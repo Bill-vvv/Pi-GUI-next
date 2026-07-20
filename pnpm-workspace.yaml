@@ -1,0 +1,6 @@
+nodeVersion: 26.4.0
+engineStrict: true
+saveExact: true
+strictPeerDependencies: true
+allowBuilds:
+  esbuild: true
