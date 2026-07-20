@@ -3,4 +3,5 @@ engineStrict: true
 saveExact: true
 strictPeerDependencies: true
 allowBuilds:
+  electron: true
   esbuild: true

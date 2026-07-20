@@ -20,6 +20,19 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-S0 只建立事实源和可复现依赖基线；Electron 应用入口将在 S1 落地，因此 `pnpm dev` 从 S1 开始可运行。
+启动时，Electron Main 会先检查 Pi 版本并执行离线、无 session 的 `get_state` 探针。默认从当前 `PATH` 解析 `pi`；需要显式指定时使用：
+
+```bash
+PI_GUI_PI_EXECUTABLE=/absolute/path/to/pi pnpm dev
+```
+
+当前统一验证入口：
+
+```bash
+pnpm typecheck
+pnpm test:core
+pnpm smoke:pi
+pnpm build
+```
 
 产品范围、架构、发布门槛和决策分别见 `docs/product-boundary.md`、`docs/architecture.md`、`docs/release-gate.md` 和 `docs/decisions.md`。

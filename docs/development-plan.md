@@ -1,10 +1,10 @@
 # Pi GUI 开发计划
 
 > 当前阶段：P1 — Linux Core Chain / v0.0.1
-> 计划版本：0.1
+> 计划版本：0.2
 > 最后更新：2026-07-20
 > 总体状态：Ready
-> 当前 Slice：S1 — Linux 桌面空壳
+> 当前 Slice：S5 — 对话闭环
 
 ## 1. 计划用途
 
@@ -59,6 +59,17 @@ Slice 只使用以下状态：
 - 同时实现 Pi RPC 与直接 SDK 两套主集成。
 - 为 Windows、WSL、macOS、SSH 或远程后端提前建立未被当前 Linux 实现使用的兼容层。
 - 使用 `latest` 作为核心依赖版本。
+
+### 3.1 旧前端资产复用边界
+
+用户在 2026-07-20 明确：后续可复用的“旧资产”特指旧 Pi GUI 的前端资产，包括信息架构、设计 token、组件与交互经验、展示用例和视觉参考，不是要求复用旧 runtime 或 application layer。
+
+执行意见：
+
+- S2 仍只实现 Electron Main 内的 Pi RPC 探针，不为了展示资产而提前增加 renderer 功能。
+- 从 S3 的 runtime 状态与诊断界面开始，优先从结项资源包 `curated/` 逐项提取前端 IA、token、正文展示和组件经验。
+- 不复制旧 `App.tsx`、global reducer 或整套 feature CSS；提取内容必须进入新组件边界并重新验证。
+- `archive-only/` 中授权待确认的字体、Logo、图标和第三方参考素材只作参考，授权确认前不得进入发布产物。
 
 ## 4. 当前开发基线
 
@@ -174,11 +185,11 @@ pi-gui-next/
 | Slice | 目标 | 状态 | 完成日期 | 验收证据 |
 | --- | --- | --- | --- | --- |
 | S0 | 建立全新 canonical repository、固定工具链和依赖、建立边界文档与唯一启动入口 | `Complete` | 2026-07-20 | `pnpm install --frozen-lockfile` 在临时干净目录通过；`electron-vite/5.0.0 linux-x64 node-v26.4.0`；见 `package.json`、`pnpm-lock.yaml`、`product-boundary.md`、`architecture.md`、`release-gate.md`、`decisions.md` |
-| S1 | 建立 Electron Main、preload 和 React renderer 空壳；验证 Wayland/Niri 启停 | `Ready` | — | — |
-| S2 | 实现 Pi executable 配置、版本检查、LF JSONL、stderr 分流和 `get_state` | `Pending` | — | — |
-| S3 | 建立最小 typed kernel command/event contract；renderer 展示 runtime 状态和诊断 | `Pending` | — | — |
-| S4 | 实现 Project 选择、显式信任和带明确 cwd 的 Pi runtime 启动 | `Pending` | — | — |
-| S5 | 实现 prompt、streaming、thinking、tool card、abort 和 settled 状态 | `Pending` | — | — |
+| S1 | 建立 Electron Main、preload 和 React renderer 空壳；验证 Wayland/Niri 启停 | `Complete` | 2026-07-20 | `pnpm typecheck`、`pnpm build` 通过；Wayland/Niri 下 `pnpm dev` 显示 `Pi GUI` 窗口，关闭后 dev 进程退出码 0，窗口与 Electron 进程无残留 |
+| S2 | 实现 Pi executable 配置、版本检查、LF JSONL、stderr 分流和 `get_state` | `Complete` | 2026-07-20 | 21 项定向测试、`pnpm typecheck`、`pnpm build`、`pnpm smoke:pi` 通过；Electron Main 使用真实 Pi 0.80.10 取得 `get_state`；正常开发启动先完成探针再显示窗口，Pi 与 Electron 进程均正常收口 |
+| S3 | 建立最小 typed kernel command/event contract；renderer 展示 runtime 状态和诊断 | `Complete` | 2026-07-20 | 24 项定向测试、`pnpm typecheck`、`pnpm build`、`pnpm smoke:pi` 通过；Wayland/Niri 窗口显示真实 Pi 0.80.10 `ready`，强制终止唯一 Pi 子进程后同一窗口进入 `crashed`，关闭后 Pi/Electron 无残留 |
+| S4 | 实现 Project 选择、显式信任和带明确 cwd 的 Pi runtime 启动 | `Complete` | 2026-07-20 | 审计修复后 41 项当前 core tests、`pnpm typecheck`、`pnpm build`、`pnpm smoke:pi` 通过；覆盖 start/stop 竞态、版本检查期取消、XDG 并发保存与 renderer origin；trusted/untrusted 真实 Pi 0.80.10 probe 均通过；构建版在继承错误 `ELECTRON_RENDERER_URL` 时仍加载 bundled renderer，IPC 可用且外部导航/新窗口被拒绝 |
+| S5 | 实现 prompt、streaming、thinking、tool card、abort 和 settled 状态 | `Ready` | — | — |
 | S6 | 实现 crash 检测、session 指针持久化、用户显式 restart 和 resume | `Pending` | — | — |
 | S7 | 构建唯一 Linux 产物并从产物完成真实核心链路，生成发布证据 | `Pending` | — | — |
 
@@ -416,9 +427,17 @@ P1 完成后，才进入多 Project、多 Session 和第一个独立 Workbench M
 | --- | --- | --- | --- |
 | 2026-07-20 | Planning | 完成旧项目结项报告阅读；确认新项目从零开始；确认 Linux 为当前开发平台；本机 Pi 0.80.10 离线 RPC `get_state` 成功；形成 P1 活计划 | 开始 S0，建立 canonical repository 和项目边界文件 |
 | 2026-07-20 | S0 | 初始化 canonical Git repository；精确固定 Node 26.4.0、pnpm 11.9.0、Electron 43.1.1、React 19.2.7、TypeScript 7.0.2、Pi 0.80.10 及兼容构建依赖；生成 lockfile；建立产品、架构、发布门槛和决策事实源；临时干净目录 frozen install 通过 | 开始 S1，建立 Linux Electron 桌面空壳并验证 Wayland/Niri 启停 |
+| 2026-07-20 | S1 | 开始建立 Electron Main、preload 和 React renderer 空壳；增加共享构建与类型检查入口 | 完成两层实现并验证 Wayland/Niri 启停与进程收口 |
+| 2026-07-20 | S1 | 完成 Electron Main、空 preload 和 React renderer 空壳；修正 pnpm Electron postinstall 允许项；typecheck/build 通过；Wayland/Niri 窗口显示、关闭及进程收口通过 | 开始 S2，实现真实 Pi RPC 探针 |
+| 2026-07-20 | S2 | 明确旧资产是旧项目的前端 IA、token、组件与展示经验；固定从 S3 开始逐项提取的复用边界；开始实现 Pi executable、LF JSONL、request correlation 和真实 `get_state` 探针 | 完成协议、runtime、Main 接线和真实 Pi 0.80.10 验收 |
+| 2026-07-20 | S2 | 完成显式路径/PATH 解析、Pi 0.80.10 精确版本检查、strict LF JSONL、request ID/timeout/exit 诊断、stderr 分流和 Linux Local probe；21 项测试及真实 Electron Main `get_state` smoke 通过；默认日志只记录 stderr 长度，不输出内容 | 开始 S3，建立 typed kernel contract，并按计划逐项提取旧前端资产实现 runtime 状态与诊断界面 |
+| 2026-07-20 | S3 | 完成最小 `KernelCommand`/`KernelState`/`KernelEvent`、RuntimeHost 五方法、Workbench Kernel 六态状态机、持久 Pi runtime、窄 preload IPC 和按需诊断视图；使用 CommonJS preload 保持 Electron 默认 sandbox；24 项测试、typecheck、build、真实 Pi smoke 通过；Wayland/Niri 下验证 ready、SIGKILL 后 crashed、关闭后进程收口 | 开始 S4，实现单 Project 选择、显式 trust 与明确 cwd |
+| 2026-07-20 | S4 | 完成单 Project 目录选择、显式 trusted/untrusted、XDG config 持久化与 XDG state 初始化；Project 路径在 Main canonicalize 并验证目录及权限，Kernel 以所选 Project 创建唯一 runtime；Pi 每次显式使用 `--approve` 或 `--no-approve`；UI 和诊断显示 cwd、trust、executable 与 version；29 项测试、typecheck、build、真实 Pi smoke、两种 trust probe 及隔离 XDG renderer 启动链路通过 | 开始 S5，实现最小对话闭环 |
+| 2026-07-20 | S4 Audit | 修复 inherited renderer URL 获得 preload、start/stop 并发后旧 start 复活、版本检查后延迟 spawn、XDG 固定临时文件并发冲突四项审计问题；Main 只接受 electron-vite development 模式下的 loopback origin，并校验导航、窗口打开和 IPC sender；41 项当前 core tests、build/smoke、两种 trust probe、构建版错误环境继承和开发入口验收通过 | S4 保持 Complete；S5 状态由其独立验收结果维护 |
 
 ## 16. 计划变更记录
 
 | 日期 | 版本 | 变更 | 原因 | 影响 |
 | --- | --- | --- | --- | --- |
 | 2026-07-20 | 0.1 | 建立 P1 Linux Core Chain 计划 | 新项目决定从零构建，并吸取旧 Pi GUI 的结项经验 | 当前只实现 Linux Local Pi；跨平台后端延后 |
+| 2026-07-20 | 0.2 | 明确旧资产特指旧项目前端资产；复用从 S3 可视界面开始，S2 保持纯 Main/RPC 边界 | 用户澄清资产含义；需要同时保留视觉积累与 Slice 边界 | S2 不增加 renderer 功能；S3 起逐项提取 IA、token、组件和展示经验，授权未确认资产继续阻塞发布 |
