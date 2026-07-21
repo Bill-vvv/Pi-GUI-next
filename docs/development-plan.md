@@ -1,10 +1,10 @@
 # Pi GUI 开发计划
 
 > 当前阶段：P1 — Linux Core Chain / v0.0.1
-> 计划版本：0.2
-> 最后更新：2026-07-20
-> 总体状态：Ready
-> 当前 Slice：S5 — 对话闭环
+> 计划版本：0.6
+> 最后更新：2026-07-21
+> 总体状态：In Progress
+> 当前 Slice：S7 — Linux 发布证据
 
 ## 1. 计划用途
 
@@ -86,7 +86,7 @@ Slice 只使用以下状态：
 | Pi executable | `/home/vvv/.local/bin/pi` |
 | Pi Coding Agent | 0.80.10 |
 | Pi 要求 | Node.js >= 22.19.0 |
-| RPC 探针 | `--mode rpc --no-session --offline --no-approve` 下 `get_state` 成功 |
+| RPC 探针 | `--mode rpc --no-session --offline` 下 `get_state` 成功 |
 
 P1 固定支持 Pi 0.80.10，不在本阶段设计宽松版本兼容。
 
@@ -101,7 +101,7 @@ P1 必须包含：
 - Linux Electron 应用启动与退出。
 - Pi executable 配置、版本检查和能力探针。
 - 单 Project、单 Runtime、单 Session。
-- 显式项目路径和项目信任选择。
+- 显式项目路径；选择后直接启动 Pi。
 - prompt、assistant streaming、thinking、tool call/result。
 - abort。
 - Pi 非正常退出检测。
@@ -188,10 +188,10 @@ pi-gui-next/
 | S1 | 建立 Electron Main、preload 和 React renderer 空壳；验证 Wayland/Niri 启停 | `Complete` | 2026-07-20 | `pnpm typecheck`、`pnpm build` 通过；Wayland/Niri 下 `pnpm dev` 显示 `Pi GUI` 窗口，关闭后 dev 进程退出码 0，窗口与 Electron 进程无残留 |
 | S2 | 实现 Pi executable 配置、版本检查、LF JSONL、stderr 分流和 `get_state` | `Complete` | 2026-07-20 | 21 项定向测试、`pnpm typecheck`、`pnpm build`、`pnpm smoke:pi` 通过；Electron Main 使用真实 Pi 0.80.10 取得 `get_state`；正常开发启动先完成探针再显示窗口，Pi 与 Electron 进程均正常收口 |
 | S3 | 建立最小 typed kernel command/event contract；renderer 展示 runtime 状态和诊断 | `Complete` | 2026-07-20 | 24 项定向测试、`pnpm typecheck`、`pnpm build`、`pnpm smoke:pi` 通过；Wayland/Niri 窗口显示真实 Pi 0.80.10 `ready`，强制终止唯一 Pi 子进程后同一窗口进入 `crashed`，关闭后 Pi/Electron 无残留 |
-| S4 | 实现 Project 选择、显式信任和带明确 cwd 的 Pi runtime 启动 | `Complete` | 2026-07-20 | 审计修复后 41 项当前 core tests、`pnpm typecheck`、`pnpm build`、`pnpm smoke:pi` 通过；覆盖 start/stop 竞态、版本检查期取消、XDG 并发保存与 renderer origin；trusted/untrusted 真实 Pi 0.80.10 probe 均通过；构建版在继承错误 `ELECTRON_RENDERER_URL` 时仍加载 bundled renderer，IPC 可用且外部导航/新窗口被拒绝 |
-| S5 | 实现 prompt、streaming、thinking、tool card、abort 和 settled 状态 | `Ready` | — | — |
-| S6 | 实现 crash 检测、session 指针持久化、用户显式 restart 和 resume | `Pending` | — | — |
-| S7 | 构建唯一 Linux 产物并从产物完成真实核心链路，生成发布证据 | `Pending` | — | — |
+| S4 | 实现 Project 选择和带明确 cwd 的 Pi runtime 启动 | `Complete` | 2026-07-20 | 审计修复后当前 core tests、`pnpm typecheck`、`pnpm build`、`pnpm smoke:pi` 通过；覆盖 start/stop 竞态、版本检查期取消、XDG 并发保存与 renderer origin；Pi 启动不传 `--approve`/`--no-approve`；构建版在继承错误 `ELECTRON_RENDERER_URL` 时仍加载 bundled renderer，IPC 可用且外部导航/新窗口被拒绝 |
+| S5 | 实现 prompt、streaming、thinking、tool card、abort 和 settled 状态 | `Complete` | 2026-07-20 | 41 项当前 core tests、`pnpm typecheck`、`pnpm smoke:pi`、`pnpm build` 通过；Wayland/Niri 构建版完成真实 provider prompt；真实 `bash` tool 记录 `pending → running（0/6/12 字符）→ success`；真实 abort 将运行中 tool 归一化为 error，并在 `agent_settled` 后使 runtime/UI 一致回到 `ready`；视觉层按 Phase B 实际 Workbench 的 332px 侧栏、860px 对话框架、轻量 Header、双层 Composer 与扁平活动流完成 1440×960 Electron 对照；补齐安全 CommonMark/GFM、开放代码围栏、外链策略与稳定块流式复用 |
+| S6 | 实现 crash 检测、session 指针持久化、用户显式 restart 和 resume | `Complete` | 2026-07-20 | 二次审计修复后 78 项 core tests、`pnpm typecheck`、`electron-vite build` 和真实 Pi 0.80.10 无状态 probe 通过；覆盖 prompt 退出竞态、并发 resume、恢复验证期间 shutdown、crashed runtime 清理期间 shutdown，以及同时间戳历史消息恢复；隔离 XDG 的 probe 指针哈希、真实 session 副本 `sessionId`/`get_messages` 恢复、构建版 SIGKILL→显式恢复与 GUI 重开恢复证据已建立 |
+| S7 | 构建唯一 Linux 产物并从产物完成真实核心链路，生成发布证据 | `In Progress` | — | 已选择 x86_64 AppImage；`electron-builder@26.15.3`、`package:linux`、`verify:linux` 与脱敏报告/截图验证器已落地；AppImage 构建、包内容边界和产物真实 Pi 0.80.10 probe 已通过；完整核心链路证据待干净 commit 上执行 |
 
 ## 9. Slice 详细验收
 
@@ -258,20 +258,18 @@ pi-gui-next/
 - 所有状态变化有唯一 owner。
 - Pi 非正常退出后 UI 进入 crashed，不继续显示 running。
 
-### S4 — Project 与信任
+### S4 — Project
 
 工作内容：
 
 - 选择一个本地目录作为 Project。
-- 显式展示并保存 trusted/untrusted 选择。
-- 每次启动明确传递 `--approve` 或 `--no-approve`，不依赖全局隐式值。
 - 使用 XDG config/state 保存 GUI 项目设置和最近 session 指针。
+- 选择 Project 后直接以明确 cwd 启动 Pi，不增加 GUI 信任等级或传递 project trust override。
 - 凭证继续由 Pi 管理，GUI 不读取或复制 API key。
 
 验收：
 
-- trusted 与 untrusted 启动路径均可解释、可复现。
-- cwd、Pi executable 和信任状态在诊断中可见，但不泄露凭证。
+- cwd 和 Pi executable 在诊断中可见，但不泄露凭证。
 - 找不到路径或权限不满足时 Fail Fast。
 
 ### S5 — 对话闭环
@@ -296,7 +294,7 @@ pi-gui-next/
 工作内容：
 
 - 从 `get_state` 保存 `sessionFile`、`sessionId` 和必要的 session metadata。
-- 检测 Pi 意外退出，保留退出码与裁剪后的 stderr 摘要。
+- 检测 Pi 意外退出，保留退出码与仅含字符数、不含原文的 stderr 诊断摘要。
 - 提供显式 Restart and Resume，不自动无限重启。
 - 使用新 Pi 进程恢复上一个 session，并通过 `get_messages` 重建 Timeline。
 
@@ -381,6 +379,7 @@ stopped
 - Runtime 瞬时状态只在内存中维护。
 - P1 不建立 SQLite。
 - 默认诊断不记录完整 prompt、tool output、环境变量或 API endpoint credential。
+- stderr 原文不进入 KernelState 或 renderer，只保留累计字符数。
 - child process 必须使用参数数组和 `shell: false`。
 
 ## 13. 计划中的验证命令
@@ -410,7 +409,7 @@ P1 只有同时满足以下条件才可完成：
 
 1. 从全新 checkout 可以重复安装和构建。
 2. Linux GUI 能检测并启动 Pi 0.80.10。
-3. 用户能明确选择项目是否可信。
+3. 用户选择项目后能直接启动 Pi。
 4. 能完成真实 prompt、streaming 和工具调用。
 5. abort 行为正确。
 6. Pi 被终止后 GUI 不会继续假装其正在运行。
@@ -434,6 +433,16 @@ P1 完成后，才进入多 Project、多 Session 和第一个独立 Workbench M
 | 2026-07-20 | S3 | 完成最小 `KernelCommand`/`KernelState`/`KernelEvent`、RuntimeHost 五方法、Workbench Kernel 六态状态机、持久 Pi runtime、窄 preload IPC 和按需诊断视图；使用 CommonJS preload 保持 Electron 默认 sandbox；24 项测试、typecheck、build、真实 Pi smoke 通过；Wayland/Niri 下验证 ready、SIGKILL 后 crashed、关闭后进程收口 | 开始 S4，实现单 Project 选择、显式 trust 与明确 cwd |
 | 2026-07-20 | S4 | 完成单 Project 目录选择、显式 trusted/untrusted、XDG config 持久化与 XDG state 初始化；Project 路径在 Main canonicalize 并验证目录及权限，Kernel 以所选 Project 创建唯一 runtime；Pi 每次显式使用 `--approve` 或 `--no-approve`；UI 和诊断显示 cwd、trust、executable 与 version；29 项测试、typecheck、build、真实 Pi smoke、两种 trust probe 及隔离 XDG renderer 启动链路通过 | 开始 S5，实现最小对话闭环 |
 | 2026-07-20 | S4 Audit | 修复 inherited renderer URL 获得 preload、start/stop 并发后旧 start 复活、版本检查后延迟 spawn、XDG 固定临时文件并发冲突四项审计问题；Main 只接受 electron-vite development 模式下的 loopback origin，并校验导航、窗口打开和 IPC sender；41 项当前 core tests、build/smoke、两种 trust probe、构建版错误环境继承和开发入口验收通过 | S4 保持 Complete；S5 状态由其独立验收结果维护 |
+| 2026-07-20 | S5 | 完成六项 Pi RPC command 映射和 agent/message/tool/error 归一化；以旧前端的暖炭灰 token、单工作台 IA、可折叠 thinking 和紧凑 tool card 经验重建 Project 启动页、Session Header、Timeline、Composer，不复制旧 application layer 或受限资产；真实 provider prompt、工具流式更新、abort 与 `agent_settled` 闭环通过，41 项 core tests、typecheck、smoke、build 全部通过 | 开始 S6，实现显式 restart、session 指针持久化与 resume |
+| 2026-07-20 | S5 Visual Parity | 用户复核后将 Phase B 的实际 React/CSS Workbench 升格为视觉规格：恢复 12px 浮动外框、332px 半透明侧栏、860px 主对话框架、轻量绝对定位 Header、底部双层 Composer、右对齐用户气泡以及扁平 thinking/tool 时间线；移除新加的大品牌区、页面级标题胶囊、中央空状态宣传与底部状态条；未复制受限字体、Logo 或应用资产；在真实 Electron 中以 1440×960 与历史工作台同尺寸对照并重跑 typecheck、core tests、build | S5 保持 Complete；继续 S6 |
+| 2026-07-20 | S4 Scope Correction | 移除 GUI 自定义的 trusted/untrusted 状态、IPC、持久化、启动参数、UI 与诊断字段；config 严格只接受项目路径；core tests、typecheck、真实 Pi 0.80.10 smoke 与 build 通过 | S4 保持 Complete；继续 S6 |
+| 2026-07-20 | S5 Markdown Completion | 修复对话仅输出纯文本却误用 `markdown-message` 命名的 S5 验收缺口；正文与 thinking 统一接入无 raw HTML 的 CommonMark/GFM；历史内容 memo、活动尾块按帧更新、稳定 GFM AST 顶层块复用；引用/脚注定义保持整篇解析；外链经 Main 白名单打开，远程图片不自动加载；106,500 字符/1,500 次追加的分块模型基准约 0.59ms/update；53 项 core tests、typecheck、build、真实 Pi smoke 与生产依赖审计通过 | S5 保持 Complete；继续 S6 |
+| 2026-07-20 | S6 | 完成 Pi session 持久化启动、严格 XDG recent session 指针、`sessionFile`/`sessionId` 捕获、裁剪后的 stderr 摘要、显式 restart/resume IPC 与 renderer 入口；49 项 core tests、typecheck、build、真实 Pi smoke 通过；隔离构建版完成真实 provider 两消息会话、SIGKILL→crashed→显式重启恢复，并验证 GUI 关闭重开后仍可恢复且进程无残留 | 开始 S7，选择唯一 Linux 产物并生成发布证据 |
+| 2026-07-21 | S6 Audit | 修复 probe 改写 recent session、缺失 session 文件被 Pi 当成新会话、恢复后 `sessionId` 未核对、启动投影失败遗留 runtime、清理失败丢失进程所有权、stopping 期间迟到事件改写 UI、stderr 原文进入 renderer，以及 crashed/无效恢复指针缺少新建入口；恢复前验证普通可读文件，probe 使用 `--no-session`；65 项 core tests、typecheck、直接 build、隔离 XDG 哈希校验及真实 Pi session 副本恢复通过 | S6 保持 Complete；不改变 S7 范围与状态 |
+| 2026-07-21 | S7 | 选择 x86_64 AppImage 为唯一 P1 Linux 产物；精确固定 electron-builder；实现只打包 `out/` 与运行依赖的 AppImage 配置，以及通过 CDP 驱动真实产物 UI 的脱敏验证器；初次 AppImage 构建、包内容边界和真实 Pi 0.80.10 probe 通过 | 建立干净 commit，执行完整 prompt/tool/abort/crash/resume/reopen 产物链路并生成最终证据 |
+| 2026-07-21 | S5 Flow UX | 按用户确认的流程重建 conversation 展示投影：thinking 成为有序过程项，工具按 `toolCallId` 单项原地更新，活动 run 线性展示并在 `agent_settled` 后折叠到回答上方；展开后保留原顺序，并汇总 `read`/`edit`/`write` 的文件路径与基础悬浮信息；diff 延后。65 项 core tests、typecheck、build 通过；Wayland/Niri 构建版用真实 provider 验证 `read → write → read`、4 秒 bash 运行态、settled 折叠、过程展开和文件 hover，QA 临时文件已清理 | S5 保持 Complete；继续 S7，不扩大发布范围 |
+| 2026-07-21 | S6 Re-audit | 修复 prompt transport rejection 覆盖 crashed、并发 resume 泄漏 Runtime、恢复验证与 crashed runtime 清理期间 shutdown 未完整收口，以及历史消息仅用 role/timestamp 造成恢复碰撞；增加 Kernel 单一 launch operation、取消/项目切换边界与确定的历史消息 identity；78 项 core tests、typecheck、diff check、build 和真实 Pi 0.80.10 无状态 probe 通过 | S6 保持 Complete；S7 继续在干净 commit 上执行完整产物 crash/resume/reopen 链路 |
+| 2026-07-21 | S5 Performance Hardening | 将 Pi 高频更新从完整 `KernelState` 改为 entry insert/append suffix patch，Renderer 每帧最多提交一次；流式 Markdown tail 超过 16,384 字符后安全降级为纯文本并在 settled 后完整解析；Timeline 初始挂载最近 60 轮、折叠过程按需挂载；Composer 按实际高度避让并保持跟随输出；主动 abort 使用中性“已中止”。106,500 字符/1,500 次追加三类基准平均 0.52ms/update、最坏 P95 2.60ms；浏览器 1,500 patch 仅 1 组 DOM mutation，长输入遮挡为 0，70 轮展开锚点偏移 0.16px；79 项 core tests、typecheck、build、真实 Pi 0.80.10 probe 通过 | S5 保持 Complete；继续 S7 |
 
 ## 16. 计划变更记录
 
@@ -441,3 +450,8 @@ P1 完成后，才进入多 Project、多 Session 和第一个独立 Workbench M
 | --- | --- | --- | --- | --- |
 | 2026-07-20 | 0.1 | 建立 P1 Linux Core Chain 计划 | 新项目决定从零构建，并吸取旧 Pi GUI 的结项经验 | 当前只实现 Linux Local Pi；跨平台后端延后 |
 | 2026-07-20 | 0.2 | 明确旧资产特指旧项目前端资产；复用从 S3 可视界面开始，S2 保持纯 Main/RPC 边界 | 用户澄清资产含义；需要同时保留视觉积累与 Slice 边界 | S2 不增加 renderer 功能；S3 起逐项提取 IA、token、组件和展示经验，授权未确认资产继续阻塞发布 |
+| 2026-07-20 | 0.3 | 移除 GUI 的项目 trusted/untrusted 选择及 `--approve`/`--no-approve` override | 这些 Pi 参数控制项目本地资源加载，不是工具执行审批；原 UI 将其误表述成执行权限等级 | Project 只保存路径；选择后直接启动；不保留旧 trust schema 兼容 |
+| 2026-07-20 | 0.4 | 将安全、流式优化的 CommonMark/GFM 明确纳入 S5 完成证据 | 原 S5 只验证文本可见，未覆盖 Markdown 基础渲染；长回复完整重解析会损害流式体验 | S5 增加统一 Markdown 管线、稳定块复用、外链白名单和定向性能验证；S6/S7 范围不变 |
+| 2026-07-21 | 0.5 | S7 选择 x86_64 AppImage 作为 P1 唯一 Linux 产物，并落地真实 UI 发布验证入口 | 当前 Arch Linux/Wayland/Niri 机器已具备 FUSE；单文件、免 root 的 AppImage 能保持唯一发布路径且不绑定发行版包管理器 | 新增精确固定的 electron-builder、`package:linux`、`verify:linux`、脱敏报告与截图证据；不增加第二种产物格式 |
+| 2026-07-21 | 0.6 | 明确活动 run 的线性过程流、settled 后折叠规则，以及工具单项状态更新与文件信息展示 | 用户确认现有 thinking/tool 时间线缺少真实顺序和完成后的信息层级，并明确 tool call/result 不拆成两个展示节点 | S5 增加独立 thinking entry、活动 run 边界、完成过程摘要和文件 hover；diff 延后，S7 范围与状态不变 |
+| 2026-07-21 | 0.7 | 为 S5 固定高频增量 patch、16,384 字符流式解析预算、最近 60 轮挂载窗口和动态 Composer clearance | 审计确认完整状态/长单块解析/全历史挂载会放大长回复成本，输入框增高会覆盖末尾消息 | 保留完整 settled Markdown 与可展开历史；长回复热路径有界；S6/S7 功能范围不变 |

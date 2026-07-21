@@ -33,6 +33,10 @@ pnpm typecheck
 pnpm test:core
 pnpm smoke:pi
 pnpm build
+pnpm package:linux
+pnpm verify:linux
 ```
+
+P1 只生成 `release/pi-gui-next-0.0.1-x86_64.AppImage`。`verify:linux` 必须在干净工作区运行，并从该 AppImage 执行真实核心链路；脱敏报告和截图写入被 Git 忽略的 `release/evidence/`。
 
 产品范围、架构、发布门槛和决策分别见 `docs/product-boundary.md`、`docs/architecture.md`、`docs/release-gate.md` 和 `docs/decisions.md`。

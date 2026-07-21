@@ -46,11 +46,21 @@ subscribe
 | --- | --- | --- |
 | Conversation 内容 | Pi session 文件 | 由 Pi 管理 |
 | Pi credential/provider auth | Pi | GUI 不读取或复制 |
-| Project 设置与信任选择 | Workbench Kernel | XDG config |
+| Project 设置 | Workbench Kernel | XDG config |
 | 最近 session 指针与非敏感启动证据 | Workbench Kernel | XDG state |
 | Runtime 瞬时状态 | Workbench Kernel | 仅内存 |
 
 GUI 不建立 Conversation 数据库，也不把 renderer 投影当作对话事实来源。
+
+## Conversation 展示投影
+
+Workbench Kernel 将 Pi message content 按原始顺序投影成 `message`、`thinking`、`tool` 和 `error` entry。一次工具调用始终由 `toolCallId` 标识为同一个 entry，`pending/running/success/error` 与输出只原地更新，不为 tool result 创建第二个展示节点。
+
+Kernel 在活动开始时记录当前 run 的 entry 起点，并只以 `agent_settled` 结束该边界。Renderer 对活动 run 线性展示 thinking 与工具状态；run settled 后，把 thinking 和工具项折叠到该轮最终回答上方，展开时仍使用原始顺序。文件操作摘要只从有明确结构化路径的工具参数提取，不猜测 `bash` 的文件副作用。
+
+高频 Pi message、thinking 和 tool update 不重复发送完整 `KernelState`。Kernel 发送 `kernel.state-patched`：新 entry 按 index 插入，append-only 文本和工具输出只发送起始长度与新增后缀；非前缀改写或无法安全增量化时立即退回 `kernel.state-changed` 全量快照。Renderer 按顺序应用 patch，并最多每动画帧提交一次 React state。
+
+Timeline 默认只挂载最近 60 个 settled turn，用户可按 60 轮继续向前展开且保持当前滚动锚点；折叠的工作过程只保留摘要，展开时才挂载 thinking、工具参数与输出正文。
 
 ## Runtime 状态机
 
@@ -67,3 +77,5 @@ stopped -> starting -> ready -> running -> ready -> stopping -> stopped
 - stdout 只承载 strict LF JSONL；stderr 单独诊断，不能污染 framing。
 - 诊断默认不记录完整 prompt、tool output、环境变量或 credential。
 - Linux PATH、XDG、进程和权限逻辑只能存在于 runtime/main 边界，不进入 renderer 或会话模型。
+- 对话正文使用无 raw HTML 的 CommonMark/GFM AST 渲染；Markdown 图片不自动发起远程请求。
+- Markdown 外链只能由用户点击触发，经受信 IPC sender 校验及 `http:`、`https:`、`mailto:` 协议白名单后交给系统打开。

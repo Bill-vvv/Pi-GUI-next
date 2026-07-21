@@ -15,7 +15,7 @@ canonical Git checkout
   -> 计划、commit、证据一致后发布
 ```
 
-具体脚本在对应 Slice 实现后加入 `package.json`；不得用尚未实现的占位脚本制造已具备发布能力的假象。S7 只选择一种 Linux 产物格式，并把该选择追加到 `decisions.md`。
+具体脚本在对应 Slice 实现后加入 `package.json`；不得用尚未实现的占位脚本制造已具备发布能力的假象。S7 唯一 Linux 产物是 `release/pi-gui-next-0.0.1-x86_64.AppImage`，选择依据见 `decisions.md` 的 D-008。
 
 ## S0 gate
 
@@ -46,13 +46,15 @@ pnpm verify:linux
 
 1. launch 与干净退出；
 2. Pi 0.80.10 probe；
-3. project 路径与 trusted/untrusted 选择；
+3. project 路径选择与明确 cwd 启动；
 4. prompt、streaming、thinking 和真实 tool execution；
 5. abort 后 runtime/UI 状态一致；
 6. 强制终止 Pi 后进入 crashed；
 7. 用户显式 restart/resume，并在应用重启后恢复最近 session。
 
 验证报告必须记录 app、Node/Electron、Pi、平台、commit、产物和各步骤结果，不得包含 prompt 正文、敏感 tool output、credential 或完整环境变量。
+
+`pnpm verify:linux` 只在干净工作区执行；它从 AppImage 的真实 renderer UI 完成上述链路，并将脱敏 `report.json` 与五张关键截图写入 `release/evidence/<UTC>-<commit>/`。验证器不得向生产代码加入测试后门。
 
 ## Fail Fast
 
