@@ -1,7 +1,7 @@
 # Pi GUI 开发计划
 
 > 当前阶段：P1 — Linux Core Chain / v0.0.1
-> 计划版本：0.6
+> 计划版本：0.8
 > 最后更新：2026-07-21
 > 总体状态：In Progress
 > 当前 Slice：S7 — Linux 发布证据
@@ -443,6 +443,7 @@ P1 完成后，才进入多 Project、多 Session 和第一个独立 Workbench M
 | 2026-07-21 | S5 Flow UX | 按用户确认的流程重建 conversation 展示投影：thinking 成为有序过程项，工具按 `toolCallId` 单项原地更新，活动 run 线性展示并在 `agent_settled` 后折叠到回答上方；展开后保留原顺序，并汇总 `read`/`edit`/`write` 的文件路径与基础悬浮信息；diff 延后。65 项 core tests、typecheck、build 通过；Wayland/Niri 构建版用真实 provider 验证 `read → write → read`、4 秒 bash 运行态、settled 折叠、过程展开和文件 hover，QA 临时文件已清理 | S5 保持 Complete；继续 S7，不扩大发布范围 |
 | 2026-07-21 | S6 Re-audit | 修复 prompt transport rejection 覆盖 crashed、并发 resume 泄漏 Runtime、恢复验证与 crashed runtime 清理期间 shutdown 未完整收口，以及历史消息仅用 role/timestamp 造成恢复碰撞；增加 Kernel 单一 launch operation、取消/项目切换边界与确定的历史消息 identity；78 项 core tests、typecheck、diff check、build 和真实 Pi 0.80.10 无状态 probe 通过 | S6 保持 Complete；S7 继续在干净 commit 上执行完整产物 crash/resume/reopen 链路 |
 | 2026-07-21 | S5 Performance Hardening | 将 Pi 高频更新从完整 `KernelState` 改为 entry insert/append suffix patch，Renderer 每帧最多提交一次；流式 Markdown tail 超过 16,384 字符后安全降级为纯文本并在 settled 后完整解析；Timeline 初始挂载最近 60 轮、折叠过程按需挂载；Composer 按实际高度避让并保持跟随输出；主动 abort 使用中性“已中止”。106,500 字符/1,500 次追加三类基准平均 0.52ms/update、最坏 P95 2.60ms；浏览器 1,500 patch 仅 1 组 DOM mutation，长输入遮挡为 0，70 轮展开锚点偏移 0.16px；79 项 core tests、typecheck、build、真实 Pi 0.80.10 probe 通过 | S5 保持 Complete；继续 S7 |
+| 2026-07-21 | S5 Streaming Markdown Correction | 按用户确认移除超长流式 tail 的纯文本 fallback；16,384 字符只限制分块预解析，超限后仍由同一 React Markdown 管线整篇实时渲染 GFM。浏览器核验 17,606 字符未闭合代码围栏、24,220 字符 GFM 表格和 16,426 字符末尾引用定义均保持真实 Markdown DOM；106,500 字符/300 帧的超长单段渲染平均 12.81ms、P95 22.41ms | S5 保持 Complete；保留其他性能修复并继续 S7 |
 
 ## 16. 计划变更记录
 
@@ -455,3 +456,4 @@ P1 完成后，才进入多 Project、多 Session 和第一个独立 Workbench M
 | 2026-07-21 | 0.5 | S7 选择 x86_64 AppImage 作为 P1 唯一 Linux 产物，并落地真实 UI 发布验证入口 | 当前 Arch Linux/Wayland/Niri 机器已具备 FUSE；单文件、免 root 的 AppImage 能保持唯一发布路径且不绑定发行版包管理器 | 新增精确固定的 electron-builder、`package:linux`、`verify:linux`、脱敏报告与截图证据；不增加第二种产物格式 |
 | 2026-07-21 | 0.6 | 明确活动 run 的线性过程流、settled 后折叠规则，以及工具单项状态更新与文件信息展示 | 用户确认现有 thinking/tool 时间线缺少真实顺序和完成后的信息层级，并明确 tool call/result 不拆成两个展示节点 | S5 增加独立 thinking entry、活动 run 边界、完成过程摘要和文件 hover；diff 延后，S7 范围与状态不变 |
 | 2026-07-21 | 0.7 | 为 S5 固定高频增量 patch、16,384 字符流式解析预算、最近 60 轮挂载窗口和动态 Composer clearance | 审计确认完整状态/长单块解析/全历史挂载会放大长回复成本，输入框增高会覆盖末尾消息 | 保留完整 settled Markdown 与可展开历史；长回复热路径有界；S6/S7 功能范围不变 |
+| 2026-07-21 | 0.8 | 取消超长流式 Markdown 的纯文本 fallback；16,384 字符预算只用于停止分块预解析，超限后整篇实时渲染 GFM | 用户明确要求 streaming 与 settled 的实际 Markdown 效果一致，不能在消息结束时再发生格式切换 | 保留增量 state patch、帧合并、历史挂载窗口和 Composer clearance；极端超长单块恢复 O(n) GFM 渲染并记录实测边界，S6/S7 范围不变 |

@@ -78,4 +78,5 @@ stopped -> starting -> ready -> running -> ready -> stopping -> stopped
 - 诊断默认不记录完整 prompt、tool output、环境变量或 credential。
 - Linux PATH、XDG、进程和权限逻辑只能存在于 runtime/main 边界，不进入 renderer 或会话模型。
 - 对话正文使用无 raw HTML 的 CommonMark/GFM AST 渲染；Markdown 图片不自动发起远程请求。
+- 流式 Markdown 按动画帧合并并复用稳定顶层块；未稳定 tail 超过 16,384 字符时停止额外的分块预解析，改由同一 React Markdown 管线整篇渲染，任何长度都不降级为纯文本。
 - Markdown 外链只能由用户点击触发，经受信 IPC sender 校验及 `http:`、`https:`、`mailto:` 协议白名单后交给系统打开。

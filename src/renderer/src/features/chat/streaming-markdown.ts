@@ -85,12 +85,12 @@ function parseTail(
   hasDocumentWideDefinition: boolean
   exceededParseBudget: boolean
 } {
-  const tail = sourceText.slice(cursor)
-  if (tail.length === 0) {
+  const tailLength = sourceText.length - cursor
+  if (tailLength === 0) {
     return { blocks: [], hasDocumentWideDefinition: false, exceededParseBudget: false }
   }
 
-  if (tail.length > STREAMING_TAIL_PARSE_BUDGET) {
+  if (tailLength > STREAMING_TAIL_PARSE_BUDGET) {
     return {
       blocks: [],
       hasDocumentWideDefinition: false,
@@ -98,6 +98,7 @@ function parseTail(
     }
   }
 
+  const tail = sourceText.slice(cursor)
   const root = streamingParser.parse(tail) as PositionedNode
   if (hasDocumentWideDefinition(root)) {
     return { blocks: [], hasDocumentWideDefinition: true, exceededParseBudget: false }
