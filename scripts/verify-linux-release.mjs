@@ -759,16 +759,12 @@ async function findUniquePiRpcProcess(app, projectPath) {
         .map(async (entry) => {
           const pid = Number(entry.name)
           try {
-            const [commandLine, cwd] = await Promise.all([
-              readFile(`/proc/${pid}/cmdline`),
+            const [processName, cwd] = await Promise.all([
+              readFile(`/proc/${pid}/comm`, 'utf8'),
               realpath(`/proc/${pid}/cwd`)
             ])
-            const args = commandLine.toString('utf8').split('\0').filter(Boolean)
-            const modeIndex = args.indexOf('--mode')
             return cwd === projectPath &&
-              modeIndex >= 0 &&
-              args[modeIndex + 1] === 'rpc' &&
-              args.includes('--offline')
+              processName.trim() === 'pi'
               ? pid
               : null
           } catch {
