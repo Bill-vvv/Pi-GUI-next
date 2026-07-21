@@ -1,7 +1,7 @@
 # Pi GUI 开发计划
 
 > 当前阶段：P1 — Linux Core Chain / v0.0.1
-> 计划版本：0.8
+> 计划版本：0.9
 > 最后更新：2026-07-21
 > 总体状态：In Progress
 > 当前 Slice：S7 — Linux 发布证据
@@ -56,7 +56,7 @@ Slice 只使用以下状态：
 
 - 将两个旧 Pi GUI 仓库作为新项目源码或依赖。
 - 复制旧 `App.tsx`、`RuntimeSupervisor`、global reducer、SQLite schema、launcher/mirror 拓扑或整套 CSS。
-- 同时实现 Pi RPC 与直接 SDK 两套主集成。
+- 同时实现外部 Pi RPC 与进程内 `AgentSession` SDK 两套主集成。官方 `RpcClient` 属于 RPC 路径的候选客户端，不视为第二条 runtime 拓扑。
 - 为 Windows、WSL、macOS、SSH 或远程后端提前建立未被当前 Linux 实现使用的兼容层。
 - 使用 `latest` 作为核心依赖版本。
 
@@ -150,6 +150,16 @@ pi --mode rpc
 
 不实现插件注册、动态后端发现或远程 transport。
 
+### 6.1 Pi 官方 SDK / `RpcClient` 演进边界
+
+Pi 0.80.10 同时提供进程内 `AgentSession` SDK 和会自行启动 RPC 子进程的 typed `RpcClient`。P1 审计后继续使用 `LinuxLocalRuntime + PiRpcClient`：
+
+- 不将 `AgentSession` 嵌入 Electron Main；Pi 运行时继续保持独立进程。
+- 官方 `RpcClient` 作为后续受控迁移候选，不在 P1 与自有客户端并行接入。
+- 当前 `LinuxLocalRuntime` 必须继续拥有 executable 解析与精确版本检查、cwd、spawn、异常退出、分阶段停止和脱敏 stderr 语义。
+- 可优先评估通过精确固定的 Pi 开发依赖仅复用官方 RPC command/response/event 类型；引入依赖前必须单独评估 lockfile 与打包边界。
+- 只有当官方客户端能保留上述 lifecycle/诊断语义或允许注入等价 process transport 时，才能替换自有 `PiRpcClient`。替换必须通过当时完整 release gate，并删除旧客户端，不保留双路径。
+
 ## 7. 初始目录结构
 
 P1 采用单 package，不建立 monorepo：
@@ -191,7 +201,7 @@ pi-gui-next/
 | S4 | 实现 Project 选择和带明确 cwd 的 Pi runtime 启动 | `Complete` | 2026-07-20 | 审计修复后当前 core tests、`pnpm typecheck`、`pnpm build`、`pnpm smoke:pi` 通过；覆盖 start/stop 竞态、版本检查期取消、XDG 并发保存与 renderer origin；Pi 启动不传 `--approve`/`--no-approve`；构建版在继承错误 `ELECTRON_RENDERER_URL` 时仍加载 bundled renderer，IPC 可用且外部导航/新窗口被拒绝 |
 | S5 | 实现 prompt、streaming、thinking、tool card、abort 和 settled 状态 | `Complete` | 2026-07-20 | 41 项当前 core tests、`pnpm typecheck`、`pnpm smoke:pi`、`pnpm build` 通过；Wayland/Niri 构建版完成真实 provider prompt；真实 `bash` tool 记录 `pending → running（0/6/12 字符）→ success`；真实 abort 将运行中 tool 归一化为 error，并在 `agent_settled` 后使 runtime/UI 一致回到 `ready`；视觉层按 Phase B 实际 Workbench 的 332px 侧栏、860px 对话框架、轻量 Header、双层 Composer 与扁平活动流完成 1440×960 Electron 对照；补齐安全 CommonMark/GFM、开放代码围栏、外链策略与稳定块流式复用 |
 | S6 | 实现 crash 检测、session 指针持久化、用户显式 restart 和 resume | `Complete` | 2026-07-20 | 二次审计修复后 78 项 core tests、`pnpm typecheck`、`electron-vite build` 和真实 Pi 0.80.10 无状态 probe 通过；覆盖 prompt 退出竞态、并发 resume、恢复验证期间 shutdown、crashed runtime 清理期间 shutdown，以及同时间戳历史消息恢复；隔离 XDG 的 probe 指针哈希、真实 session 副本 `sessionId`/`get_messages` 恢复、构建版 SIGKILL→显式恢复与 GUI 重开恢复证据已建立 |
-| S7 | 构建唯一 Linux 产物并从产物完成真实核心链路，生成发布证据 | `In Progress` | — | 已选择 x86_64 AppImage；`electron-builder@26.15.3`、`package:linux`、`verify:linux` 与脱敏报告/截图验证器已落地；AppImage 构建、包内容边界和产物真实 Pi 0.80.10 probe 已通过；完整核心链路证据待干净 commit 上执行 |
+| S7 | 构建唯一 Linux 产物并从产物完成真实核心链路，生成发布证据 | `In Progress` | — | 已选择 x86_64 AppImage；`electron-builder@26.15.3`、`package:linux`、`verify:linux` 与脱敏报告/截图验证器已落地；候选 `8a63c29` 已通过 launch、版本、project/cwd、probe 与高思考设置，但因验证器仍使用旧 Timeline DOM 选择器而在 `tool_turn/E_THINKING_ACTIVITY` Fail Fast；`a2e5c28` 已改为从 typed kernel state 验证工具状态并兼容当前 thinking UI，需在包含本计划更新的干净 commit 上重跑完整链路 |
 
 ## 9. Slice 详细验收
 
@@ -444,6 +454,9 @@ P1 完成后，才进入多 Project、多 Session 和第一个独立 Workbench M
 | 2026-07-21 | S6 Re-audit | 修复 prompt transport rejection 覆盖 crashed、并发 resume 泄漏 Runtime、恢复验证与 crashed runtime 清理期间 shutdown 未完整收口，以及历史消息仅用 role/timestamp 造成恢复碰撞；增加 Kernel 单一 launch operation、取消/项目切换边界与确定的历史消息 identity；78 项 core tests、typecheck、diff check、build 和真实 Pi 0.80.10 无状态 probe 通过 | S6 保持 Complete；S7 继续在干净 commit 上执行完整产物 crash/resume/reopen 链路 |
 | 2026-07-21 | S5 Performance Hardening | 将 Pi 高频更新从完整 `KernelState` 改为 entry insert/append suffix patch，Renderer 每帧最多提交一次；流式 Markdown tail 超过 16,384 字符后安全降级为纯文本并在 settled 后完整解析；Timeline 初始挂载最近 60 轮、折叠过程按需挂载；Composer 按实际高度避让并保持跟随输出；主动 abort 使用中性“已中止”。106,500 字符/1,500 次追加三类基准平均 0.52ms/update、最坏 P95 2.60ms；浏览器 1,500 patch 仅 1 组 DOM mutation，长输入遮挡为 0，70 轮展开锚点偏移 0.16px；79 项 core tests、typecheck、build、真实 Pi 0.80.10 probe 通过 | S5 保持 Complete；继续 S7 |
 | 2026-07-21 | S5 Streaming Markdown Correction | 按用户确认移除超长流式 tail 的纯文本 fallback；16,384 字符只限制分块预解析，超限后仍由同一 React Markdown 管线整篇实时渲染 GFM。浏览器核验 17,606 字符未闭合代码围栏、24,220 字符 GFM 表格和 16,426 字符末尾引用定义均保持真实 Markdown DOM；106,500 字符/300 帧的超长单段渲染平均 12.81ms、P95 22.41ms | S5 保持 Complete；保留其他性能修复并继续 S7 |
+| 2026-07-21 | Architecture Audit | 核对本机 Pi 0.80.10 的进程内 `AgentSession` SDK、官方 typed `RpcClient` 与当前 `LinuxLocalRuntime + PiRpcClient`；确认当前六项命令的最小 adapter 满足 P1，官方 `RpcClient` 的自行 spawn、完整 stderr 保留/输出和较简化的停止语义不能原样替换当前 runtime；79 项 core tests 通过；记录先复用官方类型、后在满足 lifecycle/诊断门槛时受控迁移的路径 | S7 保持 In Progress；建立包含计划/ADR 更新的干净 commit，再运行完整产物验证 |
+| 2026-07-21 | S7 Evidence Sync | 复核候选 `8a63c29` 及发布验证器；脚本已覆盖 launch、project/probe、prompt/tool、abort、crash、restart/resume、close/reopen，但当时不存在 passed 的 `release/evidence` 报告和五张截图；实现存在不等于验收证据已生成 | 在新的干净 commit 上执行 `pnpm package:linux` 与 `pnpm verify:linux`；只有脱敏报告为 passed 且重复链路成功后才将 S7/P1 标记 Complete |
+| 2026-07-21 | S7 Candidate Gate | 候选 `8a63c29` 的 frozen install、typecheck、79 项 core tests、真实 Pi smoke、build 与 AppImage package 通过；真实产物验证通过 launch、Electron/Pi 版本、project/cwd、probe 和高思考设置，在 `tool_turn/E_THINKING_ACTIVITY` 超时后 Fail Fast，Pi/Electron 无残留。根因是 S5 Flow UX 已将过程节点改为 `process-step`，验证器仍等待旧 `chronological-activity` DOM；`a2e5c28` 改为通过 typed kernel state 计数工具状态，并接受当前 thinking status 或持久 thinking entry | 在包含 0.9 计划与 ADR 的干净 commit 上重新打包并执行完整链路；失败候选不计入完成证据 |
 
 ## 16. 计划变更记录
 
@@ -457,3 +470,4 @@ P1 完成后，才进入多 Project、多 Session 和第一个独立 Workbench M
 | 2026-07-21 | 0.6 | 明确活动 run 的线性过程流、settled 后折叠规则，以及工具单项状态更新与文件信息展示 | 用户确认现有 thinking/tool 时间线缺少真实顺序和完成后的信息层级，并明确 tool call/result 不拆成两个展示节点 | S5 增加独立 thinking entry、活动 run 边界、完成过程摘要和文件 hover；diff 延后，S7 范围与状态不变 |
 | 2026-07-21 | 0.7 | 为 S5 固定高频增量 patch、16,384 字符流式解析预算、最近 60 轮挂载窗口和动态 Composer clearance | 审计确认完整状态/长单块解析/全历史挂载会放大长回复成本，输入框增高会覆盖末尾消息 | 保留完整 settled Markdown 与可展开历史；长回复热路径有界；S6/S7 功能范围不变 |
 | 2026-07-21 | 0.8 | 取消超长流式 Markdown 的纯文本 fallback；16,384 字符预算只用于停止分块预解析，超限后整篇实时渲染 GFM | 用户明确要求 streaming 与 settled 的实际 Markdown 效果一致，不能在消息结束时再发生格式切换 | 保留增量 state patch、帧合并、历史挂载窗口和 Composer clearance；极端超长单块恢复 O(n) GFM 渲染并记录实测边界，S6/S7 范围不变 |
+| 2026-07-21 | 0.9 | 澄清 Pi 的进程内 `AgentSession` SDK、官方 typed `RpcClient` 与当前自有 typed RPC adapter 的边界；将官方 `RpcClient` 记为受控迁移候选 | 官方 `RpcClient` 同时提供 SDK 体验和 RPC 进程隔离，但 Pi 0.80.10 的实现尚不满足当前 executable ownership、异常退出证据、分阶段停止与脱敏 stderr 要求 | P1 拓扑与六项命令范围不变；允许先评估仅复用官方类型，完整替换需满足 lifecycle/诊断门槛、通过完整 release gate 并删除旧路径 |
