@@ -1,7 +1,7 @@
 # Pi GUI 开发计划
 
 > 当前阶段：P1 — Linux Core Chain / v0.0.1
-> 计划版本：0.9
+> 计划版本：1.0
 > 最后更新：2026-07-21
 > 总体状态：In Progress
 > 当前 Slice：S7 — Linux 发布证据
@@ -428,9 +428,56 @@ P1 只有同时满足以下条件才可完成：
 9. 工作区干净，计划、commit 和证据一致。
 10. 新项目没有依赖或复制旧项目 application layer。
 
-P1 完成后，才进入多 Project、多 Session 和第一个独立 Workbench Module 的讨论。
+P1 完成后进入 P2。P2/P3 的当前路径见下一节；后续调整继续通过状态维护规则和计划变更记录显式更新。
 
-## 15. 进展日志
+## 15. P2/P3 后续开发路径
+
+本节记录当前已确认、允许后续迭代的阶段路径。P1 的范围和完成门槛不因本节变化；S7 与 P1 实际完成后才开始 P2，不把后续功能提前并入当前发布候选。
+
+### 15.1 阶段边界
+
+| 阶段 | 目标 | 状态 | 开始条件 |
+| --- | --- | --- | --- |
+| P1 — Linux Core Chain | 建立第一条可发布的 Linux 本地 Pi 核心链路 | `In Progress` | 当前阶段 |
+| P2 — Workbench Foundation | 补齐日常工作台基础功能，并完成 UI 与交互收敛 | `Pending` | S7 和 P1 完成 |
+| P3 — Ecosystem Integration | 接入 Pi Extension、Package、Skill、prompt template 与 MCP 等扩展能力 | `Pending` | P2 完成且工作台交互边界稳定 |
+
+### 15.2 P2 — Workbench Foundation
+
+P2 先用一个短 Slice 固定结构，再实现基础功能，随后在真实功能上完成视觉与交互优化。布局、Project/Session 导航和对话流属于结构设计；icon、视觉细节和动效不在结构确定前完整精修。
+
+| Slice | 目标 | 状态 | 主要工作与边界 |
+| --- | --- | --- | --- |
+| S8 | Workbench 信息架构与状态模型 | `Pending` | 确定主布局、Project/Session 导航、对话流、Composer 与 slash command 入口；同步明确 typed Kernel state/command 所有权；只完成结构和必要原型，不做最终视觉精修 |
+| S9 | 多 Project | `Pending` | 保存、展示、选择和切换多个 Project；第一版同一时间只拥有一个活动 Runtime，切换时可靠停止旧 Runtime 后再加载目标 Project，不实现多 Project 并行运行 |
+| S10 | 多 Session | `Pending` | 每个 Project 支持创建、列出、切换和恢复多个 Session；Pi session 文件继续作为 Conversation 事实来源，GUI 只保存必要索引和选择状态 |
+| S11 | Pi 基础命令与 slash command | `Pending` | 扩展当前 RPC command 范围；建立统一的命令发现、搜索、补全和执行入口；区分 GUI 本地命令、typed RPC 命令以及 extension/prompt/skill 命令，不把 TUI 本地命令无条件当作 RPC 文本透传 |
+| S12 | UI 视觉收敛 | `Pending` | 在真实多 Project、多 Session 和命令入口上完成布局、对话流、信息层级、design token 与 icon 系统；不以脱离真实状态的静态 mock 作为完成证据 |
+| S13 | 交互优化与 P2 发布证据 | `Pending` | 完成键盘与焦点、滚动、Project/Session 切换反馈、命令补全、加载/错误/空状态等交互；从打包产物重复验证 P2 核心链路并生成脱敏证据 |
+
+P2 的“多 Project、多 Session”首先指多个对象可保存、可发现、可切换，不等于多个 Pi Runtime 并行运行。只有出现明确并行使用需求后，才单独决定是否扩展 runtime ownership 和调度模型，不预留空的并行抽象。
+
+P2 只有同时满足以下条件才可完成：
+
+1. 多个 Project 可保存和切换，且任一时刻只有一个明确的活动 Runtime owner。
+2. 每个 Project 下可创建、列出、切换和恢复多个 Session。
+3. 当前支持的 Pi 日常命令与 slash command 在 GUI 中可发现、可执行，并能区分命令来源与执行路径。
+4. 布局、对话流、icon 和基础交互经过真实工作流验证，不再依赖 P1 的单 Project/单 Session 占位结构。
+5. 打包产物通过 P1 回归链路和 P2 新增核心链路，工作区、计划、commit 与脱敏证据一致。
+
+### 15.3 P3 — Ecosystem Integration
+
+P3 在 P2 的导航、命令入口和交互容器上接入扩展生态，当前固定范围方向，不提前建立未被真实能力使用的插件平台：
+
+- Pi Extension 的发现、命令、事件和可支持的 UI request。
+- Pi Package 的安装、移除、更新、列出、配置和资源重载。
+- Skill 与 prompt template 的发现、说明和调用；复用 P2 的统一命令入口。
+- MCP server、tool、resource、配置和运行状态；先核对届时固定 Pi 版本的真实支持边界，不预设能够经 Pi RPC 直接透传。
+- 为上述能力统一来源标识、错误、权限提示和诊断体验。
+
+P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核验后追加到本计划。后续拆分必须继续遵循 KISS：先接入一条真实可验证的能力链路，再扩展第二类资源或管理界面。
+
+## 16. 进展日志
 
 | 日期 | Slice | 记录 | 下一步 |
 | --- | --- | --- | --- |
@@ -459,8 +506,10 @@ P1 完成后，才进入多 Project、多 Session 和第一个独立 Workbench M
 | 2026-07-21 | S7 Candidate Gate | 候选 `8a63c29` 的 frozen install、typecheck、79 项 core tests、真实 Pi smoke、build 与 AppImage package 通过；真实产物验证通过 launch、Electron/Pi 版本、project/cwd、probe 和高思考设置，在 `tool_turn/E_THINKING_ACTIVITY` 超时后 Fail Fast，Pi/Electron 无残留。根因是 S5 Flow UX 已将过程节点改为 `process-step`，验证器仍等待旧 `chronological-activity` DOM；`a2e5c28` 改为通过 typed kernel state 计数工具状态，并接受当前 thinking status 或持久 thinking entry | 在包含 0.9 计划与 ADR 的干净 commit 上重新打包并执行完整链路；失败候选不计入完成证据 |
 | 2026-07-21 | S7 Candidate Gate | 候选 `91ba7a9` 的 AppImage package 与真实产物验证再次执行；launch、版本、project/cwd、probe、高思考设置、真实 tool 和 abort 均通过，在 `crash_detection/E_PI_PROCESS_MISSING` Fail Fast，Pi/Electron 无残留。根因是 AppImage 启动器 PID 不能作为 Pi 进程的稳定祖先；验证器改为全局扫描同时满足本次唯一临时 project cwd 与精确 RPC 参数的进程，并继续拒绝零个或多个匹配 | 在新的干净 commit 上重跑 package 与完整 crash/resume/reopen 链路；失败候选不计入完成证据 |
 | 2026-07-21 | S7 Candidate Gate | 候选 `64b4534` 的 AppImage package 与真实产物验证再次执行；launch、版本、project/cwd、probe、高思考设置和真实 tool 通过；abort 已观察到运行中 tool 且 runtime 回到 ready，但工具可能在 abort RPC 生效前完成，旧断言因没有 error tool 报 `E_ABORT_FAILED_TOOL`，随后 Fail Fast 且 Pi/Electron 无残留。验证器改为要求终态无 pending/running tool，并接受 failed tool 或 assistant `stopReason=aborted` 作为中止证据 | 在新的干净 commit 上重新打包并重跑完整链路；失败候选不计入完成证据 |
+| 2026-07-21 | S7 Candidate Gate | 候选 `e278359` 的 AppImage package 与真实产物验证再次执行；launch、版本、project/cwd、probe、高思考设置和真实 tool 通过；中止请求后 runtime 回到 ready 且 tool 已终止，但当前 kernel state 没有独立 abort marker，Pi 在此链路也没有投影 failed tool 或 `stopReason=aborted`，旧验证器因而报 `E_ABORT_SETTLED`，随后 Fail Fast 且 Pi/Electron 无残留。验证器改为先确认 UI 中止入口可用和 tool 正在运行，再直接等待 preload `abort` 的成功 RPC 响应，并验证终态无运行中 tool；该响应只有在 Pi RPC 返回 success 后才完成 | 在新的干净 commit 上重新打包并重跑完整链路；失败候选不计入完成证据 |
+| 2026-07-21 | P2/P3 Planning | 确认 P1 只负责可发布的 Linux 核心链路；P2 依次完成 Workbench 结构、多 Project、多 Session、Pi/slash command、视觉与交互收敛；P3 再接入 Extension、Package、Skill、prompt template 和 MCP，并保留后续显式修订空间 | 先完成 S7/P1；随后以 S8 固定 Workbench 信息架构与状态模型，并在 S9 实现多 Project |
 
-## 16. 计划变更记录
+## 17. 计划变更记录
 
 | 日期 | 版本 | 变更 | 原因 | 影响 |
 | --- | --- | --- | --- | --- |
@@ -473,3 +522,4 @@ P1 完成后，才进入多 Project、多 Session 和第一个独立 Workbench M
 | 2026-07-21 | 0.7 | 为 S5 固定高频增量 patch、16,384 字符流式解析预算、最近 60 轮挂载窗口和动态 Composer clearance | 审计确认完整状态/长单块解析/全历史挂载会放大长回复成本，输入框增高会覆盖末尾消息 | 保留完整 settled Markdown 与可展开历史；长回复热路径有界；S6/S7 功能范围不变 |
 | 2026-07-21 | 0.8 | 取消超长流式 Markdown 的纯文本 fallback；16,384 字符预算只用于停止分块预解析，超限后整篇实时渲染 GFM | 用户明确要求 streaming 与 settled 的实际 Markdown 效果一致，不能在消息结束时再发生格式切换 | 保留增量 state patch、帧合并、历史挂载窗口和 Composer clearance；极端超长单块恢复 O(n) GFM 渲染并记录实测边界，S6/S7 范围不变 |
 | 2026-07-21 | 0.9 | 澄清 Pi 的进程内 `AgentSession` SDK、官方 typed `RpcClient` 与当前自有 typed RPC adapter 的边界；将官方 `RpcClient` 记为受控迁移候选 | 官方 `RpcClient` 同时提供 SDK 体验和 RPC 进程隔离，但 Pi 0.80.10 的实现尚不满足当前 executable ownership、异常退出证据、分阶段停止与脱敏 stderr 要求 | P1 拓扑与六项命令范围不变；允许先评估仅复用官方类型，完整替换需满足 lifecycle/诊断门槛、通过完整 release gate 并删除旧路径 |
+| 2026-07-21 | 1.0 | 增加 P2 Workbench Foundation 与 P3 Ecosystem Integration 后续路径；P2 规划 S8–S13，并将多 Project 放在结构 Slice 后立即实施 | 用户确认需要在 P1 后补齐多 Project、多 Session、slash command、UI 与交互，再扩展 Pi 与 MCP 生态；同时要求路线可继续修改 | P1/S7 范围和门槛不变；P2 首先建立可切换但不并行的多 Project/Session 工作台，P3 的具体 Slice 延后到 P2 接近完成时核验并追加 |
