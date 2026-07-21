@@ -3,8 +3,8 @@
 > 当前阶段：P1 — Linux Core Chain / v0.0.1
 > 计划版本：1.0
 > 最后更新：2026-07-21
-> 总体状态：In Progress
-> 当前 Slice：S7 — Linux 发布证据
+> 总体状态：Complete
+> 当前 Slice：—（P1 已完成；P2 待开始）
 
 ## 1. 计划用途
 
@@ -201,7 +201,7 @@ pi-gui-next/
 | S4 | 实现 Project 选择和带明确 cwd 的 Pi runtime 启动 | `Complete` | 2026-07-20 | 审计修复后当前 core tests、`pnpm typecheck`、`pnpm build`、`pnpm smoke:pi` 通过；覆盖 start/stop 竞态、版本检查期取消、XDG 并发保存与 renderer origin；Pi 启动不传 `--approve`/`--no-approve`；构建版在继承错误 `ELECTRON_RENDERER_URL` 时仍加载 bundled renderer，IPC 可用且外部导航/新窗口被拒绝 |
 | S5 | 实现 prompt、streaming、thinking、tool card、abort 和 settled 状态 | `Complete` | 2026-07-20 | 41 项当前 core tests、`pnpm typecheck`、`pnpm smoke:pi`、`pnpm build` 通过；Wayland/Niri 构建版完成真实 provider prompt；真实 `bash` tool 记录 `pending → running（0/6/12 字符）→ success`；真实 abort 将运行中 tool 归一化为 error，并在 `agent_settled` 后使 runtime/UI 一致回到 `ready`；视觉层按 Phase B 实际 Workbench 的 332px 侧栏、860px 对话框架、轻量 Header、双层 Composer 与扁平活动流完成 1440×960 Electron 对照；补齐安全 CommonMark/GFM、开放代码围栏、外链策略与稳定块流式复用 |
 | S6 | 实现 crash 检测、session 指针持久化、用户显式 restart 和 resume | `Complete` | 2026-07-20 | 二次审计修复后 78 项 core tests、`pnpm typecheck`、`electron-vite build` 和真实 Pi 0.80.10 无状态 probe 通过；覆盖 prompt 退出竞态、并发 resume、恢复验证期间 shutdown、crashed runtime 清理期间 shutdown，以及同时间戳历史消息恢复；隔离 XDG 的 probe 指针哈希、真实 session 副本 `sessionId`/`get_messages` 恢复、构建版 SIGKILL→显式恢复与 GUI 重开恢复证据已建立 |
-| S7 | 构建唯一 Linux 产物并从产物完成真实核心链路，生成发布证据 | `In Progress` | — | 已选择 x86_64 AppImage；`electron-builder@26.15.3`、`package:linux`、`verify:linux` 与脱敏报告/截图验证器已落地；候选 `bd6158c` 已通过 launch、版本、project/cwd、probe、高思考设置、真实 tool 与 abort，在 crash 前因 Pi 将 Linux process title 改为 `pi`、`/proc/<pid>/cmdline` 不再保留启动参数而报 `E_PI_PROCESS_MISSING`；当前验证器改用验证专属 project cwd 加 `/proc/<pid>/comm` 精确唯一识别 Pi，需在新的干净 commit 上重跑 crash/resume/reopen 链路 |
+| S7 | 构建唯一 Linux 产物并从产物完成真实核心链路，生成发布证据 | `Complete` | 2026-07-21 | x86_64 AppImage 与 `electron-builder@26.15.3` 精确固定；候选 `0f76f1e` 上 `pnpm package:linux`、`pnpm verify:linux` 通过，真实产物完成 launch、版本、project/cwd、probe、高思考设置、tool、abort、SIGKILL crash、restart/resume、继续对话、关闭重开恢复和最终收口；脱敏报告 `release/evidence/2026-07-21T04-20-26-724Z-0f76f1e2c756/report.json` 为 passed，五张截图已逐张核验，80 项 core tests 与 `pnpm typecheck` 通过 |
 
 ## 9. Slice 详细验收
 
@@ -438,7 +438,7 @@ P1 完成后进入 P2。P2/P3 的当前路径见下一节；后续调整继续�
 
 | 阶段 | 目标 | 状态 | 开始条件 |
 | --- | --- | --- | --- |
-| P1 — Linux Core Chain | 建立第一条可发布的 Linux 本地 Pi 核心链路 | `In Progress` | 当前阶段 |
+| P1 — Linux Core Chain | 建立第一条可发布的 Linux 本地 Pi 核心链路 | `Complete` | 2026-07-21 完成 |
 | P2 — Workbench Foundation | 补齐日常工作台基础功能，并完成 UI 与交互收敛 | `Pending` | S7 和 P1 完成 |
 | P3 — Ecosystem Integration | 接入 Pi Extension、Package、Skill、prompt template 与 MCP 等扩展能力 | `Pending` | P2 完成且工作台交互边界稳定 |
 
@@ -510,6 +510,7 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-21 | S7 Candidate Gate | 候选 `eecc22d` 的 AppImage package 与真实产物验证再次执行；launch、版本、project/cwd、probe、高思考设置和真实 tool 通过，验证器在 tool running 时取得 Pi abort 成功响应，runtime 回到 ready；但 Pi 未投影 `tool_execution_end`，当前 run 的 tool card 永久残留为 running，验证器报 `E_ABORT_SETTLED` 后 Fail Fast，Pi/Electron 无残留。kernel 的统一 settle 边界改为只将当前 run 遗留的 pending/running tool 归一化为 error，并补充确定性回归测试 | 在新的干净 commit 上重新打包并重跑完整链路；失败候选不计入完成证据 |
 | 2026-07-21 | S7 Candidate Gate | 候选 `bd6158c` 的 AppImage package 与真实产物验证再次执行；launch、版本、project/cwd、probe、高思考设置、真实 tool 和 abort 均通过，abort 获得 Pi 成功响应，tool card 归一化为 error 且 runtime/UI 回到一致终态；在 crash 前因 Pi 将 Linux process title 改为 `pi`、`/proc/<pid>/cmdline` 不再保留启动参数而报 `E_PI_PROCESS_MISSING`，随后 Fail Fast 且 Pi/Electron 无残留。验证器改为以本次唯一临时 project cwd 加 `/proc/<pid>/comm` 的 `pi` 唯一定位进程，继续拒绝零个或多个匹配 | 在新的干净 commit 上重跑 package 与完整 crash/resume/reopen 链路；失败候选不计入完成证据 |
 | 2026-07-21 | P2/P3 Planning | 确认 P1 只负责可发布的 Linux 核心链路；P2 依次完成 Workbench 结构、多 Project、多 Session、Pi/slash command、视觉与交互收敛；P3 再接入 Extension、Package、Skill、prompt template 和 MCP，并保留后续显式修订空间 | 先完成 S7/P1；随后以 S8 固定 Workbench 信息架构与状态模型，并在 S9 实现多 Project |
+| 2026-07-21 | S7 / P1 Complete | 候选 `0f76f1e` 的 AppImage package 与真实产物验证完整通过；报告 13 个步骤全部 pass，覆盖 launch、runtime identity、project/cwd、probe、高思考、真实 tool、Pi 成功响应的 abort、SIGKILL crash、restart/resume、继续对话、graceful close、reopen/reopen resume 和 final close；五张 1271×1523 截图均非空且 prompt、assistant、thinking、tool 详情已脱敏，报告不含 prompt 正文、tool 输出或 credential；80 项 core tests、typecheck 通过，验证后 Pi/Electron 无残留 | P1 完成；P2 保持 Pending，下一步从 S8 Workbench 信息架构与状态模型开始 |
 
 ## 17. 计划变更记录
 
