@@ -1,17 +1,18 @@
-import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron'
 import { join } from 'node:path'
 
 import {
   KERNEL_COMMAND_CHANNEL,
   KERNEL_EVENT_CHANNEL,
+  OPEN_EXTERNAL_CHANNEL,
   type KernelCommand,
   type KernelEvent,
-  type ProjectTrust,
   type ThinkingLevel
 } from '../shared/kernel-contract.ts'
+import { normalizeExternalUrl } from '../shared/external-url.ts'
 import { WorkbenchKernel } from './kernel/workbench-kernel.ts'
 import { ProjectStore } from './project/project-store.ts'
-import { LinuxLocalRuntime } from './runtime/linux-local-runtime.ts'
+import { LinuxLocalRuntime, probePiRpc } from './runtime/linux-local-runtime.ts'
 import {
   isAllowedRendererUrl,
   resolveRendererTarget,
@@ -29,8 +30,10 @@ async function createMainWindow(rendererTarget: RendererTarget): Promise<void> {
   }
 
   const window = new BrowserWindow({
-    width: 1024,
-    height: 720,
+    width: 1440,
+    height: 960,
+    minWidth: 720,
+    minHeight: 560,
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
@@ -56,6 +59,18 @@ async function createMainWindow(rendererTarget: RendererTarget): Promise<void> {
 }
 
 async function startApplication(): Promise<void> {
+  if (process.env.PI_GUI_PROBE_ONLY === '1') {
+    const result = await probePiRpc({
+      cwd: process.cwd(),
+      explicitExecutable: process.env.PI_GUI_PI_EXECUTABLE,
+      noSession: true
+    })
+    console.info(`[Pi GUI] Pi RPC runtime ready: version=${result.version}`)
+    allowQuit = true
+    app.quit()
+    return
+  }
+
   const rendererTarget = resolveRendererTarget({
     isPackaged: app.isPackaged,
     electronViteMode: process.env.NODE_ENV_ELECTRON_VITE,
@@ -64,14 +79,22 @@ async function startApplication(): Promise<void> {
   })
   const projectStore = new ProjectStore()
   const storedProject = await projectStore.loadProject()
+  const recentSession = storedProject.path === null
+    ? null
+    : await projectStore.loadRecentSession(storedProject.path)
   kernel = new WorkbenchKernel(
-    (project) =>
+    (project, launchOptions) =>
       new LinuxLocalRuntime({
         cwd: project.path,
-        trust: project.trust,
-        explicitExecutable: process.env.PI_GUI_PI_EXECUTABLE
+        explicitExecutable: process.env.PI_GUI_PI_EXECUTABLE,
+        sessionFile: launchOptions.sessionFile
       }),
-    storedProject
+    storedProject,
+    {
+      recentSession,
+      persistRecentSession: (pointer) => projectStore.saveRecentSession(pointer),
+      validateRecentSession: (pointer) => projectStore.validateRecentSession(pointer)
+    }
   )
   kernel.subscribe(forwardKernelEvent)
   ipcMain.handle(KERNEL_COMMAND_CHANNEL, async (event, command: unknown) => {
@@ -91,37 +114,23 @@ async function startApplication(): Promise<void> {
           : await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
         const selectedPath = selection.filePaths[0]
         if (selection.canceled || selectedPath === undefined) return kernel.getState()
-        kernel.setProject(await projectStore.validateProjectPath(selectedPath))
-        return kernel.getState()
-      }
-      case 'kernel.set-project-trust': {
-        const state = kernel.getState()
-        if (state.runtime.status !== 'stopped') {
-          throw new Error(`Cannot change project while runtime is ${state.runtime.status}.`)
-        }
-        if (state.project.path === null) {
-          throw new Error('Select a project directory before choosing trust.')
-        }
-        const project = {
-          path: await projectStore.validateProjectPath(state.project.path),
-          trust: command.trust
-        }
-        await projectStore.saveProject(project)
-        kernel.setProject(project.path)
-        kernel.setProjectTrust(project.trust)
+        const projectPath = await projectStore.validateProjectPath(selectedPath)
+        kernel.setProject(projectPath, await projectStore.loadRecentSession(projectPath))
         return kernel.getState()
       }
       case 'kernel.start-project': {
         const project = configuredProject(kernel.getState().project)
         const canonicalPath = await projectStore.validateProjectPath(project.path)
         if (canonicalPath !== project.path) {
-          kernel.setProject(canonicalPath)
-          kernel.setProjectTrust(project.trust)
+          kernel.setProject(canonicalPath, await projectStore.loadRecentSession(canonicalPath))
         }
         await projectStore.saveProject(configuredProject(kernel.getState().project))
         await kernel.start()
         return kernel.getState()
       }
+      case 'kernel.resume-session':
+        await kernel.resumeSession()
+        return kernel.getState()
       case 'kernel.prompt':
         await kernel.prompt(command.message)
         return kernel.getState()
@@ -136,18 +145,13 @@ async function startApplication(): Promise<void> {
         return kernel.getState()
     }
   })
-
-  if (process.env.PI_GUI_PROBE_ONLY === '1') {
-    kernel.setProject(await projectStore.validateProjectPath(process.cwd()))
-    kernel.setProjectTrust('untrusted')
-    await kernel.start()
-    const runtimeState = kernel.getState().runtime
-    console.info(`[Pi GUI] Pi RPC runtime ready: version=${runtimeState.version}`)
-    await kernel.stop()
-    allowQuit = true
-    app.quit()
-    return
-  }
+  ipcMain.handle(OPEN_EXTERNAL_CHANNEL, async (event, value: unknown) => {
+    assertTrustedIpcSender(event, rendererTarget)
+    if (typeof value !== 'string') throw new Error('External link must be a URL string.')
+    const url = normalizeExternalUrl(value)
+    if (url === null) throw new Error('External link protocol is not allowed.')
+    await shell.openExternal(url)
+  })
 
   await createMainWindow(rendererTarget)
 }
@@ -193,15 +197,10 @@ function isKernelCommand(value: unknown): value is KernelCommand {
     value.type === 'kernel.get-state' ||
     value.type === 'kernel.select-project' ||
     value.type === 'kernel.start-project' ||
+    value.type === 'kernel.resume-session' ||
     value.type === 'kernel.abort'
   ) {
     return Object.keys(value).length === 1
-  }
-  if (value.type === 'kernel.set-project-trust') {
-    return (
-      (value.trust === 'trusted' || value.trust === 'untrusted') &&
-      Object.keys(value).length === 2
-    )
   }
   if (value.type === 'kernel.prompt') {
     return typeof value.message === 'string' && Object.keys(value).length === 2
@@ -243,14 +242,9 @@ async function stopKernel(): Promise<void> {
   await kernel.stop()
 }
 
-function configuredProject(project: {
-  path: string | null
-  trust: ProjectTrust | null
-}): { path: string; trust: ProjectTrust } {
-  if (project.path === null || project.trust === null) {
-    throw new Error('Select a project directory and trust setting before starting.')
-  }
-  return { path: project.path, trust: project.trust }
+function configuredProject(project: { path: string | null }): { path: string } {
+  if (project.path === null) throw new Error('Select a project directory before starting.')
+  return { path: project.path }
 }
 
 function assertTrustedIpcSender(event: IpcMainInvokeEvent, rendererTarget: RendererTarget): void {

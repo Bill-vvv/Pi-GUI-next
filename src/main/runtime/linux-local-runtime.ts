@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { isAbsolute } from 'node:path'
 
 import {
   PiRpcClient,
@@ -24,21 +25,28 @@ const STOP_GRACE_MS = 1_000
 
 export type LinuxLocalRuntimeOptions = {
   cwd: string
-  trust: 'trusted' | 'untrusted'
   explicitExecutable?: string
   path?: string
   versionTimeoutMs?: number
   rpcTimeoutMs?: number
+  sessionFile?: string
+  noSession?: boolean
 }
 
-export function buildPiRpcArguments(trust: LinuxLocalRuntimeOptions['trust']): string[] {
-  return [
-    '--mode',
-    'rpc',
-    '--offline',
-    '--no-session',
-    trust === 'trusted' ? '--approve' : '--no-approve'
-  ]
+export function buildPiRpcArguments(sessionFile?: string, noSession = false): string[] {
+  if (sessionFile !== undefined && noSession) {
+    throw new Error('Session file and no-session mode cannot be used together.')
+  }
+  const arguments_ = ['--mode', 'rpc', '--offline']
+  if (sessionFile !== undefined) {
+    if (!isAbsolute(sessionFile)) {
+      throw new Error(`Session file must be an absolute path: ${sessionFile}`)
+    }
+    arguments_.push('--session', sessionFile)
+  } else if (noSession) {
+    arguments_.push('--no-session')
+  }
+  return arguments_
 }
 
 export type PiRpcProbeResult = {
@@ -61,12 +69,19 @@ export class LinuxLocalRuntime implements RuntimeHost {
     executable: null,
     version: null,
     stderrChars: 0,
+    stderrSummary: null,
     lastError: null,
     exitCode: null,
     exitSignal: null
   }
 
   constructor(options: LinuxLocalRuntimeOptions) {
+    if (options.sessionFile !== undefined && options.noSession) {
+      throw new Error('Session file and no-session mode cannot be used together.')
+    }
+    if (options.sessionFile !== undefined && !isAbsolute(options.sessionFile)) {
+      throw new Error(`Session file must be an absolute path: ${options.sessionFile}`)
+    }
     this.options = options
   }
 
@@ -113,7 +128,7 @@ export class LinuxLocalRuntime implements RuntimeHost {
 
     const child = spawn(
       executable,
-      buildPiRpcArguments(this.options.trust),
+      buildPiRpcArguments(this.options.sessionFile, this.options.noSession),
       {
         cwd: this.options.cwd,
         shell: false,
@@ -126,6 +141,7 @@ export class LinuxLocalRuntime implements RuntimeHost {
       executable,
       version,
       stderrChars: 0,
+      stderrSummary: null,
       lastError: null,
       exitCode: null,
       exitSignal: null
@@ -282,9 +298,11 @@ export class LinuxLocalRuntime implements RuntimeHost {
 
   private handleDiagnostic(diagnostic: PiRpcDiagnostic): void {
     if (diagnostic.type === 'stderr') {
+      const stderrChars = this.state.stderrChars + diagnostic.chunk.length
       this.state = {
         ...this.state,
-        stderrChars: this.state.stderrChars + diagnostic.chunk.length
+        stderrChars,
+        stderrSummary: `Pi stderr captured ${stderrChars} characters.`
       }
       this.emit({
         type: 'diagnostic',

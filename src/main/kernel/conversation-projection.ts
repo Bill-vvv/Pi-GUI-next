@@ -1,6 +1,7 @@
 import type {
   KernelConversationEntry,
   KernelMessageEntry,
+  KernelThinkingEntry,
   KernelToolEntry
 } from '../../shared/kernel-contract.ts'
 import type { PiRpcEvent } from '../pi-rpc/pi-rpc-client.ts'
@@ -9,8 +10,8 @@ const MAX_DISPLAY_CHARS = 30_000
 
 export function projectMessages(messages: unknown[]): KernelConversationEntry[] {
   let entries: KernelConversationEntry[] = []
-  for (const message of messages) {
-    entries = projectMessage(entries, message, false)
+  for (const [messageIndex, message] of messages.entries()) {
+    entries = projectMessage(entries, message, false, `history:${messageIndex}`)
   }
   return entries
 }
@@ -110,19 +111,22 @@ export function projectPiEvent(
 function projectMessage(
   entries: KernelConversationEntry[],
   value: unknown,
-  streaming: boolean
+  streaming: boolean,
+  historicalIdentity?: string
 ): KernelConversationEntry[] {
   if (!isRecord(value) || typeof value.role !== 'string') return entries
   const timestamp = numberValue(value.timestamp) ?? Date.now()
 
   if (value.role === 'user') {
     const text = textFromContent(value.content)
+    const messageId = historicalIdentity === undefined
+      ? `message:user:${timestamp}`
+      : `message:${historicalIdentity}:user`
     const entry: KernelMessageEntry = {
-      id: `message:user:${timestamp}`,
+      id: messageId,
       kind: 'message',
       role: 'user',
       text,
-      thinking: '',
       timestamp,
       streaming: false,
       stopReason: null,
@@ -133,26 +137,45 @@ function projectMessage(
 
   if (value.role === 'assistant') {
     const content = Array.isArray(value.content) ? value.content : []
-    const entry: KernelMessageEntry = {
-      id: `message:assistant:${timestamp}`,
+    const messageId = historicalIdentity === undefined
+      ? `message:assistant:${timestamp}`
+      : `message:${historicalIdentity}:assistant`
+    const messageEntry: KernelMessageEntry = {
+      id: messageId,
       kind: 'message',
       role: 'assistant',
       text: content
         .filter((item) => isRecord(item) && item.type === 'text')
         .map((item) => stringValue(item.text) ?? '')
         .join(''),
-      thinking: content
-        .filter((item) => isRecord(item) && item.type === 'thinking')
-        .map((item) => stringValue(item.thinking) ?? '')
-        .join(''),
       timestamp,
       streaming,
       stopReason: stringValue(value.stopReason),
       error: stringValue(value.errorMessage)
     }
-    let nextEntries = upsert(entries, entry)
-    for (const item of content) {
-      if (!isRecord(item) || item.type !== 'toolCall') continue
+    let nextEntries = entries
+    let messageProjected = false
+    for (const [contentIndex, item] of content.entries()) {
+      if (!isRecord(item)) continue
+      if (item.type === 'thinking') {
+        const thinkingEntry: KernelThinkingEntry = {
+          id: `${messageId}:thinking:${contentIndex}`,
+          kind: 'thinking',
+          text: stringValue(item.thinking) ?? '',
+          timestamp,
+          streaming
+        }
+        nextEntries = upsert(nextEntries, thinkingEntry)
+        continue
+      }
+      if (item.type === 'text') {
+        if (!messageProjected) {
+          nextEntries = upsert(nextEntries, messageEntry)
+          messageProjected = true
+        }
+        continue
+      }
+      if (item.type !== 'toolCall') continue
       const toolCallId = stringValue(item.id)
       if (toolCallId === null) continue
       const existing = findTool(nextEntries, toolCallId)
@@ -169,6 +192,9 @@ function projectMessage(
         timestamp: existing?.timestamp ?? timestamp,
         durationMs: existing?.durationMs ?? null
       })
+    }
+    if (!messageProjected && messageEntry.error !== null) {
+      nextEntries = upsert(nextEntries, messageEntry)
     }
     return nextEntries
   }

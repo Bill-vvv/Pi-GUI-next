@@ -23,6 +23,7 @@ export type RuntimeHostState = {
   executable: string | null
   version: string | null
   stderrChars: number
+  stderrSummary: string | null
   lastError: string | null
   exitCode: number | null
   exitSignal: string | null

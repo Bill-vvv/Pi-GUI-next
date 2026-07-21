@@ -1,5 +1,6 @@
 export const KERNEL_COMMAND_CHANNEL = 'pi-gui:kernel-command'
 export const KERNEL_EVENT_CHANNEL = 'pi-gui:kernel-event'
+export const OPEN_EXTERNAL_CHANNEL = 'pi-gui:open-external'
 
 export type RuntimeStatus =
   | 'stopped'
@@ -23,16 +24,14 @@ export type KernelRuntimeState = {
   executable: string | null
   version: string | null
   stderrChars: number
+  stderrSummary: string | null
   lastError: string | null
   exitCode: number | null
   exitSignal: string | null
 }
 
-export type ProjectTrust = 'trusted' | 'untrusted'
-
 export type KernelProjectState = {
   path: string | null
-  trust: ProjectTrust | null
 }
 
 export type KernelModelState = {
@@ -46,6 +45,7 @@ export type KernelModelState = {
 export type KernelSessionState = {
   id: string | null
   name: string | null
+  resumeAvailable: boolean
   model: KernelModelState | null
   thinkingLevel: ThinkingLevel | null
   messageCount: number
@@ -58,11 +58,18 @@ export type KernelMessageEntry = {
   kind: 'message'
   role: 'user' | 'assistant'
   text: string
-  thinking: string
   timestamp: number
   streaming: boolean
   stopReason: string | null
   error: string | null
+}
+
+export type KernelThinkingEntry = {
+  id: string
+  kind: 'thinking'
+  text: string
+  timestamp: number
+  streaming: boolean
 }
 
 export type KernelToolEntry = {
@@ -88,10 +95,15 @@ export type KernelErrorEntry = {
   timestamp: number
 }
 
-export type KernelConversationEntry = KernelMessageEntry | KernelToolEntry | KernelErrorEntry
+export type KernelConversationEntry =
+  | KernelMessageEntry
+  | KernelThinkingEntry
+  | KernelToolEntry
+  | KernelErrorEntry
 
 export type KernelConversationState = {
   entries: KernelConversationEntry[]
+  activeRunStartIndex: number | null
 }
 
 export type KernelState = {
@@ -101,29 +113,75 @@ export type KernelState = {
   conversation: KernelConversationState
 }
 
+export type KernelConversationEntryPatch =
+  | { type: 'insert'; index: number; entry: KernelConversationEntry }
+  | {
+      type: 'append-message-text'
+      index: number
+      from: number
+      text: string
+      streaming: boolean
+      stopReason: string | null
+      error: string | null
+    }
+  | {
+      type: 'append-thinking-text'
+      index: number
+      from: number
+      text: string
+      streaming: boolean
+    }
+  | {
+      type: 'append-tool-output'
+      index: number
+      from: number
+      output: string
+      status: KernelToolEntry['status']
+      details: string
+      truncated: boolean
+      durationMs: number | null
+    }
+
+export type KernelConversationPatch = {
+  entries?: KernelConversationEntryPatch[]
+  activeRunStartIndex?: number | null
+}
+
+export type KernelStatePatch = {
+  runtime?: KernelRuntimeState
+  session?: KernelSessionState
+  conversation?: KernelConversationPatch
+}
+
 export type KernelCommand =
   | { type: 'kernel.get-state' }
   | { type: 'kernel.select-project' }
-  | { type: 'kernel.set-project-trust'; trust: ProjectTrust }
   | { type: 'kernel.start-project' }
+  | { type: 'kernel.resume-session' }
   | { type: 'kernel.prompt'; message: string }
   | { type: 'kernel.abort' }
   | { type: 'kernel.set-model'; provider: string; modelId: string }
   | { type: 'kernel.set-thinking-level'; level: ThinkingLevel }
 
-export type KernelEvent = {
-  type: 'kernel.state-changed'
-  state: KernelState
-}
+export type KernelEvent =
+  | {
+      type: 'kernel.state-changed'
+      state: KernelState
+    }
+  | {
+      type: 'kernel.state-patched'
+      patch: KernelStatePatch
+    }
 
 export type KernelApi = {
   getState: () => Promise<KernelState>
   selectProject: () => Promise<KernelState>
-  setProjectTrust: (trust: ProjectTrust) => Promise<KernelState>
   startProject: () => Promise<KernelState>
+  resumeSession: () => Promise<KernelState>
   prompt: (message: string) => Promise<KernelState>
   abort: () => Promise<KernelState>
   setModel: (provider: string, modelId: string) => Promise<KernelState>
   setThinkingLevel: (level: ThinkingLevel) => Promise<KernelState>
+  openExternal: (url: string) => Promise<void>
   subscribe: (listener: (event: KernelEvent) => void) => () => void
 }
