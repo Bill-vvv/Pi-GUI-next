@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { KernelEvent, RuntimeStatus } from '../../shared/kernel-contract.ts'
-import type { RecentSessionPointer } from '../project/project-store.ts'
+import type { KernelEvent, KernelProjectState, RuntimeStatus } from '../../shared/kernel-contract.ts'
+import type { ProjectSessionRegistry, SessionPointer } from '../project/project-store.ts'
 import type { PiRpcSessionState } from '../pi-rpc/pi-rpc-client.ts'
 import { WorkbenchKernel } from './workbench-kernel.ts'
 import type {
@@ -218,27 +218,46 @@ function collectStatuses(kernel: WorkbenchKernel): RuntimeStatus[] {
 }
 
 function kernelOptions(
-  recentSession: RecentSessionPointer | null = null,
-  persisted: RecentSessionPointer[] = []
+  recentSession: SessionPointer | null = null,
+  persisted: SessionPointer[] = [],
+  activeProjects: string[] = [],
+  persistedProjects: KernelProjectState[] = []
 ): {
-  recentSession: RecentSessionPointer | null
-  persistRecentSession: (pointer: RecentSessionPointer) => Promise<void>
-  validateRecentSession: (pointer: RecentSessionPointer) => Promise<void>
+  sessionRegistry: ProjectSessionRegistry
+  persistProject: (project: KernelProjectState) => Promise<void>
+  persistActiveProject: (projectKey: string) => Promise<void>
+  persistSession: (pointer: SessionPointer) => Promise<void>
+  validateSession: (pointer: SessionPointer) => Promise<SessionPointer>
 } {
   return {
-    recentSession,
-    validateRecentSession: async () => {},
-    persistRecentSession: async (pointer) => {
+    sessionRegistry: sessionRegistry(recentSession),
+    validateSession: async (pointer) => pointer,
+    persistProject: async (project) => {
+      persistedProjects.push(project)
+    },
+    persistActiveProject: async (projectKey) => {
+      activeProjects.push(projectKey)
+    },
+    persistSession: async (pointer) => {
       persisted.push(pointer)
     }
   }
 }
 
+function sessionRegistry(pointer: SessionPointer | null): ProjectSessionRegistry {
+  return {
+    sessions: pointer === null ? [] : [pointer],
+    activeSessionKey: pointer?.sessionFile ?? null
+  }
+}
+
+function fileError(code: string, message: string): Error & { code: string } {
+  return Object.assign(new Error(message), { code })
+}
+
 test('normal start and stop follows the lifecycle', async () => {
   const runtime = new FakeRuntimeHost()
-  const kernel = new WorkbenchKernel(() => runtime, {
-    path: '/tmp/project'
-  }, kernelOptions())
+  const kernel = new WorkbenchKernel(() => runtime, { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' }, kernelOptions())
   const statuses = collectStatuses(kernel)
 
   await kernel.start()
@@ -250,9 +269,7 @@ test('normal start and stop follows the lifecycle', async () => {
 
 test('stop during start cancels the old start without reviving the runtime', async () => {
   const runtime = new DelayedStartRuntimeHost()
-  const kernel = new WorkbenchKernel(() => runtime, {
-    path: '/tmp/project'
-  }, kernelOptions())
+  const kernel = new WorkbenchKernel(() => runtime, { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' }, kernelOptions())
   const statuses = collectStatuses(kernel)
 
   const startPromise = kernel.start()
@@ -266,15 +283,17 @@ test('stop during start cancels the old start without reviving the runtime', asy
   assert.equal(kernel.getState().runtime.status, 'stopped')
   assert.equal(statuses.includes('ready'), false)
   assert.equal(statuses.includes('crashed'), false)
-  kernel.setProject('/tmp/next-project', null)
-  assert.equal(kernel.getState().project.path, '/tmp/next-project')
+  await kernel.addProject('/tmp/next-project', sessionRegistry(null))
+  assert.equal(kernel.getState().activeProjectKey, '/tmp/next-project')
+  assert.deepEqual(kernel.getState().projects, [
+    { path: '/tmp/project' },
+    { path: '/tmp/next-project' }
+  ])
 })
 
 test('activity transitions ready to running and back to ready', async () => {
   const runtime = new FakeRuntimeHost()
-  const kernel = new WorkbenchKernel(() => runtime, {
-    path: '/tmp/project'
-  }, kernelOptions())
+  const kernel = new WorkbenchKernel(() => runtime, { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' }, kernelOptions())
   const statuses = collectStatuses(kernel)
 
   await kernel.start()
@@ -286,9 +305,7 @@ test('activity transitions ready to running and back to ready', async () => {
 
 test('unexpected exit crashes and later activity cannot make it running', async () => {
   const runtime = new FakeRuntimeHost()
-  const kernel = new WorkbenchKernel(() => runtime, {
-    path: '/tmp/project'
-  }, kernelOptions())
+  const kernel = new WorkbenchKernel(() => runtime, { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' }, kernelOptions())
 
   await kernel.start()
   runtime.emit({ type: 'process-exit', code: 7, signal: null })
@@ -304,7 +321,7 @@ test('prompt rejection after process exit preserves the crashed state and exit d
   const runtime = new RejectablePromptRuntimeHost()
   const kernel = new WorkbenchKernel(
     () => runtime,
-    { path: '/tmp/project' },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     kernelOptions()
   )
 
@@ -325,25 +342,107 @@ test('prompt rejection after process exit preserves the crashed state and exit d
 test('project path is required and passed to the runtime factory', async () => {
   const runtime = new FakeRuntimeHost()
   let receivedProject: { path: string } | null = null
+  const persistedProjects: KernelProjectState[] = []
   const kernel = new WorkbenchKernel((project) => {
     receivedProject = project
     return runtime
-  }, { path: null }, kernelOptions())
+  }, { projects: [], activeProjectKey: null }, kernelOptions(null, [], [], persistedProjects))
 
   await assert.rejects(kernel.start(), /Select a project directory/)
 
-  kernel.setProject('/tmp/project', null)
+  await kernel.addProject('/tmp/project', sessionRegistry(null))
   await kernel.start()
 
+  assert.deepEqual(persistedProjects, [{ path: '/tmp/project' }])
   assert.deepEqual(receivedProject, { path: '/tmp/project' })
-  assert.deepEqual(kernel.getState().project, { path: '/tmp/project' })
+  assert.deepEqual(kernel.getState().projects, [{ path: '/tmp/project' }])
+  assert.equal(kernel.getState().activeProjectKey, '/tmp/project')
+})
+
+test('activating another project stops the ready runtime before changing the active projection', async () => {
+  const runtime = new FakeRuntimeHost()
+  const activeProjects: string[] = []
+  const recentSession: SessionPointer = {
+    projectPath: '/tmp/next-project',
+    sessionFile: '/tmp/next-session.jsonl',
+    sessionId: 'next-session',
+    sessionName: 'Next session'
+  }
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    {
+      projects: [{ path: '/tmp/project' }, { path: '/tmp/next-project' }],
+      activeProjectKey: '/tmp/project'
+    },
+    kernelOptions(null, [], activeProjects)
+  )
+
+  await kernel.start()
+  await kernel.activateProject('/tmp/next-project', sessionRegistry(recentSession))
+
+  assert.equal(runtime.stopCalls, 1)
+  assert.deepEqual(activeProjects, ['/tmp/next-project'])
+  assert.equal(kernel.getState().activeProjectKey, '/tmp/next-project')
+  assert.equal(kernel.getState().runtime.status, 'stopped')
+  assert.equal(kernel.getState().session.id, 'next-session')
+  assert.equal(kernel.getState().session.resumeAvailable, true)
+  assert.deepEqual(kernel.getState().conversation.entries, [])
+})
+
+test('activating another project rejects while a turn is running', async () => {
+  const runtime = new FakeRuntimeHost()
+  const activeProjects: string[] = []
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    {
+      projects: [{ path: '/tmp/project' }, { path: '/tmp/next-project' }],
+      activeProjectKey: '/tmp/project'
+    },
+    kernelOptions(null, [], activeProjects)
+  )
+
+  await kernel.start()
+  runtime.emit({ type: 'activity-started' })
+
+  await assert.rejects(
+    kernel.activateProject('/tmp/next-project', sessionRegistry(null)),
+    /Cannot change project while runtime is running/
+  )
+  assert.equal(runtime.stopCalls, 0)
+  assert.deepEqual(activeProjects, [])
+  assert.equal(kernel.getState().activeProjectKey, '/tmp/project')
+})
+
+test('active-project persistence failure leaves the stopped old project selected', async () => {
+  const runtime = new FakeRuntimeHost()
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    {
+      projects: [{ path: '/tmp/project' }, { path: '/tmp/next-project' }],
+      activeProjectKey: '/tmp/project'
+    },
+    {
+      ...kernelOptions(),
+      persistActiveProject: async () => {
+        throw new Error('active project persistence failed')
+      }
+    }
+  )
+
+  await kernel.start()
+  await assert.rejects(
+    kernel.activateProject('/tmp/next-project', sessionRegistry(null)),
+    /active project persistence failed/
+  )
+
+  assert.equal(runtime.stopCalls, 1)
+  assert.equal(kernel.getState().runtime.status, 'stopped')
+  assert.equal(kernel.getState().activeProjectKey, '/tmp/project')
 })
 
 test('projects streaming messages and tools without duplication and settles only on agent_settled', async () => {
   const runtime = new FakeRuntimeHost()
-  const kernel = new WorkbenchKernel(() => runtime, {
-    path: '/tmp/project'
-  }, kernelOptions())
+  const kernel = new WorkbenchKernel(() => runtime, { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' }, kernelOptions())
 
   await kernel.start()
   await kernel.prompt('Inspect package.json')
@@ -480,7 +579,7 @@ test('settling after abort marks a tool without an end event as error', async ()
   const runtime = new FakeRuntimeHost()
   const kernel = new WorkbenchKernel(
     () => runtime,
-    { path: '/tmp/project' },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     kernelOptions()
   )
 
@@ -511,7 +610,7 @@ test('Pi streaming emits indexed patches and only includes changed state boundar
   const runtime = new FakeRuntimeHost()
   const kernel = new WorkbenchKernel(
     () => runtime,
-    { path: '/tmp/project' },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     kernelOptions()
   )
   await kernel.start()
@@ -576,7 +675,7 @@ test('Pi patches append tool output and falls back for a non-prefix message rewr
   const runtime = new FakeRuntimeHost()
   const kernel = new WorkbenchKernel(
     () => runtime,
-    { path: '/tmp/project' },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     kernelOptions()
   )
   await kernel.start()
@@ -634,7 +733,7 @@ test('Pi lifecycle patches runtime, session, and run boundary without changing s
   const runtime = new FakeRuntimeHost()
   const kernel = new WorkbenchKernel(
     () => runtime,
-    { path: '/tmp/project' },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     kernelOptions()
   )
   await kernel.start()
@@ -670,7 +769,7 @@ test('low-frequency activity lifecycle keeps the full-state fallback', async () 
   const runtime = new FakeRuntimeHost()
   const kernel = new WorkbenchKernel(
     () => runtime,
-    { path: '/tmp/project' },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     kernelOptions()
   )
   await kernel.start()
@@ -694,22 +793,462 @@ test('new session persists its recent-session pointer', async () => {
     sessionFile: '/tmp/new-session.jsonl',
     sessionName: 'New session'
   })
-  const persisted: RecentSessionPointer[] = []
+  const persisted: SessionPointer[] = []
   const kernel = new WorkbenchKernel(
     () => runtime,
-    { path: '/tmp/project' },
-    kernelOptions(null, persisted)
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(null, persisted),
+      validateSession: async (pointer) => ({
+        ...pointer,
+        sessionFile: '/tmp/canonical-new-session.jsonl'
+      })
+    }
   )
 
   await kernel.start()
 
   assert.deepEqual(persisted, [{
     projectPath: '/tmp/project',
-    sessionFile: '/tmp/new-session.jsonl',
+    sessionFile: '/tmp/canonical-new-session.jsonl',
     sessionId: 'new-session',
     sessionName: 'New session'
   }])
   assert.equal(kernel.getState().session.resumeAvailable, true)
+})
+
+test('a new session whose JSONL is not written yet starts as an unregistered provisional session', async () => {
+  const existingPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/existing-session.jsonl',
+    sessionId: 'existing-session',
+    sessionName: 'Existing session'
+  }
+  const runtime = new FakeRuntimeHost({
+    sessionId: 'provisional-session',
+    sessionFile: '/tmp/provisional-session.jsonl',
+    sessionName: 'Provisional session'
+  })
+  const persisted: SessionPointer[] = []
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(existingPointer, persisted),
+      validateSession: async () => {
+        throw fileError('ENOENT', 'session file not written yet')
+      }
+    }
+  )
+
+  await kernel.start()
+
+  const state = kernel.getState()
+  assert.equal(state.runtime.status, 'ready')
+  assert.equal(state.session.id, 'provisional-session')
+  assert.equal(state.session.resumeAvailable, false)
+  assert.equal(state.activeSessionKey, null)
+  assert.deepEqual(state.sessions, [{
+    key: existingPointer.sessionFile,
+    id: existingPointer.sessionId,
+    name: existingPointer.sessionName
+  }])
+  assert.deepEqual(persisted, [])
+
+  await kernel.prompt('Write the first turn')
+  assert.deepEqual(runtime.commands.at(-1), { type: 'prompt', message: 'Write the first turn' })
+})
+
+test('the first assistant message materializes a provisional session before settled becomes ready', async () => {
+  const runtime = new FakeRuntimeHost({
+    sessionId: 'provisional-session',
+    sessionFile: '/tmp/provisional-session.jsonl',
+    sessionName: 'Provisional session'
+  })
+  const canonicalPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/canonical-provisional-session.jsonl',
+    sessionId: 'provisional-session',
+    sessionName: 'Provisional session'
+  }
+  const persisted: SessionPointer[] = []
+  let validationCalls = 0
+  let earlyAttemptEntered!: () => void
+  let persistenceEntered!: () => void
+  let releasePersistence!: () => void
+  const earlyAttempt = new Promise<void>((resolve) => {
+    earlyAttemptEntered = resolve
+  })
+  const entered = new Promise<void>((resolve) => {
+    persistenceEntered = resolve
+  })
+  const persistenceGate = new Promise<void>((resolve) => {
+    releasePersistence = resolve
+  })
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(null, persisted),
+      validateSession: async () => {
+        validationCalls += 1
+        if (validationCalls === 1) throw fileError('ENOENT', 'session file not written yet')
+        if (validationCalls === 2) {
+          earlyAttemptEntered()
+          throw fileError('ENOENT', 'message event arrived before Pi finished writing')
+        }
+        return canonicalPointer
+      },
+      persistSession: async (pointer) => {
+        persistenceEntered()
+        await persistenceGate
+        persisted.push(pointer)
+      }
+    }
+  )
+
+  await kernel.start()
+  await kernel.prompt('Materialize the session')
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Written' }],
+        timestamp: 20
+      }
+    }
+  })
+  await earlyAttempt
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  runtime.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+  await entered
+
+  assert.equal(kernel.getState().runtime.status, 'running')
+  assert.equal(kernel.getState().activeSessionKey, null)
+  const committed = new Promise<void>((resolve) => {
+    const unsubscribe = kernel.subscribe(() => {
+      const state = kernel.getState()
+      if (state.activeSessionKey === canonicalPointer.sessionFile && state.runtime.status === 'ready') {
+        unsubscribe()
+        resolve()
+      }
+    })
+  })
+  releasePersistence()
+  await committed
+
+  const state = kernel.getState()
+  assert.deepEqual(persisted, [canonicalPointer])
+  assert.deepEqual(state.sessions, [{
+    key: canonicalPointer.sessionFile,
+    id: canonicalPointer.sessionId,
+    name: canonicalPointer.sessionName
+  }])
+  assert.equal(state.activeSessionKey, canonicalPointer.sessionFile)
+  assert.equal(state.session.resumeAvailable, true)
+  assert.equal(state.session.settled, true)
+  assert.equal(state.runtime.status, 'ready')
+})
+
+test('a non-ENOENT provisional commit failure crashes without registering a ghost session', async () => {
+  const runtime = new FakeRuntimeHost({
+    sessionId: 'failed-provisional-session',
+    sessionFile: '/tmp/failed-provisional-session.jsonl'
+  })
+  const persisted: SessionPointer[] = []
+  let validationCalls = 0
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(null, persisted),
+      validateSession: async () => {
+        validationCalls += 1
+        if (validationCalls === 1) throw fileError('ENOENT', 'session file not written yet')
+        throw fileError('EACCES', 'session file is unreadable')
+      }
+    }
+  )
+
+  await kernel.start()
+  await kernel.prompt('Trigger materialization')
+  const crashed = new Promise<void>((resolve) => {
+    const unsubscribe = kernel.subscribe(() => {
+      if (kernel.getState().runtime.status === 'crashed') {
+        unsubscribe()
+        resolve()
+      }
+    })
+  })
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Cannot commit' }],
+        timestamp: 20
+      }
+    }
+  })
+  await crashed
+
+  const state = kernel.getState()
+  assert.equal(state.runtime.status, 'crashed')
+  assert.match(state.runtime.lastError ?? '', /unreadable/)
+  assert.equal(state.activeSessionKey, null)
+  assert.deepEqual(state.sessions, [])
+  assert.deepEqual(persisted, [])
+})
+
+test('starting another session stops the ready runtime and keeps both sessions indexed', async () => {
+  const firstRuntime = new FakeRuntimeHost({
+    sessionId: 'session-1',
+    sessionFile: '/tmp/session-1.jsonl',
+    sessionName: 'First session'
+  })
+  const secondRuntime = new FakeRuntimeHost({
+    sessionId: 'session-2',
+    sessionFile: '/tmp/session-2.jsonl',
+    sessionName: 'Second session'
+  })
+  const runtimes = [firstRuntime, secondRuntime]
+  const persisted: SessionPointer[] = []
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions(null, persisted)
+  )
+
+  await kernel.start()
+  await kernel.start()
+
+  assert.equal(firstRuntime.stopCalls, 1)
+  assert.deepEqual(persisted.map(({ sessionId }) => sessionId), ['session-1', 'session-2'])
+  assert.deepEqual(kernel.getState().sessions.map(({ id }) => id), ['session-1', 'session-2'])
+  assert.equal(kernel.getState().activeSessionKey, '/tmp/session-2.jsonl')
+  assert.equal(kernel.getState().session.id, 'session-2')
+  assert.equal(kernel.getState().runtime.status, 'ready')
+})
+
+test('activating a registered session stops the old runtime, resumes by key, and rejects running switches', async () => {
+  const firstPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/session-1.jsonl',
+    sessionId: 'session-1',
+    sessionName: 'First session'
+  }
+  const secondPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/session-2.jsonl',
+    sessionId: 'session-2',
+    sessionName: 'Second session'
+  }
+  const firstRuntime = new FakeRuntimeHost({
+    sessionId: firstPointer.sessionId,
+    sessionFile: firstPointer.sessionFile,
+    sessionName: firstPointer.sessionName ?? undefined
+  })
+  const secondRuntime = new FakeRuntimeHost(
+    {
+      sessionId: secondPointer.sessionId,
+      sessionFile: secondPointer.sessionFile,
+      sessionName: secondPointer.sessionName ?? undefined
+    },
+    [{ role: 'assistant', content: [{ type: 'text', text: 'Second history' }], timestamp: 10 }]
+  )
+  const runtimes = [firstRuntime, secondRuntime]
+  const launches: Array<{ sessionFile?: string }> = []
+  const kernel = new WorkbenchKernel(
+    (_project, launchOptions) => {
+      launches.push(launchOptions)
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [firstPointer, secondPointer],
+        activeSessionKey: firstPointer.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(firstPointer.sessionFile)
+  await kernel.activateSession(secondPointer.sessionFile)
+
+  assert.equal(firstRuntime.stopCalls, 1)
+  assert.deepEqual(launches, [
+    { sessionFile: firstPointer.sessionFile },
+    { sessionFile: secondPointer.sessionFile }
+  ])
+  assert.equal(kernel.getState().activeSessionKey, secondPointer.sessionFile)
+  assert.equal(kernel.getState().session.id, secondPointer.sessionId)
+  const recovered = kernel.getState().conversation.entries[0]
+  assert.equal(recovered?.kind === 'message' ? recovered.text : null, 'Second history')
+
+  secondRuntime.emit({ type: 'activity-started' })
+  await assert.rejects(
+    kernel.activateSession(firstPointer.sessionFile),
+    /Cannot change session while runtime is running/
+  )
+  assert.equal(secondRuntime.stopCalls, 0)
+  secondRuntime.emit({ type: 'activity-settled' })
+  await assert.rejects(
+    kernel.activateSession('/tmp/unregistered-session.jsonl'),
+    /Session is not registered for the active project/
+  )
+  assert.equal(secondRuntime.stopCalls, 0)
+})
+
+test('session validation failure leaves the ready runtime and active identity untouched', async () => {
+  const firstPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/session-1.jsonl',
+    sessionId: 'session-1',
+    sessionName: 'First session'
+  }
+  const secondPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/missing-session.jsonl',
+    sessionId: 'session-2',
+    sessionName: 'Missing session'
+  }
+  const runtime = new FakeRuntimeHost({
+    sessionId: firstPointer.sessionId,
+    sessionFile: firstPointer.sessionFile,
+    sessionName: firstPointer.sessionName ?? undefined
+  })
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [firstPointer, secondPointer],
+        activeSessionKey: firstPointer.sessionFile
+      },
+      validateSession: async (pointer) => {
+        if (pointer.sessionFile === secondPointer.sessionFile) throw new Error('session file missing')
+        return pointer
+      }
+    }
+  )
+
+  await kernel.activateSession(firstPointer.sessionFile)
+  await assert.rejects(kernel.activateSession(secondPointer.sessionFile), /session file missing/)
+
+  assert.equal(runtime.stopCalls, 0)
+  assert.equal(kernel.getState().runtime.status, 'ready')
+  assert.equal(kernel.getState().activeSessionKey, firstPointer.sessionFile)
+  assert.equal(kernel.getState().session.id, firstPointer.sessionId)
+})
+
+test('stop waits for the session commit, then stops the committed runtime', async () => {
+  const runtime = new FakeRuntimeHost({
+    sessionId: 'session-commit',
+    sessionFile: '/tmp/session-commit.jsonl'
+  })
+  let commitEntered!: () => void
+  let releaseCommit!: () => void
+  const entered = new Promise<void>((resolve) => {
+    commitEntered = resolve
+  })
+  const commitGate = new Promise<void>((resolve) => {
+    releaseCommit = resolve
+  })
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      persistSession: async () => {
+        commitEntered()
+        await commitGate
+      }
+    }
+  )
+
+  const startPromise = kernel.start()
+  await entered
+  const stopPromise = kernel.stop()
+  releaseCommit()
+  await startPromise
+  await stopPromise
+
+  assert.equal(runtime.stopCalls, 1)
+  assert.equal(kernel.getState().activeSessionKey, '/tmp/session-commit.jsonl')
+  assert.equal(kernel.getState().runtime.status, 'stopped')
+})
+
+test('session switch crash during persistence cannot commit ready or the target session', async () => {
+  const firstPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/session-1.jsonl',
+    sessionId: 'session-1',
+    sessionName: 'First session'
+  }
+  const secondPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/session-2.jsonl',
+    sessionId: 'session-2',
+    sessionName: 'Second session'
+  }
+  const runtime = new FakeRuntimeHost({
+    sessionId: secondPointer.sessionId,
+    sessionFile: secondPointer.sessionFile,
+    sessionName: secondPointer.sessionName ?? undefined
+  })
+  let persistenceEntered!: () => void
+  let releasePersistence!: () => void
+  const entered = new Promise<void>((resolve) => {
+    persistenceEntered = resolve
+  })
+  const persistenceGate = new Promise<void>((resolve) => {
+    releasePersistence = resolve
+  })
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [firstPointer, secondPointer],
+        activeSessionKey: firstPointer.sessionFile
+      },
+      persistSession: async () => {
+        persistenceEntered()
+        await persistenceGate
+      }
+    }
+  )
+  const statuses = collectStatuses(kernel)
+
+  const switchPromise = kernel.activateSession(secondPointer.sessionFile)
+  await entered
+  runtime.emit({ type: 'process-exit', code: 11, signal: null })
+  releasePersistence()
+
+  await assert.rejects(switchPromise, /cancelled/i)
+  const crashedState = kernel.getState()
+  assert.equal(crashedState.runtime.status, 'crashed')
+  assert.equal(crashedState.runtime.exitCode, 11)
+  assert.equal(statuses.includes('ready'), false)
+  assert.equal(crashedState.activeSessionKey, firstPointer.sessionFile)
+  assert.equal(crashedState.session.id, firstPointer.sessionId)
+  assert.deepEqual(crashedState.conversation.entries, [])
+
+  await kernel.stop()
+  assert.equal(runtime.stopCalls, 1)
+  assert.equal(kernel.getState().runtime.status, 'stopped')
 })
 
 test('explicit resume after a crash creates a new runtime and rebuilds messages', async () => {
@@ -731,7 +1270,7 @@ test('explicit resume after a crash creates a new runtime and rebuilds messages'
       assert.ok(runtime)
       return runtime
     },
-    { path: '/tmp/project' },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     kernelOptions()
   )
 
@@ -748,7 +1287,7 @@ test('explicit resume after a crash creates a new runtime and rebuilds messages'
 })
 
 test('a stored pointer is resumable from a stopped kernel relaunch', async () => {
-  const pointer: RecentSessionPointer = {
+  const pointer: SessionPointer = {
     projectPath: '/tmp/project',
     sessionFile: '/tmp/stored-session.jsonl',
     sessionId: 'stored-session',
@@ -765,7 +1304,7 @@ test('a stored pointer is resumable from a stopped kernel relaunch', async () =>
       launches.push(launchOptions)
       return runtime
     },
-    { path: '/tmp/project' },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     kernelOptions(pointer)
   )
 
@@ -781,12 +1320,12 @@ test('resume rejects without a pointer or from an active runtime state', async (
   const runtime = new FakeRuntimeHost()
   const noPointerKernel = new WorkbenchKernel(
     () => runtime,
-    { path: '/tmp/project' },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     kernelOptions()
   )
-  await assert.rejects(noPointerKernel.resumeSession(), /No recent session/)
+  await assert.rejects(noPointerKernel.resumeSession(), /No active session/)
 
-  const pointer: RecentSessionPointer = {
+  const pointer: SessionPointer = {
     projectPath: '/tmp/project',
     sessionFile: '/tmp/session-1.jsonl',
     sessionId: 'session-1',
@@ -794,11 +1333,12 @@ test('resume rejects without a pointer or from an active runtime state', async (
   }
   const activeKernel = new WorkbenchKernel(
     () => runtime,
-    { path: '/tmp/project' },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     kernelOptions(pointer)
   )
   await activeKernel.start()
-  await assert.rejects(activeKernel.resumeSession(), /while runtime is ready/)
+  await activeKernel.resumeSession()
+  assert.equal(runtime.startCalls, 1)
 })
 
 test('startup persistence and message failures stop and release the runtime', async (t) => {
@@ -812,11 +1352,13 @@ test('startup persistence and message failures stop and release the runtime', as
         assert.ok(runtime)
         return runtime
       },
-      { path: '/tmp/project' },
+      { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
       {
-        recentSession: null,
-        validateRecentSession: async () => {},
-        persistRecentSession: async () => {
+        sessionRegistry: sessionRegistry(null),
+        validateSession: async (pointer) => pointer,
+        persistProject: async () => {},
+        persistActiveProject: async () => {},
+        persistSession: async () => {
           throw new Error('persist failed')
         }
       }
@@ -833,22 +1375,33 @@ test('startup persistence and message failures stop and release the runtime', as
 
   await t.test('get_messages failure', async () => {
     const runtime = new FailingCommandRuntimeHost('get_messages')
+    const persisted: SessionPointer[] = []
+    const previousPointer: SessionPointer = {
+      projectPath: '/tmp/project',
+      sessionFile: '/tmp/previous-session.jsonl',
+      sessionId: 'previous-session',
+      sessionName: 'Previous session'
+    }
     const kernel = new WorkbenchKernel(
       () => runtime,
-      { path: '/tmp/project' },
-      kernelOptions()
+      { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+      kernelOptions(previousPointer, persisted)
     )
 
     await assert.rejects(kernel.start(), /get_messages failed/)
     assert.equal(runtime.stopCalls, 1)
+    assert.deepEqual(persisted, [])
     assert.equal(kernel.getState().runtime.status, 'crashed')
+    assert.equal(kernel.getState().session.id, previousPointer.sessionId)
+    assert.equal(kernel.getState().session.name, previousPointer.sessionName)
+    assert.deepEqual(kernel.getState().conversation.entries, [])
     await kernel.stop()
     assert.equal(kernel.getState().runtime.status, 'stopped')
   })
 })
 
 test('resume requires a validator before creating a runtime', async () => {
-  const pointer: RecentSessionPointer = {
+  const pointer: SessionPointer = {
     projectPath: '/tmp/project',
     sessionFile: '/tmp/session-1.jsonl',
     sessionId: 'session-1',
@@ -856,15 +1409,17 @@ test('resume requires a validator before creating a runtime', async () => {
   }
   let createCalls = 0
   const options = {
-    recentSession: pointer,
-    persistRecentSession: async () => {}
+    sessionRegistry: sessionRegistry(pointer),
+    persistProject: async () => {},
+    persistActiveProject: async () => {},
+    persistSession: async () => {}
   } as unknown as ConstructorParameters<typeof WorkbenchKernel>[2]
   const kernel = new WorkbenchKernel(
     () => {
       createCalls += 1
       return new FakeRuntimeHost()
     },
-    { path: '/tmp/project' },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     options
   )
 
@@ -873,7 +1428,7 @@ test('resume requires a validator before creating a runtime', async () => {
 })
 
 test('resume validation failure preserves the pointer without creating a runtime', async () => {
-  const pointer: RecentSessionPointer = {
+  const pointer: SessionPointer = {
     projectPath: '/tmp/project',
     sessionFile: '/tmp/missing-session.jsonl',
     sessionId: 'missing-session',
@@ -885,11 +1440,13 @@ test('resume validation failure preserves the pointer without creating a runtime
       createCalls += 1
       return new FakeRuntimeHost()
     },
-    { path: '/tmp/project' },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     {
-      recentSession: pointer,
-      persistRecentSession: async () => {},
-      validateRecentSession: async () => {
+      sessionRegistry: sessionRegistry(pointer),
+      persistProject: async () => {},
+      persistActiveProject: async () => {},
+      persistSession: async () => {},
+      validateSession: async () => {
         throw new Error('session file missing')
       }
     }
@@ -903,7 +1460,7 @@ test('resume validation failure preserves the pointer without creating a runtime
 })
 
 test('concurrent resumes allow only one launch operation and create one runtime', async () => {
-  const pointer: RecentSessionPointer = {
+  const pointer: SessionPointer = {
     projectPath: '/tmp/project',
     sessionFile: '/tmp/session-1.jsonl',
     sessionId: 'session-1',
@@ -926,13 +1483,16 @@ test('concurrent resumes allow only one launch operation and create one runtime'
         sessionFile: pointer.sessionFile
       })
     },
-    { path: '/tmp/project' },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     {
-      recentSession: pointer,
-      persistRecentSession: async () => {},
-      validateRecentSession: async () => {
+      sessionRegistry: sessionRegistry(pointer),
+      persistProject: async () => {},
+      persistActiveProject: async () => {},
+      persistSession: async () => {},
+      validateSession: async () => {
         validationEntered()
         await validationGate
+        return pointer
       }
     }
   )
@@ -948,7 +1508,7 @@ test('concurrent resumes allow only one launch operation and create one runtime'
 })
 
 test('stop during resume validation cancels launch before runtime creation', async () => {
-  const pointer: RecentSessionPointer = {
+  const pointer: SessionPointer = {
     projectPath: '/tmp/project',
     sessionFile: '/tmp/session-1.jsonl',
     sessionId: 'session-1',
@@ -968,20 +1528,29 @@ test('stop during resume validation cancels launch before runtime creation', asy
       createCalls += 1
       return new FakeRuntimeHost()
     },
-    { path: '/tmp/project' },
     {
-      recentSession: pointer,
-      persistRecentSession: async () => {},
-      validateRecentSession: async () => {
+      projects: [{ path: '/tmp/project' }, { path: '/tmp/next-project' }],
+      activeProjectKey: '/tmp/project'
+    },
+    {
+      sessionRegistry: sessionRegistry(pointer),
+      persistProject: async () => {},
+      persistActiveProject: async () => {},
+      persistSession: async () => {},
+      validateSession: async () => {
         validationEntered()
         await validationGate
+        return pointer
       }
     }
   )
 
   const resumePromise = kernel.resumeSession()
   await entered
-  assert.throws(() => kernel.setProject('/tmp/next-project', null), /launch is in progress/)
+  await assert.rejects(
+    kernel.activateProject('/tmp/next-project', sessionRegistry(null)),
+    /launch is in progress/
+  )
   const stopPromise = kernel.stop()
   releaseValidation()
 
@@ -989,7 +1558,7 @@ test('stop during resume validation cancels launch before runtime creation', asy
   await stopPromise
   assert.equal(createCalls, 0)
   assert.equal(kernel.getState().runtime.status, 'stopped')
-  assert.equal(kernel.getState().project.path, '/tmp/project')
+  assert.equal(kernel.getState().activeProjectKey, '/tmp/project')
 })
 
 test('stop during crashed runtime disposal settles at stopped without launching a replacement', async () => {
@@ -1007,7 +1576,7 @@ test('stop during crashed runtime disposal settles at stopped without launching 
       assert.ok(runtime)
       return runtime
     },
-    { path: '/tmp/project' },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     kernelOptions()
   )
 
@@ -1028,7 +1597,7 @@ test('failed launch cleanup keeps runtime ownership so stop can be retried', asy
   const runtime = new FailingThenStoppingRuntimeHost()
   const kernel = new WorkbenchKernel(
     () => runtime,
-    { path: '/tmp/project' },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     kernelOptions()
   )
 
@@ -1045,20 +1614,20 @@ test('failed launch cleanup keeps runtime ownership so stop can be retried', asy
 })
 
 test('resume session ID mismatch preserves the pointer and cleans up the runtime', async () => {
-  const pointer: RecentSessionPointer = {
+  const pointer: SessionPointer = {
     projectPath: '/tmp/project',
     sessionFile: '/tmp/stored-session.jsonl',
     sessionId: 'stored-session',
     sessionName: 'Stored session'
   }
-  const persisted: RecentSessionPointer[] = []
+  const persisted: SessionPointer[] = []
   const runtime = new FakeRuntimeHost({
     sessionId: 'different-session',
     sessionFile: '/tmp/different-session.jsonl'
   })
   const kernel = new WorkbenchKernel(
     () => runtime,
-    { path: '/tmp/project' },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     kernelOptions(pointer, persisted)
   )
 
@@ -1084,7 +1653,7 @@ test('a crashed kernel without a pointer can explicitly start a new runtime', as
       assert.ok(runtime)
       return runtime
     },
-    { path: '/tmp/project' },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     kernelOptions()
   )
 
@@ -1102,7 +1671,7 @@ test('delayed activity and Pi events cannot revive a stopping runtime', async ()
   const runtime = new DelayedStopRuntimeHost()
   const kernel = new WorkbenchKernel(
     () => runtime,
-    { path: '/tmp/project' },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     kernelOptions()
   )
 

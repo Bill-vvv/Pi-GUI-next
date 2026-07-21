@@ -4,7 +4,7 @@ type ProjectStartupProps = {
   state: KernelState
   pendingAction: string | null
   error: string | null
-  onSelectProject: () => Promise<void>
+  onAddProject: () => Promise<void>
   onStart: () => Promise<void>
 }
 
@@ -12,12 +12,15 @@ export function ProjectStartup({
   state,
   pendingAction,
   error,
-  onSelectProject,
+  onAddProject,
   onStart
 }: ProjectStartupProps): React.JSX.Element {
-  const { project, runtime } = state
+  const { projects, activeProjectKey, runtime } = state
+  const activeProject = activeProjectKey === null
+    ? null
+    : projects.find((project) => project.path === activeProjectKey) ?? null
   const busy = pendingAction !== null || runtime.status === 'starting'
-  const canStart = !busy && project.path !== null
+  const canStart = !busy && activeProject !== null
 
   return (
     <main className="startup-shell">
@@ -46,16 +49,16 @@ export function ProjectStartup({
         <div className="project-path-block">
           <span className="field-label">项目目录</span>
           <div className="project-path-row">
-            <span className="project-path mono" title={project.path ?? undefined}>
-              {project.path ?? '尚未选择目录'}
+            <span className="project-path mono" title={activeProject?.path}>
+              {activeProject?.path ?? '尚未选择目录'}
             </span>
             <button
               className="secondary-action"
               type="button"
               disabled={busy || runtime.status !== 'stopped'}
-              onClick={() => void onSelectProject().catch(() => undefined)}
+              onClick={() => void onAddProject().catch(() => undefined)}
             >
-              {pendingAction === 'select-project' ? '选择中…' : '选择目录'}
+              {pendingAction === 'add-project' ? '选择中…' : '添加目录'}
             </button>
           </div>
         </div>

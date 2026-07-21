@@ -1,6 +1,6 @@
 # Pi GUI
 
-Pi GUI 是面向本地 Pi Coding Agent 的 Linux 桌面工作台。当前开发阶段为 P1（Linux Core Chain / v0.0.1），执行事实以 [`docs/development-plan.md`](docs/development-plan.md) 为准。
+Pi GUI 是面向本地 Pi Coding Agent 的 Linux 桌面工作台。P1 Linux Core Chain / v0.0.1 已完成，P2（Workbench Foundation）已完成 S10 多 Session，下一 Slice 为 S11 Pi 基础命令与 slash command，执行事实以 [`docs/development-plan.md`](docs/development-plan.md) 为准。
 
 ## 工具链
 
@@ -39,4 +39,4 @@ pnpm verify:linux
 
 P1 只生成 `release/pi-gui-next-0.0.1-x86_64.AppImage`。`verify:linux` 必须在干净工作区运行，并从该 AppImage 执行真实核心链路；脱敏报告和截图写入被 Git 忽略的 `release/evidence/`。
 
-产品范围、架构、发布门槛和决策分别见 `docs/product-boundary.md`、`docs/architecture.md`、`docs/release-gate.md` 和 `docs/decisions.md`。
+产品范围、架构、发布门槛和决策分别见 `docs/product-boundary.md`、`docs/architecture.md`、`docs/release-gate.md` 和 `docs/decisions.md`；P2 Workbench 结构见 `docs/p2-workbench-structure.md`；已交付能力、历史修复与工程经验见 `docs/engineering-history.md`。

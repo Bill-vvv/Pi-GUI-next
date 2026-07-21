@@ -16,18 +16,23 @@ const kernelApi: KernelApi = {
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
   },
-  selectProject: () => {
-    const command: KernelCommand = { type: 'kernel.select-project' }
+  addProject: () => {
+    const command: KernelCommand = { type: 'kernel.add-project' }
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
   },
-  startProject: () => {
-    const command: KernelCommand = { type: 'kernel.start-project' }
+  activateProject: (projectKey) => {
+    const command: KernelCommand = { type: 'kernel.activate-project', projectKey }
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
   },
-  resumeSession: () => {
-    const command: KernelCommand = { type: 'kernel.resume-session' }
+  startSession: () => {
+    const command: KernelCommand = { type: 'kernel.start-session' }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+  },
+  activateSession: (sessionKey) => {
+    const command: KernelCommand = { type: 'kernel.activate-session', sessionKey }
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
   },

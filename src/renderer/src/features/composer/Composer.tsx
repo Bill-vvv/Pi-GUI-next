@@ -9,9 +9,8 @@ import { Icon } from '../../components/Icon'
 type ComposerProps = {
   state: KernelState
   busy: boolean
-  onSelectProject: () => Promise<void>
-  onStart: () => Promise<void>
-  onResume: () => Promise<void>
+  onStartSession: () => Promise<void>
+  onActivateSession: (sessionKey: string) => Promise<void>
   onPrompt: (message: string) => Promise<void>
   onAbort: () => Promise<void>
   onSetThinkingLevel: (level: ThinkingLevel) => Promise<void>
@@ -30,9 +29,8 @@ const THINKING_LEVELS: ThinkingLevel[] = [
 export function Composer({
   state,
   busy,
-  onSelectProject,
-  onStart,
-  onResume,
+  onStartSession,
+  onActivateSession,
   onPrompt,
   onAbort,
   onSetThinkingLevel
@@ -41,16 +39,17 @@ export function Composer({
   const [submitting, setSubmitting] = useState(false)
   const composerRef = useRef<HTMLFormElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const { project, runtime, session } = state
+  const { activeProjectKey, activeSessionKey, runtime, session } = state
   const running = runtime.status === 'running'
   const ready = runtime.status === 'ready'
   const canStart =
     (runtime.status === 'stopped' || runtime.status === 'crashed') &&
-    project.path !== null &&
+    activeProjectKey !== null &&
     !busy
   const canResume =
     (runtime.status === 'stopped' || runtime.status === 'crashed') &&
-    project.path !== null &&
+    activeProjectKey !== null &&
+    activeSessionKey !== null &&
     session.resumeAvailable &&
     !busy
 
@@ -148,17 +147,6 @@ export function Composer({
         </div>
 
         <div className="composer-input-actions">
-          <div className="composer-input-tools" role="group" aria-label="输入辅助操作">
-            <button
-              className="composer-attach-action"
-              type="button"
-              title="P1 暂不支持附件"
-              aria-label="P1 暂不支持附件"
-              disabled
-            >
-              <Icon name="attach" />
-            </button>
-          </div>
           <div className="composer-submit-actions">
             {running ? (
               <button
@@ -187,19 +175,6 @@ export function Composer({
       </div>
 
       <div className="composer-meta-row">
-        <div className="composer-project-meta">
-          <button
-            className={`path-picker-trigger composer-project-trigger${project.path ? ' has-value' : ''}`}
-            type="button"
-            title={project.path ?? '选择项目文件夹'}
-            disabled={busy || runtime.status !== 'stopped'}
-            onClick={() => void onSelectProject().catch(() => undefined)}
-          >
-            <Icon name="folder" />
-            <span className="composer-project-path-text">{project.path ?? '选择项目文件夹'}</span>
-          </button>
-        </div>
-
         <div className="composer-runtime-controls">
           {canResume ? (
             <>
@@ -207,7 +182,7 @@ export function Composer({
                 className="composer-start-action"
                 type="button"
                 disabled={!canStart}
-                onClick={() => void onStart().catch(() => undefined)}
+                onClick={() => void onStartSession().catch(() => undefined)}
               >
                 <span>新建对话</span>
               </button>
@@ -215,7 +190,11 @@ export function Composer({
                 className="composer-start-action"
                 type="button"
                 disabled={busy}
-                onClick={() => void onResume().catch(() => undefined)}
+                onClick={() => {
+                  if (activeSessionKey !== null) {
+                    void onActivateSession(activeSessionKey).catch(() => undefined)
+                  }
+                }}
               >
                 <span>{runtime.status === 'crashed' ? '重启并恢复' : '恢复对话'}</span>
                 <Icon name="arrow-right" />
@@ -226,7 +205,7 @@ export function Composer({
               className="composer-start-action"
               type="button"
               disabled={!canStart}
-              onClick={() => void onStart().catch(() => undefined)}
+              onClick={() => void onStartSession().catch(() => undefined)}
             >
               <span>{runtime.status === 'crashed' ? '重新启动 Pi' : '启动 Pi'}</span>
               <Icon name="arrow-right" />
@@ -282,7 +261,7 @@ export function Composer({
 }
 
 function composerPlaceholder(state: KernelState): string {
-  if (state.project.path === null) return '先选择项目文件夹'
+  if (state.activeProjectKey === null) return '先选择项目文件夹'
   if (state.runtime.status === 'stopped') return '启动 Pi 后开始对话'
   if (state.runtime.status === 'starting') return '正在启动 Pi…'
   if (state.runtime.status === 'running') return 'Pi 正在执行当前任务…'

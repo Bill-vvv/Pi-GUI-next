@@ -1,10 +1,10 @@
 # Pi GUI 开发计划
 
-> 当前阶段：P1 — Linux Core Chain / v0.0.1
-> 计划版本：1.0
+> 当前阶段：P2 — Workbench Foundation
+> 计划版本：1.1
 > 最后更新：2026-07-21
-> 总体状态：Complete
-> 当前 Slice：—（P1 已完成；P2 待开始）
+> 总体状态：In Progress
+> 当前 Slice：S11 — Pi 基础命令与 slash command（Ready）
 
 ## 1. 计划用途
 
@@ -439,7 +439,7 @@ P1 完成后进入 P2。P2/P3 的当前路径见下一节；后续调整继续�
 | 阶段 | 目标 | 状态 | 开始条件 |
 | --- | --- | --- | --- |
 | P1 — Linux Core Chain | 建立第一条可发布的 Linux 本地 Pi 核心链路 | `Complete` | 2026-07-21 完成 |
-| P2 — Workbench Foundation | 补齐日常工作台基础功能，并完成 UI 与交互收敛 | `Pending` | S7 和 P1 完成 |
+| P2 — Workbench Foundation | 补齐日常工作台基础功能，并完成 UI 与交互收敛 | `In Progress` | 2026-07-21 开始 S8 |
 | P3 — Ecosystem Integration | 接入 Pi Extension、Package、Skill、prompt template 与 MCP 等扩展能力 | `Pending` | P2 完成且工作台交互边界稳定 |
 
 ### 15.2 P2 — Workbench Foundation
@@ -448,10 +448,10 @@ P2 先用一个短 Slice 固定结构，再实现基础功能，随后在真实�
 
 | Slice | 目标 | 状态 | 主要工作与边界 |
 | --- | --- | --- | --- |
-| S8 | Workbench 信息架构与状态模型 | `Pending` | 确定主布局、Project/Session 导航、对话流、Composer 与 slash command 入口；同步明确 typed Kernel state/command 所有权；只完成结构和必要原型，不做最终视觉精修 |
-| S9 | 多 Project | `Pending` | 保存、展示、选择和切换多个 Project；第一版同一时间只拥有一个活动 Runtime，切换时可靠停止旧 Runtime 后再加载目标 Project，不实现多 Project 并行运行 |
-| S10 | 多 Session | `Pending` | 每个 Project 支持创建、列出、切换和恢复多个 Session；Pi session 文件继续作为 Conversation 事实来源，GUI 只保存必要索引和选择状态 |
-| S11 | Pi 基础命令与 slash command | `Pending` | 扩展当前 RPC command 范围；建立统一的命令发现、搜索、补全和执行入口；区分 GUI 本地命令、typed RPC 命令以及 extension/prompt/skill 命令，不把 TUI 本地命令无条件当作 RPC 文本透传 |
+| S8 | Workbench 信息架构与状态模型 | `Complete` | 形成 `p2-workbench-structure.md`：确定主布局、Project/Session 导航、对话流、Composer 与 slash command 入口，明确 identity、事实源、typed command 与单活动 Runtime 切换顺序；低保真 Renderer 已通过 typecheck/build、真实 Electron 折叠/展开诊断复核和用户确认，不做最终视觉精修 |
+| S9 | 多 Project | `Complete` | 保存、展示、选择和切换多个 Project；`projects[]` / `activeProjectKey` typed contract、按 Project 隔离的最近 Session 指针和单活动 Runtime 切换已落地；运行中拒绝切换，ready/crashed 切换先停止旧 Runtime，不实现多 Project 并行运行 |
+| S10 | 多 Session | `Complete` | `sessions[]` / `activeSessionKey` typed contract、XDG state v3 Session 索引与 v1/v2 迁移、每 Project 创建/列出/切换/恢复已落地；Pi 0.80.10 新 Session 在 JSONL 延迟落盘期间使用不入索引的 provisional identity，落盘校验并持久化后才正式提交；切换持久化期间进程退出保持 crashed；正常 GUI 使用单实例锁避免跨进程 XDG 丢失更新 |
+| S11 | Pi 基础命令与 slash command | `Ready` | 扩展当前 RPC command 范围；建立统一的命令发现、搜索、补全和执行入口；区分 GUI 本地命令、typed RPC 命令以及 extension/prompt/skill 命令，不把 TUI 本地命令无条件当作 RPC 文本透传 |
 | S12 | UI 视觉收敛 | `Pending` | 在真实多 Project、多 Session 和命令入口上完成布局、对话流、信息层级、design token 与 icon 系统；不以脱离真实状态的静态 mock 作为完成证据 |
 | S13 | 交互优化与 P2 发布证据 | `Pending` | 完成键盘与焦点、滚动、Project/Session 切换反馈、命令补全、加载/错误/空状态等交互；从打包产物重复验证 P2 核心链路并生成脱敏证据 |
 
@@ -511,6 +511,13 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-21 | S7 Candidate Gate | 候选 `bd6158c` 的 AppImage package 与真实产物验证再次执行；launch、版本、project/cwd、probe、高思考设置、真实 tool 和 abort 均通过，abort 获得 Pi 成功响应，tool card 归一化为 error 且 runtime/UI 回到一致终态；在 crash 前因 Pi 将 Linux process title 改为 `pi`、`/proc/<pid>/cmdline` 不再保留启动参数而报 `E_PI_PROCESS_MISSING`，随后 Fail Fast 且 Pi/Electron 无残留。验证器改为以本次唯一临时 project cwd 加 `/proc/<pid>/comm` 的 `pi` 唯一定位进程，继续拒绝零个或多个匹配 | 在新的干净 commit 上重跑 package 与完整 crash/resume/reopen 链路；失败候选不计入完成证据 |
 | 2026-07-21 | P2/P3 Planning | 确认 P1 只负责可发布的 Linux 核心链路；P2 依次完成 Workbench 结构、多 Project、多 Session、Pi/slash command、视觉与交互收敛；P3 再接入 Extension、Package、Skill、prompt template 和 MCP，并保留后续显式修订空间 | 先完成 S7/P1；随后以 S8 固定 Workbench 信息架构与状态模型，并在 S9 实现多 Project |
 | 2026-07-21 | S7 / P1 Complete | 候选 `0f76f1e` 的 AppImage package 与真实产物验证完整通过；报告 13 个步骤全部 pass，覆盖 launch、runtime identity、project/cwd、probe、高思考、真实 tool、Pi 成功响应的 abort、SIGKILL crash、restart/resume、继续对话、graceful close、reopen/reopen resume 和 final close；五张 1271×1523 截图均非空且 prompt、assistant、thinking、tool 详情已脱敏，报告不含 prompt 正文、tool 输出或 credential；80 项 core tests、typecheck 通过，验证后 Pi/Electron 无残留 | P1 完成；P2 保持 Pending，下一步从 S8 Workbench 信息架构与状态模型开始 |
+| 2026-07-21 | S8 | P2 正式开始；基于 P1 真实产物截图和当前 Renderer/Kernel/ProjectStore 审计，形成 Workbench Navigator、Session Header、turn-based Timeline、Composer command surface 的低保真结构，并明确 canonical project path、session file、单活动 Runtime 与切换顺序；Renderer 低保真实现移除重复 Project picker、不可用附件/归档入口和遮挡 Timeline 的诊断浮层，typecheck/build 及真实 Electron 折叠/展开诊断复核通过 | 等待用户确认结构方向；确认后完成 S8，进入 S9 多 Project |
+| 2026-07-21 | S8 Complete / S9 Start | 用户确认低保真 Workbench 结构方向；S8 完成。S9 开始实现多 Project 注册表、按 Project 隔离的最近 Session、`projects[]` / `activeProjectKey` typed contract、添加/激活命令、单活动 Runtime 安全切换和真实 Navigator 列表 | 完成全量 core tests、typecheck、build 与最终 diff 复核；验收通过后再完成 S9 |
+| 2026-07-21 | S9 Complete | 完成多 Project 注册表、v1 配置/状态迁移、按 Project 隔离的最近 Session、typed add/activate command、单活动 Runtime 安全切换和真实 Navigator 列表；84 项 core tests、typecheck、生产 build、diff check 通过；隔离 XDG 构建版烟测确认两个 Project 可显示、激活并持久化，且全程不启动 Pi 对话、只有一个 stopped runtime | S10 Ready；下一步实现每个 Project 下的多 Session |
+| 2026-07-21 | S8 Audit Repair | 补齐无假命令的 slash command 空态，移除重复“添加项目”入口；修正结构文档中的 Project/Session 切换顺序，明确 `starting` / `stopping` 拒绝、canonical Session identity 和成功后原子提交约束。Session 持久化与切换实现仍归 S10，不在本次 S8 修复中提前落地 | 复核 S8 Renderer 与文档定向 diff；S8 保持 Complete，S10 状态由其独立实现和验收维护 |
+| 2026-07-21 | S10 Complete | 完成每 Project 多 Session 索引、活动选择、typed `start-session` / `activate-session` IPC、Navigator 列表和 Timeline identity；Pi session 文件仍是 Conversation 事实源，GUI state 只保存 canonical pointer、`sessionId`、名称和选择。新建或切换只使用一个 Runtime，运行中拒绝，目标 Session 在普通可读文件校验、受控 stop、`sessionId` 核对、`get_messages` 和指针持久化成功后才提交；失败不把旧 Conversation 标成目标 Session。90 项 core tests、typecheck、生产 build、真实 Pi 0.80.10 无状态 smoke 和 diff check 通过 | S11 Ready；下一步审计 Pi 0.80.10 的真实命令目录与调用语义，再实现统一 slash command 入口 |
+| 2026-07-21 | S9/S10 Audit Repair | 修复 Project 激活持久化期间可并发启动旧 Project、退出遗漏校验期 launch、同路径并发添加破坏内存 registry 三项竞态；Kernel 增加 Project 变更与 launch 的同步 fail-fast lifecycle 门，Main 在 Kernel 存在时始终委托 `stop()`，并补充两项确定性并发回归测试。92 项 core tests、typecheck、生产 build、真实 Pi 0.80.10 无状态 smoke 和 diff check 通过 | S9/S10 保持 Complete；S11 保持 Ready |
+| 2026-07-21 | S10 Audit Repair | 修复 Session 切换持久化期间 Pi 退出后错误提交 `ready` 和目标 identity；按 Pi 0.80.10 的真实延迟落盘语义加入 provisional 新 Session，首个 assistant 消息落盘、canonical 校验与持久化完成前不登记索引或活动指针；正常 GUI 增加单实例锁，消除两个 Main 进程共享 XDG 时的 Session 索引丢失更新。94 项 core tests、typecheck、生产 build、diff check、持锁期间真实 Pi smoke 通过；隔离 XDG/Session 目录的真实 Pi 双 Session 验证覆盖创建、切回、重建 Kernel 后恢复，两个 Session 均恢复 2 条消息 | S10 保持 Complete；S11 保持 Ready |
 
 ## 17. 计划变更记录
 
@@ -526,3 +533,4 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-21 | 0.8 | 取消超长流式 Markdown 的纯文本 fallback；16,384 字符预算只用于停止分块预解析，超限后整篇实时渲染 GFM | 用户明确要求 streaming 与 settled 的实际 Markdown 效果一致，不能在消息结束时再发生格式切换 | 保留增量 state patch、帧合并、历史挂载窗口和 Composer clearance；极端超长单块恢复 O(n) GFM 渲染并记录实测边界，S6/S7 范围不变 |
 | 2026-07-21 | 0.9 | 澄清 Pi 的进程内 `AgentSession` SDK、官方 typed `RpcClient` 与当前自有 typed RPC adapter 的边界；将官方 `RpcClient` 记为受控迁移候选 | 官方 `RpcClient` 同时提供 SDK 体验和 RPC 进程隔离，但 Pi 0.80.10 的实现尚不满足当前 executable ownership、异常退出证据、分阶段停止与脱敏 stderr 要求 | P1 拓扑与六项命令范围不变；允许先评估仅复用官方类型，完整替换需满足 lifecycle/诊断门槛、通过完整 release gate 并删除旧路径 |
 | 2026-07-21 | 1.0 | 增加 P2 Workbench Foundation 与 P3 Ecosystem Integration 后续路径；P2 规划 S8–S13，并将多 Project 放在结构 Slice 后立即实施 | 用户确认需要在 P1 后补齐多 Project、多 Session、slash command、UI 与交互，再扩展 Pi 与 MCP 生态；同时要求路线可继续修改 | P1/S7 范围和门槛不变；P2 首先建立可切换但不并行的多 Project/Session 工作台，P3 的具体 Slice 延后到 P2 接近完成时核验并追加 |
+| 2026-07-21 | 1.1 | 明确新 Session 的 provisional/materialization 生命周期，并将单活动 Runtime 的进程内边界扩展为正常 GUI 单实例 ownership | Pi 0.80.10 在新 Session 首个 assistant 消息完成前不创建 JSONL；两个 Main 进程共享 XDG 会造成索引读改写丢失更新 | Kernel 只在文件真实落盘、canonical 校验和持久化成功后登记 Session；正常 GUI 第二实例退出并聚焦首实例，`probe-only` 保持无状态独立验证路径 |

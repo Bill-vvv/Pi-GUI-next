@@ -78,10 +78,10 @@ async function startApplication(): Promise<void> {
     rendererFilePath: join(__dirname, '../renderer/index.html')
   })
   const projectStore = new ProjectStore()
-  const storedProject = await projectStore.loadProject()
-  const recentSession = storedProject.path === null
-    ? null
-    : await projectStore.loadRecentSession(storedProject.path)
+  const storedProjects = await projectStore.loadProjects()
+  const sessionRegistry = storedProjects.activeProjectKey === null
+    ? { sessions: [], activeSessionKey: null }
+    : await projectStore.loadSessionRegistry(storedProjects.activeProjectKey)
   kernel = new WorkbenchKernel(
     (project, launchOptions) =>
       new LinuxLocalRuntime({
@@ -89,11 +89,17 @@ async function startApplication(): Promise<void> {
         explicitExecutable: process.env.PI_GUI_PI_EXECUTABLE,
         sessionFile: launchOptions.sessionFile
       }),
-    storedProject,
+    storedProjects,
     {
-      recentSession,
-      persistRecentSession: (pointer) => projectStore.saveRecentSession(pointer),
-      validateRecentSession: (pointer) => projectStore.validateRecentSession(pointer)
+      sessionRegistry,
+      persistProject: async (project) => {
+        await projectStore.addProject(project)
+      },
+      persistActiveProject: async (projectKey) => {
+        await projectStore.activateProject(projectKey)
+      },
+      persistSession: (pointer) => projectStore.saveSession(pointer),
+      validateSession: (pointer) => projectStore.validateSession(pointer)
     }
   )
   kernel.subscribe(forwardKernelEvent)
@@ -108,29 +114,42 @@ async function startApplication(): Promise<void> {
     switch (command.type) {
       case 'kernel.get-state':
         return kernel.getState()
-      case 'kernel.select-project': {
+      case 'kernel.add-project': {
         const selection = mainWindow === null
           ? await dialog.showOpenDialog({ properties: ['openDirectory'] })
           : await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
         const selectedPath = selection.filePaths[0]
         if (selection.canceled || selectedPath === undefined) return kernel.getState()
         const projectPath = await projectStore.validateProjectPath(selectedPath)
-        kernel.setProject(projectPath, await projectStore.loadRecentSession(projectPath))
+        await kernel.addProject(projectPath, await projectStore.loadSessionRegistry(projectPath))
         return kernel.getState()
       }
-      case 'kernel.start-project': {
-        const project = configuredProject(kernel.getState().project)
+      case 'kernel.activate-project': {
+        const projectPath = await projectStore.validateProjectPath(command.projectKey)
+        if (projectPath !== command.projectKey) {
+          throw new Error(`Registered project path no longer resolves canonically: ${command.projectKey}`)
+        }
+        await kernel.activateProject(projectPath, await projectStore.loadSessionRegistry(projectPath))
+        return kernel.getState()
+      }
+      case 'kernel.start-session': {
+        const project = configuredProject(kernel.getState())
         const canonicalPath = await projectStore.validateProjectPath(project.path)
         if (canonicalPath !== project.path) {
-          kernel.setProject(canonicalPath, await projectStore.loadRecentSession(canonicalPath))
+          throw new Error(`Active project path no longer resolves canonically: ${project.path}`)
         }
-        await projectStore.saveProject(configuredProject(kernel.getState().project))
         await kernel.start()
         return kernel.getState()
       }
-      case 'kernel.resume-session':
-        await kernel.resumeSession()
+      case 'kernel.activate-session': {
+        const project = configuredProject(kernel.getState())
+        const canonicalPath = await projectStore.validateProjectPath(project.path)
+        if (canonicalPath !== project.path) {
+          throw new Error(`Active project path no longer resolves canonically: ${project.path}`)
+        }
+        await kernel.activateSession(command.sessionKey)
         return kernel.getState()
+      }
       case 'kernel.prompt':
         await kernel.prompt(command.message)
         return kernel.getState()
@@ -156,33 +175,52 @@ async function startApplication(): Promise<void> {
   await createMainWindow(rendererTarget)
 }
 
-void app.whenReady().then(startApplication).catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error)
-  console.error(`[Pi GUI] Startup failed: ${message}`)
-  app.exit(1)
-})
+const probeOnly = process.env.PI_GUI_PROBE_ONLY === '1'
+const canStartApplication = probeOnly || app.requestSingleInstanceLock()
 
-app.on('window-all-closed', () => {
-  app.quit()
-})
-
-app.on('before-quit', (event) => {
-  if (allowQuit) {
-    return
+if (!canStartApplication) {
+  allowQuit = true
+  app.exit(0)
+} else {
+  if (!probeOnly) {
+    app.on('second-instance', () => {
+      if (allowQuit || shutdownPromise !== null) return
+      const window = mainWindow
+      if (window === null || window.isDestroyed()) return
+      if (window.isMinimized()) window.restore()
+      window.show()
+      window.focus()
+    })
   }
 
-  event.preventDefault()
-  shutdownPromise ??= stopKernel()
-    .then(() => {
-      allowQuit = true
-      app.quit()
-    })
-    .catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error)
-      console.error(`[Pi GUI] Shutdown failed: ${message}`)
-      app.exit(1)
-    })
-})
+  void app.whenReady().then(startApplication).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error)
+    console.error(`[Pi GUI] Startup failed: ${message}`)
+    app.exit(1)
+  })
+
+  app.on('window-all-closed', () => {
+    app.quit()
+  })
+
+  app.on('before-quit', (event) => {
+    if (allowQuit) {
+      return
+    }
+
+    event.preventDefault()
+    shutdownPromise ??= stopKernel()
+      .then(() => {
+        allowQuit = true
+        app.quit()
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        console.error(`[Pi GUI] Shutdown failed: ${message}`)
+        app.exit(1)
+      })
+  })
+}
 
 function forwardKernelEvent(event: KernelEvent): void {
   if (mainWindow === null || mainWindow.isDestroyed()) {
@@ -195,12 +233,17 @@ function isKernelCommand(value: unknown): value is KernelCommand {
   if (!isRecord(value) || typeof value.type !== 'string') return false
   if (
     value.type === 'kernel.get-state' ||
-    value.type === 'kernel.select-project' ||
-    value.type === 'kernel.start-project' ||
-    value.type === 'kernel.resume-session' ||
+    value.type === 'kernel.add-project' ||
+    value.type === 'kernel.start-session' ||
     value.type === 'kernel.abort'
   ) {
     return Object.keys(value).length === 1
+  }
+  if (value.type === 'kernel.activate-project') {
+    return typeof value.projectKey === 'string' && Object.keys(value).length === 2
+  }
+  if (value.type === 'kernel.activate-session') {
+    return typeof value.sessionKey === 'string' && Object.keys(value).length === 2
   }
   if (value.type === 'kernel.prompt') {
     return typeof value.message === 'string' && Object.keys(value).length === 2
@@ -236,15 +279,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 async function stopKernel(): Promise<void> {
-  if (kernel === null || kernel.getState().runtime.status === 'stopped') {
+  if (kernel === null) {
     return
   }
   await kernel.stop()
 }
 
-function configuredProject(project: { path: string | null }): { path: string } {
-  if (project.path === null) throw new Error('Select a project directory before starting.')
-  return { path: project.path }
+function configuredProject(state: {
+  projects: Array<{ path: string }>
+  activeProjectKey: string | null
+}): { path: string } {
+  if (state.activeProjectKey === null) throw new Error('Select a project directory before starting.')
+  const project = state.projects.find(({ path }) => path === state.activeProjectKey)
+  if (project === undefined) throw new Error('Active project is not registered.')
+  return project
 }
 
 function assertTrustedIpcSender(event: IpcMainInvokeEvent, rendererTarget: RendererTarget): void {

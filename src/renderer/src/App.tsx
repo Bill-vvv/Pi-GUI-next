@@ -126,9 +126,14 @@ export function App(): React.JSX.Element {
       state={kernelState}
       pendingAction={pendingAction}
       actionError={actionError ?? ipcError}
-      onSelectProject={() => runAction('select-project', () => window.piGui.selectProject())}
-      onStart={() => runAction('start-project', () => window.piGui.startProject())}
-      onResume={() => runAction('resume-session', () => window.piGui.resumeSession())}
+      onAddProject={() => runAction('add-project', () => window.piGui.addProject())}
+      onActivateProject={(projectKey) =>
+        runAction('activate-project', () => window.piGui.activateProject(projectKey))
+      }
+      onStartSession={() => runAction('start-session', () => window.piGui.startSession())}
+      onActivateSession={(sessionKey) =>
+        runAction('activate-session', () => window.piGui.activateSession(sessionKey))
+      }
       onPrompt={(message) => runAction('prompt', () => window.piGui.prompt(message))}
       onAbort={() => runAction('abort', () => window.piGui.abort())}
       onSetThinkingLevel={(level: ThinkingLevel) =>

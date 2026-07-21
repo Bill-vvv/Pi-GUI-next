@@ -31,7 +31,13 @@ export type KernelRuntimeState = {
 }
 
 export type KernelProjectState = {
-  path: string | null
+  path: string
+}
+
+export type KernelSessionSummary = {
+  key: string
+  id: string
+  name: string | null
 }
 
 export type KernelModelState = {
@@ -107,7 +113,10 @@ export type KernelConversationState = {
 }
 
 export type KernelState = {
-  project: KernelProjectState
+  projects: KernelProjectState[]
+  activeProjectKey: string | null
+  sessions: KernelSessionSummary[]
+  activeSessionKey: string | null
   runtime: KernelRuntimeState
   session: KernelSessionState
   conversation: KernelConversationState
@@ -155,9 +164,10 @@ export type KernelStatePatch = {
 
 export type KernelCommand =
   | { type: 'kernel.get-state' }
-  | { type: 'kernel.select-project' }
-  | { type: 'kernel.start-project' }
-  | { type: 'kernel.resume-session' }
+  | { type: 'kernel.add-project' }
+  | { type: 'kernel.activate-project'; projectKey: string }
+  | { type: 'kernel.start-session' }
+  | { type: 'kernel.activate-session'; sessionKey: string }
   | { type: 'kernel.prompt'; message: string }
   | { type: 'kernel.abort' }
   | { type: 'kernel.set-model'; provider: string; modelId: string }
@@ -175,9 +185,10 @@ export type KernelEvent =
 
 export type KernelApi = {
   getState: () => Promise<KernelState>
-  selectProject: () => Promise<KernelState>
-  startProject: () => Promise<KernelState>
-  resumeSession: () => Promise<KernelState>
+  addProject: () => Promise<KernelState>
+  activateProject: (projectKey: string) => Promise<KernelState>
+  startSession: () => Promise<KernelState>
+  activateSession: (sessionKey: string) => Promise<KernelState>
   prompt: (message: string) => Promise<KernelState>
   abort: () => Promise<KernelState>
   setModel: (provider: string, modelId: string) => Promise<KernelState>
