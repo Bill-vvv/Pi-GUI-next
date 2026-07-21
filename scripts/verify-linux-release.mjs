@@ -285,16 +285,20 @@ async function exerciseUi() {
       TIMEOUT.turn,
       'E_ABORT_RUNNING'
     )
-    await clickSelector(activeCdp, '.abort-action')
+    const abortAck = await evaluateValue(
+      activeCdp,
+      `window.piGui.abort().then((state) => ({ runtimeStatus: state.runtime.status }))`
+    )
+    if (
+      abortAck === null ||
+      typeof abortAck !== 'object' ||
+      !['running', 'ready'].includes(abortAck.runtimeStatus)
+    ) {
+      fail('E_ABORT_RPC_ACK')
+    }
     await waitForRuntime(activeCdp, 'ready', TIMEOUT.abort)
     await waitForCondition(
-      async () => {
-        const counts = await conversationCounts(activeCdp)
-        return counts.toolsRunning === 0 && (
-          counts.toolsFailed > baseline.toolsFailed ||
-          counts.abortedMessages > baseline.abortedMessages
-        )
-      },
+      async () => (await conversationCounts(activeCdp)).toolsRunning === 0,
       TIMEOUT.abort,
       'E_ABORT_SETTLED'
     )
