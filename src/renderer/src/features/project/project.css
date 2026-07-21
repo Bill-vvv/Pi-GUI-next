@@ -131,83 +131,6 @@
   background: var(--color-subtle);
 }
 
-.trust-fieldset {
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.trust-fieldset legend {
-  width: 100%;
-  margin-bottom: var(--space-3);
-}
-
-.trust-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3);
-}
-
-.trust-option {
-  position: relative;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--space-3);
-  padding: var(--space-4);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-control);
-  background: var(--color-subtle);
-  cursor: pointer;
-  transition:
-    border-color var(--motion-control) var(--ease-standard),
-    background var(--motion-control) var(--ease-standard);
-}
-
-.trust-option:hover {
-  border-color: var(--color-border);
-}
-
-.trust-option[data-selected='true'] {
-  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
-  background: color-mix(in srgb, var(--color-accent) 7%, var(--color-subtle));
-}
-
-.trust-option input {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.trust-radio {
-  width: 0.95rem;
-  height: 0.95rem;
-  margin-top: 0.15rem;
-  border: 1px solid var(--color-border-hover);
-  border-radius: 50%;
-}
-
-.trust-option[data-selected='true'] .trust-radio {
-  border: 0.28rem solid var(--color-accent);
-}
-
-.trust-option strong,
-.trust-option small {
-  display: block;
-}
-
-.trust-option strong {
-  font-size: var(--text-control);
-}
-
-.trust-option small {
-  margin-top: var(--space-1);
-  color: var(--color-muted);
-  font-size: var(--text-caption);
-  line-height: 1.5;
-}
-
 .primary-action {
   width: 100%;
   min-height: 3rem;
@@ -244,10 +167,6 @@
 @media (max-width: 34rem) {
   .startup-shell {
     padding: var(--space-6) var(--space-4);
-  }
-
-  .trust-grid {
-    grid-template-columns: 1fr;
   }
 
   .project-path-row {
