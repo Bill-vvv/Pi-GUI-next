@@ -288,9 +288,15 @@ async function exerciseUi() {
     await clickSelector(activeCdp, '.abort-action')
     await waitForRuntime(activeCdp, 'ready', TIMEOUT.abort)
     await waitForCondition(
-      async () => (await conversationCounts(activeCdp)).toolsFailed > baseline.toolsFailed,
+      async () => {
+        const counts = await conversationCounts(activeCdp)
+        return counts.toolsRunning === 0 && (
+          counts.toolsFailed > baseline.toolsFailed ||
+          counts.abortedMessages > baseline.abortedMessages
+        )
+      },
       TIMEOUT.abort,
-      'E_ABORT_FAILED_TOOL'
+      'E_ABORT_SETTLED'
     )
     await captureScreenshot(activeCdp, 'abort-settled.png')
   })
@@ -563,7 +569,8 @@ async function conversationCounts(cdp) {
       thinking: state.conversation.entries.filter((entry) => entry.kind === 'thinking').length,
       toolsCompleted: state.conversation.entries.filter((entry) => entry.kind === 'tool' && entry.status === 'success').length,
       toolsRunning: state.conversation.entries.filter((entry) => entry.kind === 'tool' && (entry.status === 'pending' || entry.status === 'running')).length,
-      toolsFailed: state.conversation.entries.filter((entry) => entry.kind === 'tool' && entry.status === 'error').length
+      toolsFailed: state.conversation.entries.filter((entry) => entry.kind === 'tool' && entry.status === 'error').length,
+      abortedMessages: state.conversation.entries.filter((entry) => entry.kind === 'message' && entry.stopReason === 'aborted').length
     }))`
   )
 }
@@ -608,6 +615,7 @@ async function captureScreenshot(cdp, filename) {
         .chat-message.user > *,
         .chat-message.assistant > *,
         .chat-message.error > *,
+        .chat-message.aborted > *,
         .chronological-thinking-detail,
         .process-thinking-detail,
         .process-tool-detail,
@@ -617,7 +625,8 @@ async function captureScreenshot(cdp, filename) {
         }
         .chat-message.user::after,
         .chat-message.assistant::after,
-        .chat-message.error::after {
+        .chat-message.error::after,
+        .chat-message.aborted::after {
           content: '内容已脱敏';
           visibility: visible;
         }
