@@ -52,7 +52,7 @@ pnpm verify:linux
 6. 强制终止 Pi 后进入 crashed；
 7. 用户显式 restart/resume，并在应用重启后恢复最近 session。
 
-验证报告必须记录 app、Node/Electron、Pi、平台、commit、产物和各步骤结果，不得包含 prompt 正文、敏感 tool output、credential 或完整环境变量。
+验证报告必须记录 app、Node/Electron、Pi、平台、commit、产物和各步骤结果；JSON 与截图均不得包含 prompt 正文、敏感 tool output、credential 或完整环境变量。截图保留状态与流程结构，但在捕获前临时遮罩会话正文、工具详情与会话标题。
 
 `pnpm verify:linux` 只在干净工作区执行；它从 AppImage 的真实 renderer UI 完成上述链路，并将脱敏 `report.json` 与五张关键截图写入 `release/evidence/<UTC>-<commit>/`。验证器不得向生产代码加入测试后门。
 

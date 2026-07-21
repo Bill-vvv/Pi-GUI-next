@@ -577,16 +577,67 @@ async function waitForMessageCount(cdp, minimum, timeoutMs) {
 }
 
 async function captureScreenshot(cdp, filename) {
-  const result = await cdp.send('Page.captureScreenshot', {
-    format: 'png',
-    captureBeyondViewport: false,
-    fromSurface: true
-  })
-  if (typeof result.data !== 'string' || result.data.length === 0) fail('E_SCREENSHOT')
-  await writeFile(join(reportDirectory, filename), Buffer.from(result.data, 'base64'), {
-    mode: 0o600,
-    flag: 'wx'
-  })
+  const redactionId = 'pi-gui-s7-evidence-redaction'
+  const redacted = await evaluateValue(
+    cdp,
+    `(() => {
+      if (document.getElementById(${JSON.stringify(redactionId)})) return false
+      const style = document.createElement('style')
+      style.id = ${JSON.stringify(redactionId)}
+      style.textContent = ${JSON.stringify(`
+        .chat-message.user > *,
+        .chat-message.assistant > *,
+        .chat-message.error > *,
+        .chronological-thinking-detail,
+        .connection-status-warning {
+          visibility: hidden !important;
+        }
+        .chat-message.user::after,
+        .chat-message.assistant::after,
+        .chat-message.error::after {
+          content: '内容已脱敏';
+          visibility: visible;
+        }
+        .chronological-activity-text {
+          font-size: 0 !important;
+        }
+        .chronological-activity-text::after {
+          content: '步骤内容已脱敏';
+          font-size: 12px;
+        }
+        .session-title,
+        .conversation-header > strong {
+          font-size: 0 !important;
+        }
+        .session-title::after,
+        .conversation-header > strong::after {
+          content: '验证会话';
+          font-size: 12px;
+        }
+      `)}
+      document.head.append(style)
+      return true
+    })()`
+  )
+  if (!redacted) fail('E_SCREENSHOT_REDACTION')
+
+  try {
+    const result = await cdp.send('Page.captureScreenshot', {
+      format: 'png',
+      captureBeyondViewport: false,
+      fromSurface: true
+    })
+    if (typeof result.data !== 'string' || result.data.length === 0) fail('E_SCREENSHOT')
+    await writeFile(join(reportDirectory, filename), Buffer.from(result.data, 'base64'), {
+      mode: 0o600,
+      flag: 'wx'
+    })
+  } finally {
+    await evaluateValue(
+      cdp,
+      `document.getElementById(${JSON.stringify(redactionId)})?.remove()`
+    ).catch(() => undefined)
+  }
 }
 
 async function reservePort() {
@@ -845,6 +896,7 @@ async function writeReport(status, error) {
     system: await osIdentity(),
     processOutputCounts: { ...processTotals },
     evidence: {
+      screenshotTextRedacted: true,
       screenshots: [
         'ready-tool.png',
         'abort-settled.png',
