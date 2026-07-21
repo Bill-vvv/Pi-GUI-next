@@ -10,6 +10,7 @@ import {
   open,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   stat,
@@ -299,7 +300,7 @@ async function exerciseUi() {
   await runStep('crash_detection', async () => {
     messagesBeforeCrash = (await conversationCounts(activeCdp)).messages
     sessionPointer = await readRecentSessionPointer(projectPath)
-    const piPid = await findUniquePiRpcProcess(activeApp)
+    const piPid = await findUniquePiRpcProcess(activeApp, projectPath)
     process.kill(piPid, 'SIGKILL')
     await waitForExpression(
       activeCdp,
@@ -734,25 +735,38 @@ async function descendantPids(rootPid) {
   return descendants
 }
 
-async function findUniquePiRpcProcess(app) {
+async function findUniquePiRpcProcess(app, projectPath) {
   const deadline = Date.now() + 10_000
   while (Date.now() < deadline) {
     await observeTree(app)
-    const matches = []
-    for (const pid of app.knownPids) {
-      if (pid === app.rootPid) continue
-      try {
-        const args = (await readFile(`/proc/${pid}/cmdline`))
-          .toString('utf8')
-          .split('\0')
-          .filter(Boolean)
-        const sequence = args.join(' ')
-        if (sequence.includes('--mode rpc --offline')) matches.push(pid)
-      } catch {
-        // Ignore descendants which exited during inspection.
-      }
+    const entries = await readdir('/proc', { withFileTypes: true })
+    const matches = (await Promise.all(
+      entries
+        .filter((entry) => /^\d+$/.test(entry.name))
+        .map(async (entry) => {
+          const pid = Number(entry.name)
+          try {
+            const [commandLine, cwd] = await Promise.all([
+              readFile(`/proc/${pid}/cmdline`),
+              realpath(`/proc/${pid}/cwd`)
+            ])
+            const args = commandLine.toString('utf8').split('\0').filter(Boolean)
+            const modeIndex = args.indexOf('--mode')
+            return cwd === projectPath &&
+              modeIndex >= 0 &&
+              args[modeIndex + 1] === 'rpc' &&
+              args.includes('--offline')
+              ? pid
+              : null
+          } catch {
+            return null
+          }
+        })
+    )).filter((pid) => pid !== null)
+    if (matches.length === 1) {
+      app.knownPids.add(matches[0])
+      return matches[0]
     }
-    if (matches.length === 1) return matches[0]
     if (matches.length > 1) fail('E_PI_PROCESS_AMBIGUOUS')
     await delay(250)
   }
