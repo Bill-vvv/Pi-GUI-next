@@ -633,13 +633,6 @@
   word-break: normal;
 }
 
-.markdown-streaming-plain-text {
-  display: block;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-  word-break: normal;
-}
-
 .chat-message > pre {
   overflow: auto;
   white-space: pre-wrap;

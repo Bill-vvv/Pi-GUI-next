@@ -14,7 +14,7 @@ type BenchmarkResult = {
   p95Ms: number
   p99Ms: number
   maxMs: number
-  finalBlockFormat: 'markdown' | 'plain-text' | null
+  finalWholeDocument: boolean | null
 }
 
 function percentile(samples: number[], ratio: number): number {
@@ -49,7 +49,7 @@ function benchmark(
     p95Ms: percentile(samples, 0.95),
     p99Ms: percentile(samples, 0.99),
     maxMs: Math.max(...samples),
-    finalBlockFormat: model?.blocks.at(-1)?.format ?? null
+    finalWholeDocument: model?.wholeDocument ?? null
   }
 }
 

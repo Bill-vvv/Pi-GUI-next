@@ -75,11 +75,9 @@ const MarkdownBlock = memo(function MarkdownBlock({
 }: {
   block: StreamingMarkdownBlock
 }): React.JSX.Element {
-  return block.format === 'plain-text'
-    ? <span className="markdown-streaming-plain-text">{block.text}</span>
-    : <MarkdownFragment text={block.text} />
+  return <MarkdownFragment text={block.text} />
 }, (previous, next) => (
-  previous.block.text === next.block.text && previous.block.format === next.block.format
+  previous.block.text === next.block.text
 ))
 
 const MarkdownFragment = memo(function MarkdownFragment({ text }: { text: string }): React.JSX.Element {

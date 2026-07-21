@@ -8,7 +8,6 @@ export type StreamingMarkdownBlock = {
   stable: boolean
   start: number
   end: number
-  format: 'markdown' | 'plain-text'
 }
 
 export type StreamingMarkdownModel = {
@@ -40,9 +39,9 @@ export function buildStreamingMarkdownModel(
 
   if (parsed.exceededParseBudget) {
     return {
-      blocks: [...prefix, ...parsed.blocks],
+      blocks: text.length === 0 ? [] : [block('markdown-whole', text, 0, text.length, false)],
       sourceText: text,
-      wholeDocument: false
+      wholeDocument: true
     }
   }
 
@@ -93,7 +92,7 @@ function parseTail(
 
   if (tail.length > STREAMING_TAIL_PARSE_BUDGET) {
     return {
-      blocks: [block(`plain-text-tail-${cursor}`, tail, cursor, sourceText.length, false, 'plain-text')],
+      blocks: [],
       hasDocumentWideDefinition: false,
       exceededParseBudget: true
     }
@@ -139,8 +138,7 @@ function block(
   text: string,
   start: number,
   end: number,
-  stable: boolean,
-  format: StreamingMarkdownBlock['format'] = 'markdown'
+  stable: boolean
 ): StreamingMarkdownBlock {
-  return { id, text, stable, start, end, format }
+  return { id, text, stable, start, end }
 }
