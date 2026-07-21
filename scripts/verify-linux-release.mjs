@@ -252,15 +252,15 @@ async function exerciseUi() {
   await runStep('tool_turn', async () => {
     const baseline = await conversationCounts(activeCdp)
     await submitPrompt(activeCdp, TOOL_PROMPT)
-    await waitForExpression(
-      activeCdp,
-      `document.querySelectorAll('.chronological-activity-item.thinking').length > ${baseline.thinking}`,
+    await waitForCondition(
+      async () => (
+        await evaluateValue(activeCdp, `document.querySelector('.thinking-status[role="status"]') !== null`)
+      ) || (await conversationCounts(activeCdp)).thinking > baseline.thinking,
       TIMEOUT.turn,
       'E_THINKING_ACTIVITY'
     )
-    await waitForExpression(
-      activeCdp,
-      `document.querySelectorAll('.chronological-activity-item.tool.completed').length > ${baseline.toolsCompleted}`,
+    await waitForCondition(
+      async () => (await conversationCounts(activeCdp)).toolsCompleted > baseline.toolsCompleted,
       TIMEOUT.turn,
       'E_TOOL_COMPLETED'
     )
@@ -275,15 +275,19 @@ async function exerciseUi() {
     await submitPrompt(activeCdp, ABORT_PROMPT)
     await waitForExpression(
       activeCdp,
-      `document.querySelector('.abort-action:not(:disabled)') !== null && document.querySelectorAll('.chronological-activity-item.tool.running').length > 0`,
+      `document.querySelector('.abort-action:not(:disabled)') !== null`,
+      TIMEOUT.turn,
+      'E_ABORT_ACTION'
+    )
+    await waitForCondition(
+      async () => (await conversationCounts(activeCdp)).toolsRunning > baseline.toolsRunning,
       TIMEOUT.turn,
       'E_ABORT_RUNNING'
     )
     await clickSelector(activeCdp, '.abort-action')
     await waitForRuntime(activeCdp, 'ready', TIMEOUT.abort)
-    await waitForExpression(
-      activeCdp,
-      `document.querySelectorAll('.chronological-activity-item.tool.failed').length > ${baseline.toolsFailed}`,
+    await waitForCondition(
+      async () => (await conversationCounts(activeCdp)).toolsFailed > baseline.toolsFailed,
       TIMEOUT.abort,
       'E_ABORT_FAILED_TOOL'
     )
@@ -484,10 +488,18 @@ async function evaluateValue(cdp, expression) {
 }
 
 async function waitForExpression(cdp, expression, timeoutMs, code) {
+  await waitForCondition(
+    async () => Boolean(await evaluateValue(cdp, `Boolean(${expression})`)),
+    timeoutMs,
+    code
+  )
+}
+
+async function waitForCondition(check, timeoutMs, code) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (activeApp) await observeTree(activeApp)
-    if (await evaluateValue(cdp, `Boolean(${expression})`)) return
+    if (await check()) return
     await delay(250)
   }
   fail(code)
@@ -544,7 +556,14 @@ async function submitPrompt(cdp, prompt) {
 async function conversationCounts(cdp) {
   return evaluateValue(
     cdp,
-    `({ messages: document.querySelectorAll('.chat-message.user, .chat-message.assistant:not(.thinking-placeholder)').length, assistant: document.querySelectorAll('.chat-message.assistant:not(.streaming):not(.thinking-placeholder)').length, thinking: document.querySelectorAll('.chronological-activity-item.thinking').length, toolsCompleted: document.querySelectorAll('.chronological-activity-item.tool.completed').length, toolsFailed: document.querySelectorAll('.chronological-activity-item.tool.failed').length })`
+    `window.piGui.getState().then((state) => ({
+      messages: state.conversation.entries.filter((entry) => entry.kind === 'message').length,
+      assistant: state.conversation.entries.filter((entry) => entry.kind === 'message' && entry.role === 'assistant' && !entry.streaming).length,
+      thinking: state.conversation.entries.filter((entry) => entry.kind === 'thinking').length,
+      toolsCompleted: state.conversation.entries.filter((entry) => entry.kind === 'tool' && entry.status === 'success').length,
+      toolsRunning: state.conversation.entries.filter((entry) => entry.kind === 'tool' && (entry.status === 'pending' || entry.status === 'running')).length,
+      toolsFailed: state.conversation.entries.filter((entry) => entry.kind === 'tool' && entry.status === 'error').length
+    }))`
   )
 }
 
@@ -559,18 +578,18 @@ async function waitForRuntime(cdp, status, timeoutMs) {
 }
 
 async function waitForAssistantSettled(cdp, baseline, timeoutMs) {
-  await waitForExpression(
-    cdp,
-    `document.querySelector('.status-dot.task-idle') !== null && document.querySelectorAll('.chat-message.assistant:not(.streaming):not(.thinking-placeholder)').length > ${baseline}`,
+  await waitForCondition(
+    async () => (
+      await evaluateValue(cdp, `document.querySelector('.status-dot.task-idle') !== null`)
+    ) && (await conversationCounts(cdp)).assistant > baseline,
     timeoutMs,
     'E_ASSISTANT_SETTLED'
   )
 }
 
 async function waitForMessageCount(cdp, minimum, timeoutMs) {
-  await waitForExpression(
-    cdp,
-    `document.querySelectorAll('.chat-message.user, .chat-message.assistant:not(.thinking-placeholder)').length >= ${minimum}`,
+  await waitForCondition(
+    async () => (await conversationCounts(cdp)).messages >= minimum,
     timeoutMs,
     'E_MESSAGES_NOT_RESTORED'
   )
@@ -589,6 +608,9 @@ async function captureScreenshot(cdp, filename) {
         .chat-message.assistant > *,
         .chat-message.error > *,
         .chronological-thinking-detail,
+        .process-thinking-detail,
+        .process-tool-detail,
+        .tool-file-tooltip,
         .connection-status-warning {
           visibility: hidden !important;
         }
@@ -598,10 +620,12 @@ async function captureScreenshot(cdp, filename) {
           content: '内容已脱敏';
           visibility: visible;
         }
-        .chronological-activity-text {
+        .chronological-activity-text,
+        .process-step-text {
           font-size: 0 !important;
         }
-        .chronological-activity-text::after {
+        .chronological-activity-text::after,
+        .process-step-text::after {
           content: '步骤内容已脱敏';
           font-size: 12px;
         }
