@@ -476,6 +476,37 @@ test('projects streaming messages and tools without duplication and settles only
   ])
 })
 
+test('settling after abort marks a tool without an end event as error', async () => {
+  const runtime = new FakeRuntimeHost()
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { path: '/tmp/project' },
+    kernelOptions()
+  )
+
+  await kernel.start()
+  await kernel.prompt('Run a long tool')
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_start',
+      toolCallId: 'tool-abort',
+      toolName: 'bash',
+      args: { command: 'sleep 60' }
+    }
+  })
+
+  await kernel.abort()
+  runtime.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+
+  const state = kernel.getState()
+  const tool = state.conversation.entries.find((entry) => entry.kind === 'tool')
+  assert.equal(tool?.kind === 'tool' ? tool.status : null, 'error')
+  assert.equal(state.runtime.status, 'ready')
+  assert.equal(state.session.settled, true)
+  assert.equal(state.conversation.activeRunStartIndex, null)
+})
+
 test('Pi streaming emits indexed patches and only includes changed state boundaries', async () => {
   const runtime = new FakeRuntimeHost()
   const kernel = new WorkbenchKernel(

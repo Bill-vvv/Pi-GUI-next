@@ -762,8 +762,17 @@ function beginConversationRun(conversation: KernelConversationState): KernelConv
 }
 
 function settleConversationRun(conversation: KernelConversationState): KernelConversationState {
-  if (conversation.activeRunStartIndex === null) return conversation
-  return { ...conversation, activeRunStartIndex: null }
+  const activeRunStartIndex = conversation.activeRunStartIndex
+  if (activeRunStartIndex === null) return conversation
+  const entries = conversation.entries.map((entry, index) => {
+    if (
+      index < activeRunStartIndex ||
+      entry.kind !== 'tool' ||
+      (entry.status !== 'pending' && entry.status !== 'running')
+    ) return entry
+    return { ...entry, status: 'error' as const }
+  })
+  return { entries, activeRunStartIndex: null }
 }
 
 function thinkingLevel(value: unknown): ThinkingLevel | null {
