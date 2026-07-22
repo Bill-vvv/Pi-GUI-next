@@ -6,6 +6,21 @@
 - 长期架构约束和决策分别以 [`architecture.md`](architecture.md) 与 [`decisions.md`](decisions.md) 为准。
 - 这里只记录有实现和验证证据的结果；候选方案、失败候选和未完成计划不写成已交付能力。
 
+## 2026-07-22 — S13 交互收敛与 P2 AppImage 发布证据
+
+**状态：** 已通过发布门槛。**交付：** 低成本可配置的 Session 语义命名、键盘与焦点收尾、Project/Session 切换反馈、slash command 补全、加载/错误/空状态，以及覆盖 P1 回归和 P2 新链路的真实 AppImage 验证器。
+
+| 已修复问题 | 根因 | 修复与工程价值 |
+| --- | --- | --- |
+| Runtime context action 完成后输入焦点停留在导航控件，slash 建议不能用 Tab 补全 | Composer 只在 prompt/command 完成后恢复焦点，slash keydown 未处理 Tab，combobox ARIA 关系也不完整 | 只在 Project/Session/start/resume 成功且 Composer 重新 editable 后恢复焦点；Tab/Arrow/Enter/Escape 保持明确语义并补齐 listbox 关系 |
+| 切换期间只禁用按钮，空对话完全空白，Kernel 初始连接失败没有恢复入口 | Renderer 有 pending/error 事实但缺少最小可见投影 | 增加 `role=status`/`aria-live` 切换反馈、空对话和 crash fallback，并允许用户显式重试 Kernel 连接，不新增 IPC 或状态框架 |
+| 旧发布验证器在 S10–S13 后读取失效 DOM 和 v1 `recentSession`，并把异步条件的 Promise 直接转成 true | 验证器依赖 P1 展示节点，未随 typed state 与 XDG state v3 演进；`Boolean(Promise)` 造成瞬时状态误判 | 运行身份、状态和恢复改读 typed KernelState 与 `sessions[]`/`activeSessionKeys[]`；异步条件先 await 再布尔化，受控输入准备不再依赖不稳定的 CDP Ctrl+A |
+| 自动命名 metadata Pi 被进程探针误判成第二个 Runtime | metadata 请求与 RPC Runtime 共享 executable/cwd，但前者按架构不属于 Runtime | 发布验证显式关闭自动命名，独立验证单 Runtime 主链路；自动命名继续由定向测试覆盖，不削弱 Runtime ownership 断言 |
+
+**验证：** 候选 `fe1e559` 的 AppImage 报告 17 步全部通过；P2 摘要确认 2/2 Project、2/2 Session、5 个命令、2 类来源、typed command、未知命令拒绝、空态、切换反馈、焦点恢复和单 Runtime。`release/evidence/2026-07-22T03-37-46-614Z-fe1e559bca43/report.json` 为 schema v2 passed，六张截图均非空并已脱敏；119 项 core tests、`pnpm typecheck`、生产 build、真实 Pi 0.80.10 smoke 和 AppImage package 通过。
+
+**可复用规则：** 发布验证应等待用户可操作的稳定点，而不是瞬时 Kernel 状态；允许存在的辅助进程不能被误算为 Runtime；验证器的持久化读取必须与当前 schema 同步，异步浏览器条件必须先解析 Promise 再判断。
+
 ## 2026-07-22 — GPT 思考强度与模型选择器修正
 
 **状态：** 已验证。**交付：** 模型选择器、`/thinking` 命令与 Kernel contract 统一使用 `low`、`medium`、`high`、`xhigh`、`max` 五档，并分别显示为“低、中、高、极高、最高”；Composer 设置弹层改为“模型 / 思考强度”左侧一级入口与右侧选项面板。

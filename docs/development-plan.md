@@ -4,7 +4,7 @@
 > 计划版本：1.5
 > 最后更新：2026-07-22
 > 总体状态：In Progress
-> 当前 Slice：S13 — 交互优化与 P2 发布证据（In Progress）
+> 当前 Slice：S14 — 优化（Ready）
 
 ## 1. 计划用途
 
@@ -454,8 +454,8 @@ P2 先用一个短 Slice 固定结构，再实现基础功能，随后在真实�
 | S11 | Pi 基础命令与 slash command | `Complete` | Kernel 在 Runtime 启动时通过真实 `get_commands` 建立 normalized catalog；内建 `/new`、`/model`、`/thinking`、`/compact`、`/name` 分别路由到 GUI 或 typed RPC，extension/prompt/skill 只允许调用当前 catalog 中的 ID 后进入 Pi prompt 语义；Composer 支持来源标识、搜索、键盘选择、补全、参数输入和未知命令 Fail Fast，不存在任意 raw command IPC |
 | S12 | UI 视觉收敛 | `Complete` | 真实构建版通过隔离 XDG 的 ProjectStore/WorkbenchKernel 载入 2 个 Project、3 个 Session，切换后只显示目标 Project 的 Session；真实 Pi 0.80.10 启动到 ready 并展示 `/new`、`/model`、`/thinking`、`/compact`、`/name` catalog；slash menu 位于 Composer 上方且无溢出，Header/流内诊断不覆盖 Timeline；109 项 core tests、`pnpm typecheck`、生产 build、diff check 通过 |
 | S12.5 | 重复职责解耦 | `Complete` | 审计当前实现后只收敛跨模块高重复且存在语义漂移风险的纯逻辑：Main 通用 record guard、错误文本归一化、Project Session pointer 类型与 upsert，以及 Renderer Runtime 状态判定；不按文件大小拆分，不为单次逻辑增加函数、类或中间层；109 项 core tests、`pnpm typecheck`、生产 build 和 diff check 通过 |
-| S13 | 交互优化与 P2 发布证据 | `In Progress` | 已实现新 Session 首轮 settled 后按对话目的生成名称，并为已有未命名 Session 在下次恢复时补生成；自动命名只从当前授权 provider 选择低成本模型，设置可关闭或指定模型；已完成 Tab/Arrow slash 补全与 combobox 语义、Runtime context action 成功后的 Composer 焦点恢复、Project/Session 切换反馈、Kernel 连接重试以及空对话与无详情 crash 状态；P2 验证器已保留 P1 回归并加入双 Project、双 Session、slash command 和交互断言，等待干净 commit 上的真实 AppImage 完整验证与脱敏证据 |
-| S14 | 优化 | `Pending` | 不预先拆分具体计划；按实际使用中发现的零散交互问题逐项优化 |
+| S13 | 交互优化与 P2 发布证据 | `Complete` | 完成低成本可配置的 Session 语义命名、Tab/Arrow slash 补全与 combobox 语义、Runtime context action 成功后的 Composer 焦点恢复、Project/Session 切换反馈、Kernel 连接重试以及空对话与无详情 crash 状态；候选 `fe1e559` 的 AppImage 通过 17 步 P1 回归与 P2 双 Project、双 Session、slash command、单 Runtime 和交互链路，schema v2 脱敏报告与六张截图位于 `release/evidence/2026-07-22T03-37-46-614Z-fe1e559bca43/` |
+| S14 | 优化 | `Ready` | 不预先拆分具体计划；按实际使用中发现的零散交互问题逐项优化 |
 
 P2 的“多 Project、多 Session”首先指多个对象可保存、可发现、可切换，不等于多个 Pi Runtime 并行运行。只有出现明确并行使用需求后，才单独决定是否扩展 runtime ownership 和调度模型，不预留空的并行抽象。
 
@@ -569,6 +569,7 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-22 | S13 P2 Release Verifier | 保留 P1 的 13 步真实 AppImage 回归，新增双 Project 发现/切换与单 Runtime 采样、同 Project 双 Session materialize/list/switch/restore、slash 来源与 Arrow/Tab 补全、typed `/thinking`、未知命令 Fail Fast、空态/切换反馈/焦点恢复断言；报告升级为 schema v2 与 P2 摘要。复核时同步移除 S12 后失效的 DOM 选择器，并按当前 XDG state v3 的 `sessions[]` / `activeSessionKeys[]` 读取恢复事实；脚本语法、diff check 与 AppImage package 通过 | 先整理当前 P2 工作区为干净 commit，再运行 `pnpm verify:linux`；passed 报告和六张脱敏截图生成前，S13/P2 保持 In Progress |
 | 2026-07-22 | S14 Planning | 新增后续 Slice S14“优化”；不预先拆分具体事项，实际交互问题按出现顺序处理 | S13 继续 In Progress；完成后进入 S14 |
 | 2026-07-22 | S14 Intake | 记录首批四项实际体验问题：菜单外点击收起、设置界面首期范围、只读查看 Session 与 Runtime 启动语义、Project/Session 拖拽排序 | 继续接收问题；具体方案和顺序留待逐项讨论 |
+| 2026-07-22 | S13 Complete / S14 Ready | 候选 `fe1e559` 从 AppImage 完成 17 步真实 UI 验证：完整保留 P1 launch、probe、tool、abort、crash、restart/resume、reopen 链路，并通过 2 个 Project 发现/切换、同 Project 2 个 Session 落盘/列出/切换/恢复、5 个命令与 2 类来源发现、Arrow/Tab 补全、typed `/thinking`、未知命令 Fail Fast、空态、切换反馈、焦点恢复和单 Runtime 采样；schema v2 报告为 passed，六张 1271px 宽截图均非空且正文、工具详情和标题已脱敏。119 项 core tests、typecheck、生产 build、真实 Pi 0.80.10 smoke 与 AppImage package 均通过 | S13 完成；S14 Ready，按优化记录逐项讨论和实施 |
 
 ## 17. 计划变更记录
 
