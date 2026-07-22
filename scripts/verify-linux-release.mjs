@@ -903,9 +903,20 @@ async function dispatchKey(cdp, key, code, modifiers = 0) {
 }
 
 async function clearComposer(cdp) {
-  await focusComposer(cdp)
-  await dispatchKey(cdp, 'a', 'KeyA', 2)
-  await dispatchKey(cdp, 'Backspace', 'Backspace')
+  const cleared = await evaluateValue(
+    cdp,
+    `(() => {
+      const input = document.querySelector('textarea[aria-label="发送给 Pi 的任务"]')
+      if (!(input instanceof HTMLTextAreaElement) || input.disabled) return false
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+      if (setter === undefined) return false
+      setter.call(input, '')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      input.focus()
+      return true
+    })()`
+  )
+  if (!cleared) fail('E_COMPOSER_CLEAR')
   await waitForExpression(
     cdp,
     `document.querySelector('textarea[aria-label="发送给 Pi 的任务"]')?.value === ''`,
