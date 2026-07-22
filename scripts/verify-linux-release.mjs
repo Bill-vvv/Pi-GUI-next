@@ -193,9 +193,10 @@ async function prepareRun() {
   await writeFile(
     join(paths.config, 'pi-gui-next', 'config.json'),
     `${JSON.stringify({
-      version: 2,
+      version: 3,
       projects: [{ path: paths.project }, { path: paths.secondProject }],
-      activeProjectKey: paths.project
+      activeProjectKey: paths.project,
+      sessionNaming: { mode: 'off' }
     }, null, 2)}\n`,
     { mode: 0o600, flag: 'wx' }
   )
