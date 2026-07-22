@@ -265,11 +265,18 @@ async function exerciseUi() {
     if (
       runtimeIdentity === null ||
       typeof runtimeIdentity !== 'object' ||
-      runtimeIdentity.status !== 'ready' ||
-      runtimeIdentity.executable !== piExecutable ||
-      runtimeIdentity.version !== PI_VERSION
+      runtimeIdentity.status !== 'ready'
     ) {
-      fail('E_PI_READY')
+      fail('E_PI_RUNTIME_STATUS')
+    }
+    if (runtimeIdentity.version !== PI_VERSION) fail('E_PI_VERSION')
+    if (typeof runtimeIdentity.executable !== 'string') fail('E_PI_EXECUTABLE')
+    const [actualExecutable, expectedExecutable] = await Promise.all([
+      realpath(runtimeIdentity.executable).catch(() => null),
+      realpath(piExecutable).catch(() => null)
+    ])
+    if (actualExecutable === null || actualExecutable !== expectedExecutable) {
+      fail('E_PI_EXECUTABLE')
     }
   })
 
