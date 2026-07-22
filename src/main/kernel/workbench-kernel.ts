@@ -1,4 +1,5 @@
 import type {
+  KernelCommandDescriptor,
   KernelConversationEntry,
   KernelConversationEntryPatch,
   KernelConversationState,
@@ -10,12 +11,28 @@ import type {
   KernelState,
   KernelStatePatch,
   RuntimeStatus,
+  SessionNamingSettings,
   ThinkingLevel
 } from '../../shared/kernel-contract.ts'
+import { DEFAULT_SESSION_NAMING_SETTINGS } from '../../shared/kernel-contract.ts'
 import type { PiRpcEvent, PiRpcSessionState } from '../pi-rpc/pi-rpc-client.ts'
 import { isAbsolute } from 'node:path'
-import type { ProjectSessionRegistry, SessionPointer } from '../project/project-store.ts'
+import {
+  upsertSessionPointer,
+  type ProjectSessionRegistry,
+  type SessionPointer
+} from '../project/session-pointer.ts'
 import type { RuntimeHost, RuntimeHostEvent, RuntimeHostState } from '../runtime/runtime-host.ts'
+import type { SessionNameGenerator } from '../runtime/session-name-generator.ts'
+import { errorMessage } from '../utils/errors.ts'
+import {
+  COMPACT_COMMAND_ID,
+  createCommandCatalog,
+  NEW_SESSION_COMMAND_ID,
+  SET_MODEL_COMMAND_ID,
+  SET_SESSION_NAME_COMMAND_ID,
+  SET_THINKING_COMMAND_ID
+} from './command-catalog.ts'
 import { projectMessages, projectPiEvent } from './conversation-projection.ts'
 
 const INITIAL_HOST_STATE: RuntimeHostState = {
@@ -39,6 +56,12 @@ const INITIAL_SESSION_STATE: KernelSessionState = {
   settled: true
 }
 
+const AUTOMATIC_SESSION_NAME_MODEL_IDS = [
+  'gpt-5.4-nano',
+  'gpt-5.4-mini',
+  'gpt-5.6-luna'
+] as const
+
 export type RuntimeFactory = (
   project: { path: string },
   launchOptions: { sessionFile?: string }
@@ -50,11 +73,16 @@ export type WorkbenchKernelOptions = {
   persistActiveProject: (projectKey: string) => Promise<void>
   persistSession: (pointer: SessionPointer) => Promise<void>
   validateSession: (pointer: SessionPointer) => Promise<SessionPointer>
+  readSessionActivityAt?: (pointer: SessionPointer) => Promise<number | null>
+  sessionNaming?: SessionNamingSettings
+  persistSessionNaming?: (settings: SessionNamingSettings) => Promise<void>
+  generateSessionName?: SessionNameGenerator
 }
 
 export class WorkbenchKernel {
   private readonly createRuntime: RuntimeFactory
   private readonly listeners = new Set<(event: KernelEvent) => void>()
+  private sessionActivityAtByKey = new Map<string, number | null>()
   private runtime: RuntimeHost | null = null
   private unsubscribeRuntime: (() => void) | null = null
   private sessionPointers: SessionPointer[]
@@ -62,9 +90,23 @@ export class WorkbenchKernel {
   private stopRequested = false
   private launchOperation: Promise<void> | null = null
   private launchCommitting = false
-  private provisionalSession: { runtime: RuntimeHost, pointer: SessionPointer } | null = null
+  private provisionalSession: {
+    runtime: RuntimeHost
+    pointer: SessionPointer
+    initialPrompt: string | null
+  } | null = null
   private provisionalCommit: Promise<void> | null = null
   private provisionalSettled = false
+  private pendingSessionName: {
+    runtime: RuntimeHost
+    sessionFile: string
+    sessionId: string
+    userMessage: string
+  } | null = null
+  private sessionNameOperation: {
+    runtime: RuntimeHost
+    controller: AbortController
+  } | null = null
 
   constructor(
     createRuntime: RuntimeFactory,
@@ -79,13 +121,24 @@ export class WorkbenchKernel {
     this.persistActiveProject = options.persistActiveProject
     this.persistSession = options.persistSession
     this.validateSession = options.validateSession
-    this.state = initialKernelState(projectRegistry, sessionRegistry)
+    this.readSessionActivityAt = options.readSessionActivityAt ?? (async () => null)
+    this.persistSessionNaming = options.persistSessionNaming ?? (async () => {})
+    this.generateSessionName = options.generateSessionName
+    this.state = initialKernelState(
+      projectRegistry,
+      sessionRegistry,
+      this.sessionActivityAtByKey,
+      options.sessionNaming ?? DEFAULT_SESSION_NAMING_SETTINGS
+    )
   }
 
   private readonly persistProject: (project: KernelProjectState) => Promise<void>
   private readonly persistActiveProject: (projectKey: string) => Promise<void>
   private readonly persistSession: (pointer: SessionPointer) => Promise<void>
   private readonly validateSession: ((pointer: SessionPointer) => Promise<SessionPointer>) | undefined
+  private readonly readSessionActivityAt: (pointer: SessionPointer) => Promise<number | null>
+  private readonly persistSessionNaming: (settings: SessionNamingSettings) => Promise<void>
+  private readonly generateSessionName: SessionNameGenerator | undefined
 
   getState(): KernelState {
     return copyState(this.state)
@@ -94,6 +147,18 @@ export class WorkbenchKernel {
   subscribe(listener: (event: KernelEvent) => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  async refreshSessionActivities(): Promise<void> {
+    const pointers = this.sessionPointers.map((pointer) => ({ ...pointer }))
+    const activityAtByKey = await this.loadSessionActivities(pointers)
+    if (!sameSessionPointers(this.sessionPointers, pointers)) return
+    this.sessionActivityAtByKey = activityAtByKey
+    this.state = {
+      ...this.state,
+      sessions: toKernelSessionSummaries(this.sessionPointers, this.sessionActivityAtByKey)
+    }
+    this.emitState()
   }
 
   async addProject(path: string, sessionRegistry: ProjectSessionRegistry): Promise<void> {
@@ -128,10 +193,11 @@ export class WorkbenchKernel {
     await this.persistActiveProject(path)
     const matchingRegistry = matchingSessionRegistry({ path }, sessionRegistry)
     this.sessionPointers = matchingRegistry.sessions
+    this.sessionActivityAtByKey = await this.loadSessionActivities(this.sessionPointers)
     this.state = initialKernelState({
       projects: this.state.projects,
       activeProjectKey: path
-    }, matchingRegistry)
+    }, matchingRegistry, this.sessionActivityAtByKey, this.state.sessionNaming)
     this.emitState()
   }
 
@@ -220,6 +286,7 @@ export class WorkbenchKernel {
       if (this.runtime === runtime) this.handleRuntimeEvent(event)
     })
 
+    this.state = { ...this.state, commands: createCommandCatalog(), availableModels: [] }
     this.transition('starting')
     let runtimeStarted = false
     try {
@@ -255,12 +322,24 @@ export class WorkbenchKernel {
         sessionId: session.id,
         sessionName: session.name
       }
+      const availableModelsResult = await runtime.send({ type: 'get_available_models' })
       this.assertStartActive(runtime)
+      if (availableModelsResult.type !== 'available-models') {
+        throw new Error('Runtime returned an invalid model catalog.')
+      }
+      const availableModels = availableModelsResult.models.map(toAvailableKernelModel)
+      const commandsResult = await runtime.send({ type: 'get_commands' })
+      this.assertStartActive(runtime)
+      if (commandsResult.type !== 'commands') {
+        throw new Error('Runtime returned an invalid command catalog.')
+      }
+      const commands = createCommandCatalog(commandsResult.commands)
       const messagesResult = await runtime.send({ type: 'get_messages' })
       this.assertStartActive(runtime)
       if (messagesResult.type !== 'messages') {
         throw new Error('Runtime returned an invalid startup projection.')
       }
+      const projectedMessages = projectMessages(messagesResult.messages)
       const stateAfterProjection = this.getState()
       if (stateAfterProjection.runtime.status === 'crashed') {
         throw new Error(stateAfterProjection.runtime.lastError ?? 'Runtime exited while starting.')
@@ -274,14 +353,16 @@ export class WorkbenchKernel {
       } catch (error) {
         if (expectedSessionId !== undefined || !isEnoent(error)) throw error
         this.assertStartActive(runtime)
-        this.provisionalSession = { runtime, pointer }
+        this.provisionalSession = { runtime, pointer, initialPrompt: null }
         this.state = {
           ...this.state,
           activeSessionKey: null,
+          commands,
+          availableModels,
           runtime: toKernelRuntime('ready', runtime.getState()),
           session: { ...session, resumeAvailable: false },
           conversation: {
-            entries: projectMessages(messagesResult.messages),
+            entries: projectedMessages,
             activeRunStartIndex: null
           }
         }
@@ -294,18 +375,28 @@ export class WorkbenchKernel {
         await this.persistSession(canonicalPointer)
         this.assertStartActive(runtime)
         this.sessionPointers = upsertSessionPointer(this.sessionPointers, canonicalPointer)
+        await this.captureSessionActivity(canonicalPointer)
+        this.assertStartActive(runtime)
         this.state = {
           ...this.state,
-          sessions: toKernelSessionSummaries(this.sessionPointers),
+          sessions: toKernelSessionSummaries(this.sessionPointers, this.sessionActivityAtByKey),
           activeSessionKey: canonicalPointer.sessionFile,
+          commands,
+          availableModels,
           runtime: toKernelRuntime('ready', runtime.getState()),
           session,
           conversation: {
-            entries: projectMessages(messagesResult.messages),
+            entries: projectedMessages,
             activeRunStartIndex: null
           }
         }
+        this.queueSessionNameGeneration(
+          runtime,
+          canonicalPointer,
+          firstUserMessage(projectedMessages)
+        )
         this.emitState()
+        this.beginSessionNameGeneration()
       } finally {
         this.launchCommitting = false
       }
@@ -346,6 +437,14 @@ export class WorkbenchKernel {
   async prompt(message: string): Promise<void> {
     const runtime = this.requireRuntime('ready')
     if (message.trim().length === 0) throw new Error('Prompt must not be empty.')
+    const provisional = this.provisionalSession?.runtime === runtime &&
+      this.provisionalSession.pointer.sessionName === null &&
+      this.provisionalSession.initialPrompt === null
+      ? this.provisionalSession
+      : null
+    if (provisional !== null) {
+      provisional.initialPrompt = message
+    }
 
     this.state = {
       ...this.state,
@@ -357,6 +456,13 @@ export class WorkbenchKernel {
     try {
       await runtime.send({ type: 'prompt', message })
     } catch (error) {
+      if (
+        provisional !== null &&
+        this.provisionalSession === provisional &&
+        provisional.pointer.sessionName === null
+      ) {
+        provisional.initialPrompt = null
+      }
       if (this.runtime === runtime && this.state.runtime.status === 'running') {
         this.state = {
           ...this.state,
@@ -390,6 +496,115 @@ export class WorkbenchKernel {
     await this.refreshSessionState(runtime)
   }
 
+  async setSessionNaming(settings: SessionNamingSettings): Promise<void> {
+    assertSessionNamingSettings(settings)
+    if (sameSessionNamingSettings(this.state.sessionNaming, settings)) return
+    if (settings.mode === 'model' && !this.state.availableModels.some((model) =>
+      model.provider === settings.provider && model.id === settings.modelId
+    )) {
+      throw new Error(`Session naming model is not currently available: ${settings.provider}/${settings.modelId}`)
+    }
+
+    const nextSettings = copySessionNamingSettings(settings)
+    await this.persistSessionNaming(nextSettings)
+    this.cancelSessionNameGeneration()
+    this.state = { ...this.state, sessionNaming: nextSettings }
+    this.emitState()
+
+    const runtime = this.runtime
+    const activePointer = this.sessionPointers.find((pointer) =>
+      pointer.sessionFile === this.state.activeSessionKey
+    )
+    if (
+      runtime !== null &&
+      this.state.runtime.status === 'ready' &&
+      this.state.session.name === null &&
+      activePointer !== undefined
+    ) {
+      this.queueSessionNameGeneration(
+        runtime,
+        activePointer,
+        firstUserMessage(this.state.conversation.entries)
+      )
+      this.beginSessionNameGeneration()
+    }
+  }
+
+  async invokeCommand(commandId: string, argument: string): Promise<void> {
+    const command = this.state.commands.find(({ id }) => id === commandId)
+    if (command === undefined) throw new Error(`Command is not available: ${commandId}`)
+
+    if (command.id === NEW_SESSION_COMMAND_ID) {
+      assertNoCommandArgument(command, argument)
+      await this.start()
+      return
+    }
+    if (command.id === SET_MODEL_COMMAND_ID) {
+      const { provider, modelId } = parseModelArgument(argument)
+      await this.setModel(provider, modelId)
+      return
+    }
+    if (command.id === SET_THINKING_COMMAND_ID) {
+      const level = thinkingLevel(argument.trim())
+      if (level === null) {
+        throw new Error('Thinking level must be low, medium, high, xhigh, or max.')
+      }
+      await this.setThinkingLevel(level)
+      return
+    }
+    if (command.id === COMPACT_COMMAND_ID) {
+      const runtime = this.requireRuntime('ready')
+      const customInstructions = argument.trim()
+      await runtime.send({
+        type: 'compact',
+        ...(customInstructions.length === 0 ? {} : { customInstructions })
+      })
+      await this.refreshCompactedProjection(runtime)
+      return
+    }
+    if (command.id === SET_SESSION_NAME_COMMAND_ID) {
+      const name = argument.trim()
+      if (name.length === 0) throw new Error('Session name must not be empty.')
+      const runtime = this.requireRuntime('ready')
+      this.cancelSessionNameGeneration(runtime)
+      await runtime.send({ type: 'set_session_name', name })
+      await this.refreshRenamedSession(runtime)
+      return
+    }
+
+    await this.invokePiCommand(command, argument)
+  }
+
+  private async invokePiCommand(command: KernelCommandDescriptor, argument: string): Promise<void> {
+    if (command.source !== 'extension' && command.source !== 'prompt' && command.source !== 'skill') {
+      throw new Error(`Command has no execution path: ${command.id}`)
+    }
+    const runtime = this.requireRuntime('ready')
+    const commandText = argument.trim().length === 0
+      ? `/${command.name}`
+      : `/${command.name} ${argument.trim()}`
+    await this.prompt(commandText)
+    if (this.runtime !== runtime || this.state.runtime.status !== 'running') {
+      return
+    }
+
+    const stateResult = await runtime.send({ type: 'get_state' })
+    if (stateResult.type !== 'state') throw new Error('Runtime did not return session state.')
+    if (
+      this.runtime === runtime &&
+      this.state.runtime.status === 'running' &&
+      stateResult.state.isStreaming !== true
+    ) {
+      this.state = this.withActiveSessionActivity({
+        ...this.state,
+        runtime: toKernelRuntime('ready', runtime.getState()),
+        session: toKernelSession(stateResult.state, this.state.session.resumeAvailable),
+        conversation: settleConversationRun(this.state.conversation)
+      })
+      this.emitState()
+    }
+  }
+
   async stop(): Promise<void> {
     if (this.launchCommitting) await this.waitForLaunchToSettle()
     await this.waitForProvisionalCommit()
@@ -407,6 +622,7 @@ export class WorkbenchKernel {
       if (waitForLaunch) this.stopRequested = false
       this.state = {
         ...this.state,
+        commands: createCommandCatalog(),
         runtime: toKernelRuntime('stopped', INITIAL_HOST_STATE)
       }
       this.emitState()
@@ -414,6 +630,7 @@ export class WorkbenchKernel {
     }
 
     const runtime = this.runtime
+    this.cancelSessionNameGeneration(runtime)
     const unsubscribeRuntime = this.unsubscribeRuntime
     this.transition('stopping')
     try {
@@ -427,6 +644,7 @@ export class WorkbenchKernel {
       if (this.runtime === null) {
         this.state = {
           ...this.state,
+          commands: createCommandCatalog(),
           runtime: toKernelRuntime('stopped', runtime.getState())
         }
         this.emitState()
@@ -475,6 +693,80 @@ export class WorkbenchKernel {
     this.state = {
       ...this.state,
       session: toKernelSession(result.state, this.state.session.resumeAvailable)
+    }
+    this.emitState()
+  }
+
+  private async refreshCompactedProjection(runtime: RuntimeHost): Promise<void> {
+    const stateResult = await runtime.send({ type: 'get_state' })
+    if (stateResult.type !== 'state') throw new Error('Runtime did not return session state.')
+    const messagesResult = await runtime.send({ type: 'get_messages' })
+    if (messagesResult.type !== 'messages') {
+      throw new Error('Runtime did not return conversation messages.')
+    }
+    if (this.runtime !== runtime) return
+    this.state = {
+      ...this.state,
+      session: toKernelSession(stateResult.state, this.state.session.resumeAvailable),
+      conversation: {
+        entries: projectMessages(messagesResult.messages),
+        activeRunStartIndex: null
+      }
+    }
+    this.emitState()
+  }
+
+  private async refreshRenamedSession(runtime: RuntimeHost): Promise<void> {
+    const result = await runtime.send({ type: 'get_state' })
+    if (result.type !== 'state') throw new Error('Runtime did not return session state.')
+    if (this.runtime !== runtime) return
+
+    const session = toKernelSession(result.state, this.state.session.resumeAvailable)
+    const sessionFile = stringValue(result.state.sessionFile)
+    if (session.id === null || sessionFile === null || !isAbsolute(sessionFile)) {
+      throw new Error('Runtime did not return a valid session identity.')
+    }
+    const provisional = this.provisionalSession?.runtime === runtime
+      ? this.provisionalSession
+      : null
+    const storedPointer = provisional?.pointer ?? this.sessionPointers.find((pointer) =>
+      pointer.sessionFile === this.state.activeSessionKey ||
+      (pointer.projectPath === this.state.activeProjectKey && pointer.sessionId === session.id)
+    )
+    if (storedPointer === undefined || storedPointer === null) {
+      throw new Error('Active session pointer is unavailable.')
+    }
+    let pointer: SessionPointer = {
+      ...storedPointer,
+      sessionFile: provisional === null ? storedPointer.sessionFile : sessionFile,
+      sessionId: session.id,
+      sessionName: session.name
+    }
+    if (provisional !== null) {
+      provisional.pointer = pointer
+      if (typeof this.validateSession !== 'function') {
+        throw new Error('Session validation is unavailable.')
+      }
+      pointer = await this.validateSession(pointer)
+      if (this.provisionalSession !== provisional || this.runtime !== runtime) return
+    }
+    await this.persistSession(pointer)
+    if (this.runtime !== runtime || (provisional !== null && this.provisionalSession !== provisional)) {
+      return
+    }
+
+    this.sessionPointers = upsertSessionPointer(this.sessionPointers, pointer)
+    await this.captureSessionActivity(pointer)
+    if (this.runtime !== runtime) return
+    if (provisional !== null) {
+      this.provisionalSession = null
+      this.provisionalSettled = false
+    }
+    this.state = {
+      ...this.state,
+      sessions: toKernelSessionSummaries(this.sessionPointers, this.sessionActivityAtByKey),
+      activeSessionKey: pointer.sessionFile,
+      session: { ...session, resumeAvailable: true }
     }
     this.emitState()
   }
@@ -535,12 +827,12 @@ export class WorkbenchKernel {
           this.provisionalSettled = true
           return
         }
-        this.state = {
+        this.state = this.withActiveSessionActivity({
           ...this.state,
           runtime: toKernelRuntime('ready', this.runtime.getState()),
           session: { ...this.state.session, settled: true },
           conversation: settleConversationRun(this.state.conversation)
-        }
+        })
         this.emitState()
       }
       return
@@ -613,16 +905,41 @@ export class WorkbenchKernel {
         this.beginProvisionalCommit()
         return
       }
-      nextState = {
+      nextState = this.withActiveSessionActivity({
         ...nextState,
         runtime: toKernelRuntime('ready', this.runtime.getState()),
         session: { ...nextState.session, settled: true, pendingMessageCount: 0 },
         conversation: settleConversationRun(nextState.conversation)
-      }
+      })
     } else if (event.type === 'message_end') {
       nextState = {
         ...nextState,
         session: { ...nextState.session, messageCount: nextState.session.messageCount + 1 }
+      }
+    } else if (event.type === 'session_info_changed' && typeof event.name === 'string') {
+      const sessionName = event.name
+      const provisional = this.provisionalSession?.runtime === this.runtime
+        ? this.provisionalSession
+        : null
+      if (provisional !== null) {
+        provisional.pointer = { ...provisional.pointer, sessionName }
+      } else {
+        const pointerIndex = this.sessionPointers.findIndex((pointer) =>
+          pointer.sessionFile === nextState.activeSessionKey
+        )
+        if (pointerIndex !== -1) {
+          this.sessionPointers = this.sessionPointers.map((pointer, index) =>
+            index === pointerIndex ? { ...pointer, sessionName } : pointer
+          )
+          nextState = {
+            ...nextState,
+            sessions: toKernelSessionSummaries(this.sessionPointers, this.sessionActivityAtByKey)
+          }
+        }
+      }
+      nextState = {
+        ...nextState,
+        session: { ...nextState.session, name: sessionName }
       }
     }
 
@@ -647,6 +964,7 @@ export class WorkbenchKernel {
     ) {
       this.beginProvisionalCommit()
     }
+    if (event.type === 'agent_settled') this.beginSessionNameGeneration()
   }
 
   private beginProvisionalCommit(): void {
@@ -662,26 +980,40 @@ export class WorkbenchKernel {
   }
 
   private async commitProvisionalSession(
-    provisional: { runtime: RuntimeHost, pointer: SessionPointer }
+    provisional: {
+      runtime: RuntimeHost
+      pointer: SessionPointer
+      initialPrompt: string | null
+    }
   ): Promise<void> {
     try {
       if (typeof this.validateSession !== 'function') {
         throw new Error('Session validation is unavailable.')
       }
-      const canonicalPointer = await this.validateSession(provisional.pointer)
+      let canonicalPointer = await this.validateSession(provisional.pointer)
       if (this.provisionalSession !== provisional || this.runtime !== provisional.runtime) return
+      if (provisional.pointer.sessionName !== null) {
+        canonicalPointer = {
+          ...canonicalPointer,
+          sessionName: provisional.pointer.sessionName
+        }
+      }
       await this.persistSession(canonicalPointer)
       if (this.provisionalSession !== provisional || this.runtime !== provisional.runtime) return
       this.sessionPointers = upsertSessionPointer(this.sessionPointers, canonicalPointer)
+      await this.captureSessionActivity(canonicalPointer)
+      if (this.provisionalSession !== provisional || this.runtime !== provisional.runtime) return
+      this.queueSessionNameGeneration(provisional.runtime, canonicalPointer, provisional.initialPrompt)
       this.provisionalSession = null
       this.state = {
         ...this.state,
-        sessions: toKernelSessionSummaries(this.sessionPointers),
+        sessions: toKernelSessionSummaries(this.sessionPointers, this.sessionActivityAtByKey),
         activeSessionKey: canonicalPointer.sessionFile,
         session: { ...this.state.session, resumeAvailable: true }
       }
       this.finishDeferredSettled(provisional.runtime)
       this.emitState()
+      this.beginSessionNameGeneration()
     } catch (error) {
       if (this.provisionalSession !== provisional || this.runtime !== provisional.runtime) return
       if (isEnoent(error)) {
@@ -699,11 +1031,142 @@ export class WorkbenchKernel {
     if (!this.provisionalSettled) return
     this.provisionalSettled = false
     if (this.runtime !== runtime || this.state.runtime.status !== 'running') return
-    this.state = {
+    this.state = this.withActiveSessionActivity({
       ...this.state,
       runtime: toKernelRuntime('ready', runtime.getState()),
       session: { ...this.state.session, settled: true, pendingMessageCount: 0 },
       conversation: settleConversationRun(this.state.conversation)
+    })
+  }
+
+  private beginSessionNameGeneration(): void {
+    const pending = this.pendingSessionName
+    if (pending === null || this.sessionNameOperation !== null) return
+    if (this.generateSessionName === undefined) {
+      this.pendingSessionName = null
+      return
+    }
+    if (
+      this.runtime !== pending.runtime ||
+      this.state.activeSessionKey !== pending.sessionFile ||
+      this.state.session.id !== pending.sessionId
+    ) {
+      this.pendingSessionName = null
+      return
+    }
+    if (this.state.runtime.status !== 'ready') return
+    if (this.state.session.name !== null) {
+      this.pendingSessionName = null
+      return
+    }
+
+    const executable = pending.runtime.getState().executable
+    const project = activeProject(this.state)
+    const model = selectSessionNameModel(
+      this.state.sessionNaming,
+      this.state.availableModels,
+      this.state.session.model?.provider ?? null
+    )
+    if (executable === null || project === null || model === null) {
+      this.pendingSessionName = null
+      return
+    }
+    const assistantMessage = lastAssistantMessage(this.state.conversation.entries)
+    const controller = new AbortController()
+    const operation = { runtime: pending.runtime, controller }
+    this.sessionNameOperation = operation
+    void this.generateSessionName({
+      executable,
+      cwd: project.path,
+      provider: model.provider,
+      modelId: model.id,
+      userMessage: pending.userMessage,
+      assistantMessage,
+      signal: controller.signal
+    }).then(async (generatedName) => {
+      const name = normalizeGeneratedSessionName(generatedName)
+      if (
+        name === null ||
+        controller.signal.aborted ||
+        this.sessionNameOperation !== operation ||
+        this.pendingSessionName !== pending ||
+        this.runtime !== pending.runtime ||
+        this.state.runtime.status !== 'ready' ||
+        this.state.activeSessionKey !== pending.sessionFile ||
+        this.state.session.id !== pending.sessionId ||
+        this.state.session.name !== null
+      ) return
+
+      await pending.runtime.send({ type: 'set_session_name', name })
+      if (
+        controller.signal.aborted ||
+        this.sessionNameOperation !== operation ||
+        this.pendingSessionName !== pending ||
+        this.runtime !== pending.runtime ||
+        this.state.activeSessionKey !== pending.sessionFile
+      ) return
+      await this.refreshRenamedSession(pending.runtime)
+    }).catch(() => {
+      // Automatic naming is metadata enrichment; leave the session unnamed on failure.
+    }).finally(() => {
+      if (this.sessionNameOperation === operation) this.sessionNameOperation = null
+      if (this.pendingSessionName === pending) this.pendingSessionName = null
+    })
+  }
+
+  private queueSessionNameGeneration(
+    runtime: RuntimeHost,
+    pointer: SessionPointer,
+    userMessage: string | null
+  ): void {
+    this.pendingSessionName = pointer.sessionName === null && userMessage !== null
+      ? {
+          runtime,
+          sessionFile: pointer.sessionFile,
+          sessionId: pointer.sessionId,
+          userMessage
+        }
+      : null
+  }
+
+  private cancelSessionNameGeneration(runtime?: RuntimeHost): void {
+    if (this.pendingSessionName !== null && (
+      runtime === undefined || this.pendingSessionName.runtime === runtime
+    )) {
+      this.pendingSessionName = null
+    }
+    if (this.sessionNameOperation !== null && (
+      runtime === undefined || this.sessionNameOperation.runtime === runtime
+    )) {
+      const operation = this.sessionNameOperation
+      this.sessionNameOperation = null
+      operation.controller.abort()
+    }
+  }
+
+  private async loadSessionActivities(
+    pointers: SessionPointer[]
+  ): Promise<Map<string, number | null>> {
+    const entries = await Promise.all(pointers.map(async (pointer) => [
+      pointer.sessionFile,
+      await this.readSessionActivityAt(pointer)
+    ] as const))
+    return new Map(entries)
+  }
+
+  private async captureSessionActivity(pointer: SessionPointer): Promise<void> {
+    this.sessionActivityAtByKey.set(
+      pointer.sessionFile,
+      await this.readSessionActivityAt(pointer)
+    )
+  }
+
+  private withActiveSessionActivity(state: KernelState): KernelState {
+    if (state.activeSessionKey === null) return state
+    this.sessionActivityAtByKey.set(state.activeSessionKey, Date.now())
+    return {
+      ...state,
+      sessions: toKernelSessionSummaries(this.sessionPointers, this.sessionActivityAtByKey)
     }
   }
 
@@ -714,6 +1177,7 @@ export class WorkbenchKernel {
   }
 
   private transition(status: RuntimeStatus, lastError?: string): void {
+    if (status === 'crashed') this.cancelSessionNameGeneration(this.runtime ?? undefined)
     this.state = {
       ...this.state,
       runtime: toKernelRuntime(status, this.runtime?.getState() ?? INITIAL_HOST_STATE, lastError)
@@ -740,7 +1204,9 @@ function configuredProject(state: Pick<KernelState, 'projects' | 'activeProjectK
 
 function initialKernelState(
   projectRegistry: Pick<KernelState, 'projects' | 'activeProjectKey'>,
-  sessionRegistry: ProjectSessionRegistry
+  sessionRegistry: ProjectSessionRegistry,
+  sessionActivityAtByKey: ReadonlyMap<string, number | null>,
+  sessionNaming: SessionNamingSettings
 ): KernelState {
   assertProjectRegistry(projectRegistry)
   const projects = projectRegistry.projects.map((project) => ({ ...project }))
@@ -754,8 +1220,11 @@ function initialKernelState(
   return {
     projects,
     activeProjectKey: projectRegistry.activeProjectKey,
-    sessions: toKernelSessionSummaries(matchingRegistry.sessions),
+    sessions: toKernelSessionSummaries(matchingRegistry.sessions, sessionActivityAtByKey),
     activeSessionKey: matchingRegistry.activeSessionKey,
+    commands: createCommandCatalog(),
+    availableModels: [],
+    sessionNaming: copySessionNamingSettings(sessionNaming),
     runtime: toKernelRuntime('stopped', INITIAL_HOST_STATE),
     session: activePointer === null
       ? { ...INITIAL_SESSION_STATE }
@@ -823,26 +1292,27 @@ function matchingSessionRegistry(
   }
 }
 
-function upsertSessionPointer(pointers: SessionPointer[], pointer: SessionPointer): SessionPointer[] {
-  const index = pointers.findIndex((existing) =>
-    existing.sessionFile === pointer.sessionFile ||
-    (
-      existing.projectPath === pointer.projectPath &&
-      existing.sessionId === pointer.sessionId
-    )
-  )
-  if (index === -1) return [...pointers, { ...pointer }]
-  return pointers.map((existing, pointerIndex) =>
-    pointerIndex === index ? { ...pointer } : { ...existing }
-  )
-}
-
-function toKernelSessionSummaries(pointers: SessionPointer[]): KernelSessionSummary[] {
+function toKernelSessionSummaries(
+  pointers: SessionPointer[],
+  sessionActivityAtByKey: ReadonlyMap<string, number | null>
+): KernelSessionSummary[] {
   return pointers.map((pointer) => ({
     key: pointer.sessionFile,
     id: pointer.sessionId,
-    name: pointer.sessionName
+    name: pointer.sessionName,
+    lastActivityAt: sessionActivityAtByKey.get(pointer.sessionFile) ?? null
   }))
+}
+
+function sameSessionPointers(current: SessionPointer[], snapshot: SessionPointer[]): boolean {
+  return current.length === snapshot.length && current.every((pointer, index) => {
+    const other = snapshot[index]
+    return other !== undefined &&
+      pointer.projectPath === other.projectPath &&
+      pointer.sessionFile === other.sessionFile &&
+      pointer.sessionId === other.sessionId &&
+      pointer.sessionName === other.sessionName
+  })
 }
 
 function activeProject(
@@ -872,7 +1342,37 @@ function toKernelModel(value: PiRpcSessionState['model']): KernelModelState | nu
     id: value.id,
     name: typeof value.name === 'string' ? value.name : value.id,
     reasoning: value.reasoning === true,
+    thinkingLevelMap: { ...(value.thinkingLevelMap ?? {}) },
     contextWindow: typeof value.contextWindow === 'number' ? value.contextWindow : null
+  }
+}
+
+function toAvailableKernelModel(value: unknown): KernelModelState {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    !('id' in value) ||
+    typeof value.id !== 'string' ||
+    value.id.trim().length === 0 ||
+    !('provider' in value) ||
+    typeof value.provider !== 'string' ||
+    value.provider.trim().length === 0
+  ) {
+    throw new Error('Runtime returned an invalid model catalog.')
+  }
+  return {
+    id: value.id,
+    provider: value.provider,
+    name: 'name' in value && typeof value.name === 'string' ? value.name : value.id,
+    reasoning: 'reasoning' in value && value.reasoning === true,
+    thinkingLevelMap: {
+      ...('thinkingLevelMap' in value && typeof value.thinkingLevelMap === 'object'
+        ? value.thinkingLevelMap
+        : {})
+    },
+    contextWindow: 'contextWindow' in value && typeof value.contextWindow === 'number'
+      ? value.contextWindow
+      : null
   }
 }
 
@@ -882,10 +1382,18 @@ function copyState(state: KernelState): KernelState {
     activeProjectKey: state.activeProjectKey,
     sessions: state.sessions.map((session) => ({ ...session })),
     activeSessionKey: state.activeSessionKey,
+    commands: state.commands.map((command) => ({ ...command })),
+    availableModels: state.availableModels.map((model) => ({
+      ...model,
+      thinkingLevelMap: { ...model.thinkingLevelMap }
+    })),
+    sessionNaming: copySessionNamingSettings(state.sessionNaming),
     runtime: { ...state.runtime },
     session: {
       ...state.session,
-      model: state.session.model === null ? null : { ...state.session.model }
+      model: state.session.model === null
+        ? null
+        : { ...state.session.model, thinkingLevelMap: { ...state.session.model.thinkingLevelMap } }
     },
     conversation: {
       entries: state.conversation.entries.map((entry) => ({ ...entry })),
@@ -895,6 +1403,13 @@ function copyState(state: KernelState): KernelState {
 }
 
 function createStatePatch(previous: KernelState, next: KernelState): KernelStatePatch | null {
+  if (
+    next.sessions !== previous.sessions ||
+    next.activeSessionKey !== previous.activeSessionKey ||
+    next.sessionNaming !== previous.sessionNaming
+  ) {
+    return null
+  }
   const patch: KernelStatePatch = {}
   if (next.runtime !== previous.runtime) patch.runtime = next.runtime
   if (next.session !== previous.session) patch.session = next.session
@@ -936,7 +1451,12 @@ function copyPatch(patch: KernelStatePatch): KernelStatePatch {
       : {
           session: {
             ...patch.session,
-            model: patch.session.model === null ? null : { ...patch.session.model }
+            model: patch.session.model === null
+              ? null
+              : {
+                  ...patch.session.model,
+                  thinkingLevelMap: { ...patch.session.model.thinkingLevelMap }
+                }
           }
         }),
     ...(patch.conversation === undefined
@@ -1037,10 +1557,89 @@ function settleConversationRun(conversation: KernelConversationState): KernelCon
   return { entries, activeRunStartIndex: null }
 }
 
+function selectSessionNameModel(
+  settings: SessionNamingSettings,
+  availableModels: KernelModelState[],
+  activeProvider: string | null
+): KernelModelState | null {
+  if (settings.mode === 'off') return null
+  if (settings.mode === 'model') {
+    return availableModels.find((model) =>
+      model.provider === settings.provider && model.id === settings.modelId
+    ) ?? null
+  }
+  if (activeProvider === null) return null
+  for (const modelId of AUTOMATIC_SESSION_NAME_MODEL_IDS) {
+    const model = availableModels.find((candidate) =>
+      candidate.provider === activeProvider && candidate.id === modelId
+    )
+    if (model !== undefined) return model
+  }
+  return null
+}
+
+function copySessionNamingSettings(settings: SessionNamingSettings): SessionNamingSettings {
+  return settings.mode === 'model'
+    ? { mode: 'model', provider: settings.provider, modelId: settings.modelId }
+    : { mode: settings.mode }
+}
+
+function sameSessionNamingSettings(
+  first: SessionNamingSettings,
+  second: SessionNamingSettings
+): boolean {
+  if (first.mode !== second.mode) return false
+  if (first.mode !== 'model' || second.mode !== 'model') return true
+  return first.provider === second.provider && first.modelId === second.modelId
+}
+
+function assertSessionNamingSettings(value: SessionNamingSettings): void {
+  if (value.mode === 'auto' || value.mode === 'off') return
+  if (
+    value.mode !== 'model' ||
+    value.provider.trim().length === 0 ||
+    value.modelId.trim().length === 0
+  ) {
+    throw new Error('Invalid session naming settings.')
+  }
+}
+
+function normalizeGeneratedSessionName(value: string): string | null {
+  const firstLine = value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0)
+  if (firstLine === undefined) return null
+  const withoutPrefix = firstLine.replace(/^(?:conversation title|session title|title|会话标题|对话标题|标题)\s*[:：]\s*/i, '')
+  const withoutQuotes = withoutPrefix.replace(/^["'“‘《]+|["'”’》]+$/g, '')
+  const normalized = withoutQuotes.replace(/\s+/g, ' ').trim()
+  if (normalized.length === 0) return null
+  const characters = Array.from(normalized)
+  return characters.length <= 48
+    ? normalized
+    : `${characters.slice(0, 47).join('')}…`
+}
+
+function firstUserMessage(entries: KernelConversationEntry[]): string | null {
+  const entry = entries.find((candidate) =>
+    candidate.kind === 'message' &&
+    candidate.role === 'user' &&
+    candidate.text.trim().length > 0
+  )
+  return entry?.kind === 'message' ? entry.text : null
+}
+
+function lastAssistantMessage(entries: KernelConversationEntry[]): string | null {
+  const entry = [...entries].reverse().find((candidate) =>
+    candidate.kind === 'message' &&
+    candidate.role === 'assistant' &&
+    candidate.text.trim().length > 0
+  )
+  return entry?.kind === 'message' ? entry.text : null
+}
+
 function thinkingLevel(value: unknown): ThinkingLevel | null {
-  return value === 'off' ||
-    value === 'minimal' ||
-    value === 'low' ||
+  return value === 'low' ||
     value === 'medium' ||
     value === 'high' ||
     value === 'xhigh' ||
@@ -1049,16 +1648,28 @@ function thinkingLevel(value: unknown): ThinkingLevel | null {
     : null
 }
 
+function assertNoCommandArgument(command: KernelCommandDescriptor, argument: string): void {
+  if (argument.trim().length > 0) throw new Error(`/${command.name} does not accept arguments.`)
+}
+
+function parseModelArgument(argument: string): { provider: string, modelId: string } {
+  const normalized = argument.trim()
+  const separator = normalized.indexOf('/')
+  if (separator <= 0 || separator === normalized.length - 1) {
+    throw new Error('Model must use the provider/model format.')
+  }
+  return {
+    provider: normalized.slice(0, separator).trim(),
+    modelId: normalized.slice(separator + 1).trim()
+  }
+}
+
 function stringValue(value: unknown): string | null {
   return typeof value === 'string' ? value : null
 }
 
 function integerValue(value: unknown): number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 function isEnoent(error: unknown): boolean {

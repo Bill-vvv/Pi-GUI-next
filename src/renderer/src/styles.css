@@ -102,6 +102,22 @@ pre,
   animation: loading-pulse 1.4s ease-in-out infinite;
 }
 
+.screen-loading.error::before {
+  display: none;
+}
+
+.kernel-connection-error {
+  display: flex;
+  max-width: min(36rem, calc(100% - 2rem));
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--color-status-error);
+}
+
+.kernel-connection-error button {
+  flex: none;
+}
+
 @keyframes loading-pulse {
   0%, 100% { opacity: 0.35; transform: scale(0.8); }
   50% { opacity: 1; transform: scale(1); }

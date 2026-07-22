@@ -4,6 +4,7 @@ export type IconName =
   | 'attach'
   | 'enter'
   | 'folder'
+  | 'folder-open'
   | 'left-sidebar-close'
   | 'left-sidebar-open'
   | 'logs'
@@ -14,8 +15,8 @@ export type IconName =
 
 export function Icon({ name }: { name: IconName }): React.JSX.Element {
   const common = {
-    width: 18,
-    height: 18,
+    width: 'var(--icon-size-control)',
+    height: 'var(--icon-size-control)',
     viewBox: '0 0 24 24',
     fill: 'none',
     xmlns: 'http://www.w3.org/2000/svg',
@@ -56,6 +57,13 @@ export function Icon({ name }: { name: IconName }): React.JSX.Element {
       return (
         <svg {...common}>
           <path d="M3.75 7.75A2.75 2.75 0 0 1 6.5 5h3.2c.72 0 1.39.34 1.82.92l.78 1.05c.24.32.61.51 1.01.51h5.19A2.75 2.75 0 0 1 21.25 10.23v5.52A3.25 3.25 0 0 1 18 19H6a3.25 3.25 0 0 1-3.25-3.25v-8Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'folder-open':
+      return (
+        <svg {...common}>
+          <path d="M3.75 9V7.75A2.75 2.75 0 0 1 6.5 5h3.2c.72 0 1.39.34 1.82.92l.78 1.05c.24.32.61.51 1.01.51h4.94A2.75 2.75 0 0 1 21 10.23V11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M5.2 9.75h14.86a1.5 1.5 0 0 1 1.44 1.92l-1.65 5.58A2.5 2.5 0 0 1 17.45 19H6.1a2.5 2.5 0 0 1-2.4-1.8l-1.14-3.92A2.75 2.75 0 0 1 5.2 9.75Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
         </svg>
       )
     case 'left-sidebar-close':

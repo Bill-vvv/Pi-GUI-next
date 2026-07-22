@@ -1,5 +1,7 @@
 import { StringDecoder } from 'node:string_decoder'
 
+import { errorMessage } from '../utils/errors.ts'
+
 const MAX_UNTERMINATED_PREVIEW_CHARS = 120
 
 export type JsonlParseBatch = {
@@ -63,7 +65,7 @@ export class LfJsonlParser {
       try {
         batch.records.push(JSON.parse(line))
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error)
+        const detail = errorMessage(error)
         batch.errors.push(new Error(`Failed to parse Pi RPC JSONL record: ${detail}`))
       }
     }

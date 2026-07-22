@@ -149,7 +149,11 @@ export function Timeline({
             ) : null}
             <div className="conversation-bottom-sentinel" />
           </div>
-        ) : null}
+        ) : (
+          <p className="conversation-empty-state" role="status">
+            尚无对话内容。
+          </p>
+        )}
       </div>
     </div>
   )

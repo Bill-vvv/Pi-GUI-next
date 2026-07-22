@@ -5,6 +5,7 @@ import type {
   KernelToolEntry
 } from '../../shared/kernel-contract.ts'
 import type { PiRpcEvent } from '../pi-rpc/pi-rpc-client.ts'
+import { isRecord } from '../utils/guards.ts'
 
 const MAX_DISPLAY_CHARS = 30_000
 
@@ -278,8 +279,4 @@ function stringValue(value: unknown): string | null {
 
 function numberValue(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
 }

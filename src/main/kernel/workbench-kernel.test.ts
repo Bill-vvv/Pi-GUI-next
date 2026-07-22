@@ -1,8 +1,24 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { KernelEvent, KernelProjectState, RuntimeStatus } from '../../shared/kernel-contract.ts'
-import type { ProjectSessionRegistry, SessionPointer } from '../project/project-store.ts'
-import type { PiRpcSessionState } from '../pi-rpc/pi-rpc-client.ts'
+import type {
+  KernelEvent,
+  KernelProjectState,
+  RuntimeStatus,
+  SessionNamingSettings
+} from '../../shared/kernel-contract.ts'
+import type { ProjectSessionRegistry, SessionPointer } from '../project/session-pointer.ts'
+import type {
+  PiRpcAvailableModel,
+  PiRpcSessionState,
+  PiRpcSlashCommand
+} from '../pi-rpc/pi-rpc-client.ts'
+import {
+  COMPACT_COMMAND_ID,
+  NEW_SESSION_COMMAND_ID,
+  SET_MODEL_COMMAND_ID,
+  SET_SESSION_NAME_COMMAND_ID,
+  SET_THINKING_COMMAND_ID
+} from './command-catalog.ts'
 import { WorkbenchKernel } from './workbench-kernel.ts'
 import type {
   RuntimeCommand,
@@ -11,6 +27,10 @@ import type {
   RuntimeHostEvent,
   RuntimeHostState
 } from '../runtime/runtime-host.ts'
+import type {
+  SessionNameGenerationRequest,
+  SessionNameGenerator
+} from '../runtime/session-name-generator.ts'
 
 class FakeRuntimeHost implements RuntimeHost {
   private readonly listeners = new Set<(event: RuntimeHostEvent) => void>()
@@ -19,6 +39,8 @@ class FakeRuntimeHost implements RuntimeHost {
   stopCalls = 0
   private readonly sessionState: PiRpcSessionState
   private readonly messages: unknown[]
+  private readonly slashCommands: PiRpcSlashCommand[]
+  private readonly availableModels: PiRpcAvailableModel[]
   private state: RuntimeHostState = {
     executable: '/usr/bin/pi',
     version: '0.80.10',
@@ -38,10 +60,20 @@ class FakeRuntimeHost implements RuntimeHost {
       messageCount: 0,
       pendingMessageCount: 0
     },
-    messages: unknown[] = []
+    messages: unknown[] = [],
+    slashCommands: PiRpcSlashCommand[] = [],
+    availableModels: PiRpcAvailableModel[] = [{
+      id: 'gpt-5.4-mini',
+      provider: 'openai',
+      name: 'GPT-5.4 mini',
+      reasoning: true,
+      contextWindow: 128000
+    }]
   ) {
     this.sessionState = sessionState
     this.messages = messages
+    this.slashCommands = slashCommands
+    this.availableModels = availableModels
   }
 
   async start(): Promise<void> {
@@ -57,11 +89,23 @@ class FakeRuntimeHost implements RuntimeHost {
       }
     }
     if (command.type === 'get_messages') return { type: 'messages', messages: this.messages }
+    if (command.type === 'get_commands') return { type: 'commands', commands: this.slashCommands }
+    if (command.type === 'get_available_models') {
+      return { type: 'available-models', models: this.availableModels }
+    }
     if (command.type === 'set_model') {
+      this.sessionState.model = { id: command.modelId, provider: command.provider }
       return {
         type: 'model',
         model: { id: command.modelId, provider: command.provider }
       }
+    }
+    if (command.type === 'set_session_name') {
+      this.sessionState.sessionName = command.name
+      this.emit({
+        type: 'pi-event',
+        event: { type: 'session_info_changed', name: command.name }
+      })
     }
     return { type: 'accepted' }
   }
@@ -86,6 +130,41 @@ class FakeRuntimeHost implements RuntimeHost {
     for (const listener of this.listeners) {
       listener(event)
     }
+  }
+
+  setStreaming(streaming: boolean): void {
+    this.sessionState.isStreaming = streaming
+  }
+
+  replaceMessages(messages: unknown[]): void {
+    this.messages.splice(0, this.messages.length, ...messages)
+  }
+}
+
+class CompactingRuntimeHost extends FakeRuntimeHost {
+  private readonly compactedMessages: unknown[]
+  private failCompactedMessages = false
+
+  constructor(initialMessages: unknown[], compactedMessages: unknown[]) {
+    super(undefined, initialMessages)
+    this.compactedMessages = compactedMessages
+  }
+
+  failNextCompactedProjection(): void {
+    this.failCompactedMessages = true
+  }
+
+  override async send(command: RuntimeCommand): Promise<RuntimeCommandResult> {
+    if (command.type === 'compact') {
+      const result = await super.send(command)
+      this.replaceMessages(this.compactedMessages)
+      return result
+    }
+    if (command.type === 'get_messages' && this.failCompactedMessages) {
+      this.failCompactedMessages = false
+      throw new Error('compacted messages unavailable')
+    }
+    return super.send(command)
   }
 }
 
@@ -121,9 +200,9 @@ class DelayedStartRuntimeHost extends FakeRuntimeHost {
 }
 
 class FailingCommandRuntimeHost extends FakeRuntimeHost {
-  private readonly failingCommand: 'get_state' | 'get_messages'
+  private readonly failingCommand: 'get_state' | 'get_messages' | 'get_commands' | 'get_available_models'
 
-  constructor(failingCommand: 'get_state' | 'get_messages') {
+  constructor(failingCommand: 'get_state' | 'get_messages' | 'get_commands' | 'get_available_models') {
     super()
     this.failingCommand = failingCommand
   }
@@ -221,13 +300,15 @@ function kernelOptions(
   recentSession: SessionPointer | null = null,
   persisted: SessionPointer[] = [],
   activeProjects: string[] = [],
-  persistedProjects: KernelProjectState[] = []
+  persistedProjects: KernelProjectState[] = [],
+  generateSessionName?: SessionNameGenerator
 ): {
   sessionRegistry: ProjectSessionRegistry
   persistProject: (project: KernelProjectState) => Promise<void>
   persistActiveProject: (projectKey: string) => Promise<void>
   persistSession: (pointer: SessionPointer) => Promise<void>
   validateSession: (pointer: SessionPointer) => Promise<SessionPointer>
+  generateSessionName?: SessionNameGenerator
 } {
   return {
     sessionRegistry: sessionRegistry(recentSession),
@@ -240,7 +321,8 @@ function kernelOptions(
     },
     persistSession: async (pointer) => {
       persisted.push(pointer)
-    }
+    },
+    ...(generateSessionName === undefined ? {} : { generateSessionName })
   }
 }
 
@@ -265,6 +347,434 @@ test('normal start and stop follows the lifecycle', async () => {
 
   assert.deepEqual(statuses, ['starting', 'ready', 'stopping', 'stopped'])
   assert.equal(kernel.getState().runtime.status, 'stopped')
+})
+
+test('exposes a normalized model catalog and keeps model selection typed', async () => {
+  const runtime = new FakeRuntimeHost(
+    {
+      sessionId: 'session-1',
+      sessionFile: '/tmp/session-1.jsonl',
+      model: {
+        id: 'claude-test',
+        provider: 'anthropic',
+        name: 'Claude Test',
+        reasoning: true,
+        thinkingLevelMap: { low: 'low', xhigh: null }
+      }
+    },
+    [],
+    [],
+    [{
+      id: 'claude-test',
+      provider: 'anthropic',
+      name: 'Claude Test',
+      reasoning: true,
+      thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high', xhigh: null, max: null },
+      contextWindow: 200000,
+      baseUrl: 'https://private.example'
+    } as PiRpcAvailableModel]
+  )
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+
+  await kernel.start()
+
+  const readyState = kernel.getState()
+  assert.deepEqual(readyState.availableModels, [{
+    id: 'claude-test',
+    provider: 'anthropic',
+    name: 'Claude Test',
+    reasoning: true,
+    thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high', xhigh: null, max: null },
+    contextWindow: 200000
+  }])
+  assert.deepEqual(readyState.session.model?.thinkingLevelMap, { low: 'low', xhigh: null })
+  readyState.availableModels[0]!.name = 'mutated copy'
+  readyState.availableModels[0]!.thinkingLevelMap.low = 'mutated copy'
+  if (readyState.session.model !== null) readyState.session.model.thinkingLevelMap.low = 'mutated copy'
+  assert.equal(kernel.getState().availableModels[0]?.name, 'Claude Test')
+  assert.equal(kernel.getState().availableModels[0]?.thinkingLevelMap.low, 'low')
+  assert.equal(kernel.getState().session.model?.thinkingLevelMap.low, 'low')
+
+  await kernel.setModel('anthropic', 'claude-test')
+  assert.deepEqual(runtime.commands.slice(-2), [
+    { type: 'set_model', provider: 'anthropic', modelId: 'claude-test' },
+    { type: 'get_state' }
+  ])
+  assert.deepEqual(kernel.getState().session.model, {
+    id: 'claude-test',
+    provider: 'anthropic',
+    name: 'claude-test',
+    reasoning: false,
+    thinkingLevelMap: {},
+    contextWindow: null
+  })
+})
+
+test('discovers the normalized command catalog and routes typed commands', async () => {
+  const runtime = new FakeRuntimeHost(
+    undefined,
+    [],
+    [
+      { name: 'review', description: 'Review changes', source: 'extension' },
+      { name: 'ship', description: 'Prepare release', source: 'prompt' },
+      { name: 'skill:verify', source: 'skill' }
+    ]
+  )
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+
+  await kernel.start()
+  assert.deepEqual(kernel.getState().commands.slice(5).map(({ name, source }) => ({ name, source })), [
+    { name: 'review', source: 'extension' },
+    { name: 'ship', source: 'prompt' },
+    { name: 'skill:verify', source: 'skill' }
+  ])
+
+  await kernel.invokeCommand(SET_MODEL_COMMAND_ID, 'openrouter/anthropic/claude-test')
+  await kernel.invokeCommand(SET_THINKING_COMMAND_ID, 'high')
+  await kernel.invokeCommand(COMPACT_COMMAND_ID, 'Preserve decisions')
+  await kernel.invokeCommand(SET_SESSION_NAME_COMMAND_ID, 'Release planning')
+
+  assert.deepEqual(runtime.commands.slice(-9), [
+    { type: 'set_model', provider: 'openrouter', modelId: 'anthropic/claude-test' },
+    { type: 'get_state' },
+    { type: 'set_thinking_level', level: 'high' },
+    { type: 'get_state' },
+    { type: 'compact', customInstructions: 'Preserve decisions' },
+    { type: 'get_state' },
+    { type: 'get_messages' },
+    { type: 'set_session_name', name: 'Release planning' },
+    { type: 'get_state' }
+  ])
+})
+
+test('compact atomically rebuilds the conversation and preserves it when projection fails', async () => {
+  const initialMessages = [
+    { role: 'user', content: [{ type: 'text', text: 'Long request' }], timestamp: 10 },
+    { role: 'assistant', content: [{ type: 'text', text: 'Long response' }], timestamp: 20 }
+  ]
+  const compactedMessages = [
+    { role: 'assistant', content: [{ type: 'text', text: 'Compacted summary' }], timestamp: 30 }
+  ]
+  const runtime = new CompactingRuntimeHost(initialMessages, compactedMessages)
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+
+  await kernel.start()
+  await kernel.invokeCommand(COMPACT_COMMAND_ID, '')
+
+  let entries = kernel.getState().conversation.entries
+  assert.equal(entries.length, 1)
+  assert.equal(entries[0]?.kind === 'message' ? entries[0].text : null, 'Compacted summary')
+  assert.deepEqual(runtime.commands.slice(-3), [
+    { type: 'compact' },
+    { type: 'get_state' },
+    { type: 'get_messages' }
+  ])
+
+  const beforeFailure = entries
+  runtime.failNextCompactedProjection()
+  await assert.rejects(
+    kernel.invokeCommand(COMPACT_COMMAND_ID, 'Keep decisions'),
+    /compacted messages unavailable/
+  )
+  entries = kernel.getState().conversation.entries
+  assert.deepEqual(entries, beforeFailure)
+})
+
+test('renaming an existing session updates navigation and persisted restart state', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/existing-session.jsonl',
+    sessionId: 'existing-session',
+    sessionName: 'Old name'
+  }
+  const persisted: SessionPointer[] = []
+  const runtime = new FakeRuntimeHost({
+    sessionId: pointer.sessionId,
+    sessionFile: pointer.sessionFile,
+    sessionName: pointer.sessionName ?? undefined
+  })
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions(pointer, persisted)
+  )
+
+  await kernel.resumeSession()
+  persisted.length = 0
+  await kernel.invokeCommand(SET_SESSION_NAME_COMMAND_ID, 'Renamed session')
+
+  const renamedPointer = persisted.at(-1)
+  assert.deepEqual(renamedPointer, { ...pointer, sessionName: 'Renamed session' })
+  assert.equal(kernel.getState().session.name, 'Renamed session')
+  assert.equal(kernel.getState().sessions[0]?.name, 'Renamed session')
+
+  assert.ok(renamedPointer)
+  const restarted = new WorkbenchKernel(
+    () => new FakeRuntimeHost(),
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions(renamedPointer)
+  )
+  assert.equal(restarted.getState().session.name, 'Renamed session')
+  assert.equal(restarted.getState().sessions[0]?.name, 'Renamed session')
+})
+
+test('resuming an existing unnamed session backfills a purpose-based name', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/existing-unnamed-session.jsonl',
+    sessionId: 'existing-unnamed-session',
+    sessionName: null
+  }
+  const runtime = new FakeRuntimeHost(
+    {
+      sessionId: pointer.sessionId,
+      sessionFile: pointer.sessionFile,
+      model: { provider: 'openai', id: 'gpt-purpose' }
+    },
+    [
+      { role: 'user', content: [{ type: 'text', text: 'Make session names describe the goal.' }], timestamp: 10 },
+      { role: 'assistant', content: [{ type: 'text', text: 'I will generate a semantic title.' }], timestamp: 20 }
+    ]
+  )
+  const persisted: SessionPointer[] = []
+  let releaseGeneration!: (name: string) => void
+  const generatedName = new Promise<string>((resolve) => {
+    releaseGeneration = resolve
+  })
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions(pointer, persisted, [], [], async () => generatedName)
+  )
+
+  await kernel.resumeSession()
+  assert.equal(kernel.getState().session.name, null)
+  const named = new Promise<void>((resolve) => {
+    const unsubscribe = kernel.subscribe(() => {
+      if (kernel.getState().session.name === 'Semantic session naming' && persisted.length === 2) {
+        unsubscribe()
+        resolve()
+      }
+    })
+  })
+  releaseGeneration('Semantic session naming')
+  await named
+
+  assert.deepEqual(persisted, [
+    pointer,
+    { ...pointer, sessionName: 'Semantic session naming' }
+  ])
+})
+
+test('automatic naming never falls back to an expensive active model and allows an authorized override', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/oauth-title-session.jsonl',
+    sessionId: 'oauth-title-session',
+    sessionName: null
+  }
+  const runtime = new FakeRuntimeHost(
+    {
+      sessionId: pointer.sessionId,
+      sessionFile: pointer.sessionFile,
+      model: { provider: 'openai-codex', id: 'gpt-5.6-sol' }
+    },
+    [
+      { role: 'user', content: [{ type: 'text', text: 'Name this conversation by purpose.' }], timestamp: 10 },
+      { role: 'assistant', content: [{ type: 'text', text: 'I will use the configured title model.' }], timestamp: 20 }
+    ],
+    [],
+    [
+      { id: 'gpt-5.6-sol', provider: 'openai-codex', reasoning: true },
+      { id: 'gpt-5.4-mini', provider: 'oauth-provider', reasoning: true }
+    ]
+  )
+  const persistedSettings: SessionNamingSettings[] = []
+  let generationRequest: SessionNameGenerationRequest | null = null
+  let releaseGeneration!: (name: string) => void
+  const generatedName = new Promise<string>((resolve) => {
+    releaseGeneration = resolve
+  })
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(pointer, [], [], [], async (request) => {
+        generationRequest = request
+        return generatedName
+      }),
+      persistSessionNaming: async (settings) => {
+        persistedSettings.push(settings)
+      }
+    }
+  )
+
+  await kernel.resumeSession()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(generationRequest, null)
+  assert.equal(kernel.getState().session.name, null)
+
+  await kernel.setSessionNaming({
+    mode: 'model',
+    provider: 'oauth-provider',
+    modelId: 'gpt-5.4-mini'
+  })
+  const request = generationRequest as SessionNameGenerationRequest | null
+  assert.ok(request)
+  assert.deepEqual({ provider: request.provider, modelId: request.modelId }, {
+    provider: 'oauth-provider',
+    modelId: 'gpt-5.4-mini'
+  })
+  assert.deepEqual(persistedSettings, [{
+    mode: 'model',
+    provider: 'oauth-provider',
+    modelId: 'gpt-5.4-mini'
+  }])
+
+  const named = new Promise<void>((resolve) => {
+    const unsubscribe = kernel.subscribe(() => {
+      if (kernel.getState().session.name === 'OAuth title model') {
+        unsubscribe()
+        resolve()
+      }
+    })
+  })
+  releaseGeneration('OAuth title model')
+  await named
+})
+
+test('a manual session name cancels an in-flight generated name', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/manually-named-session.jsonl',
+    sessionId: 'manually-named-session',
+    sessionName: null
+  }
+  const runtime = new FakeRuntimeHost(
+    {
+      sessionId: pointer.sessionId,
+      sessionFile: pointer.sessionFile,
+      model: { provider: 'openai', id: 'gpt-purpose' }
+    },
+    [
+      { role: 'user', content: [{ type: 'text', text: 'Generate a useful session title.' }], timestamp: 10 },
+      { role: 'assistant', content: [{ type: 'text', text: 'I will name it by purpose.' }], timestamp: 20 }
+    ]
+  )
+  const persisted: SessionPointer[] = []
+  let generationRequest: SessionNameGenerationRequest | null = null
+  let releaseGeneration!: (name: string) => void
+  const generatedName = new Promise<string>((resolve) => {
+    releaseGeneration = resolve
+  })
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions(pointer, persisted, [], [], async (request) => {
+      generationRequest = request
+      return generatedName
+    })
+  )
+
+  await kernel.resumeSession()
+  const request = generationRequest as SessionNameGenerationRequest | null
+  assert.ok(request)
+  assert.equal(request.signal.aborted, false)
+
+  await kernel.invokeCommand(SET_SESSION_NAME_COMMAND_ID, 'Manual purpose name')
+  assert.equal(request.signal.aborted, true)
+  releaseGeneration('Generated name must not win')
+  await new Promise<void>((resolve) => setImmediate(resolve))
+
+  assert.deepEqual(
+    runtime.commands.filter(({ type }) => type === 'set_session_name'),
+    [{ type: 'set_session_name', name: 'Manual purpose name' }]
+  )
+  assert.deepEqual(persisted, [
+    pointer,
+    { ...pointer, sessionName: 'Manual purpose name' }
+  ])
+  assert.equal(kernel.getState().session.name, 'Manual purpose name')
+})
+
+test('invokes catalog prompt commands without passing unknown slash text through', async () => {
+  const runtime = new FakeRuntimeHost(
+    undefined,
+    [],
+    [
+      { name: 'review', source: 'extension' },
+      { name: 'ship', source: 'prompt' }
+    ]
+  )
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+
+  await kernel.start()
+  const extension = kernel.getState().commands.find(({ name }) => name === 'review')
+  const prompt = kernel.getState().commands.find(({ name }) => name === 'ship')
+  assert.ok(extension)
+  assert.ok(prompt)
+
+  await kernel.invokeCommand(extension.id, 'current diff')
+  assert.equal(kernel.getState().runtime.status, 'ready')
+  assert.deepEqual(runtime.commands.slice(-2), [
+    { type: 'prompt', message: '/review current diff' },
+    { type: 'get_state' }
+  ])
+
+  runtime.setStreaming(true)
+  await kernel.invokeCommand(prompt.id, '')
+  assert.equal(kernel.getState().runtime.status, 'running')
+  assert.deepEqual(runtime.commands.slice(-2), [
+    { type: 'prompt', message: '/ship' },
+    { type: 'get_state' }
+  ])
+  runtime.setStreaming(false)
+  runtime.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+  assert.equal(kernel.getState().runtime.status, 'ready')
+
+  await assert.rejects(kernel.invokeCommand('missing-command', ''), /not available/)
+  await assert.rejects(kernel.invokeCommand(SET_MODEL_COMMAND_ID, 'missing-provider'), /provider\/model/)
+})
+
+test('the typed new command starts one replacement runtime', async () => {
+  const firstRuntime = new FakeRuntimeHost()
+  const secondRuntime = new FakeRuntimeHost({
+    sessionId: 'session-2',
+    sessionFile: '/tmp/session-2.jsonl'
+  })
+  const runtimes = [firstRuntime, secondRuntime]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+
+  await kernel.start()
+  await kernel.invokeCommand(NEW_SESSION_COMMAND_ID, '')
+
+  assert.equal(firstRuntime.stopCalls, 1)
+  assert.equal(secondRuntime.startCalls, 1)
+  assert.equal(kernel.getState().session.id, 'session-2')
 })
 
 test('stop during start cancels the old start without reviving the runtime', async () => {
@@ -384,6 +894,7 @@ test('activating another project stops the ready runtime before changing the act
   assert.deepEqual(activeProjects, ['/tmp/next-project'])
   assert.equal(kernel.getState().activeProjectKey, '/tmp/next-project')
   assert.equal(kernel.getState().runtime.status, 'stopped')
+  assert.deepEqual(kernel.getState().availableModels, [])
   assert.equal(kernel.getState().session.id, 'next-session')
   assert.equal(kernel.getState().session.resumeAvailable, true)
   assert.deepEqual(kernel.getState().conversation.entries, [])
@@ -753,12 +1264,13 @@ test('Pi lifecycle patches runtime, session, and run boundary without changing s
     assert.equal(started.patch.conversation?.entries, undefined)
   }
   const settled = events[1]
-  assert.equal(settled?.type, 'kernel.state-patched')
-  if (settled?.type === 'kernel.state-patched') {
-    assert.equal(settled.patch.runtime?.status, 'ready')
-    assert.equal(settled.patch.session?.settled, true)
-    assert.equal(settled.patch.session?.pendingMessageCount, 0)
-    assert.equal(settled.patch.conversation?.activeRunStartIndex, null)
+  assert.equal(settled?.type, 'kernel.state-changed')
+  if (settled?.type === 'kernel.state-changed') {
+    assert.equal(settled.state.runtime.status, 'ready')
+    assert.equal(settled.state.session.settled, true)
+    assert.equal(settled.state.session.pendingMessageCount, 0)
+    assert.equal(settled.state.conversation.activeRunStartIndex, null)
+    assert.equal(typeof settled.state.sessions[0]?.lastActivityAt, 'number')
   }
   assert.equal(kernel.getState().runtime.status, 'ready')
   assert.equal(kernel.getState().session.settled, true)
@@ -785,6 +1297,27 @@ test('low-frequency activity lifecycle keeps the full-state fallback', async () 
   ])
   assert.equal(kernel.getState().runtime.status, 'ready')
   assert.equal(kernel.getState().session.settled, true)
+})
+
+test('session summaries refresh activity time from the configured metadata reader', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/session.jsonl',
+    sessionId: 'session-1',
+    sessionName: 'Session'
+  }
+  const kernel = new WorkbenchKernel(
+    () => new FakeRuntimeHost(),
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(pointer),
+      readSessionActivityAt: async () => 1_784_630_000_000
+    }
+  )
+
+  await kernel.refreshSessionActivities()
+
+  assert.equal(kernel.getState().sessions[0]?.lastActivityAt, 1_784_630_000_000)
 })
 
 test('new session persists its recent-session pointer', async () => {
@@ -851,12 +1384,162 @@ test('a new session whose JSONL is not written yet starts as an unregistered pro
   assert.deepEqual(state.sessions, [{
     key: existingPointer.sessionFile,
     id: existingPointer.sessionId,
-    name: existingPointer.sessionName
+    name: existingPointer.sessionName,
+    lastActivityAt: null
   }])
   assert.deepEqual(persisted, [])
 
   await kernel.prompt('Write the first turn')
   assert.deepEqual(runtime.commands.at(-1), { type: 'prompt', message: 'Write the first turn' })
+})
+
+test('the settled first turn uses a low-cost model to generate and persist a purpose-based session name', async () => {
+  const runtime = new FakeRuntimeHost({
+    sessionId: 'unnamed-session',
+    sessionFile: '/tmp/unnamed-session.jsonl',
+    model: { provider: 'openai', id: 'gpt-purpose' }
+  })
+  const canonicalSessionFile = '/tmp/canonical-unnamed-session.jsonl'
+  const automaticName = '修复会话语义命名'
+  const persisted: SessionPointer[] = []
+  let generationRequest: SessionNameGenerationRequest | null = null
+  let validationCalls = 0
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(null, persisted, [], [], async (request) => {
+        generationRequest = request
+        return `标题：${automaticName}\n不应采用这一行`
+      }),
+      validateSession: async (pointer) => {
+        validationCalls += 1
+        if (validationCalls === 1) throw fileError('ENOENT', 'session file not written yet')
+        return { ...pointer, sessionFile: canonicalSessionFile }
+      }
+    }
+  )
+
+  await kernel.start()
+  await kernel.prompt('请让对话名称体现会话目的，而不是复制第一条消息。')
+  const materialized = new Promise<void>((resolve) => {
+    const unsubscribe = kernel.subscribe(() => {
+      if (kernel.getState().activeSessionKey === canonicalSessionFile) {
+        unsubscribe()
+        resolve()
+      }
+    })
+  })
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: '我会改用独立模型请求生成语义标题。' }],
+        timestamp: 20
+      }
+    }
+  })
+  await materialized
+  assert.equal(generationRequest, null)
+
+  const named = new Promise<void>((resolve) => {
+    const unsubscribe = kernel.subscribe(() => {
+      if (kernel.getState().session.name === automaticName && persisted.length === 2) {
+        unsubscribe()
+        resolve()
+      }
+    })
+  })
+  runtime.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+  await named
+
+  const request = generationRequest as SessionNameGenerationRequest | null
+  assert.ok(request)
+  assert.deepEqual({
+    executable: request.executable,
+    cwd: request.cwd,
+    provider: request.provider,
+    modelId: request.modelId,
+    userMessage: request.userMessage,
+    assistantMessage: request.assistantMessage,
+    aborted: request.signal.aborted
+  }, {
+    executable: '/usr/bin/pi',
+    cwd: '/tmp/project',
+    provider: 'openai',
+    modelId: 'gpt-5.4-mini',
+    userMessage: '请让对话名称体现会话目的，而不是复制第一条消息。',
+    assistantMessage: '我会改用独立模型请求生成语义标题。',
+    aborted: false
+  })
+  const expectedPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: canonicalSessionFile,
+    sessionId: 'unnamed-session',
+    sessionName: automaticName
+  }
+  assert.equal(persisted.length, 2)
+  assert.deepEqual(persisted[0], { ...expectedPointer, sessionName: null })
+  assert.deepEqual(persisted[1], expectedPointer)
+  assert.deepEqual(
+    runtime.commands.filter(({ type }) => type === 'prompt' || type === 'set_session_name'),
+    [
+      { type: 'prompt', message: '请让对话名称体现会话目的，而不是复制第一条消息。' },
+      { type: 'set_session_name', name: automaticName }
+    ]
+  )
+  assert.equal(kernel.getState().sessions[0]?.name, automaticName)
+})
+
+test('renaming a provisional session persists the real name and replaces the provisional pointer', async () => {
+  const runtime = new FakeRuntimeHost({
+    sessionId: 'provisional-session',
+    sessionFile: '/tmp/provisional-session.jsonl',
+    sessionName: 'Temporary name'
+  })
+  const persisted: SessionPointer[] = []
+  let validationCalls = 0
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(null, persisted),
+      validateSession: async (pointer) => {
+        validationCalls += 1
+        if (validationCalls === 1) throw fileError('ENOENT', 'session file not written yet')
+        return { ...pointer, sessionFile: '/tmp/canonical-provisional-session.jsonl' }
+      }
+    }
+  )
+
+  await kernel.start()
+  await kernel.invokeCommand(SET_SESSION_NAME_COMMAND_ID, 'Named before first turn')
+
+  const expectedPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/canonical-provisional-session.jsonl',
+    sessionId: 'provisional-session',
+    sessionName: 'Named before first turn'
+  }
+  assert.deepEqual(persisted, [expectedPointer])
+  assert.equal(kernel.getState().activeSessionKey, expectedPointer.sessionFile)
+  assert.equal(kernel.getState().session.name, expectedPointer.sessionName)
+  assert.equal(kernel.getState().session.resumeAvailable, true)
+  assert.deepEqual(kernel.getState().sessions, [{
+    key: expectedPointer.sessionFile,
+    id: expectedPointer.sessionId,
+    name: expectedPointer.sessionName,
+    lastActivityAt: null
+  }])
+
+  const restarted = new WorkbenchKernel(
+    () => new FakeRuntimeHost(),
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions(expectedPointer)
+  )
+  assert.equal(restarted.getState().session.name, expectedPointer.sessionName)
 })
 
 test('the first assistant message materializes a provisional session before settled becomes ready', async () => {
@@ -941,15 +1624,17 @@ test('the first assistant message materializes a provisional session before sett
 
   const state = kernel.getState()
   assert.deepEqual(persisted, [canonicalPointer])
-  assert.deepEqual(state.sessions, [{
+  assert.deepEqual(state.sessions.map(({ lastActivityAt: _lastActivityAt, ...summary }) => summary), [{
     key: canonicalPointer.sessionFile,
     id: canonicalPointer.sessionId,
     name: canonicalPointer.sessionName
   }])
+  assert.equal(typeof state.sessions[0]?.lastActivityAt, 'number')
   assert.equal(state.activeSessionKey, canonicalPointer.sessionFile)
   assert.equal(state.session.resumeAvailable, true)
   assert.equal(state.session.settled, true)
   assert.equal(state.runtime.status, 'ready')
+  assert.equal(runtime.commands.some(({ type }) => type === 'set_session_name'), false)
 })
 
 test('a non-ENOENT provisional commit failure crashes without registering a ghost session', async () => {
@@ -1341,7 +2026,7 @@ test('resume rejects without a pointer or from an active runtime state', async (
   assert.equal(runtime.startCalls, 1)
 })
 
-test('startup persistence and message failures stop and release the runtime', async (t) => {
+test('startup persistence and projection failures stop and release the runtime', async (t) => {
   await t.test('persistence failure', async () => {
     const failedRuntime = new FakeRuntimeHost()
     const replacementRuntime = new FakeRuntimeHost()
@@ -1397,6 +2082,40 @@ test('startup persistence and message failures stop and release the runtime', as
     assert.deepEqual(kernel.getState().conversation.entries, [])
     await kernel.stop()
     assert.equal(kernel.getState().runtime.status, 'stopped')
+  })
+
+  await t.test('get_commands failure', async () => {
+    const runtime = new FailingCommandRuntimeHost('get_commands')
+    const kernel = new WorkbenchKernel(
+      () => runtime,
+      { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+      kernelOptions()
+    )
+
+    await assert.rejects(kernel.start(), /get_commands failed/)
+    assert.equal(runtime.stopCalls, 1)
+    assert.equal(kernel.getState().runtime.status, 'crashed')
+    assert.deepEqual(kernel.getState().commands.map(({ name }) => name), [
+      'new',
+      'model',
+      'thinking',
+      'compact',
+      'name'
+    ])
+  })
+
+  await t.test('get_available_models failure', async () => {
+    const runtime = new FailingCommandRuntimeHost('get_available_models')
+    const kernel = new WorkbenchKernel(
+      () => runtime,
+      { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+      kernelOptions()
+    )
+
+    await assert.rejects(kernel.start(), /get_available_models failed/)
+    assert.equal(runtime.stopCalls, 1)
+    assert.equal(kernel.getState().runtime.status, 'crashed')
+    assert.deepEqual(kernel.getState().availableModels, [])
   })
 })
 

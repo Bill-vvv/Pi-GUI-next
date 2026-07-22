@@ -19,9 +19,11 @@ import {
   resolvePiExecutable,
   type ResolvePiExecutableOptions
 } from './pi-executable.ts'
+import { errorMessage } from '../utils/errors.ts'
 
 const DEFAULT_RPC_TIMEOUT_MS = 10_000
 const STOP_GRACE_MS = 1_000
+const PROBE_SESSION_NAME = 'Pi GUI S11 probe'
 
 export type LinuxLocalRuntimeOptions = {
   cwd: string
@@ -53,6 +55,8 @@ export type PiRpcProbeResult = {
   executable: string
   version: string
   state: PiRpcSessionState
+  commandCount: number
+  sessionNameEventObserved: boolean
   stderrChars: number
 }
 
@@ -207,9 +211,27 @@ export class LinuxLocalRuntime implements RuntimeHost {
       const model = await this.client.setModel(command.provider, command.modelId)
       return { type: 'model', model }
     }
+    if (command.type === 'set_thinking_level') {
+      await this.client.setThinkingLevel(command.level)
+      return { type: 'accepted' }
+    }
+    if (command.type === 'get_commands') {
+      return { type: 'commands', commands: await this.client.getCommands() }
+    }
+    if (command.type === 'get_available_models') {
+      return { type: 'available-models', models: await this.client.getAvailableModels() }
+    }
+    if (command.type === 'compact') {
+      await this.client.compact(command.customInstructions)
+      return { type: 'accepted' }
+    }
+    if (command.type === 'set_session_name') {
+      await this.client.setSessionName(command.name)
+      return { type: 'accepted' }
+    }
 
-    await this.client.setThinkingLevel(command.level)
-    return { type: 'accepted' }
+    command satisfies never
+    throw new Error('Unsupported runtime command.')
   }
 
   stop(): Promise<void> {
@@ -357,8 +379,19 @@ export class LinuxLocalRuntime implements RuntimeHost {
 export async function probePiRpc(options: LinuxLocalRuntimeOptions): Promise<PiRpcProbeResult> {
   const runtime = new LinuxLocalRuntime(options)
   const diagnostics: RuntimeHostEvent[] = []
-  runtime.subscribe((event) => diagnostics.push(event))
+  let sessionNameEventObserved = false
+  runtime.subscribe((event) => {
+    diagnostics.push(event)
+    if (
+      event.type === 'pi-event' &&
+      event.event.type === 'session_info_changed' &&
+      event.event.name === PROBE_SESSION_NAME
+    ) {
+      sessionNameEventObserved = true
+    }
+  })
   let state: PiRpcSessionState
+  let commandCount = 0
   try {
     await runtime.start()
     const result = await runtime.send({ type: 'get_state' })
@@ -366,6 +399,22 @@ export async function probePiRpc(options: LinuxLocalRuntimeOptions): Promise<PiR
       throw new Error('Pi RPC probe did not receive session state.')
     }
     state = result.state
+    const commandsResult = await runtime.send({ type: 'get_commands' })
+    if (commandsResult.type !== 'commands') {
+      throw new Error('Pi RPC probe did not receive a command catalog.')
+    }
+    commandCount = commandsResult.commands.length
+    if (options.noSession === true) {
+      await runtime.send({ type: 'set_session_name', name: PROBE_SESSION_NAME })
+      const renamedResult = await runtime.send({ type: 'get_state' })
+      if (renamedResult.type !== 'state' || renamedResult.state.sessionName !== PROBE_SESSION_NAME) {
+        throw new Error('Pi RPC probe did not retain the typed session name.')
+      }
+      if (!sessionNameEventObserved) {
+        throw new Error('Pi RPC probe did not observe session_info_changed.')
+      }
+      state = renamedResult.state
+    }
   } catch (error) {
     await runtime.stop()
     throw error
@@ -394,6 +443,8 @@ export async function probePiRpc(options: LinuxLocalRuntimeOptions): Promise<PiR
     executable: runtimeState.executable!,
     version: runtimeState.version!,
     state,
+    commandCount,
+    sessionNameEventObserved,
     stderrChars: runtimeState.stderrChars
   }
 }
@@ -455,10 +506,6 @@ function formatExitError(code: number | null, signal: NodeJS.Signals | null): st
     return `Pi RPC process exited with code ${code}.`
   }
   return `Pi RPC process exited from signal ${signal ?? 'unknown'}.`
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 function startCancelledError(): Error {

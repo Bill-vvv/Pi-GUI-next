@@ -34,6 +34,7 @@ const TOOL_PROMPT =
 const ABORT_PROMPT =
   'Use the bash tool to run exactly `for i in $(seq 1 60); do sleep 1; done`, and wait for it to finish.'
 const CONTINUATION_PROMPT = 'Reply briefly that this recovered conversation can continue.'
+const SECOND_SESSION_PROMPT = 'Reply briefly that this second release-verification conversation is ready.'
 const STARTED_AT = new Date().toISOString()
 const RUN_STAMP = STARTED_AT.replaceAll(':', '-').replaceAll('.', '-')
 const TIMEOUT = {
@@ -56,8 +57,20 @@ let artifactPath = null
 let artifactMetadata = null
 let piExecutable = null
 let runtimeElectronVersion = null
+let projectPaths = []
 const steps = []
 const processTotals = { stdoutChars: 0, stderrChars: 0 }
+const p2Summary = {
+  projects: { configured: 0, discovered: 0, switched: false },
+  sessions: { materialized: 0, listed: 0, switched: false, restored: false },
+  commands: { discovered: 0, sources: 0, completed: false, unknownRejected: false },
+  interaction: {
+    composerFocusRestored: false,
+    emptyConversationVisible: false,
+    switchFeedbackObserved: false,
+    singleRuntime: false
+  }
+}
 
 class VerificationError extends Error {
   constructor(code) {
@@ -172,16 +185,23 @@ async function prepareRun() {
     config: join(temporaryRoot, 'config'),
     state: join(temporaryRoot, 'state'),
     cache: join(temporaryRoot, 'cache'),
-    project: join(temporaryRoot, 'project')
+    project: join(temporaryRoot, 'project'),
+    secondProject: join(temporaryRoot, 'project-secondary')
   }
   await Promise.all(Object.values(paths).map((path) => mkdir(path, { recursive: true, mode: 0o700 })))
   await mkdir(join(paths.config, 'pi-gui-next'), { recursive: true, mode: 0o700 })
   await writeFile(
     join(paths.config, 'pi-gui-next', 'config.json'),
-    `${JSON.stringify({ version: 1, project: { path: paths.project } }, null, 2)}\n`,
+    `${JSON.stringify({
+      version: 2,
+      projects: [{ path: paths.project }, { path: paths.secondProject }],
+      activeProjectKey: paths.project
+    }, null, 2)}\n`,
     { mode: 0o600, flag: 'wx' }
   )
   temporaryRoot = resolve(temporaryRoot)
+  projectPaths = [join(temporaryRoot, 'project'), join(temporaryRoot, 'project-secondary')]
+  p2Summary.projects.configured = projectPaths.length
 }
 
 function xdgEnvironment() {
@@ -213,41 +233,48 @@ async function exerciseUi() {
   })
 
   await runStep('project_cwd', async () => {
-    const displayedPath = await evaluateValue(
+    const projectState = await evaluateValue(
       activeCdp,
-      `document.querySelector('.project-select small')?.textContent ?? null`
+      `window.piGui.getState().then((state) => ({
+        activeProjectKey: state.activeProjectKey,
+        projects: state.projects.map((project) => project.path)
+      }))`
     )
-    if (displayedPath !== projectPath) fail('E_PROJECT_PATH')
+    if (
+      projectState === null ||
+      typeof projectState !== 'object' ||
+      projectState.activeProjectKey !== projectPath ||
+      !Array.isArray(projectState.projects) ||
+      !projectState.projects.includes(projectPath)
+    ) {
+      fail('E_PROJECT_PATH')
+    }
   })
 
   await runStep('pi_probe_ready', async () => {
     await clickSelector(activeCdp, '.composer-start-action')
     await waitForRuntime(activeCdp, 'ready', TIMEOUT.ready)
-    await openDiagnostics(activeCdp)
-    await waitForExpression(
+    const runtimeIdentity = await evaluateValue(
       activeCdp,
-      `Array.from(document.querySelectorAll('.runtime-diagnostics dd'))[1]?.textContent?.trim() === ${JSON.stringify(PI_VERSION)}`,
-      TIMEOUT.ready,
-      'E_PI_READY'
+      `window.piGui.getState().then((state) => ({
+        status: state.runtime.status,
+        executable: state.runtime.executable,
+        version: state.runtime.version
+      }))`
     )
+    if (
+      runtimeIdentity === null ||
+      typeof runtimeIdentity !== 'object' ||
+      runtimeIdentity.status !== 'ready' ||
+      runtimeIdentity.executable !== piExecutable ||
+      runtimeIdentity.version !== PI_VERSION
+    ) {
+      fail('E_PI_READY')
+    }
   })
 
   await runStep('high_thinking', async () => {
-    await clickSelector(activeCdp, '.model-picker-button')
-    const available = await evaluateValue(
-      activeCdp,
-      `Array.from(document.querySelectorAll('.thinking-grid button')).some((button) => button.textContent?.trim() === '高' && !button.disabled)`
-    )
-    if (available) {
-      await clickButtonText(activeCdp, '.thinking-grid button', '高')
-      await waitForExpression(
-        activeCdp,
-        `Array.from(document.querySelectorAll('.thinking-grid button')).some((button) => button.textContent?.trim() === '高' && button.getAttribute('aria-selected') === 'true')`,
-        10_000,
-        'E_THINKING_LEVEL'
-      )
-    }
-    await evaluateValue(activeCdp, `document.querySelector('.composer-model-controls')?.removeAttribute('open')`)
+    await selectThinkingLevelFromGui(activeCdp, 'high')
   })
 
   await runStep('tool_turn', async () => {
@@ -314,17 +341,29 @@ async function exerciseUi() {
     process.kill(piPid, 'SIGKILL')
     await waitForExpression(
       activeCdp,
-      `document.querySelector('.status-dot.crashed') !== null && Array.from(document.querySelectorAll('.composer-start-action')).some((button) => button.textContent?.includes('重启并恢复'))`,
+      `window.piGui.getState().then((state) =>
+        state.runtime.status === 'crashed' &&
+        Array.from(document.querySelectorAll('.composer-start-action')).some((button) => button.textContent?.includes('重启并恢复'))
+      )`,
       TIMEOUT.crash,
       'E_CRASH_STATE'
     )
-    await openDiagnostics(activeCdp)
-    await waitForExpression(
+    const crashDiagnostic = await evaluateValue(
       activeCdp,
-      `(() => { const value = Array.from(document.querySelectorAll('.runtime-diagnostics dd'))[4]?.textContent?.trim(); return Boolean(value && value !== '—') })()`,
-      TIMEOUT.crash,
-      'E_CRASH_EXIT_DIAGNOSTIC'
+      `window.piGui.getState().then((state) => ({
+        status: state.runtime.status,
+        exitCode: state.runtime.exitCode,
+        exitSignal: state.runtime.exitSignal
+      }))`
     )
+    if (
+      crashDiagnostic === null ||
+      typeof crashDiagnostic !== 'object' ||
+      crashDiagnostic.status !== 'crashed' ||
+      (crashDiagnostic.exitCode === null && crashDiagnostic.exitSignal === null)
+    ) {
+      fail('E_CRASH_EXIT_DIAGNOSTIC')
+    }
     await captureScreenshot(activeCdp, 'crashed.png')
   })
 
@@ -366,6 +405,212 @@ async function exerciseUi() {
     await waitForMessageCount(activeCdp, messagesBeforeReopen, TIMEOUT.ready)
     await assertSameSessionPointer(sessionPointer, projectPath)
     await captureScreenshot(activeCdp, 'reopened-resumed.png')
+  })
+
+  await runStep('p2_projects', async () => {
+    const [primaryProjectPath, secondaryProjectPath] = projectPaths
+    const discovered = await evaluateValue(
+      activeCdp,
+      `document.querySelectorAll('.project-select').length`
+    )
+    if (discovered !== projectPaths.length) fail('E_P2_PROJECT_DISCOVERY')
+    p2Summary.projects.discovered = discovered
+
+    await assertSingleProjectRuntime(primaryProjectPath)
+    await monitorSingleRuntimeOwners(async () => {
+      const feedbackObserved = await clickTitledButtonWithFeedback(
+        activeCdp,
+        '.project-select',
+        secondaryProjectPath
+      )
+      if (!feedbackObserved) fail('E_P2_PROJECT_SWITCH_FEEDBACK')
+      p2Summary.interaction.switchFeedbackObserved = true
+      await waitForTitledSelection(
+        activeCdp,
+        '.project-select',
+        secondaryProjectPath,
+        TIMEOUT.ready,
+        'E_P2_PROJECT_SWITCH'
+      )
+    })
+    await waitForExpression(
+      activeCdp,
+      `document.querySelector('.conversation-empty-state[role="status"]') !== null`,
+      TIMEOUT.page,
+      'E_P2_EMPTY_CONVERSATION'
+    )
+    p2Summary.interaction.emptyConversationVisible = true
+
+    await clickButtonText(activeCdp, '.composer-start-action', '启动 Pi')
+    await waitForRuntime(activeCdp, 'ready', TIMEOUT.ready)
+    await assertSingleProjectRuntime(secondaryProjectPath)
+    await waitForComposerFocus(activeCdp)
+
+    await monitorSingleRuntimeOwners(async () => {
+      await clickTitledButton(activeCdp, '.project-select', primaryProjectPath)
+      await waitForTitledSelection(
+        activeCdp,
+        '.project-select',
+        primaryProjectPath,
+        TIMEOUT.ready,
+        'E_P2_PROJECT_RESTORE'
+      )
+    })
+    const primaryReady = await evaluateValue(
+      activeCdp,
+      `window.piGui.getState().then((state) => state.runtime.status === 'ready')`
+    )
+    if (!primaryReady) {
+      await clickButtonText(activeCdp, '.composer-start-action', '恢复对话')
+      await waitForRuntime(activeCdp, 'ready', TIMEOUT.ready)
+    }
+    await waitForMessageCount(activeCdp, messagesBeforeReopen, TIMEOUT.ready)
+    await assertSameSessionPointer(sessionPointer, primaryProjectPath)
+    await assertSingleProjectRuntime(primaryProjectPath)
+    await waitForComposerFocus(activeCdp)
+    p2Summary.projects.switched = true
+    p2Summary.interaction.composerFocusRestored = true
+    p2Summary.interaction.singleRuntime = true
+  })
+
+  await runStep('p2_sessions', async () => {
+    const originalSessionKey = await selectedTitledButton(activeCdp, '.session-item')
+    if (originalSessionKey === null) fail('E_P2_SESSION_ORIGINAL')
+
+    await monitorSingleRuntimeOwners(async () => {
+      await clickSelector(activeCdp, '.project-new-chat')
+      await waitForRuntime(activeCdp, 'ready', TIMEOUT.ready)
+    })
+    await waitForExpression(
+      activeCdp,
+      `document.querySelector('.conversation-empty-state[role="status"]') !== null`,
+      TIMEOUT.page,
+      'E_P2_NEW_SESSION_EMPTY'
+    )
+    await waitForComposerFocus(activeCdp)
+    const baseline = await conversationCounts(activeCdp)
+    await submitPrompt(activeCdp, SECOND_SESSION_PROMPT)
+    await waitForAssistantSettled(activeCdp, baseline.assistant, TIMEOUT.turn)
+    await waitForCondition(
+      async () => Number(await evaluateValue(
+        activeCdp,
+        `document.querySelectorAll('.session-item').length`
+      )) >= 2,
+      TIMEOUT.ready,
+      'E_P2_SESSION_LIST'
+    )
+    const listed = await evaluateValue(
+      activeCdp,
+      `document.querySelectorAll('.session-item').length`
+    )
+    const secondSessionKey = await selectedTitledButton(activeCdp, '.session-item')
+    if (
+      typeof listed !== 'number' ||
+      listed < 2 ||
+      secondSessionKey === null ||
+      secondSessionKey === originalSessionKey
+    ) {
+      fail('E_P2_SESSION_MATERIALIZATION')
+    }
+    p2Summary.sessions.materialized = 2
+    p2Summary.sessions.listed = listed
+
+    await monitorSingleRuntimeOwners(async () => {
+      await clickTitledButton(activeCdp, '.session-item', originalSessionKey)
+      await waitForTitledSelection(
+        activeCdp,
+        '.session-item',
+        originalSessionKey,
+        TIMEOUT.ready,
+        'E_P2_SESSION_SWITCH'
+      )
+      await waitForRuntime(activeCdp, 'ready', TIMEOUT.ready)
+    })
+    await waitForMessageCount(activeCdp, messagesBeforeReopen, TIMEOUT.ready)
+    await assertSameSessionPointer(sessionPointer, projectPath)
+    await waitForComposerFocus(activeCdp)
+    p2Summary.sessions.switched = true
+    p2Summary.sessions.restored = true
+  })
+
+  await runStep('p2_slash_commands', async () => {
+    await focusComposer(activeCdp)
+    await insertText(activeCdp, '/')
+    await waitForSelector(activeCdp, '.slash-command-surface[aria-label="Slash 命令"]', TIMEOUT.page)
+    const catalogSummary = await evaluateValue(
+      activeCdp,
+      `(() => {
+        const options = Array.from(document.querySelectorAll('.slash-command-option'))
+        return {
+          commands: options.length,
+          sources: new Set(options.map((option) => option.querySelector('.slash-command-source')?.textContent?.trim()).filter(Boolean)).size
+        }
+      })()`
+    )
+    if (
+      catalogSummary === null ||
+      typeof catalogSummary !== 'object' ||
+      !Number.isInteger(catalogSummary.commands) ||
+      catalogSummary.commands < 5 ||
+      !Number.isInteger(catalogSummary.sources) ||
+      catalogSummary.sources < 2
+    ) {
+      fail('E_P2_COMMAND_DISCOVERY')
+    }
+    p2Summary.commands.discovered = catalogSummary.commands
+    p2Summary.commands.sources = catalogSummary.sources
+
+    await clearComposer(activeCdp)
+    await insertText(activeCdp, '/thi')
+    await waitForExpression(
+      activeCdp,
+      `(() => {
+        const options = Array.from(document.querySelectorAll('.slash-command-option'))
+        return options.length === 1 && options[0]?.querySelector('.slash-command-source')?.textContent?.trim() === 'Pi RPC'
+      })()`,
+      TIMEOUT.page,
+      'E_P2_COMMAND_SOURCE'
+    )
+    await dispatchKey(activeCdp, 'ArrowDown', 'ArrowDown')
+    await dispatchKey(activeCdp, 'Tab', 'Tab')
+    await waitForExpression(
+      activeCdp,
+      `document.querySelector('textarea[aria-label="发送给 Pi 的任务"]')?.value === '/thinking '`,
+      TIMEOUT.page,
+      'E_P2_COMMAND_COMPLETION'
+    )
+    const availableThinkingLevel = await availableThinkingLevelFromGui(activeCdp)
+    await focusComposer(activeCdp)
+    await insertText(activeCdp, availableThinkingLevel)
+    await dispatchKey(activeCdp, 'Enter', 'Enter')
+    await waitForExpression(
+      activeCdp,
+      `(() => {
+        const input = document.querySelector('textarea[aria-label="发送给 Pi 的任务"]')
+        return input?.value === '' && document.querySelector('.composer-command-error[role="alert"]') === null
+      })()`,
+      TIMEOUT.ready,
+      'E_P2_TYPED_COMMAND'
+    )
+    p2Summary.commands.completed = true
+
+    await insertText(activeCdp, '/__p2_unknown__')
+    await dispatchKey(activeCdp, 'Enter', 'Enter')
+    await waitForExpression(
+      activeCdp,
+      `document.querySelector('.composer-command-error[role="alert"]')?.textContent?.startsWith('未知命令：') === true`,
+      TIMEOUT.page,
+      'E_P2_UNKNOWN_COMMAND'
+    )
+    p2Summary.commands.unknownRejected = true
+    await clearComposer(activeCdp)
+    await waitForExpression(
+      activeCdp,
+      `document.querySelector('.composer-command-error[role="alert"]') === null`,
+      TIMEOUT.page,
+      'E_P2_UNKNOWN_COMMAND_CLEAR'
+    )
+    await captureScreenshot(activeCdp, 'p2-workbench.png')
   })
 
   await runStep('final_close', async () => {
@@ -541,12 +786,180 @@ async function clickButtonText(cdp, selector, text) {
   if (!clicked) fail('E_CLICK_TEXT')
 }
 
-async function openDiagnostics(cdp) {
-  const opened = await evaluateValue(
+async function clickTitledButton(cdp, selector, title) {
+  const clicked = await evaluateValue(
     cdp,
-    `(() => { const details = document.querySelector('.runtime-diagnostics'); if (!(details instanceof HTMLDetailsElement)) return false; details.open = true; return details.open })()`
+    `(() => {
+      const element = Array.from(document.querySelectorAll(${JSON.stringify(selector)}))
+        .find((candidate) => candidate.getAttribute('title') === ${JSON.stringify(title)})
+      if (!(element instanceof HTMLButtonElement) || element.disabled) return false
+      element.click()
+      return true
+    })()`
   )
-  if (!opened) fail('E_DIAGNOSTICS')
+  if (!clicked) fail('E_CLICK_TITLE')
+}
+
+async function clickTitledButtonWithFeedback(cdp, selector, title) {
+  const observed = await evaluateValue(
+    cdp,
+    `new Promise((resolveClick) => {
+      const element = Array.from(document.querySelectorAll(${JSON.stringify(selector)}))
+        .find((candidate) => candidate.getAttribute('title') === ${JSON.stringify(title)})
+      if (!(element instanceof HTMLButtonElement) || element.disabled) {
+        resolveClick(false)
+        return
+      }
+      let settled = false
+      const finish = (value) => {
+        if (settled) return
+        settled = true
+        observer.disconnect()
+        clearTimeout(timer)
+        resolveClick(value)
+      }
+      const feedbackVisible = () =>
+        document.querySelector('.runtime-context-status[role="status"]') !== null ||
+        element.getAttribute('aria-busy') === 'true'
+      const observer = new MutationObserver(() => {
+        if (feedbackVisible()) finish(true)
+      })
+      observer.observe(document.body, { attributes: true, childList: true, subtree: true })
+      const timer = setTimeout(() => finish(false), 5_000)
+      element.click()
+      if (feedbackVisible()) finish(true)
+    })`
+  )
+  return observed === true
+}
+
+async function waitForTitledSelection(cdp, selector, title, timeoutMs, code) {
+  await waitForExpression(
+    cdp,
+    `Array.from(document.querySelectorAll(${JSON.stringify(selector)})).some((element) =>
+      element.getAttribute('title') === ${JSON.stringify(title)} &&
+      element.getAttribute('aria-current') === 'true'
+    )`,
+    timeoutMs,
+    code
+  )
+}
+
+async function selectedTitledButton(cdp, selector) {
+  const title = await evaluateValue(
+    cdp,
+    `document.querySelector(${JSON.stringify(`${selector}[aria-current="true"]`)})?.getAttribute('title') ?? null`
+  )
+  return typeof title === 'string' && title.length > 0 ? title : null
+}
+
+async function focusComposer(cdp) {
+  const focused = await evaluateValue(
+    cdp,
+    `(() => {
+      const input = document.querySelector('textarea[aria-label="发送给 Pi 的任务"]')
+      if (!(input instanceof HTMLTextAreaElement) || input.disabled) return false
+      input.focus()
+      return document.activeElement === input
+    })()`
+  )
+  if (!focused) fail('E_COMPOSER_FOCUS')
+}
+
+async function waitForComposerFocus(cdp) {
+  await waitForExpression(
+    cdp,
+    `(() => {
+      const input = document.querySelector('textarea[aria-label="发送给 Pi 的任务"]')
+      return input instanceof HTMLTextAreaElement && !input.disabled && document.activeElement === input
+    })()`,
+    TIMEOUT.page,
+    'E_P2_COMPOSER_FOCUS'
+  )
+}
+
+async function insertText(cdp, text) {
+  await cdp.send('Input.insertText', { text })
+}
+
+async function dispatchKey(cdp, key, code, modifiers = 0) {
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, modifiers })
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, modifiers })
+}
+
+async function clearComposer(cdp) {
+  await focusComposer(cdp)
+  await dispatchKey(cdp, 'a', 'KeyA', 2)
+  await dispatchKey(cdp, 'Backspace', 'Backspace')
+  await waitForExpression(
+    cdp,
+    `document.querySelector('textarea[aria-label="发送给 Pi 的任务"]')?.value === ''`,
+    TIMEOUT.page,
+    'E_COMPOSER_CLEAR'
+  )
+}
+
+async function availableThinkingLevelFromGui(cdp) {
+  await openThinkingOptions(cdp)
+  const level = await evaluateValue(
+    cdp,
+    `Array.from(document.querySelectorAll('.model-picker-option-panel .model-picker-item:not(:disabled)'))
+      .map((button) => button.querySelector('.model-picker-option-meta')?.textContent?.trim())
+      .find((value) => ['low', 'medium', 'high', 'xhigh', 'max'].includes(value)) ?? null`
+  )
+  await evaluateValue(
+    cdp,
+    `document.querySelector('.composer-model-controls')?.removeAttribute('open')`
+  )
+  if (typeof level !== 'string') fail('E_P2_TYPED_COMMAND_PRECONDITION')
+  return level
+}
+
+async function selectThinkingLevelFromGui(cdp, level) {
+  await openThinkingOptions(cdp)
+  const selected = await evaluateValue(
+    cdp,
+    `(() => {
+      const button = Array.from(document.querySelectorAll('.model-picker-option-panel .model-picker-item:not(:disabled)'))
+        .find((candidate) => candidate.querySelector('.model-picker-option-meta')?.textContent?.trim() === ${JSON.stringify(level)})
+      if (!(button instanceof HTMLButtonElement)) return false
+      button.click()
+      return true
+    })()`
+  )
+  if (selected) {
+    await waitForExpression(
+      cdp,
+      `window.piGui.getState().then((state) => state.session.thinkingLevel === ${JSON.stringify(level)})`,
+      TIMEOUT.page,
+      'E_THINKING_LEVEL'
+    )
+  }
+  await evaluateValue(cdp, `document.querySelector('.composer-model-controls')?.removeAttribute('open')`)
+}
+
+async function openThinkingOptions(cdp) {
+  const thinkingPanelSelected = await evaluateValue(
+    cdp,
+    `(() => {
+      const details = document.querySelector('.composer-model-controls')
+      if (!(details instanceof HTMLDetailsElement)) return false
+      details.open = true
+      const button = Array.from(document.querySelectorAll('.model-picker-category'))
+        .find((candidate) => candidate.querySelector('.model-picker-category-label')?.textContent?.trim() === '思考强度')
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false
+      button.click()
+      return true
+    })()`
+  )
+  if (!thinkingPanelSelected) fail('E_P2_TYPED_COMMAND_PRECONDITION')
+  await waitForExpression(
+    cdp,
+    `Array.from(document.querySelectorAll('.model-picker-category[aria-pressed="true"]'))
+      .some((button) => button.querySelector('.model-picker-category-label')?.textContent?.trim() === '思考强度')`,
+    TIMEOUT.page,
+    'E_P2_THINKING_OPTIONS'
+  )
 }
 
 async function submitPrompt(cdp, prompt) {
@@ -580,10 +993,9 @@ async function conversationCounts(cdp) {
 }
 
 async function waitForRuntime(cdp, status, timeoutMs) {
-  const selector = status === 'ready' ? '.status-dot.task-idle' : `.status-dot.${status}`
   await waitForExpression(
     cdp,
-    `document.querySelector(${JSON.stringify(selector)}) !== null`,
+    `window.piGui.getState().then((state) => state.runtime.status === ${JSON.stringify(status)})`,
     timeoutMs,
     'E_RUNTIME_STATUS'
   )
@@ -592,7 +1004,7 @@ async function waitForRuntime(cdp, status, timeoutMs) {
 async function waitForAssistantSettled(cdp, baseline, timeoutMs) {
   await waitForCondition(
     async () => (
-      await evaluateValue(cdp, `document.querySelector('.status-dot.task-idle') !== null`)
+      await evaluateValue(cdp, `window.piGui.getState().then((state) => state.runtime.status === 'ready')`)
     ) && (await conversationCounts(cdp)).assistant > baseline,
     timeoutMs,
     'E_ASSISTANT_SETTLED'
@@ -644,10 +1056,12 @@ async function captureScreenshot(cdp, filename) {
           font-size: 12px;
         }
         .session-title,
+        .workbench-session-title,
         .conversation-header > strong {
           font-size: 0 !important;
         }
         .session-title::after,
+        .workbench-session-title::after,
         .conversation-header > strong::after {
           content: '验证会话';
           font-size: 12px;
@@ -782,15 +1196,82 @@ async function findUniquePiRpcProcess(app, projectPath) {
   fail('E_PI_PROCESS_MISSING')
 }
 
-async function readRecentSessionPointer(projectPath) {
-  let value
+async function piProcessesForConfiguredProjects() {
+  const entries = await readdir('/proc', { withFileTypes: true })
+  return (await Promise.all(
+    entries
+      .filter((entry) => /^\d+$/.test(entry.name))
+      .map(async (entry) => {
+        const pid = Number(entry.name)
+        try {
+          const [processName, cwd] = await Promise.all([
+            readFile(`/proc/${pid}/comm`, 'utf8'),
+            realpath(`/proc/${pid}/cwd`)
+          ])
+          return processName.trim() === 'pi' && projectPaths.includes(cwd)
+            ? { pid, cwd }
+            : null
+        } catch {
+          return null
+        }
+      })
+  )).filter((process) => process !== null)
+}
+
+async function assertSingleProjectRuntime(projectPath) {
+  const processes = await piProcessesForConfiguredProjects()
+  if (processes.length !== 1 || processes[0].cwd !== projectPath) {
+    fail('E_P2_RUNTIME_OWNER')
+  }
+  activeApp.knownPids.add(processes[0].pid)
+}
+
+async function monitorSingleRuntimeOwners(operation) {
+  let monitoring = true
+  let violation = false
+  const monitor = (async () => {
+    while (monitoring) {
+      const processes = await piProcessesForConfiguredProjects()
+      if (processes.length > 1) {
+        violation = true
+        return
+      }
+      await delay(100)
+    }
+  })()
   try {
-    value = JSON.parse(
+    await operation()
+  } finally {
+    monitoring = false
+    await monitor
+  }
+  if (violation) fail('E_P2_RUNTIME_CONCURRENCY')
+}
+
+async function readRecentSessionPointer(projectPath) {
+  let state
+  try {
+    state = JSON.parse(
       await readFile(join(temporaryRoot, 'state', 'pi-gui-next', 'state.json'), 'utf8')
-    )?.recentSession
+    )
   } catch {
     fail('E_SESSION_POINTER')
   }
+  if (
+    typeof state !== 'object' ||
+    state === null ||
+    state.version !== 3 ||
+    !Array.isArray(state.sessions) ||
+    !Array.isArray(state.activeSessionKeys)
+  ) {
+    fail('E_SESSION_POINTER')
+  }
+  const activeSessionKey = state.activeSessionKeys.find(
+    (selection) => selection?.projectPath === projectPath
+  )?.sessionKey
+  const value = state.sessions.find(
+    (pointer) => pointer?.projectPath === projectPath && pointer.sessionFile === activeSessionKey
+  )
   if (
     typeof value !== 'object' ||
     value === null ||
@@ -925,8 +1406,9 @@ async function osIdentity() {
 async function writeReport(status, error) {
   if (reportDirectory === null) return
   const report = {
-    schemaVersion: 1,
-    verification: 'S7 AppImage real UI',
+    schemaVersion: 2,
+    verification: 'P2/S13 AppImage real UI',
+    phase: 'P2',
     status,
     timestamps: {
       startedAt: STARTED_AT,
@@ -942,6 +1424,7 @@ async function writeReport(status, error) {
     },
     system: await osIdentity(),
     processOutputCounts: { ...processTotals },
+    p2Summary,
     evidence: {
       screenshotTextRedacted: true,
       screenshots: [
@@ -949,7 +1432,8 @@ async function writeReport(status, error) {
         'abort-settled.png',
         'crashed.png',
         'resumed.png',
-        'reopened-resumed.png'
+        'reopened-resumed.png',
+        'p2-workbench.png'
       ]
     },
     steps,

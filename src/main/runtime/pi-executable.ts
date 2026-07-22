@@ -2,6 +2,8 @@ import { accessSync, constants, statSync } from 'node:fs'
 import { delimiter, join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 
+import { errorMessage } from '../utils/errors.ts'
+
 export const SUPPORTED_PI_VERSION = '0.80.10'
 
 const DEFAULT_VERSION_TIMEOUT_MS = 5_000
@@ -193,8 +195,4 @@ function stderrDiagnostic(stderr: Buffer, truncated: boolean): string {
 
 function formatVersion(version: string): string {
   return /^\d+\.\d+\.\d+$/.test(version) ? JSON.stringify(version) : '[unrecognized output]'
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }

@@ -78,15 +78,53 @@ test('concurrent project registrations complete in FIFO order without temporary 
   const configDirectory = join(configHome, 'pi-gui-next')
   const configText = await readFile(join(configDirectory, 'config.json'), 'utf8')
   assert.deepEqual(JSON.parse(configText), {
-    version: 2,
+    version: 3,
     projects: [firstProject, secondProject],
-    activeProjectKey: secondProject.path
+    activeProjectKey: secondProject.path,
+    sessionNaming: { mode: 'auto' }
   })
   assert.equal((await readdir(configDirectory)).some((name) => name.includes('.tmp-')), false)
   assert.equal(
     (await readdir(join(stateHome, 'pi-gui-next'))).some((name) => name.includes('.tmp-')),
     false,
   )
+})
+
+test('session naming settings migrate to config v3 without storing OAuth credentials', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-gui-session-naming-settings-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const configHome = join(root, 'config')
+  const configDirectory = join(configHome, 'pi-gui-next')
+  const project = { path: join(root, 'project') }
+  await mkdir(configDirectory, { recursive: true })
+  await writeFile(
+    join(configDirectory, 'config.json'),
+    JSON.stringify({ version: 2, projects: [project], activeProjectKey: project.path })
+  )
+  const store = new ProjectStore({ configHome, stateHome: join(root, 'state') })
+
+  assert.deepEqual(await store.loadSessionNaming(), { mode: 'auto' })
+  await store.saveSessionNaming({
+    mode: 'model',
+    provider: 'openai-codex',
+    modelId: 'gpt-5.4-mini'
+  })
+
+  assert.deepEqual(await store.loadSessionNaming(), {
+    mode: 'model',
+    provider: 'openai-codex',
+    modelId: 'gpt-5.4-mini'
+  })
+  assert.deepEqual(JSON.parse(await readFile(join(configDirectory, 'config.json'), 'utf8')), {
+    version: 3,
+    projects: [project],
+    activeProjectKey: project.path,
+    sessionNaming: {
+      mode: 'model',
+      provider: 'openai-codex',
+      modelId: 'gpt-5.4-mini'
+    }
+  })
 })
 
 test('session pointers roundtrip as a per-project index with an active selection', async (t) => {
@@ -207,9 +245,10 @@ test('version 1 project and session files migrate on the next write', async (t) 
   })
 
   assert.deepEqual(JSON.parse(await readFile(join(configDirectory, 'config.json'), 'utf8')), {
-    version: 2,
+    version: 3,
     projects: [oldProject, newProject],
-    activeProjectKey: newProject.path
+    activeProjectKey: newProject.path,
+    sessionNaming: { mode: 'auto' }
   })
   const state = JSON.parse(await readFile(join(stateDirectory, 'state.json'), 'utf8')) as {
     version: number
@@ -303,6 +342,8 @@ test('session validation requires an existing regular file', async (t) => {
   await rm(sessionFile, { recursive: true })
   await writeFile(sessionFile, '{}\n')
   assert.deepEqual(await store.validateSession(pointer), pointer)
+  assert.equal(typeof await store.sessionActivityAt(sessionFile), 'number')
+  assert.equal(await store.sessionActivityAt(join(root, 'missing-session.jsonl')), null)
   await assert.rejects(
     store.validateSession({ ...pointer, extra: true } as typeof pointer),
     /Invalid Pi GUI session pointer/

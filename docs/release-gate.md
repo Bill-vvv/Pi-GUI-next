@@ -2,7 +2,7 @@
 
 ## 唯一 lifecycle
 
-P1 只有一条开发与发布路径，不建立 stable/dev/canary、多 checkout、镜像目录或旁路 launcher：
+项目只有一条开发与发布路径，不建立 stable/dev/canary、多 checkout、镜像目录或旁路 launcher：
 
 ```text
 canonical Git checkout
@@ -25,7 +25,7 @@ canonical Git checkout
 - 干净 checkout 可执行 `pnpm install --frozen-lockfile`。
 - 文档明确当前范围、进程 owner、状态来源和 P1 发布门槛。
 
-## P1 自动验证
+## 统一自动验证
 
 对应 Slice 落地后，统一命令为：
 
@@ -40,7 +40,7 @@ pnpm verify:linux
 
 自动测试只覆盖三组高价值边界：LF JSONL framing、RPC request/response correlation、Runtime lifecycle/crash transition。不设置覆盖率目标。
 
-## P1 真实产物 gate
+## P1 真实产物回归
 
 必须从打包产物而非开发服务器执行并记录：
 
@@ -54,7 +54,17 @@ pnpm verify:linux
 
 验证报告必须记录 app、Node/Electron、Pi、平台、commit、产物和各步骤结果；JSON 与截图均不得包含 prompt 正文、敏感 tool output、credential 或完整环境变量。截图保留状态与流程结构，但在捕获前临时遮罩会话正文、工具详情与会话标题。
 
-`pnpm verify:linux` 只在干净工作区执行；它从 AppImage 的真实 renderer UI 完成上述链路，并将脱敏 `report.json` 与五张关键截图写入 `release/evidence/<UTC>-<commit>/`。验证器不得向生产代码加入测试后门。
+## P2 真实产物 gate
+
+P2 在完整保留上述 P1 链路的基础上，还必须从同一 AppImage 验证：
+
+1. 两个 Project 可发现、切换和恢复，切换过程中最多存在一个活动 Pi Runtime；
+2. 同一 Project 下两个 Session 可真实落盘、列出、切换和恢复；
+3. slash command 可发现来源，可通过 Arrow/Tab 补全并执行 typed command，未知命令明确 Fail Fast；
+4. 空对话、Project/Session 切换反馈和切换后的 Composer 焦点恢复可观察；
+5. P2 新增步骤与 P1 回归使用同一隔离 XDG、清理和脱敏边界。
+
+`pnpm verify:linux` 只在干净工作区执行；它从 AppImage 的真实 renderer UI 完成 P1 回归与当前 P2 链路，并将 schema v2 的脱敏 `report.json` 与六张关键截图写入 `release/evidence/<UTC>-<commit>/`。P2 摘要只记录计数和布尔结果，不记录完整 Project 路径、Session 标题、prompt、tool output 或 credential。验证器不得向生产代码加入测试后门。
 
 ## Fail Fast
 

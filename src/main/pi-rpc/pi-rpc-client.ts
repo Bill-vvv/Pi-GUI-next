@@ -2,17 +2,31 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
 
+import type { ThinkingLevel, ThinkingLevelMap } from '../../shared/kernel-contract.ts'
+import { isRecord } from '../utils/guards.ts'
 import { LfJsonlParser, type JsonlParseBatch } from './jsonl-framing.ts'
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
+const DEFAULT_COMPACT_TIMEOUT_MS = 120_000
+const GUI_THINKING_LEVELS: ThinkingLevel[] = ['low', 'medium', 'high', 'xhigh', 'max']
 
 export type PiRpcModel = {
   id: string
   name?: string
   provider: string
   reasoning?: boolean
+  thinkingLevelMap?: ThinkingLevelMap
   contextWindow?: number
   [key: string]: unknown
+}
+
+export type PiRpcAvailableModel = {
+  id: string
+  provider: string
+  name?: string
+  reasoning?: boolean
+  thinkingLevelMap?: ThinkingLevelMap
+  contextWindow?: number
 }
 
 export type PiRpcSessionState = {
@@ -26,6 +40,12 @@ export type PiRpcSessionState = {
   messageCount?: number
   pendingMessageCount?: number
   [key: string]: unknown
+}
+
+export type PiRpcSlashCommand = {
+  name: string
+  description?: string
+  source: 'extension' | 'prompt' | 'skill'
 }
 
 export type PiRpcEvent = Record<string, unknown> & { type: string }
@@ -50,6 +70,10 @@ type PiRpcCommandName =
   | 'abort'
   | 'set_model'
   | 'set_thinking_level'
+  | 'get_commands'
+  | 'get_available_models'
+  | 'compact'
+  | 'set_session_name'
 
 type PendingRequest = {
   command: PiRpcCommandName
@@ -114,6 +138,12 @@ export class PiRpcClient {
     if (!isRecord(data)) {
       throw new Error('Invalid Pi RPC get_state response')
     }
+    if (data.model !== undefined && data.model !== null) {
+      if (!isPiRpcModel(data.model)) {
+        throw new Error('Invalid Pi RPC get_state response')
+      }
+      return { ...data, model: normalizePiRpcModel(data.model) }
+    }
     return data
   }
 
@@ -142,11 +172,67 @@ export class PiRpcClient {
     if (!isPiRpcModel(data)) {
       throw new Error('Invalid Pi RPC set_model response')
     }
-    return data
+    return normalizePiRpcModel(data)
   }
 
   async setThinkingLevel(level: string, timeoutMs = this.requestTimeoutMs): Promise<void> {
     await this.request({ type: 'set_thinking_level', level }, false, timeoutMs)
+  }
+
+  async getCommands(timeoutMs = this.requestTimeoutMs): Promise<PiRpcSlashCommand[]> {
+    const data = await this.request({ type: 'get_commands' }, true, timeoutMs)
+    if (!isRecord(data) || !Array.isArray(data.commands)) {
+      throw new Error('Invalid Pi RPC get_commands response')
+    }
+
+    return data.commands.map((command) => {
+      if (!isPiRpcSlashCommand(command)) {
+        throw new Error('Invalid Pi RPC get_commands response')
+      }
+      return command.description === undefined
+        ? { name: command.name, source: command.source }
+        : { name: command.name, description: command.description, source: command.source }
+    })
+  }
+
+  async getAvailableModels(timeoutMs = this.requestTimeoutMs): Promise<PiRpcAvailableModel[]> {
+    const data = await this.request({ type: 'get_available_models' }, true, timeoutMs)
+    if (!isRecord(data) || !Array.isArray(data.models)) {
+      throw new Error('Invalid Pi RPC get_available_models response')
+    }
+
+    return data.models.map((model) => {
+      if (!isPiRpcAvailableModel(model)) {
+        throw new Error('Invalid Pi RPC get_available_models response')
+      }
+      return {
+        id: model.id,
+        provider: model.provider,
+        ...(typeof model.name === 'string' ? { name: model.name } : {}),
+        ...(typeof model.reasoning === 'boolean' ? { reasoning: model.reasoning } : {}),
+        ...(model.thinkingLevelMap === undefined
+          ? {}
+          : { thinkingLevelMap: projectThinkingLevelMap(model.thinkingLevelMap) }),
+        ...(typeof model.contextWindow === 'number' ? { contextWindow: model.contextWindow } : {})
+      }
+    })
+  }
+
+  async compact(
+    customInstructions?: string,
+    timeoutMs = Math.max(this.requestTimeoutMs, DEFAULT_COMPACT_TIMEOUT_MS)
+  ): Promise<void> {
+    await this.request(
+      customInstructions === undefined
+        ? { type: 'compact' }
+        : { type: 'compact', customInstructions },
+      false,
+      timeoutMs
+    )
+  }
+
+  async setSessionName(name: string, timeoutMs = this.requestTimeoutMs): Promise<void> {
+    await this.request({ type: 'set_session_name', name }, false, timeoutMs)
   }
 
   private request(
@@ -287,12 +373,59 @@ function isPiRpcModel(value: unknown): value is PiRpcModel {
   return (
     isRecord(value) &&
     typeof value.id === 'string' &&
-    typeof value.provider === 'string'
+    typeof value.provider === 'string' &&
+    isOptionalThinkingLevelMap(value.thinkingLevelMap)
   )
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
+function isPiRpcAvailableModel(value: unknown): value is PiRpcAvailableModel {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    value.id.trim().length > 0 &&
+    typeof value.provider === 'string' &&
+    value.provider.trim().length > 0 &&
+    (!('name' in value) || typeof value.name === 'string') &&
+    (!('reasoning' in value) || typeof value.reasoning === 'boolean') &&
+    isOptionalThinkingLevelMap(value.thinkingLevelMap) &&
+    (!('contextWindow' in value) || typeof value.contextWindow === 'number')
+  )
+}
+
+function normalizePiRpcModel(model: PiRpcModel): PiRpcModel {
+  return {
+    ...model,
+    ...(model.thinkingLevelMap === undefined
+      ? {}
+      : { thinkingLevelMap: projectThinkingLevelMap(model.thinkingLevelMap) })
+  }
+}
+
+function isOptionalThinkingLevelMap(value: unknown): boolean {
+  return value === undefined || (
+    isRecord(value) &&
+    Object.values(value).every((entry) => typeof entry === 'string' || entry === null)
+  )
+}
+
+function projectThinkingLevelMap(value: Record<string, string | null>): ThinkingLevelMap {
+  const result: ThinkingLevelMap = {}
+  for (const level of GUI_THINKING_LEVELS) {
+    if (Object.prototype.hasOwnProperty.call(value, level)) result[level] = value[level] ?? null
+  }
+  return result
+}
+
+function isPiRpcSlashCommand(value: unknown): value is PiRpcSlashCommand {
+  return (
+    isRecord(value) &&
+    typeof value.name === 'string' &&
+    value.name.length > 0 &&
+    !value.name.startsWith('/') &&
+    !/\s/u.test(value.name) &&
+    (!('description' in value) || typeof value.description === 'string') &&
+    (value.source === 'extension' || value.source === 'prompt' || value.source === 'skill')
+  )
 }
 
 function toError(value: unknown): Error {

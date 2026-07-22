@@ -1,8 +1,10 @@
 import type { ThinkingLevel } from '../../shared/kernel-contract.ts'
 import type {
   PiRpcEvent,
+  PiRpcAvailableModel,
   PiRpcModel,
-  PiRpcSessionState
+  PiRpcSessionState,
+  PiRpcSlashCommand
 } from '../pi-rpc/pi-rpc-client.ts'
 
 export type RuntimeCommand =
@@ -12,12 +14,18 @@ export type RuntimeCommand =
   | { type: 'abort' }
   | { type: 'set_model'; provider: string; modelId: string }
   | { type: 'set_thinking_level'; level: ThinkingLevel }
+  | { type: 'get_commands' }
+  | { type: 'get_available_models' }
+  | { type: 'compact'; customInstructions?: string }
+  | { type: 'set_session_name'; name: string }
 
 export type RuntimeCommandResult =
   | { type: 'state'; state: PiRpcSessionState }
   | { type: 'messages'; messages: unknown[] }
   | { type: 'accepted' }
   | { type: 'model'; model: PiRpcModel }
+  | { type: 'commands'; commands: PiRpcSlashCommand[] }
+  | { type: 'available-models'; models: PiRpcAvailableModel[] }
 
 export type RuntimeHostState = {
   executable: string | null

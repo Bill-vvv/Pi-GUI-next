@@ -21,11 +21,16 @@
   --text-control: 0.9rem;
   --text-body-sm: 0.95rem;
   --text-body: 1rem;
+  --text-list-item: 0.84rem;
   --chat-text-body: var(--text-body);
   --chat-line-body: 1.75;
   --line-control: 1.35;
   --line-body-sm: 1.55;
   --line-body: 1.75;
+
+  --icon-size-sm: 15px;
+  --icon-size-control: 18px;
+  --icon-size-lg: 21px;
 
   --weight-normal: 400;
   --weight-regular: 400;
@@ -65,6 +70,7 @@
   --color-border-divider: rgb(181 170 156 / 10%);
   --color-hover-subtle: rgb(181 170 156 / 9%);
   --color-hover-muted: rgb(181 170 156 / 8%);
+  --color-list-item-state: color-mix(in srgb, var(--color-hover-subtle) 56%, transparent);
   --color-focus-ring: rgb(181 170 156 / 8%);
   --color-focus-outline: rgb(181 170 156 / 26%);
   --color-error-border: #5a2a24;
@@ -96,10 +102,10 @@
   --radius-sm: 6px;
   --radius-control: 10px;
   --radius-panel: 16px;
-  --radius-composer: 24px;
+  --radius-composer: 22px;
   --radius-pill: 999px;
   --shadow-sidebar: none;
-  --shadow-composer: none;
+  --shadow-composer: 0 18px 48px rgb(0 0 0 / 24%), 0 4px 14px rgb(0 0 0 / 16%), inset 0 1px 0 rgb(255 255 255 / 4%);
   --shadow-popover: none;
 
   font-size: var(--text-root);

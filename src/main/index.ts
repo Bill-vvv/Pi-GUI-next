@@ -7,12 +7,16 @@ import {
   OPEN_EXTERNAL_CHANNEL,
   type KernelCommand,
   type KernelEvent,
+  type SessionNamingSettings,
   type ThinkingLevel
 } from '../shared/kernel-contract.ts'
 import { normalizeExternalUrl } from '../shared/external-url.ts'
 import { WorkbenchKernel } from './kernel/workbench-kernel.ts'
 import { ProjectStore } from './project/project-store.ts'
 import { LinuxLocalRuntime, probePiRpc } from './runtime/linux-local-runtime.ts'
+import { generateSessionNameWithPi } from './runtime/session-name-generator.ts'
+import { errorMessage } from './utils/errors.ts'
+import { isRecord } from './utils/guards.ts'
 import {
   isAllowedRendererUrl,
   resolveRendererTarget,
@@ -65,7 +69,10 @@ async function startApplication(): Promise<void> {
       explicitExecutable: process.env.PI_GUI_PI_EXECUTABLE,
       noSession: true
     })
-    console.info(`[Pi GUI] Pi RPC runtime ready: version=${result.version}`)
+    console.info(
+      `[Pi GUI] Pi RPC runtime ready: version=${result.version} ` +
+      `commands=${result.commandCount} session-name-event=${result.sessionNameEventObserved}`
+    )
     allowQuit = true
     app.quit()
     return
@@ -79,6 +86,7 @@ async function startApplication(): Promise<void> {
   })
   const projectStore = new ProjectStore()
   const storedProjects = await projectStore.loadProjects()
+  const sessionNaming = await projectStore.loadSessionNaming()
   const sessionRegistry = storedProjects.activeProjectKey === null
     ? { sessions: [], activeSessionKey: null }
     : await projectStore.loadSessionRegistry(storedProjects.activeProjectKey)
@@ -99,9 +107,14 @@ async function startApplication(): Promise<void> {
         await projectStore.activateProject(projectKey)
       },
       persistSession: (pointer) => projectStore.saveSession(pointer),
-      validateSession: (pointer) => projectStore.validateSession(pointer)
+      validateSession: (pointer) => projectStore.validateSession(pointer),
+      readSessionActivityAt: (pointer) => projectStore.sessionActivityAt(pointer.sessionFile),
+      sessionNaming,
+      persistSessionNaming: (settings) => projectStore.saveSessionNaming(settings),
+      generateSessionName: generateSessionNameWithPi
     }
   )
+  await kernel.refreshSessionActivities()
   kernel.subscribe(forwardKernelEvent)
   ipcMain.handle(KERNEL_COMMAND_CHANNEL, async (event, command: unknown) => {
     assertTrustedIpcSender(event, rendererTarget)
@@ -162,6 +175,12 @@ async function startApplication(): Promise<void> {
       case 'kernel.set-thinking-level':
         await kernel.setThinkingLevel(command.level)
         return kernel.getState()
+      case 'kernel.set-session-naming':
+        await kernel.setSessionNaming(command.settings)
+        return kernel.getState()
+      case 'kernel.invoke-command':
+        await kernel.invokeCommand(command.commandId, command.argument)
+        return kernel.getState()
     }
   })
   ipcMain.handle(OPEN_EXTERNAL_CHANNEL, async (event, value: unknown) => {
@@ -194,7 +213,7 @@ if (!canStartApplication) {
   }
 
   void app.whenReady().then(startApplication).catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error)
+    const message = errorMessage(error)
     console.error(`[Pi GUI] Startup failed: ${message}`)
     app.exit(1)
   })
@@ -215,7 +234,7 @@ if (!canStartApplication) {
         app.quit()
       })
       .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error)
+        const message = errorMessage(error)
         console.error(`[Pi GUI] Shutdown failed: ${message}`)
         app.exit(1)
       })
@@ -255,6 +274,16 @@ function isKernelCommand(value: unknown): value is KernelCommand {
       Object.keys(value).length === 3
     )
   }
+  if (value.type === 'kernel.invoke-command') {
+    return (
+      typeof value.commandId === 'string' &&
+      typeof value.argument === 'string' &&
+      Object.keys(value).length === 3
+    )
+  }
+  if (value.type === 'kernel.set-session-naming') {
+    return isSessionNamingSettings(value.settings) && Object.keys(value).length === 2
+  }
   return (
     value.type === 'kernel.set-thinking-level' &&
     isThinkingLevel(value.level) &&
@@ -262,20 +291,27 @@ function isKernelCommand(value: unknown): value is KernelCommand {
   )
 }
 
+function isSessionNamingSettings(value: unknown): value is SessionNamingSettings {
+  if (!isRecord(value) || typeof value.mode !== 'string') return false
+  if (value.mode === 'auto' || value.mode === 'off') {
+    return Object.keys(value).length === 1
+  }
+  return value.mode === 'model' &&
+    Object.keys(value).length === 3 &&
+    typeof value.provider === 'string' &&
+    value.provider.trim().length > 0 &&
+    typeof value.modelId === 'string' &&
+    value.modelId.trim().length > 0
+}
+
 function isThinkingLevel(value: unknown): value is ThinkingLevel {
   return (
-    value === 'off' ||
-    value === 'minimal' ||
     value === 'low' ||
     value === 'medium' ||
     value === 'high' ||
     value === 'xhigh' ||
     value === 'max'
   )
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
 }
 
 async function stopKernel(): Promise<void> {

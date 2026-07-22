@@ -11,13 +11,13 @@ export type RuntimeStatus =
   | 'crashed'
 
 export type ThinkingLevel =
-  | 'off'
-  | 'minimal'
   | 'low'
   | 'medium'
   | 'high'
   | 'xhigh'
   | 'max'
+
+export type ThinkingLevelMap = Partial<Record<ThinkingLevel, string | null>>
 
 export type KernelRuntimeState = {
   status: RuntimeStatus
@@ -38,6 +38,17 @@ export type KernelSessionSummary = {
   key: string
   id: string
   name: string | null
+  lastActivityAt: number | null
+}
+
+export type KernelCommandSource = 'gui' | 'pi-rpc' | 'extension' | 'prompt' | 'skill'
+
+export type KernelCommandDescriptor = {
+  id: string
+  name: string
+  description: string
+  source: KernelCommandSource
+  argumentHint: string | null
 }
 
 export type KernelModelState = {
@@ -45,8 +56,16 @@ export type KernelModelState = {
   id: string
   name: string
   reasoning: boolean
+  thinkingLevelMap: ThinkingLevelMap
   contextWindow: number | null
 }
+
+export type SessionNamingSettings =
+  | { mode: 'auto' }
+  | { mode: 'off' }
+  | { mode: 'model'; provider: string; modelId: string }
+
+export const DEFAULT_SESSION_NAMING_SETTINGS: SessionNamingSettings = { mode: 'auto' }
 
 export type KernelSessionState = {
   id: string | null
@@ -117,6 +136,9 @@ export type KernelState = {
   activeProjectKey: string | null
   sessions: KernelSessionSummary[]
   activeSessionKey: string | null
+  commands: KernelCommandDescriptor[]
+  availableModels: KernelModelState[]
+  sessionNaming: SessionNamingSettings
   runtime: KernelRuntimeState
   session: KernelSessionState
   conversation: KernelConversationState
@@ -172,6 +194,8 @@ export type KernelCommand =
   | { type: 'kernel.abort' }
   | { type: 'kernel.set-model'; provider: string; modelId: string }
   | { type: 'kernel.set-thinking-level'; level: ThinkingLevel }
+  | { type: 'kernel.set-session-naming'; settings: SessionNamingSettings }
+  | { type: 'kernel.invoke-command'; commandId: string; argument: string }
 
 export type KernelEvent =
   | {
@@ -193,6 +217,8 @@ export type KernelApi = {
   abort: () => Promise<KernelState>
   setModel: (provider: string, modelId: string) => Promise<KernelState>
   setThinkingLevel: (level: ThinkingLevel) => Promise<KernelState>
+  setSessionNaming: (settings: SessionNamingSettings) => Promise<KernelState>
+  invokeCommand: (commandId: string, argument: string) => Promise<KernelState>
   openExternal: (url: string) => Promise<void>
   subscribe: (listener: (event: KernelEvent) => void) => () => void
 }

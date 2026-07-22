@@ -6,6 +6,19 @@
 - 长期架构约束和决策分别以 [`architecture.md`](architecture.md) 与 [`decisions.md`](decisions.md) 为准。
 - 这里只记录有实现和验证证据的结果；候选方案、失败候选和未完成计划不写成已交付能力。
 
+## 2026-07-22 — GPT 思考强度与模型选择器修正
+
+**状态：** 已验证。**交付：** 模型选择器、`/thinking` 命令与 Kernel contract 统一使用 `low`、`medium`、`high`、`xhigh`、`max` 五档，并分别显示为“低、中、高、极高、最高”；Composer 设置弹层改为“模型 / 思考强度”左侧一级入口与右侧选项面板。
+
+| 已修复问题 | 根因 | 修复与工程价值 |
+| --- | --- | --- |
+| 模型选择器展示“关闭、极低、低、中、高、很高、最高”，与 GPT effort 不一致 | Renderer、共享类型、IPC guard 与命令目录共同沿用了 Pi 的七档 thinking 枚举，并将 `xhigh` 误译为“很高” | 删除产品 contract 中的 `off` / `minimal`，统一五档校验、命令提示和中文标签；旧值按未知状态投影为 `null`，不增加兼容分支 |
+| 模型和思考强度选项同时纵向堆叠在窄弹层中，层级不清且模型名称拥挤 | 两组内容被实现成不可交互的 section 标题，没有一级导航与选项层级 | 保留单一设置入口，左侧只展示“模型”“思考强度”及当前值；点击一级项后在右侧展示对应选项，并补充模型 ID、effort 原值和窄屏双列布局 |
+
+**验证：** `pnpm typecheck` 与定向 `git diff --check` 通过；源码中不再存在作为思考强度值或文案的 `off`、`minimal`、“极低”、“很高”。
+
+**可复用规则：** OpenAI 官方 [`reasoning.effort` 文档](https://developers.openai.com/api/docs/guides/reasoning#reasoning-effort) 明确支持值依赖具体模型；新增或调整档位前必须核对对应模型页，不从其他模型或通用枚举推断。
+
 ## 2026-07-21 — P2 Workbench Foundation：S8–S10
 
 **状态：** 已验证。**交付：** Workbench Navigator、多 Project、多 Session、单活动 Runtime 切换、XDG state v3 与 v1/v2 迁移、真实 Session 恢复和正常 GUI 单实例 ownership。

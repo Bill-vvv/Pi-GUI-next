@@ -7,14 +7,26 @@ import './styles.css'
 import './features/chat/chat.css'
 import './features/composer/composer.css'
 
-const root = document.getElementById('root')
+async function bootstrap(): Promise<void> {
+  const previewRequested = new URLSearchParams(window.location.search).get('preview') === '1'
+  if (
+    import.meta.env.MODE === 'development' &&
+    previewRequested &&
+    typeof window.piGui === 'undefined'
+  ) {
+    const { createPreviewKernelApi } = await import('./preview/create-preview-kernel-api')
+    window.piGui = createPreviewKernelApi()
+    document.title = 'Pi GUI — Browser Preview'
+  }
 
-if (!root) {
-  throw new Error('Renderer root element is missing')
+  const root = document.getElementById('root')
+  if (!root) throw new Error('Renderer root element is missing')
+
+  createRoot(root).render(
+    <StrictMode>
+      <App />
+    </StrictMode>
+  )
 }
 
-createRoot(root).render(
-  <StrictMode>
-    <App />
-  </StrictMode>
-)
+void bootstrap()

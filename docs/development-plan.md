@@ -1,10 +1,10 @@
 # Pi GUI 开发计划
 
 > 当前阶段：P2 — Workbench Foundation
-> 计划版本：1.1
-> 最后更新：2026-07-21
+> 计划版本：1.5
+> 最后更新：2026-07-22
 > 总体状态：In Progress
-> 当前 Slice：S11 — Pi 基础命令与 slash command（Ready）
+> 当前 Slice：S13 — 交互优化与 P2 发布证据（In Progress）
 
 ## 1. 计划用途
 
@@ -451,11 +451,40 @@ P2 先用一个短 Slice 固定结构，再实现基础功能，随后在真实�
 | S8 | Workbench 信息架构与状态模型 | `Complete` | 形成 `p2-workbench-structure.md`：确定主布局、Project/Session 导航、对话流、Composer 与 slash command 入口，明确 identity、事实源、typed command 与单活动 Runtime 切换顺序；低保真 Renderer 已通过 typecheck/build、真实 Electron 折叠/展开诊断复核和用户确认，不做最终视觉精修 |
 | S9 | 多 Project | `Complete` | 保存、展示、选择和切换多个 Project；`projects[]` / `activeProjectKey` typed contract、按 Project 隔离的最近 Session 指针和单活动 Runtime 切换已落地；运行中拒绝切换，ready/crashed 切换先停止旧 Runtime，不实现多 Project 并行运行 |
 | S10 | 多 Session | `Complete` | `sessions[]` / `activeSessionKey` typed contract、XDG state v3 Session 索引与 v1/v2 迁移、每 Project 创建/列出/切换/恢复已落地；Pi 0.80.10 新 Session 在 JSONL 延迟落盘期间使用不入索引的 provisional identity，落盘校验并持久化后才正式提交；切换持久化期间进程退出保持 crashed；正常 GUI 使用单实例锁避免跨进程 XDG 丢失更新 |
-| S11 | Pi 基础命令与 slash command | `Ready` | 扩展当前 RPC command 范围；建立统一的命令发现、搜索、补全和执行入口；区分 GUI 本地命令、typed RPC 命令以及 extension/prompt/skill 命令，不把 TUI 本地命令无条件当作 RPC 文本透传 |
-| S12 | UI 视觉收敛 | `Pending` | 在真实多 Project、多 Session 和命令入口上完成布局、对话流、信息层级、design token 与 icon 系统；不以脱离真实状态的静态 mock 作为完成证据 |
-| S13 | 交互优化与 P2 发布证据 | `Pending` | 完成键盘与焦点、滚动、Project/Session 切换反馈、命令补全、加载/错误/空状态等交互；从打包产物重复验证 P2 核心链路并生成脱敏证据 |
+| S11 | Pi 基础命令与 slash command | `Complete` | Kernel 在 Runtime 启动时通过真实 `get_commands` 建立 normalized catalog；内建 `/new`、`/model`、`/thinking`、`/compact`、`/name` 分别路由到 GUI 或 typed RPC，extension/prompt/skill 只允许调用当前 catalog 中的 ID 后进入 Pi prompt 语义；Composer 支持来源标识、搜索、键盘选择、补全、参数输入和未知命令 Fail Fast，不存在任意 raw command IPC |
+| S12 | UI 视觉收敛 | `Complete` | 真实构建版通过隔离 XDG 的 ProjectStore/WorkbenchKernel 载入 2 个 Project、3 个 Session，切换后只显示目标 Project 的 Session；真实 Pi 0.80.10 启动到 ready 并展示 `/new`、`/model`、`/thinking`、`/compact`、`/name` catalog；slash menu 位于 Composer 上方且无溢出，Header/流内诊断不覆盖 Timeline；109 项 core tests、`pnpm typecheck`、生产 build、diff check 通过 |
+| S12.5 | 重复职责解耦 | `Complete` | 审计当前实现后只收敛跨模块高重复且存在语义漂移风险的纯逻辑：Main 通用 record guard、错误文本归一化、Project Session pointer 类型与 upsert，以及 Renderer Runtime 状态判定；不按文件大小拆分，不为单次逻辑增加函数、类或中间层；109 项 core tests、`pnpm typecheck`、生产 build 和 diff check 通过 |
+| S13 | 交互优化与 P2 发布证据 | `In Progress` | 已实现新 Session 首轮 settled 后按对话目的生成名称，并为已有未命名 Session 在下次恢复时补生成；自动命名只从当前授权 provider 选择低成本模型，设置可关闭或指定模型；已完成 Tab/Arrow slash 补全与 combobox 语义、Runtime context action 成功后的 Composer 焦点恢复、Project/Session 切换反馈、Kernel 连接重试以及空对话与无详情 crash 状态；P2 验证器已保留 P1 回归并加入双 Project、双 Session、slash command 和交互断言，等待干净 commit 上的真实 AppImage 完整验证与脱敏证据 |
+| S14 | 优化 | `Pending` | 不预先拆分具体计划；按实际使用中发现的零散交互问题逐项优化 |
 
 P2 的“多 Project、多 Session”首先指多个对象可保存、可发现、可切换，不等于多个 Pi Runtime 并行运行。只有出现明确并行使用需求后，才单独决定是否扩展 runtime ownership 和调度模型，不预留空的并行抽象。
+
+#### S12.5 — 重复职责解耦
+
+判断规则：
+
+- 完全相同或同一领域语义的逻辑已在三个以上调用点出现时，优先收敛到其最窄共同 owner。
+- 逻辑只出现两次时，只有同时跨越独立职责边界、已经造成类型倒置或存在明确语义漂移风险，才进行解耦。
+- 单次业务流程、一次性格式化、单消费者布局协议、开发预览 fixture 和独立发布验证链路，即使代码较长也保留原位；文件大小本身不是拆分依据。
+- 新边界必须减少重复或依赖方向，不建立后续功能尚未使用的接口、基类、注册器或兼容层。
+
+本次处理：
+
+- Main 的四份 `isRecord` 与三份 `errorMessage` 分别收敛为纯工具，调用端错误文案与行为不变。
+- Project Session pointer 的类型和两份相同 upsert 逻辑收敛到 Project 领域纯模块；Kernel 不再从持久化 Store 获取该领域类型。
+- Renderer 的 Project/Session 切换与 Runtime 启动状态判定收敛到 Renderer 共享纯模块；Composer 不依赖 Chat feature 内部实现。
+
+明确不处理：
+
+- 不因行数拆分 `WorkbenchKernel`、`Composer`、`Timeline` 或 Linux release verifier。
+- 不抽取只使用一次的时间/标题格式化、命令参数解析、Composer DOM 测量、Preview fixture 或视觉原子组件。
+- 不修改 IPC/RPC contract、持久化 schema、Runtime ownership、视觉结构或交互行为。
+
+验收：
+
+- 被收敛逻辑只保留一个定义，调用端依赖方向与 owner 一致。
+- `pnpm typecheck`、`pnpm test:core`、`pnpm build` 和 `git diff --check` 通过。
+- 最终 diff 不包含本 Slice 边界外的顺手重构。
 
 P2 只有同时满足以下条件才可完成：
 
@@ -516,8 +545,18 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-21 | S9 Complete | 完成多 Project 注册表、v1 配置/状态迁移、按 Project 隔离的最近 Session、typed add/activate command、单活动 Runtime 安全切换和真实 Navigator 列表；84 项 core tests、typecheck、生产 build、diff check 通过；隔离 XDG 构建版烟测确认两个 Project 可显示、激活并持久化，且全程不启动 Pi 对话、只有一个 stopped runtime | S10 Ready；下一步实现每个 Project 下的多 Session |
 | 2026-07-21 | S8 Audit Repair | 补齐无假命令的 slash command 空态，移除重复“添加项目”入口；修正结构文档中的 Project/Session 切换顺序，明确 `starting` / `stopping` 拒绝、canonical Session identity 和成功后原子提交约束。Session 持久化与切换实现仍归 S10，不在本次 S8 修复中提前落地 | 复核 S8 Renderer 与文档定向 diff；S8 保持 Complete，S10 状态由其独立实现和验收维护 |
 | 2026-07-21 | S10 Complete | 完成每 Project 多 Session 索引、活动选择、typed `start-session` / `activate-session` IPC、Navigator 列表和 Timeline identity；Pi session 文件仍是 Conversation 事实源，GUI state 只保存 canonical pointer、`sessionId`、名称和选择。新建或切换只使用一个 Runtime，运行中拒绝，目标 Session 在普通可读文件校验、受控 stop、`sessionId` 核对、`get_messages` 和指针持久化成功后才提交；失败不把旧 Conversation 标成目标 Session。90 项 core tests、typecheck、生产 build、真实 Pi 0.80.10 无状态 smoke 和 diff check 通过 | S11 Ready；下一步审计 Pi 0.80.10 的真实命令目录与调用语义，再实现统一 slash command 入口 |
+| 2026-07-21 | S11 Complete | 审计并接入 Pi 0.80.10 的 `get_commands`、`compact`、`set_session_name`；Kernel 合并 GUI、typed RPC、extension、prompt、skill 五类 normalized command，并只接受当前 catalog ID。Composer 完成来源展示、搜索、Arrow 导航、补全、参数输入和未知 slash Fail Fast；TUI builtin 不做文本盲传。105 项 core tests、typecheck、生产 build、`smoke:pi`、diff check 通过；真实 Pi `get_commands` 成功返回 catalog，typed `set_session_name` 成功并产生 `session_info_changed` 事件 | S12 Ready；在真实多 Project、多 Session 和命令入口上完成 UI 视觉收敛 |
 | 2026-07-21 | S9/S10 Audit Repair | 修复 Project 激活持久化期间可并发启动旧 Project、退出遗漏校验期 launch、同路径并发添加破坏内存 registry 三项竞态；Kernel 增加 Project 变更与 launch 的同步 fail-fast lifecycle 门，Main 在 Kernel 存在时始终委托 `stop()`，并补充两项确定性并发回归测试。92 项 core tests、typecheck、生产 build、真实 Pi 0.80.10 无状态 smoke 和 diff check 通过 | S9/S10 保持 Complete；S11 保持 Ready |
 | 2026-07-21 | S10 Audit Repair | 修复 Session 切换持久化期间 Pi 退出后错误提交 `ready` 和目标 identity；按 Pi 0.80.10 的真实延迟落盘语义加入 provisional 新 Session，首个 assistant 消息落盘、canonical 校验与持久化完成前不登记索引或活动指针；正常 GUI 增加单实例锁，消除两个 Main 进程共享 XDG 时的 Session 索引丢失更新。94 项 core tests、typecheck、生产 build、diff check、持锁期间真实 Pi smoke 通过；隔离 XDG/Session 目录的真实 Pi 双 Session 验证覆盖创建、切回、重建 Kernel 后恢复，两个 Session 均恢复 2 条消息 | S10 保持 Complete；S11 保持 Ready |
+| 2026-07-21 | S11 Audit Repair | 修复 `/name` 只更新瞬时 Session、未同步导航索引与 XDG 指针的问题，并覆盖 existing/provisional Session 的持久化和重启恢复；`/compact` 成功后原子读取 `get_state`/`get_messages` 重建 Timeline，投影失败时保留原状态；Composer 直接展示 catalog 参数语法。`smoke:pi` 现在通过真实 Pi 0.80.10 重复验证 `get_commands`、typed `set_session_name` 和真实 `session_info_changed.name`；108 项 core tests、typecheck、生产 build、smoke 与 diff check 通过 | S11 保持 Complete；S12 保持 Ready |
+| 2026-07-21 | S12.5 Complete | 先审计 Main、Renderer 与跨目录依赖，只处理有重复证据的纯逻辑：四份 record guard、三份错误文本归一化、两份跨 Kernel/Store 的 Session pointer upsert，以及 Project/Session/启动入口重复的 Runtime 状态判定；保留 Composer DOM 测量、Timeline、preview 和 release verifier 等单一职责或单次逻辑。109 项 core tests、typecheck、生产 build、diff check 通过 | S12 的视觉验收状态不因本次解耦自动改变；完成 S12 后再进入 S13 |
+| 2026-07-21 | S12 Complete | 完成当前多 Project/多 Session Navigator、Session Header、Timeline、Composer、slash command、design token 与 icon 改版的并行审计；修复 Header 遗失 Project/Session/Runtime 与流内诊断的结构回归、Composer 错误 token 漂移、preview 跨 Project 复用 Session 的错误 fixture，以及 700px rail 的空白 Project initial。开发预览在 1440×960 与窄视口下确认诊断不覆盖 Timeline、页面无横向溢出、Project 切换只显示所属 Session；随后构建版 Electron 使用隔离 XDG、2 个真实临时 Project 目录和 3 个 Session 指针，经真实 ProjectStore/WorkbenchKernel 验证 Project/Session 隔离，并启动真实 Pi 0.80.10 取得五项 builtin catalog，确认 slash menu 完整位于 Composer 上方。全程未写用户 XDG、未发送 provider prompt，验证后 Pi/Electron 全部收口，临时状态与截图移入 Trash；109 项 core tests、typecheck、生产 build、diff check 通过 | S12 与 S12.5 均完成；S13 Ready，下一步进行交互优化与 P2 打包发布证据 |
+| 2026-07-22 | S12.5 Re-audit Repair | 多 Agent 按三个互斥写入边界修复复审遗漏：Main 剩余三处内联错误文本提取改用唯一纯工具；移除 ProjectStore 对 Session pointer 领域类型的兼容 re-export，并让 Kernel 测试直接依赖领域 owner；删除无调用方且 Runtime 状态判定已漂移的旧 `ProjectStartup`。主线程逐项复核实际 diff，确认未修改 IPC/RPC contract、持久化 schema、Runtime ownership、视觉结构或交互行为；109 项 core tests、typecheck、生产 build 与 diff check 通过 | S12.5 保持 Complete；S13 保持 Ready，继续交互优化与 P2 发布证据 |
+| 2026-07-22 | S13 Semantic Session Naming | 新 Session 首轮 settled 并落盘后，通过隔离、无 Session、无工具与项目资源的 Pi metadata 请求生成目的导向名称；已有未命名 Session 在下次恢复时补生成，手动 `/name`、切换、停止和崩溃会取消自动结果；118 项 core tests 通过 | 核对 OAuth 与模型成本边界，避免自动命名占用高成本主模型 |
+| 2026-07-22 | S13 Naming Cost and OAuth | 自动模式改为只从 Pi 当前授权目录、活动 provider 内按 nano/mini/luna 选择低成本模型，无候选时不回退主模型；侧边栏设置提供自动、关闭和指定已授权模型，config v3 仅保存模式与模型 ID，OAuth/API key 仍完全由 Pi 管理；119 项 core tests 与 typecheck 通过 | 完成生产构建与 diff check，再继续 S13 其余发布验证 |
+| 2026-07-22 | S13 Interaction Completion | 多 Agent 并行审计键盘/焦点、滚动、切换反馈、命令补全和加载/错误/空状态；确认 Timeline 的底部跟随、用户上滚保持、Session/Project 切换重置和历史展开视口补偿链路成立；补齐 Tab/Arrow slash 补全、combobox ARIA、Runtime context action 成功后的 Composer 焦点恢复、可访问切换状态、空对话、无详情 crash fallback 和 Kernel 连接重试。119 项 core tests、typecheck、生产 build、真实 Pi 0.80.10 无状态 smoke 与 diff check 通过 | 在干净 commit 的打包产物上执行 P2 完整真实 UI 链路，确认交互时序并生成脱敏证据 |
+| 2026-07-22 | S13 P2 Release Verifier | 保留 P1 的 13 步真实 AppImage 回归，新增双 Project 发现/切换与单 Runtime 采样、同 Project 双 Session materialize/list/switch/restore、slash 来源与 Arrow/Tab 补全、typed `/thinking`、未知命令 Fail Fast、空态/切换反馈/焦点恢复断言；报告升级为 schema v2 与 P2 摘要。复核时同步移除 S12 后失效的 DOM 选择器，并按当前 XDG state v3 的 `sessions[]` / `activeSessionKeys[]` 读取恢复事实；脚本语法、diff check 与 AppImage package 通过 | 先整理当前 P2 工作区为干净 commit，再运行 `pnpm verify:linux`；passed 报告和六张脱敏截图生成前，S13/P2 保持 In Progress |
+| 2026-07-22 | S14 Planning | 新增后续 Slice S14“优化”；不预先拆分具体事项，实际交互问题按出现顺序处理 | S13 继续 In Progress；完成后进入 S14 |
 
 ## 17. 计划变更记录
 
@@ -534,3 +573,7 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-21 | 0.9 | 澄清 Pi 的进程内 `AgentSession` SDK、官方 typed `RpcClient` 与当前自有 typed RPC adapter 的边界；将官方 `RpcClient` 记为受控迁移候选 | 官方 `RpcClient` 同时提供 SDK 体验和 RPC 进程隔离，但 Pi 0.80.10 的实现尚不满足当前 executable ownership、异常退出证据、分阶段停止与脱敏 stderr 要求 | P1 拓扑与六项命令范围不变；允许先评估仅复用官方类型，完整替换需满足 lifecycle/诊断门槛、通过完整 release gate 并删除旧路径 |
 | 2026-07-21 | 1.0 | 增加 P2 Workbench Foundation 与 P3 Ecosystem Integration 后续路径；P2 规划 S8–S13，并将多 Project 放在结构 Slice 后立即实施 | 用户确认需要在 P1 后补齐多 Project、多 Session、slash command、UI 与交互，再扩展 Pi 与 MCP 生态；同时要求路线可继续修改 | P1/S7 范围和门槛不变；P2 首先建立可切换但不并行的多 Project/Session 工作台，P3 的具体 Slice 延后到 P2 接近完成时核验并追加 |
 | 2026-07-21 | 1.1 | 明确新 Session 的 provisional/materialization 生命周期，并将单活动 Runtime 的进程内边界扩展为正常 GUI 单实例 ownership | Pi 0.80.10 在新 Session 首个 assistant 消息完成前不创建 JSONL；两个 Main 进程共享 XDG 会造成索引读改写丢失更新 | Kernel 只在文件真实落盘、canonical 校验和持久化成功后登记 Session；正常 GUI 第二实例退出并聚焦首实例，`probe-only` 保持无状态独立验证路径 |
+| 2026-07-21 | 1.2 | 在 S13 前增加 S12.5 重复职责解耦，并固定“按重复与职责证据拆分，不按文件大小拆分”的规则 | 已完成较多 Main、Kernel、Project、Renderer 工作，需要在继续增加交互前消除真实重复与错误依赖方向，同时避免把单次逻辑过度抽象 | 只新增四个已被当前调用方使用的纯边界；不改变 contract、schema、Runtime 拓扑、视觉或交互；S12 仍按独立视觉证据维护状态 |
+| 2026-07-22 | 1.3 | S13 增加首轮目的导向的 Session 语义命名，并记录隔离 Pi metadata 子进程边界 | 用户明确拒绝复制首条消息作为标题，要求像 GPT 一样按对话目的命名；Pi 0.80.10 RPC 又没有独立标题接口 | 单一活动 Runtime 与 Pi Session 事实源不变；名称生成复用 Pi provider/auth，不引入 SDK 或第二套 credential 配置，失败时保持未命名 |
+| 2026-07-22 | 1.4 | 在 S13 后增加 S14“优化”，不预设具体事项清单 | 后续将处理零散交互优化，不适合提前固化为详细计划 | S13 仍为当前 Slice；S14 保持 Pending，具体事项在实际处理时记录 |
+| 2026-07-22 | 1.5 | 自动命名改为授权目录内的低成本模型选择，并增加自动、关闭、指定模型设置 | 用户指出复用主对话模型成本过高，并要求覆盖 OAuth 登录用户与可修改界面 | 不硬编码 provider、不读取或保存凭据、不回退高成本主模型；Project config 升级为 v3 并保存非敏感命名偏好 |

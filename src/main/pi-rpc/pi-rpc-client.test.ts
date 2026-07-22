@@ -185,3 +185,152 @@ test('maps the S5 command set and validates data-bearing responses', async () =>
     'set_thinking_level'
   ])
 })
+
+test('maps the S11 command set with exact payloads and strips command sourceInfo', async () => {
+  const fake = createFakeProcess()
+  const client = new PiRpcClient(fake.child)
+  const commands = client.getCommands()
+  const compact = client.compact('Preserve decisions')
+  const compactWithoutInstructions = client.compact()
+  const setSessionName = client.setSessionName('Release planning')
+  const requests = readRequests(fake.stdin) as Array<Record<string, unknown> & { id: string; type: string }>
+
+  assert.deepEqual(requests.map(({ id: _id, ...request }) => request), [
+    { type: 'get_commands' },
+    { type: 'compact', customInstructions: 'Preserve decisions' },
+    { type: 'compact' },
+    { type: 'set_session_name', name: 'Release planning' }
+  ])
+
+  for (const request of requests) {
+    fake.stdout.write(`${JSON.stringify({
+      type: 'response',
+      id: request.id,
+      success: true,
+      ...(request.type === 'get_commands'
+        ? {
+            data: {
+              commands: [
+                {
+                  name: 'review',
+                  description: 'Review changes',
+                  source: 'extension',
+                  sourceInfo: { path: '/private/extension.ts' }
+                },
+                { name: 'summarize', source: 'skill' }
+              ]
+            }
+          }
+        : {})
+    })}\n`)
+  }
+
+  assert.deepEqual(await commands, [
+    { name: 'review', description: 'Review changes', source: 'extension' },
+    { name: 'summarize', source: 'skill' }
+  ])
+  await Promise.all([compact, compactWithoutInstructions, setSessionName])
+})
+
+test('rejects malformed get_commands responses', async () => {
+  const invalidData = [
+    {},
+    { commands: 'review' },
+    { commands: [null] },
+    { commands: [{ name: '', source: 'prompt' }] },
+    { commands: [{ name: '/review', source: 'prompt' }] },
+    { commands: [{ name: 'code review', source: 'prompt' }] },
+    { commands: [{ name: 'review', description: 1, source: 'prompt' }] },
+    { commands: [{ name: 'review', source: 'builtin' }] }
+  ]
+
+  for (const data of invalidData) {
+    const fake = createFakeProcess()
+    const client = new PiRpcClient(fake.child)
+    const commands = client.getCommands()
+    const [request] = readRequests(fake.stdin)
+    fake.stdout.write(`${JSON.stringify({
+      type: 'response',
+      id: request?.id,
+      success: true,
+      data
+    })}\n`)
+
+    await assert.rejects(commands, /Invalid Pi RPC get_commands response/)
+  }
+})
+
+test('gets available models and strips provider internals', async () => {
+  const fake = createFakeProcess()
+  const client = new PiRpcClient(fake.child)
+  const models = client.getAvailableModels()
+  const [request] = readRequests(fake.stdin)
+
+  assert.equal(request?.type, 'get_available_models')
+  fake.stdout.write(`${JSON.stringify({
+    type: 'response',
+    id: request?.id,
+    success: true,
+    data: {
+      models: [{
+        id: 'gpt-test',
+        provider: 'openai',
+        name: 'GPT Test',
+        reasoning: true,
+        thinkingLevelMap: {
+          off: 'none',
+          minimal: 'minimal',
+          low: 'low',
+          medium: 'medium',
+          high: 'high',
+          xhigh: null,
+          max: null
+        },
+        contextWindow: 128000,
+        baseUrl: 'https://private.example',
+        api: 'responses',
+        cost: { input: 1 },
+        credential: 'secret'
+      }]
+    }
+  })}\n`)
+
+  assert.deepEqual(await models, [{
+    id: 'gpt-test',
+    provider: 'openai',
+    name: 'GPT Test',
+    reasoning: true,
+    thinkingLevelMap: {
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      xhigh: null,
+      max: null
+    },
+    contextWindow: 128000
+  }])
+})
+
+test('rejects malformed get_available_models responses', async () => {
+  const invalidData = [
+    {},
+    { models: 'gpt-test' },
+    { models: [null] },
+    { models: [{ id: '', provider: 'openai' }] },
+    { models: [{ id: 'gpt-test', provider: '' }] },
+    { models: [{ id: ' ', provider: 'openai' }] },
+    { models: [{ id: 'gpt-test', provider: ' ' }] },
+    { models: [{ id: 'gpt-test', provider: 'openai', reasoning: 'yes' }] },
+    { models: [{ id: 'gpt-test', provider: 'openai', thinkingLevelMap: { low: 1 } }] }
+  ]
+
+  for (const data of invalidData) {
+    const fake = createFakeProcess()
+    const client = new PiRpcClient(fake.child)
+    const models = client.getAvailableModels()
+    const [request] = readRequests(fake.stdin)
+    fake.stdout.write(`${JSON.stringify({ type: 'response', id: request?.id, success: true, data })}\n`)
+
+    await assert.rejects(models, /Invalid Pi RPC get_available_models response/)
+  }
+})

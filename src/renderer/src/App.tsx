@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import type {
   KernelStatePatch,
   KernelState,
+  SessionNamingSettings,
   ThinkingLevel
 } from '../../shared/kernel-contract'
 import { ChatWorkbench } from './features/chat/ChatWorkbench'
@@ -16,6 +17,11 @@ export function App(): React.JSX.Element {
   const [ipcError, setIpcError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<string | null>(null)
+  const [completedAction, setCompletedAction] = useState<{
+    action: string
+    succeeded: boolean
+  } | null>(null)
+  const [connectionAttempt, setConnectionAttempt] = useState(0)
   const kernelStateRef = useRef<KernelState | null>(null)
   const eventRevision = useRef(0)
 
@@ -89,7 +95,7 @@ export function App(): React.JSX.Element {
       if (renderFrame !== null) cancelAnimationFrame(renderFrame)
       unsubscribe()
     }
-  }, [])
+  }, [connectionAttempt])
 
   async function runAction(
     action: string,
@@ -98,6 +104,7 @@ export function App(): React.JSX.Element {
     if (pendingAction !== null) throw new Error('Another action is already running.')
     setPendingAction(action)
     setActionError(null)
+    let succeeded = false
     const revisionBeforeAction = eventRevision.current
     try {
       const state = await operation()
@@ -105,18 +112,38 @@ export function App(): React.JSX.Element {
         kernelStateRef.current = state
         setKernelState(state)
       }
+      succeeded = true
     } catch (error) {
       setActionError(errorMessage(error))
       throw error
     } finally {
+      setCompletedAction({ action, succeeded })
       setPendingAction(null)
     }
   }
 
   if (kernelState === null) {
+    if (ipcError !== null) {
+      return (
+        <main className="screen-loading error">
+          <div className="kernel-connection-error" role="alert">
+            <span>无法连接 Workbench Kernel：{ipcError}</span>
+            <button
+              type="button"
+              onClick={() => {
+                setIpcError(null)
+                setConnectionAttempt((attempt) => attempt + 1)
+              }}
+            >
+              重试
+            </button>
+          </div>
+        </main>
+      )
+    }
     return (
       <main className="screen-loading">
-        {ipcError ? `无法连接 Workbench Kernel：${ipcError}` : '正在连接 Pi Workbench…'}
+        正在连接 Pi Workbench…
       </main>
     )
   }
@@ -125,6 +152,7 @@ export function App(): React.JSX.Element {
     <ChatWorkbench
       state={kernelState}
       pendingAction={pendingAction}
+      completedAction={completedAction}
       actionError={actionError ?? ipcError}
       onAddProject={() => runAction('add-project', () => window.piGui.addProject())}
       onActivateProject={(projectKey) =>
@@ -135,9 +163,18 @@ export function App(): React.JSX.Element {
         runAction('activate-session', () => window.piGui.activateSession(sessionKey))
       }
       onPrompt={(message) => runAction('prompt', () => window.piGui.prompt(message))}
+      onInvokeCommand={(commandId, argument) =>
+        runAction('invoke-command', () => window.piGui.invokeCommand(commandId, argument))
+      }
       onAbort={() => runAction('abort', () => window.piGui.abort())}
+      onSetModel={(provider, modelId) =>
+        runAction('set-model', () => window.piGui.setModel(provider, modelId))
+      }
       onSetThinkingLevel={(level: ThinkingLevel) =>
         runAction('set-thinking-level', () => window.piGui.setThinkingLevel(level))
+      }
+      onSetSessionNaming={(settings: SessionNamingSettings) =>
+        runAction('set-session-naming', () => window.piGui.setSessionNaming(settings))
       }
     />
   )

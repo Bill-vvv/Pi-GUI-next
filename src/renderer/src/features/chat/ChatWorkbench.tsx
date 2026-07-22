@@ -1,58 +1,74 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import type {
   KernelState,
-  RuntimeStatus,
+  SessionNamingSettings,
   ThinkingLevel
 } from '../../../../shared/kernel-contract'
-import { Icon, type IconName } from '../../components/Icon'
+import { Icon } from '../../components/Icon'
+import { IconButton } from '../../components/IconButton'
+import { canChangeRuntimeContext } from '../../runtime-state'
 import { Composer } from '../composer/Composer'
 import { Timeline } from './Timeline'
 
 type ChatWorkbenchProps = {
   state: KernelState
   pendingAction: string | null
+  completedAction: { action: string; succeeded: boolean } | null
   actionError: string | null
   onAddProject: () => Promise<void>
   onActivateProject: (projectKey: string) => Promise<void>
   onStartSession: () => Promise<void>
   onActivateSession: (sessionKey: string) => Promise<void>
   onPrompt: (message: string) => Promise<void>
+  onInvokeCommand: (commandId: string, argument: string) => Promise<void>
   onAbort: () => Promise<void>
+  onSetModel: (provider: string, modelId: string) => Promise<void>
   onSetThinkingLevel: (level: ThinkingLevel) => Promise<void>
-}
-
-const STATUS_LABELS: Record<RuntimeStatus, string> = {
-  stopped: '未启动',
-  starting: '启动中',
-  ready: '就绪',
-  running: '执行中',
-  stopping: '停止中',
-  crashed: '已崩溃'
+  onSetSessionNaming: (settings: SessionNamingSettings) => Promise<void>
 }
 
 export function ChatWorkbench({
   state,
   pendingAction,
+  completedAction,
   actionError,
   onAddProject,
   onActivateProject,
   onStartSession,
   onActivateSession,
   onPrompt,
+  onInvokeCommand,
   onAbort,
-  onSetThinkingLevel
+  onSetModel,
+  onSetThinkingLevel,
+  onSetSessionNaming
 }: ChatWorkbenchProps): React.JSX.Element {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [activityClock, setActivityClock] = useState(() => Date.now())
+  const [expandedProjectKey, setExpandedProjectKey] = useState<string | null>(
+    () => state.activeProjectKey
+  )
   const {
     projects,
     activeProjectKey,
     sessions,
     activeSessionKey,
     runtime,
-    session,
     conversation
   } = state
+  const previousActiveProjectKeyRef = useRef(activeProjectKey)
+  useEffect(() => {
+    const interval = window.setInterval(() => setActivityClock(Date.now()), 60_000)
+    return () => window.clearInterval(interval)
+  }, [])
+  // 仅在切换到另一个 Project 时自动展开；当前 Project 的展开/收起由点击切换，不被强制回写。
+  useEffect(() => {
+    if (previousActiveProjectKeyRef.current === activeProjectKey) return
+    previousActiveProjectKeyRef.current = activeProjectKey
+    setExpandedProjectKey(activeProjectKey)
+  }, [activeProjectKey])
   const activeProject = activeProjectKey === null
     ? null
     : projects.find((project) => project.path === activeProjectKey) ?? null
@@ -60,23 +76,27 @@ export function ChatWorkbench({
     ? null
     : sessions.find((summary) => summary.key === activeSessionKey) ?? null
   const projectName = basename(activeProject?.path ?? null) ?? '未选择项目'
-  const messageCount = conversation.entries.filter((entry) => entry.kind === 'message').length
   const busy = pendingAction !== null
-  const canChangeProject =
-    !busy &&
-    (runtime.status === 'stopped' || runtime.status === 'ready' || runtime.status === 'crashed')
-  const canChangeSession =
-    !busy &&
-    (runtime.status === 'stopped' || runtime.status === 'ready' || runtime.status === 'crashed')
+  const canChangeProjectOrSession = !busy && canChangeRuntimeContext(runtime.status)
   const canStartSession =
-    canChangeSession &&
+    canChangeProjectOrSession &&
     activeProject !== null
+  const contextActionStatus = runtimeContextActionStatus(pendingAction)
+  const namingValue = sessionNamingValue(state.sessionNaming)
+  const selectedNamingModel = state.sessionNaming.mode === 'model' ? state.sessionNaming : null
+  const selectedNamingModelAvailable = selectedNamingModel === null || state.availableModels.some(
+    (model) => model.provider === selectedNamingModel.provider && model.id === selectedNamingModel.modelId
+  )
 
   return (
     <main className={`app-shell${sidebarCollapsed ? ' left-sidebar-collapsed' : ''}`}>
       <aside className="left-sidebar" aria-label="项目与对话">
         <div className="sidebar-content">
-          <section className="sidebar-section project-list-section" aria-label="项目">
+          <section
+            className="sidebar-section project-list-section"
+            aria-label="项目"
+            aria-busy={contextActionStatus !== null}
+          >
             {projects.length === 0 ? (
               <p className="empty-project-state muted" role="status">
                 暂无项目。请使用侧边栏底部的“添加项目”。
@@ -84,9 +104,11 @@ export function ChatWorkbench({
             ) : (
               projects.map((project) => {
                 const selected = project.path === activeProjectKey
+                const expanded = selected && project.path === expandedProjectKey
+                const projectLabel = basename(project.path) ?? project.path
                 return (
                   <article
-                    className={`project-session-group${selected ? ' selected' : ''}`}
+                    className={`project-session-group${selected ? ' selected' : ''}${expanded ? ' expanded' : ''}`}
                     key={project.path}
                   >
                     <div className="project-row">
@@ -95,35 +117,48 @@ export function ChatWorkbench({
                         type="button"
                         title={project.path}
                         aria-current={selected ? 'true' : undefined}
-                        disabled={!selected && !canChangeProject}
+                        aria-expanded={selected ? expanded : undefined}
+                        disabled={!selected && !canChangeProjectOrSession}
                         onClick={() => {
-                          if (!selected && canChangeProject) {
-                            void onActivateProject(project.path).catch(() => undefined)
+                          if (selected) {
+                            setExpandedProjectKey(expanded ? null : project.path)
+                            return
                           }
+                          if (!canChangeProjectOrSession) return
+                          void onActivateProject(project.path)
+                            .then(() => setExpandedProjectKey(project.path))
+                            .catch(() => undefined)
                         }}
                       >
-                        <strong>{basename(project.path) ?? project.path}</strong>
-                        <small>{project.path}</small>
+                        <span className="project-icon" aria-hidden="true">
+                          <Icon name={expanded ? 'folder-open' : 'folder'} />
+                        </span>
+                        <span className="project-name">{projectLabel}</span>
+                        <span className="project-initial" aria-hidden="true">
+                          {projectLabel.slice(0, 1).toLocaleUpperCase()}
+                        </span>
                       </button>
                       {selected ? (
-                        <SidebarIconButton
+                        <IconButton
                           className="project-new-chat"
                           icon="plus"
                           label="在此项目中启动对话"
+                          aria-busy={pendingAction === 'start-session' ? true : undefined}
                           disabled={!canStartSession}
                           onClick={() => void onStartSession().catch(() => undefined)}
                         />
                       ) : null}
                     </div>
 
-                    {selected ? (
+                    {expanded ? (
                       <div className="session-list">
                         {sessions.length === 0 ? (
                           <p className="empty-session-state muted">暂无对话。</p>
                         ) : sessions.map((summary) => {
                           const active = summary.key === activeSessionKey
-                          const canActivate = canChangeSession && (runtime.status !== 'ready' || !active)
-                          const summaryStatus = active ? runtime.status : 'stopped'
+                          const canActivate = canChangeProjectOrSession && (runtime.status !== 'ready' || !active)
+                          const running = active && runtime.status === 'running'
+                          const activityLabel = formatActivityAge(summary.lastActivityAt, activityClock)
                           return (
                             <div
                               className={`session-row${active ? ' selected' : ''}`}
@@ -141,25 +176,24 @@ export function ChatWorkbench({
                                   }
                                 }}
                               >
-                                <span
-                                  className={`status-dot ${runtimeStatusClass(summaryStatus)}`}
-                                  aria-hidden="true"
-                                />
-                                <span className="session-text">
-                                  <span className="session-title">{sessionTitle(summary)}</span>
-                                  <span className="session-detail">
-                                    {sessionDetail(active, runtime.status, messageCount)}
-                                  </span>
-                                </span>
+                                <span className="session-title">{sessionTitle(summary)}</span>
                               </button>
-                              <div className="session-action-slot" aria-hidden="true">
-                                {active ? (
-                                  <span className="session-side-meta">
-                                    <span className="session-recency">
-                                      {session.settled ? '当前' : '进行中'}
-                                    </span>
-                                  </span>
-                                ) : null}
+                              <div className="session-action-slot">
+                                {running ? (
+                                  <span
+                                    className="session-running-indicator"
+                                    role="status"
+                                    aria-label="正在运行"
+                                    title="正在运行"
+                                  />
+                                ) : activityLabel === null ? null : (
+                                  <time
+                                    className="session-last-active"
+                                    dateTime={new Date(summary.lastActivityAt ?? 0).toISOString()}
+                                  >
+                                    {activityLabel}
+                                  </time>
+                                )}
                               </div>
                             </div>
                           )
@@ -174,26 +208,83 @@ export function ChatWorkbench({
         </div>
 
         <footer className="sidebar-footer">
-          <SidebarIconButton
+          <IconButton
             className="sidebar-collapse-toggle"
             icon="left-sidebar-close"
             label="收起侧边栏"
             onClick={() => setSidebarCollapsed(true)}
           />
-          <SidebarIconButton
+          <IconButton
             className="add-project-entry"
             icon="plus"
             label="添加项目"
-            disabled={!canChangeProject}
+            aria-busy={pendingAction === 'add-project' ? true : undefined}
+            disabled={!canChangeProjectOrSession}
             onClick={() => void onAddProject().catch(() => undefined)}
           />
+          <div className="sidebar-settings-entry">
+            <IconButton
+              className="sidebar-settings-toggle"
+              icon="settings"
+              label="设置"
+              aria-expanded={settingsOpen}
+              onClick={() => setSettingsOpen((open) => !open)}
+            />
+            {settingsOpen ? (
+              <section className="session-naming-settings" aria-label="对话命名设置">
+                <label htmlFor="session-naming-mode">自动对话命名</label>
+                <select
+                  id="session-naming-mode"
+                  value={namingValue}
+                  disabled={busy}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value
+                    const settings: SessionNamingSettings | null = value === 'auto'
+                      ? { mode: 'auto' }
+                      : value === 'off'
+                        ? { mode: 'off' }
+                        : state.availableModels
+                            .filter((model) => sessionNamingModelValue(model.provider, model.id) === value)
+                            .map((model) => ({
+                              mode: 'model' as const,
+                              provider: model.provider,
+                              modelId: model.id
+                            }))[0] ?? null
+                    if (settings === null) return
+                    void onSetSessionNaming(settings)
+                      .then(() => setSettingsOpen(false))
+                      .catch(() => undefined)
+                  }}
+                >
+                  <option value="auto">自动选择低成本模型（推荐）</option>
+                  <option value="off">关闭</option>
+                  <optgroup label="指定已授权模型">
+                    {!selectedNamingModelAvailable && selectedNamingModel !== null ? (
+                      <option value={namingValue} disabled>
+                        {selectedNamingModel.provider}/{selectedNamingModel.modelId}（当前不可用）
+                      </option>
+                    ) : null}
+                    {state.availableModels.map((model) => (
+                      <option
+                        key={`${model.provider}/${model.id}`}
+                        value={sessionNamingModelValue(model.provider, model.id)}
+                      >
+                        {model.provider}/{model.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                </select>
+                <p>OAuth 与 API 认证继续由 Pi 管理；自动模式只使用当前已授权 Provider 中的低成本模型。</p>
+              </section>
+            ) : null}
+          </div>
         </footer>
       </aside>
 
       <section className="main-chat" aria-label={`${projectName} 对话工作区`}>
         {sidebarCollapsed ? (
           <div className="left-sidebar-bottom-triggers">
-            <SidebarIconButton
+            <IconButton
               className="left-sidebar-trigger"
               icon="left-sidebar-open"
               label="展开侧边栏"
@@ -203,41 +294,14 @@ export function ChatWorkbench({
         ) : null}
 
         <header className="workbench-session-header">
-          <div className="workbench-session-heading">
-            <div className="workbench-header-project">
-              <span className="workbench-header-label">Project</span>
-              <strong title={activeProject?.path}>{projectName}</strong>
-            </div>
-            <div className="workbench-header-session">
-              <span className="workbench-header-label">Session</span>
-              <strong>{activeSession === null ? '尚未选择' : sessionTitle(activeSession)}</strong>
-              <small>{session.id === null ? '尚未创建' : `${messageCount} 条消息`}</small>
-            </div>
-            <div className="workbench-header-runtime">
-              <span className={`status-dot ${runtimeStatusClass(runtime.status)}`} aria-hidden="true" />
-              <span>
-                <span className="workbench-header-label">Runtime</span>
-                <strong>{STATUS_LABELS[runtime.status]}</strong>
-                <small>{runtime.version ? `Pi ${runtime.version}` : 'Pi 未启动'}</small>
-              </span>
-            </div>
-          </div>
-
-          <details className="runtime-diagnostics">
-            <summary className="main-chat-diagnostics-trigger">
-              <Icon name="right-sidebar" />
-              <span>运行诊断</span>
-            </summary>
-            <div className="runtime-diagnostics-panel">
-              <dl>
-                <div><dt>状态</dt><dd>{STATUS_LABELS[runtime.status]}</dd></div>
-                <div><dt>Pi</dt><dd>{runtime.version ?? '—'}</dd></div>
-                <div><dt>stderr</dt><dd>{runtime.stderrChars}</dd></div>
-                <div><dt>stderr 摘要</dt><dd>{runtime.stderrSummary ?? '—'}</dd></div>
-                <div><dt>Exit</dt><dd>{runtime.exitCode ?? runtime.exitSignal ?? '—'}</dd></div>
-              </dl>
-            </div>
-          </details>
+          <strong className="workbench-session-title">
+            {activeSession === null ? '尚未选择对话' : sessionTitle(activeSession)}
+          </strong>
+          {contextActionStatus !== null ? (
+            <span className="runtime-context-status" role="status" aria-live="polite">
+              {contextActionStatus}
+            </span>
+          ) : null}
         </header>
 
         <Timeline
@@ -245,56 +309,30 @@ export function ChatWorkbench({
           entries={conversation.entries}
           activeRunStartIndex={conversation.activeRunStartIndex}
           runtimeStatus={runtime.status}
-          warning={actionError ?? (runtime.status === 'crashed' ? runtime.lastError : null)}
+          warning={
+            actionError ??
+            (runtime.status === 'crashed'
+              ? runtime.lastError ?? 'Pi Runtime 意外退出，未提供错误详情。'
+              : null)
+          }
         />
 
         <Composer
           state={state}
           busy={busy}
+          pendingAction={pendingAction}
+          completedAction={completedAction}
           onStartSession={onStartSession}
           onActivateSession={onActivateSession}
           onPrompt={onPrompt}
+          onInvokeCommand={onInvokeCommand}
           onAbort={onAbort}
+          onSetModel={onSetModel}
           onSetThinkingLevel={onSetThinkingLevel}
         />
       </section>
     </main>
   )
-}
-
-type SidebarIconButtonProps = {
-  className: string
-  icon: IconName
-  label: string
-  disabled?: boolean
-  onClick?: () => void
-}
-
-function SidebarIconButton({
-  className,
-  icon,
-  label,
-  disabled = false,
-  onClick
-}: SidebarIconButtonProps): React.JSX.Element {
-  return (
-    <button
-      className={className}
-      type="button"
-      title={label}
-      aria-label={label}
-      disabled={disabled}
-      onClick={onClick}
-    >
-      <Icon name={icon} />
-    </button>
-  )
-}
-
-function runtimeStatusClass(status: RuntimeStatus): string {
-  if (status === 'ready') return 'task-idle'
-  if (status === 'running') return 'task-busy'
-  return status
 }
 
 function basename(path: string | null): string | null {
@@ -308,10 +346,30 @@ function sessionTitle(session: KernelState['sessions'][number]): string {
   return `对话 ${session.id.slice(0, 8)}`
 }
 
-function sessionDetail(active: boolean, status: RuntimeStatus, messageCount: number): string {
-  if (!active) return '可恢复'
-  if (status === 'ready' || status === 'running') return `${messageCount} 条消息`
-  if (status === 'crashed') return '已崩溃 · 可恢复'
-  if (status === 'stopped') return '可恢复'
-  return STATUS_LABELS[status]
+function formatActivityAge(timestamp: number | null, now: number): string | null {
+  if (timestamp === null) return null
+  const elapsedMinutes = Math.max(0, Math.floor((now - timestamp) / 60_000))
+  if (elapsedMinutes < 1) return '刚刚'
+  if (elapsedMinutes < 60) return `${elapsedMinutes} 分钟`
+  const elapsedHours = Math.floor(elapsedMinutes / 60)
+  if (elapsedHours < 24) return `${elapsedHours} 小时`
+  return `${Math.floor(elapsedHours / 24)} 天`
+}
+
+function runtimeContextActionStatus(action: string | null): string | null {
+  if (action === 'add-project') return '正在添加项目…'
+  if (action === 'activate-project') return '正在切换项目…'
+  if (action === 'activate-session') return '正在切换对话…'
+  if (action === 'start-session') return '正在启动对话…'
+  return null
+}
+
+function sessionNamingValue(settings: SessionNamingSettings): string {
+  return settings.mode === 'model'
+    ? sessionNamingModelValue(settings.provider, settings.modelId)
+    : settings.mode
+}
+
+function sessionNamingModelValue(provider: string, modelId: string): string {
+  return `model:${encodeURIComponent(provider)}:${encodeURIComponent(modelId)}`
 }

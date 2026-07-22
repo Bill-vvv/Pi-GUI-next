@@ -56,6 +56,16 @@ const kernelApi: KernelApi = {
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
   },
+  setSessionNaming: (settings) => {
+    const command: KernelCommand = { type: 'kernel.set-session-naming', settings }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+  },
+  invokeCommand: (commandId, argument) => {
+    const command: KernelCommand = { type: 'kernel.invoke-command', commandId, argument }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+  },
   openExternal: (url) => ipcRenderer.invoke(OPEN_EXTERNAL_CHANNEL, url) as Promise<void>,
   subscribe: (listener) => {
     const handleKernelEvent = (_event: IpcRendererEvent, event: KernelEvent): void => {

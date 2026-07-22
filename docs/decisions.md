@@ -1,6 +1,6 @@
 # 架构决策记录
 
-本文件只记录已经生效的 P1 决策。新决策追加，不覆盖旧结论；改变既有决策时必须写明替代关系。
+本文件只记录已经生效的架构决策。新决策追加，不覆盖旧结论；改变既有决策时必须写明替代关系。
 
 ## D-001 — 新 canonical repository
 
@@ -97,3 +97,27 @@
 - 决策：P1 不在 Electron Main 内嵌入 Pi `AgentSession`，也不将 Pi 0.80.10 官方 `RpcClient` 原样替换 `LinuxLocalRuntime + PiRpcClient`。官方 RPC command/response/event 类型可作为优先评估的复用边界；官方 `RpcClient` 作为后续唯一 RPC 客户端的受控迁移候选。
 - 原因：进程内 `AgentSession` 不满足当前 Pi 运行时隔离目标；官方 `RpcClient` 会自行通过 `node` 启动 CLI，完整累计并输出 stderr，且对 executable 版本、异常退出证据和分阶段停止的公开控制不足；这些语义是当前 crash/restart/resume 与脱敏发布证据的前提。
 - 影响：P1 拓扑、`RuntimeHost` 接口和六项 RPC 命令范围不变；不引入第二条集成路径。完整替换前，候选官方客户端必须保留或允许注入等价的 lifecycle/诊断语义，通过当时全部 release gate，并在同一变更中删除自有客户端；不长期双路径共存。
+
+## D-013 — Slash command 使用 normalized catalog 和受控分路径执行
+
+- 日期：2026-07-21
+- 状态：Accepted
+- 决策：Workbench Kernel 在活动 Runtime 启动时通过 Pi `get_commands` 建立 normalized command catalog，并与有限的 GUI/typed RPC 命令合并。Renderer 只搜索、补全并提交当前 catalog 中的 command ID 和参数；Kernel 校验 ID 后，分别执行 GUI 行为、typed RPC 或 Pi 明确支持的 extension/prompt/skill prompt 语义。
+- 原因：Pi TUI builtin slash command 是交互界面命令，不是通用 RPC 文本协议；同时 extension、prompt template 和 skill 的确由 RPC `get_commands` 发现并经 Pi prompt 入口调用。把所有 `/...` 文本盲传会混淆 owner、绕过 typed boundary，并可能把未知命令送给模型。
+- 影响：S11 只实现 `/new`、`/model`、`/thinking`、`/compact`、`/name` 五项明确内建映射和 Pi 动态目录；未知命令 Fail Fast。IPC 不接收任意 raw command 或执行路径，动态命令必须先存在于当前 Runtime catalog；TUI 的 settings、login/logout、share、reload、quit、tree 等界面命令不自动进入 GUI。
+
+## D-014 — 首轮语义名称使用隔离的 Pi metadata 请求
+
+- 日期：2026-07-22
+- 状态：Accepted；澄清 D-003 和 D-012 的单一 Runtime 集成边界
+- 决策：新 Session 的首轮进入 `agent_settled` 且 canonical pointer 已落盘后，由 Electron Main 启动一次短生命周期的 `pi --print --no-session` 请求，使用活动 Session 的 provider/model 与 Pi 已有认证生成目的导向的名称。该请求禁用 tools、extension、skill、prompt template、theme 和项目 context，不创建或恢复 Session；结果只通过现有 typed `set_session_name` 路径写回。切换、停止、崩溃或用户手动 `/name` 时取消请求。
+- 原因：Pi 0.80.10 RPC 没有独立的标题接口；复用活动 `prompt` 会污染对话事实源，内嵌 `AgentSession` SDK 会建立第二套 provider/auth 与生命周期边界。隔离的无 Session CLI 请求可以复用 Pi 管理的认证，同时不改写对话。
+- 影响：D-003 的单一活动 `RuntimeHost` 和 D-012 的“不内嵌 AgentSession、不并行 RPC client”保持不变；Electron Main 额外拥有一个有界、可取消、仅生成 metadata 的 Pi 子进程。生成失败时 Session 保持未命名，不复制首条消息做伪语义 fallback；已有未命名 Session 在下次恢复时补生成。
+
+## D-015 — 自动命名模型按授权目录选择并允许用户覆盖
+
+- 日期：2026-07-22
+- 状态：Accepted；替代 D-014 中“使用活动 Session 的 provider/model”的模型选择规则
+- 决策：自动模式只在 Pi `get_available_models` 返回的目录中、当前活动 provider 内按 `gpt-5.4-nano`、`gpt-5.4-mini`、`gpt-5.6-luna` 的顺序选择低成本模型，并使用 `--thinking off`；没有这些模型时保持未命名，不回退到活动的高成本模型。用户可在设置中选择自动、关闭或指定目录中的任一已授权 provider/model。
+- 原因：标题生成是短文本目的归纳，不需要主对话模型的能力和 reasoning 成本；同时 OAuth 与 API key 用户可用的 provider/model 不同，不能硬编码本机 provider，也不能要求第二份凭据。
+- 影响：Pi 继续独占 OAuth token、API key 与刷新流程；GUI config v3 只保存命名模式及可选 provider/model ID，不保存认证材料。指定模型在当前目录不可用时 Fail Fast；运行期间修改设置会取消旧命名请求，失败或无低成本候选时 Session 保持未命名。

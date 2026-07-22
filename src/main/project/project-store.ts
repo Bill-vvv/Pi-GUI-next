@@ -4,15 +4,33 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 
+import {
+  DEFAULT_SESSION_NAMING_SETTINGS,
+  type SessionNamingSettings
+} from '../../shared/kernel-contract.ts'
+import { isRecord } from '../utils/guards.ts'
+import {
+  upsertSessionPointer,
+  type ProjectSessionRegistry,
+  type SessionPointer
+} from './session-pointer.ts'
+
 type ProjectConfigFileV1 = {
   version: 1
   project: { path: string }
 }
 
-type ProjectConfigFile = {
+type ProjectConfigFileV2 = {
   version: 2
   projects: Array<{ path: string }>
   activeProjectKey: string | null
+}
+
+type ProjectConfigFile = {
+  version: 3
+  projects: Array<{ path: string }>
+  activeProjectKey: string | null
+  sessionNaming: SessionNamingSettings
 }
 
 export type ProjectRegistry = {
@@ -20,16 +38,8 @@ export type ProjectRegistry = {
   activeProjectKey: string | null
 }
 
-export type SessionPointer = {
-  projectPath: string
-  sessionFile: string
-  sessionId: string
-  sessionName: string | null
-}
-
-export type ProjectSessionRegistry = {
-  sessions: SessionPointer[]
-  activeSessionKey: string | null
+type ProjectConfiguration = ProjectRegistry & {
+  sessionNaming: SessionNamingSettings
 }
 
 type ProjectStateFileV1 = {
@@ -71,60 +81,89 @@ export class ProjectStore {
   }
 
   async loadProjects(): Promise<ProjectRegistry> {
-    return this.readProjects()
+    return copyRegistry(await this.readConfiguration())
+  }
+
+  async loadSessionNaming(): Promise<SessionNamingSettings> {
+    return copySessionNaming((await this.readConfiguration()).sessionNaming)
   }
 
   addProject(project: { path: string }): Promise<ProjectRegistry> {
     assertProject(project)
     return this.enqueueSave(async () => {
-      const registry = await this.readProjects()
-      if (registry.projects.some(({ path }) => path === project.path)) return registry
-      const next = {
-        projects: [...registry.projects, { ...project }],
-        activeProjectKey: registry.activeProjectKey
+      const configuration = await this.readConfiguration()
+      if (configuration.projects.some(({ path }) => path === project.path)) {
+        return copyRegistry(configuration)
+      }
+      const next: ProjectConfiguration = {
+        projects: [...configuration.projects, { ...project }],
+        activeProjectKey: configuration.activeProjectKey,
+        sessionNaming: configuration.sessionNaming
       }
       await writeJson(this.configFile, toProjectConfigFile(next))
       await ensureJson(
         this.stateFile,
         { version: 3, sessions: [], activeSessionKeys: [] } satisfies ProjectStateFile
       )
-      return next
+      return copyRegistry(next)
     })
   }
 
   activateProject(projectKey: string): Promise<ProjectRegistry> {
     assertAbsolute(projectKey, 'Project key')
     return this.enqueueSave(async () => {
-      const registry = await this.readProjects()
-      if (!registry.projects.some(({ path }) => path === projectKey)) {
+      const configuration = await this.readConfiguration()
+      if (!configuration.projects.some(({ path }) => path === projectKey)) {
         throw new Error(`Project is not registered: ${projectKey}`)
       }
-      if (registry.activeProjectKey === projectKey) return registry
-      const next = { ...registry, activeProjectKey: projectKey }
+      if (configuration.activeProjectKey === projectKey) return copyRegistry(configuration)
+      const next: ProjectConfiguration = { ...configuration, activeProjectKey: projectKey }
       await writeJson(this.configFile, toProjectConfigFile(next))
-      return next
+      return copyRegistry(next)
     })
   }
 
-  private async readProjects(): Promise<ProjectRegistry> {
+  saveSessionNaming(settings: SessionNamingSettings): Promise<void> {
+    assertSessionNaming(settings)
+    return this.enqueueSave(async () => {
+      const configuration = await this.readConfiguration()
+      await writeJson(this.configFile, toProjectConfigFile({
+        ...configuration,
+        sessionNaming: copySessionNaming(settings)
+      }))
+    })
+  }
+
+  private async readConfiguration(): Promise<ProjectConfiguration> {
     let text: string
     try {
       text = await readFile(this.configFile, 'utf8')
     } catch (error) {
       if (isNodeError(error) && error.code === 'ENOENT') {
-        return { projects: [], activeProjectKey: null }
+        return {
+          projects: [],
+          activeProjectKey: null,
+          sessionNaming: { ...DEFAULT_SESSION_NAMING_SETTINGS }
+        }
       }
       throw error
     }
 
     const value: unknown = JSON.parse(text)
     if (isProjectConfigFile(value)) {
-      return copyRegistry(value)
+      return copyConfiguration(value)
+    }
+    if (isProjectConfigFileV2(value)) {
+      return {
+        ...copyRegistry(value),
+        sessionNaming: { ...DEFAULT_SESSION_NAMING_SETTINGS }
+      }
     }
     if (isProjectConfigFileV1(value)) {
       return {
         projects: [{ path: value.project.path }],
-        activeProjectKey: value.project.path
+        activeProjectKey: value.project.path,
+        sessionNaming: { ...DEFAULT_SESSION_NAMING_SETTINGS }
       }
     }
     throw new Error(`Invalid Pi GUI project config: ${this.configFile}`)
@@ -154,7 +193,7 @@ export class ProjectStore {
     if (!isSessionPointer(pointer)) {
       throw new Error('Invalid Pi GUI session pointer.')
     }
-    const registry = await this.readProjects()
+    const registry = await this.loadProjects()
     if (!registry.projects.some(({ path }) => path === pointer.projectPath)) {
       throw new Error(`Project is not registered: ${pointer.projectPath}`)
     }
@@ -165,6 +204,16 @@ export class ProjectStore {
     }
     await access(canonicalSessionFile, constants.R_OK)
     return { ...pointer, sessionFile: canonicalSessionFile }
+  }
+
+  async sessionActivityAt(sessionFile: string): Promise<number | null> {
+    assertAbsolute(sessionFile, 'Session file')
+    try {
+      const sessionStat = await stat(sessionFile)
+      return sessionStat.isFile() ? sessionStat.mtimeMs : null
+    } catch {
+      return null
+    }
   }
 
   saveSession(pointer: SessionPointer): Promise<void> {
@@ -267,7 +316,7 @@ function isProjectConfigFileV1(value: unknown): value is ProjectConfigFileV1 {
   return typeof value.project.path === 'string' && isAbsolute(value.project.path)
 }
 
-function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
+function isProjectConfigFileV2(value: unknown): value is ProjectConfigFileV2 {
   if (
     !isRecord(value) ||
     Object.keys(value).length !== 3 ||
@@ -282,11 +331,28 @@ function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
   return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
 }
 
-function toProjectConfigFile(registry: ProjectRegistry): ProjectConfigFile {
+function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 4 ||
+    value.version !== 3 ||
+    !Array.isArray(value.projects) ||
+    !value.projects.every(isProject) ||
+    new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
+    (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
+    !isSessionNaming(value.sessionNaming)
+  ) {
+    return false
+  }
+  return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
+}
+
+function toProjectConfigFile(configuration: ProjectConfiguration): ProjectConfigFile {
   return {
-    version: 2,
-    projects: registry.projects.map((project) => ({ ...project })),
-    activeProjectKey: registry.activeProjectKey
+    version: 3,
+    projects: configuration.projects.map((project) => ({ ...project })),
+    activeProjectKey: configuration.activeProjectKey,
+    sessionNaming: copySessionNaming(configuration.sessionNaming)
   }
 }
 
@@ -295,6 +361,36 @@ function copyRegistry(registry: ProjectRegistry): ProjectRegistry {
     projects: registry.projects.map((project) => ({ ...project })),
     activeProjectKey: registry.activeProjectKey
   }
+}
+
+function copyConfiguration(configuration: ProjectConfiguration): ProjectConfiguration {
+  return {
+    ...copyRegistry(configuration),
+    sessionNaming: copySessionNaming(configuration.sessionNaming)
+  }
+}
+
+function copySessionNaming(settings: SessionNamingSettings): SessionNamingSettings {
+  return settings.mode === 'model'
+    ? { mode: 'model', provider: settings.provider, modelId: settings.modelId }
+    : { mode: settings.mode }
+}
+
+function assertSessionNaming(value: SessionNamingSettings): void {
+  if (!isSessionNaming(value)) throw new Error('Invalid Pi GUI session naming settings.')
+}
+
+function isSessionNaming(value: unknown): value is SessionNamingSettings {
+  if (!isRecord(value) || typeof value.mode !== 'string') return false
+  if (value.mode === 'auto' || value.mode === 'off') {
+    return Object.keys(value).length === 1
+  }
+  return value.mode === 'model' &&
+    Object.keys(value).length === 3 &&
+    typeof value.provider === 'string' &&
+    value.provider.trim().length > 0 &&
+    typeof value.modelId === 'string' &&
+    value.modelId.trim().length > 0
 }
 
 function assertProject(project: { path: string }): void {
@@ -394,30 +490,12 @@ function migrateSessionPointers(pointers: SessionPointer[]): ProjectStateFile {
   }
 }
 
-function upsertSessionPointer(pointers: SessionPointer[], pointer: SessionPointer): SessionPointer[] {
-  const index = pointers.findIndex((existing) =>
-    existing.sessionFile === pointer.sessionFile ||
-    (
-      existing.projectPath === pointer.projectPath &&
-      existing.sessionId === pointer.sessionId
-    )
-  )
-  if (index === -1) return [...pointers, { ...pointer }]
-  return pointers.map((existing, pointerIndex) =>
-    pointerIndex === index ? { ...pointer } : { ...existing }
-  )
-}
-
 function copyProjectState(state: ProjectStateFile): ProjectStateFile {
   return {
     version: 3,
     sessions: state.sessions.map((pointer) => ({ ...pointer })),
     activeSessionKeys: state.activeSessionKeys.map((selection) => ({ ...selection }))
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
