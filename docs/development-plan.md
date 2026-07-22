@@ -459,6 +459,17 @@ P2 先用一个短 Slice 固定结构，再实现基础功能，随后在真实�
 
 P2 的“多 Project、多 Session”首先指多个对象可保存、可发现、可切换，不等于多个 Pi Runtime 并行运行。只有出现明确并行使用需求后，才单独决定是否扩展 runtime ownership 和调度模型，不预留空的并行抽象。
 
+#### S14 — 优化记录
+
+本节只记录实际使用中发现的问题和待讨论方向，不预先固定实现方案或处理顺序。
+
+| 编号 | 类型 | 记录 | 状态 |
+| --- | --- | --- | --- |
+| S14-01 | 交互缺陷 | 部分控件展开菜单后，点击菜单外空间不会自动收起菜单 | 待定位 |
+| S14-02 | 设置界面 | 从零搭建设置界面；首期候选范围只包含“外观”和“扩展” | 待确认 |
+| S14-03 | Session 切换 | 切换 Session 会触发 Runtime 启动，但用户有时只想切换过去查看上下文；需要讨论“查看”与“激活运行”的处理方式 | 待讨论 |
+| S14-04 | 导航排序 | 评估 Project 和 Session 是否支持拖拽调整位置 | 待讨论 |
+
 #### S12.5 — 重复职责解耦
 
 判断规则：
@@ -557,6 +568,7 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-22 | S13 Interaction Completion | 多 Agent 并行审计键盘/焦点、滚动、切换反馈、命令补全和加载/错误/空状态；确认 Timeline 的底部跟随、用户上滚保持、Session/Project 切换重置和历史展开视口补偿链路成立；补齐 Tab/Arrow slash 补全、combobox ARIA、Runtime context action 成功后的 Composer 焦点恢复、可访问切换状态、空对话、无详情 crash fallback 和 Kernel 连接重试。119 项 core tests、typecheck、生产 build、真实 Pi 0.80.10 无状态 smoke 与 diff check 通过 | 在干净 commit 的打包产物上执行 P2 完整真实 UI 链路，确认交互时序并生成脱敏证据 |
 | 2026-07-22 | S13 P2 Release Verifier | 保留 P1 的 13 步真实 AppImage 回归，新增双 Project 发现/切换与单 Runtime 采样、同 Project 双 Session materialize/list/switch/restore、slash 来源与 Arrow/Tab 补全、typed `/thinking`、未知命令 Fail Fast、空态/切换反馈/焦点恢复断言；报告升级为 schema v2 与 P2 摘要。复核时同步移除 S12 后失效的 DOM 选择器，并按当前 XDG state v3 的 `sessions[]` / `activeSessionKeys[]` 读取恢复事实；脚本语法、diff check 与 AppImage package 通过 | 先整理当前 P2 工作区为干净 commit，再运行 `pnpm verify:linux`；passed 报告和六张脱敏截图生成前，S13/P2 保持 In Progress |
 | 2026-07-22 | S14 Planning | 新增后续 Slice S14“优化”；不预先拆分具体事项，实际交互问题按出现顺序处理 | S13 继续 In Progress；完成后进入 S14 |
+| 2026-07-22 | S14 Intake | 记录首批四项实际体验问题：菜单外点击收起、设置界面首期范围、只读查看 Session 与 Runtime 启动语义、Project/Session 拖拽排序 | 继续接收问题；具体方案和顺序留待逐项讨论 |
 
 ## 17. 计划变更记录
 
