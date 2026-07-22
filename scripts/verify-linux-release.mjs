@@ -756,7 +756,10 @@ async function evaluateValue(cdp, expression) {
 
 async function waitForExpression(cdp, expression, timeoutMs, code) {
   await waitForCondition(
-    async () => Boolean(await evaluateValue(cdp, `Boolean(${expression})`)),
+    async () => Boolean(await evaluateValue(
+      cdp,
+      `Promise.resolve(${expression}).then((value) => Boolean(value))`
+    )),
     timeoutMs,
     code
   )
