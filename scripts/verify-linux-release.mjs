@@ -267,7 +267,11 @@ async function exerciseUi() {
       typeof runtimeIdentity !== 'object' ||
       runtimeIdentity.status !== 'ready'
     ) {
-      fail('E_PI_RUNTIME_STATUS')
+      const observedStatus = typeof runtimeIdentity?.status === 'string' &&
+        ['stopped', 'starting', 'running', 'stopping', 'crashed'].includes(runtimeIdentity.status)
+        ? runtimeIdentity.status.toUpperCase()
+        : 'INVALID'
+      fail(`E_PI_RUNTIME_STATUS_${observedStatus}`)
     }
     if (runtimeIdentity.version !== PI_VERSION) fail('E_PI_VERSION')
     if (typeof runtimeIdentity.executable !== 'string') fail('E_PI_EXECUTABLE')
