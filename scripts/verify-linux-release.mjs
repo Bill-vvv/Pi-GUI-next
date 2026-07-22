@@ -1000,9 +1000,17 @@ async function conversationCounts(cdp) {
 }
 
 async function waitForRuntime(cdp, status, timeoutMs) {
+  const editableCondition = status === 'ready'
+    ? ` && (() => {
+        const input = document.querySelector('textarea[aria-label="发送给 Pi 的任务"]')
+        return input instanceof HTMLTextAreaElement && !input.disabled
+      })()`
+    : ''
   await waitForExpression(
     cdp,
-    `window.piGui.getState().then((state) => state.runtime.status === ${JSON.stringify(status)})`,
+    `window.piGui.getState().then((state) =>
+      state.runtime.status === ${JSON.stringify(status)}${editableCondition}
+    )`,
     timeoutMs,
     'E_RUNTIME_STATUS'
   )
