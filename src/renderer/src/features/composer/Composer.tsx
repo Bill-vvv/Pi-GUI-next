@@ -1,36 +1,54 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 import type {
   KernelCommandDescriptor,
+  KernelPromptAttachment,
+  KernelSessionPreview,
+  KernelSessionUsage,
   KernelState,
   ThinkingLevel
 } from '../../../../shared/kernel-contract'
 import { Icon } from '../../components/Icon'
 import { IconButton } from '../../components/IconButton'
-import { canStartRuntime } from '../../runtime-state'
+import { useViewportPopoverPosition } from '../../components/useViewportPopoverPosition'
+import { canChangeRuntimeContext, canStartRuntime } from '../../runtime-state'
 import {
   filterSlashCommands,
   parseSlashCommandToken,
   resolveSlashCommand
 } from './slash-command-input'
+import { readDroppedPromptAttachments } from './prompt-attachments'
+
+type PendingAttachment = {
+  id: string
+  attachment: KernelPromptAttachment
+}
 
 type ComposerProps = {
   state: KernelState
+  sessionPreview: KernelSessionPreview | null
+  viewingInactiveSession: boolean
+  viewingNewSession: boolean
+  newSessionPrepared: boolean
   busy: boolean
   pendingAction: string | null
   completedAction: { action: string; succeeded: boolean } | null
+  onSelectPromptAttachments: () => Promise<KernelPromptAttachment[]>
   onStartSession: () => Promise<void>
   onActivateSession: (sessionKey: string) => Promise<void>
-  onPrompt: (message: string) => Promise<void>
+  onPrompt: (message: string, attachments?: KernelPromptAttachment[]) => Promise<void>
+  onSteer: (message: string, attachments?: KernelPromptAttachment[]) => Promise<void>
+  onFollowUp: (message: string, attachments?: KernelPromptAttachment[]) => Promise<void>
   onInvokeCommand: (commandId: string, argument: string) => Promise<void>
   onAbort: () => Promise<void>
   onSetModel: (provider: string, modelId: string) => Promise<void>
   onSetThinkingLevel: (level: ThinkingLevel) => Promise<void>
 }
 
-type ModelPickerPanel = 'model' | 'thinking'
-
 const THINKING_LEVELS: ThinkingLevel[] = [
+  'off',
+  'minimal',
   'low',
   'medium',
   'high',
@@ -40,41 +58,78 @@ const THINKING_LEVELS: ThinkingLevel[] = [
 
 export function Composer({
   state,
+  sessionPreview,
+  viewingInactiveSession,
+  viewingNewSession,
+  newSessionPrepared,
   busy,
   pendingAction,
   completedAction,
+  onSelectPromptAttachments,
   onStartSession,
   onActivateSession,
   onPrompt,
+  onSteer,
+  onFollowUp,
   onInvokeCommand,
   onAbort,
   onSetModel,
   onSetThinkingLevel
 }: ComposerProps): React.JSX.Element {
   const [prompt, setPrompt] = useState('')
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
+  const [attachmentProcessing, setAttachmentProcessing] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null)
   const [dismissedMenuPrompt, setDismissedMenuPrompt] = useState<string | null>(null)
   const [commandError, setCommandError] = useState<string | null>(null)
-  const [activeModelPickerPanel, setActiveModelPickerPanel] = useState<ModelPickerPanel>('model')
+  const [modelPickerOpen, setModelPickerOpen] = useState(false)
+  const [modelMenuOpen, setModelMenuOpen] = useState(false)
   const composerRef = useRef<HTMLFormElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const slashSurfaceRef = useRef<HTMLElement>(null)
+  const modelPickerRef = useRef<HTMLDetailsElement>(null)
+  const modelMenuTriggerRef = useRef<HTMLButtonElement>(null)
   const selectedCommandOptionRef = useRef<HTMLButtonElement>(null)
   const restoreFocusRef = useRef(false)
+  const attachmentDragDepthRef = useRef(0)
+  const attachmentProcessingRef = useRef(false)
   const previousCompletedActionRef = useRef(completedAction)
+  const { popoverRef: modelPickerPopoverRef, position: modelPickerPosition } =
+    useViewportPopoverPosition(modelPickerOpen, modelPickerRef, 420, {
+      preferredWidth: 380,
+      align: 'before'
+    })
+  const modelPickerPlaced = modelPickerPosition !== null
+  const { popoverRef: modelMenuPopoverRef, position: modelMenuPosition } =
+    useViewportPopoverPosition(modelMenuOpen, modelMenuTriggerRef, 320, {
+      preferredWidth: 240,
+      axis: 'horizontal'
+    })
+  const modelMenuPlaced = modelMenuPosition !== null
   const { activeProjectKey, activeSessionKey, runtime, session } = state
-  const commands = state.commands ?? []
+  const preparingNewSession =
+    viewingNewSession && !newSessionPrepared && pendingAction === 'start-session'
+  const submissionBusy = busy && !preparingNewSession
+  const commands = preparingNewSession ? [] : state.commands ?? []
   const availableModels = state.availableModels ?? []
   const thinkingLevelMap = session.model?.thinkingLevelMap ?? {}
-  const running = runtime.status === 'running'
-  const ready = runtime.status === 'ready'
-  const editable = ready && !busy && !submitting
+  const running = !viewingInactiveSession && runtime.status === 'running'
+  const ready = viewingInactiveSession
+    ? canChangeRuntimeContext(runtime.status)
+    : viewingNewSession && !newSessionPrepared
+      ? preparingNewSession
+      : runtime.status === 'ready'
+  const editable =
+    (ready || running) && !submissionBusy && !submitting && !attachmentProcessing
   const slashQuery = parseSlashCommandToken(prompt)
   const matchingCommands = slashQuery === null
     ? []
     : filterSlashCommands(commands, slashQuery)
   const showSlashCommandSurface =
-    editable && slashQuery !== null && dismissedMenuPrompt !== prompt
+    !preparingNewSession &&
+    ready && editable && slashQuery !== null && dismissedMenuPrompt !== prompt
   const selectedCommand =
     matchingCommands.find((command) => command.id === selectedCommandId) ??
     matchingCommands[0] ??
@@ -94,8 +149,9 @@ export function Composer({
     session.resumeAvailable &&
     !busy
   const availableThinkingLevels = session.model?.reasoning === true
-    ? THINKING_LEVELS.filter((level) => thinkingLevelMap[level] != null)
+    ? THINKING_LEVELS.filter((level) => isThinkingLevelAvailable(level, thinkingLevelMap))
     : []
+  const currentThinkingLevel = session.thinkingLevel
 
   useLayoutEffect(() => {
     const composer = composerRef.current
@@ -141,10 +197,17 @@ export function Composer({
   }, [onAbort, running])
 
   useEffect(() => {
+    if (!viewingNewSession) return
+    restoreFocusRef.current = true
+  }, [viewingNewSession])
+
+  useEffect(() => {
     setSelectedCommandId(null)
     setDismissedMenuPrompt(null)
     setCommandError(null)
-  }, [activeProjectKey, activeSessionKey])
+    setModelPickerOpen(false)
+    setModelMenuOpen(false)
+  }, [activeProjectKey, activeSessionKey, sessionPreview?.sessionKey, viewingNewSession])
 
   useEffect(() => {
     if (previousCompletedActionRef.current === completedAction) return
@@ -174,8 +237,92 @@ export function Composer({
     selectedCommandOptionRef.current?.scrollIntoView({ block: 'nearest' })
   }, [activeCommandId, selectedCommandIndex, showSlashCommandSurface])
 
+  useEffect(() => {
+    if (!showSlashCommandSurface) return
+    const handlePointerDown = (event: PointerEvent): void => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (slashSurfaceRef.current?.contains(target) || textareaRef.current?.contains(target)) return
+      setDismissedMenuPrompt(prompt)
+    }
+    document.addEventListener('pointerdown', handlePointerDown, true)
+    return () => document.removeEventListener('pointerdown', handlePointerDown, true)
+  }, [prompt, showSlashCommandSurface])
+
+  useEffect(() => {
+    if (!modelPickerOpen) return
+    const handlePointerDown = (event: PointerEvent): void => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (
+        modelPickerRef.current?.contains(target) ||
+        modelPickerPopoverRef.current?.contains(target) ||
+        modelMenuPopoverRef.current?.contains(target)
+      ) return
+      setModelPickerOpen(false)
+      setModelMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', handlePointerDown, true)
+    return () => document.removeEventListener('pointerdown', handlePointerDown, true)
+  }, [modelPickerOpen])
+
+  useEffect(() => {
+    if (!modelPickerOpen || !modelPickerPlaced) return
+    const focusFrame = requestAnimationFrame(() => {
+      const popover = modelPickerPopoverRef.current
+      const preferredTarget =
+        popover?.querySelector<HTMLElement>('.model-picker-item.selected:not(:disabled)') ??
+        popover?.querySelector<HTMLElement>('.model-picker-model-button')
+      preferredTarget?.focus()
+    })
+    return () => cancelAnimationFrame(focusFrame)
+  }, [modelPickerOpen, modelPickerPlaced])
+
+  useEffect(() => {
+    if (!modelPickerOpen) return
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      if (modelMenuOpen) {
+        setModelMenuOpen(false)
+        requestAnimationFrame(() => modelMenuTriggerRef.current?.focus())
+        return
+      }
+      closeModelPickerAndRestoreFocus()
+    }
+    document.addEventListener('keydown', handleKeyDown, true)
+    return () => document.removeEventListener('keydown', handleKeyDown, true)
+  }, [modelMenuOpen, modelPickerOpen])
+
+  useEffect(() => {
+    if (!modelMenuOpen || !modelMenuPlaced) return
+    const focusFrame = requestAnimationFrame(() => {
+      const popover = modelMenuPopoverRef.current
+      const preferredTarget =
+        popover?.querySelector<HTMLElement>('.model-picker-item.selected:not(:disabled)') ??
+        popover?.querySelector<HTMLElement>('.model-picker-item:not(:disabled)')
+      preferredTarget?.focus()
+    })
+    return () => cancelAnimationFrame(focusFrame)
+  }, [modelMenuOpen, modelMenuPlaced])
+
+  useEffect(() => {
+    if (runtime.status === 'ready' || runtime.status === 'running') return
+    setModelPickerOpen(false)
+    setModelMenuOpen(false)
+  }, [runtime.status])
+
+  function closeModelPickerAndRestoreFocus(): void {
+    setModelPickerOpen(false)
+    setModelMenuOpen(false)
+    requestAnimationFrame(() => {
+      modelPickerRef.current?.querySelector<HTMLElement>('summary')?.focus()
+    })
+  }
+
   async function invokeCommand(command: KernelCommandDescriptor, argument: string): Promise<void> {
-    if (!ready || submitting || busy) return
+    if (!ready || submitting || submissionBusy) return
     setSubmitting(true)
     setCommandError(null)
     try {
@@ -191,27 +338,107 @@ export function Composer({
     }
   }
 
-  function selectCommand(command: KernelCommandDescriptor): void {
-    if (command.argumentHint !== null) {
-      setPrompt(`/${command.name} `)
-      setDismissedMenuPrompt(null)
-      setCommandError(null)
-      requestAnimationFrame(() => textareaRef.current?.focus())
-      return
-    }
-    void invokeCommand(command, '')
+  function appendPendingAttachments(attachments: readonly KernelPromptAttachment[]): void {
+    setPendingAttachments((current) => [
+      ...current,
+      ...attachments.map((attachment) => ({
+        id: crypto.randomUUID(),
+        attachment
+      }))
+    ])
   }
 
-  async function submitPrompt(): Promise<void> {
-    const message = prompt.trim()
-    if (!ready || submitting || busy || message.length === 0) return
+  async function selectAttachments(): Promise<void> {
+    if (!editable || attachmentProcessingRef.current) return
+    attachmentProcessingRef.current = true
+    setAttachmentProcessing(true)
+    setCommandError(null)
+    try {
+      appendPendingAttachments(await onSelectPromptAttachments())
+    } catch (error) {
+      setCommandError(errorMessage(error))
+    } finally {
+      attachmentProcessingRef.current = false
+      setAttachmentProcessing(false)
+      restoreFocusRef.current = true
+    }
+  }
 
-    const resolution = resolveSlashCommand(message, commands)
+  async function addDroppedAttachments(files: readonly File[]): Promise<void> {
+    if (!editable || attachmentProcessingRef.current || files.length === 0) return
+    attachmentProcessingRef.current = true
+    setAttachmentProcessing(true)
+    setCommandError(null)
+    try {
+      appendPendingAttachments(await readDroppedPromptAttachments(files))
+    } catch (error) {
+      setCommandError(errorMessage(error))
+    } finally {
+      attachmentProcessingRef.current = false
+      setAttachmentProcessing(false)
+      restoreFocusRef.current = true
+    }
+  }
+
+  function completeCommand(command: KernelCommandDescriptor): void {
+    const completedPrompt = `/${command.name}${command.argumentHint !== null ? ' ' : ''}`
+    setPrompt(completedPrompt)
+    setDismissedMenuPrompt(command.argumentHint === null ? completedPrompt : null)
+    setCommandError(null)
+    requestAnimationFrame(() => textareaRef.current?.focus())
+  }
+
+  async function submitPrompt(behavior: 'prompt' | 'steer' | 'follow-up' = running ? 'follow-up' : 'prompt'): Promise<void> {
+    const message = prompt.trim()
+    const attachments = pendingAttachments.map(({ attachment }) => attachment)
+    if (
+      (!ready && !running) ||
+      submitting ||
+      submissionBusy ||
+      attachmentProcessingRef.current ||
+      (message.length === 0 && attachments.length === 0)
+    ) return
+
+    if (running) {
+      setSubmitting(true)
+      setCommandError(null)
+      try {
+        if (behavior === 'follow-up') await onFollowUp(message, attachments)
+        else await onSteer(message, attachments)
+        setPrompt('')
+        setPendingAttachments([])
+        if (textareaRef.current) textareaRef.current.style.height = ''
+      } catch (error) {
+        setCommandError(errorMessage(error))
+        return
+      } finally {
+        restoreFocusRef.current = true
+        setSubmitting(false)
+      }
+      return
+    }
+
+    const resolution = message.length === 0
+      ? { kind: 'prompt' as const }
+      : resolveSlashCommand(message, commands)
     if (resolution.kind === 'unknown') {
       setCommandError(`未知命令：/${resolution.name}`)
       return
     }
     if (resolution.kind === 'command') {
+      if (attachments.length > 0) {
+        setCommandError('Slash 命令不能携带附件。')
+        return
+      }
+      const argumentHint = resolution.command.argumentHint?.trim()
+      if (
+        resolution.argument.length === 0 &&
+        argumentHint !== undefined &&
+        argumentHint.startsWith('<')
+      ) {
+        setCommandError(`/${resolution.command.name} 需要参数：${argumentHint}`)
+        return
+      }
       await invokeCommand(resolution.command, resolution.argument)
       return
     }
@@ -219,10 +446,12 @@ export function Composer({
     setSubmitting(true)
     setCommandError(null)
     try {
-      await onPrompt(message)
+      await onPrompt(message, attachments)
       setPrompt('')
+      setPendingAttachments([])
       if (textareaRef.current) textareaRef.current.style.height = ''
-    } catch {
+    } catch (error) {
+      setCommandError(errorMessage(error))
       return
     } finally {
       restoreFocusRef.current = true
@@ -233,14 +462,55 @@ export function Composer({
   return (
     <form
       ref={composerRef}
-      className="composer"
+      className={`composer${dragOver ? ' drag-over' : ''}`}
+      aria-busy={attachmentProcessing || submitting ? true : undefined}
+      onDragEnter={(event) => {
+        if (!hasDraggedFiles(event.dataTransfer) || !editable) return
+        event.preventDefault()
+        attachmentDragDepthRef.current += 1
+        setDragOver(true)
+      }}
+      onDragOver={(event) => {
+        if (!hasDraggedFiles(event.dataTransfer) || !editable) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'copy'
+      }}
+      onDragLeave={(event) => {
+        if (!hasDraggedFiles(event.dataTransfer)) return
+        attachmentDragDepthRef.current = Math.max(0, attachmentDragDepthRef.current - 1)
+        if (attachmentDragDepthRef.current === 0) setDragOver(false)
+      }}
+      onDrop={(event) => {
+        if (!hasDraggedFiles(event.dataTransfer)) return
+        event.preventDefault()
+        attachmentDragDepthRef.current = 0
+        setDragOver(false)
+        void addDroppedAttachments([...event.dataTransfer.files])
+      }}
       onSubmit={(event) => {
         event.preventDefault()
         void submitPrompt()
       }}
     >
+      {running && (session.pendingSteeringMessages.length > 0 || session.pendingFollowUpMessages.length > 0) ? (
+        <section className="composer-queue" aria-label="已排队消息" aria-live="polite">
+          <ol className="composer-queue-list">
+            {session.pendingSteeringMessages.map((message, index) => (
+              <li className="composer-queue-item" key={`steer-${index}`}>
+                <p className="composer-queue-message">{message}</p>
+              </li>
+            ))}
+            {session.pendingFollowUpMessages.map((message, index) => (
+              <li className="composer-queue-item" key={`follow-up-${index}`}>
+                <p className="composer-queue-message">{message}</p>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
+
       {showSlashCommandSurface ? (
-        <section className="slash-command-surface" aria-label="Slash 命令">
+        <section ref={slashSurfaceRef} className="slash-command-surface" aria-label="Slash 命令">
           <div id="slash-command-listbox" className="slash-command-list" role="listbox">
             {matchingCommands.length > 0 ? (
               matchingCommands.map((command) => (
@@ -253,7 +523,7 @@ export function Composer({
                   aria-selected={command.id === activeCommandId}
                   key={command.id}
                   onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => selectCommand(command)}
+                  onClick={() => completeCommand(command)}
                 >
                   <span className="slash-command-name">
                     /{command.name}
@@ -278,6 +548,35 @@ export function Composer({
 
       <div className="composer-input-row">
         <div className="composer-editor-column">
+          {pendingAttachments.length > 0 ? (
+            <ul className="composer-attachment-list" aria-label="待发送附件">
+              {pendingAttachments.map(({ id, attachment }) => (
+                <li className={`composer-attachment ${attachment.type}`} key={id} title={attachment.path}>
+                  {attachment.type === 'image' ? (
+                    <img
+                      className="composer-attachment-thumbnail"
+                      src={`data:${attachment.image.mimeType};base64,${attachment.image.data}`}
+                      alt=""
+                    />
+                  ) : (
+                    <span className="composer-attachment-file-kind" aria-hidden="true">文件</span>
+                  )}
+                  <span className="composer-attachment-name">{attachment.name}</span>
+                  <button
+                    className="composer-attachment-remove"
+                    type="button"
+                    aria-label={`移除附件 ${attachment.name}`}
+                    disabled={submitting || attachmentProcessing}
+                    onClick={() => {
+                      setPendingAttachments((current) => current.filter((item) => item.id !== id))
+                    }}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           <textarea
             ref={textareaRef}
             value={prompt}
@@ -298,7 +597,17 @@ export function Composer({
                 ? `slash-command-${selectedCommand.id}`
                 : undefined
             }
-            placeholder={composerPlaceholder(state)}
+            placeholder={composerPlaceholder(
+              state,
+              viewingInactiveSession,
+              viewingNewSession
+            )}
+            onPaste={(event) => {
+              const files = [...event.clipboardData.files]
+              if (files.length === 0) return
+              event.preventDefault()
+              void addDroppedAttachments(files)
+            }}
             onChange={(event) => {
               setPrompt(event.target.value)
               setSelectedCommandId(null)
@@ -308,7 +617,12 @@ export function Composer({
               event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 180)}px`
             }}
             onKeyDown={(event) => {
-              if (event.nativeEvent.isComposing) return
+              const completesAsciiSlashCommand =
+                event.key === 'Tab' &&
+                showSlashCommandSurface &&
+                selectedCommand !== null &&
+                /^\/[a-z0-9-]*$/i.test(prompt)
+              if (event.nativeEvent.isComposing && !completesAsciiSlashCommand) return
               if (showSlashCommandSurface && event.key === 'Escape') {
                 event.preventDefault()
                 event.stopPropagation()
@@ -328,24 +642,35 @@ export function Composer({
                   setSelectedCommandId(matchingCommands[nextIndex].id)
                   return
                 }
-                if (
-                  (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) &&
-                  selectedCommand !== null
-                ) {
+                if (event.key === 'Tab' && selectedCommand !== null) {
                   event.preventDefault()
-                  selectCommand(selectedCommand)
+                  completeCommand(selectedCommand)
+                  return
+                }
+                if (event.key === 'Enter' && !event.shiftKey && selectedCommand !== null) {
+                  event.preventDefault()
+                  completeCommand(selectedCommand)
                   return
                 }
               }
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault()
-                void submitPrompt()
+                void submitPrompt(running && event.altKey ? 'steer' : running ? 'follow-up' : 'prompt')
               }
             }}
           />
         </div>
 
         <div className="composer-input-actions">
+          <IconButton
+            className="composer-attach-action"
+            icon="attach"
+            label="添加图片或文件"
+            type="button"
+            disabled={!editable}
+            aria-busy={attachmentProcessing ? true : undefined}
+            onClick={() => void selectAttachments()}
+          />
           <div className="composer-submit-actions">
             {running ? (
               <IconButton
@@ -362,7 +687,13 @@ export function Composer({
                 icon="enter"
                 label="发送"
                 type="submit"
-                disabled={!ready || busy || submitting || prompt.trim().length === 0}
+                disabled={
+                  !ready ||
+                  submissionBusy ||
+                  submitting ||
+                  attachmentProcessing ||
+                  (prompt.trim().length === 0 && pendingAttachments.length === 0)
+                }
               />
             )}
           </div>
@@ -371,7 +702,7 @@ export function Composer({
 
       <div className="composer-meta-row">
         <div className="composer-runtime-controls">
-          {canResume ? (
+          {preparingNewSession || viewingInactiveSession ? null : canResume ? (
             <>
               <button
                 className="composer-start-action"
@@ -413,157 +744,302 @@ export function Composer({
               {runtime.status === 'starting' ? '正在启动' : '正在停止'}
             </span>
           ) : (
-            <details className="composer-model-controls">
-              <summary className="model-picker-button" aria-label="选择模型和思考强度">
+            <details
+              ref={modelPickerRef}
+              className="composer-model-controls"
+              open={modelPickerOpen}
+              onToggle={(event) => {
+                const open = event.currentTarget.open
+                setModelPickerOpen(open)
+                if (!open) setModelMenuOpen(false)
+              }}
+            >
+              <summary
+                className="model-picker-button"
+                aria-label="选择模型和思考强度"
+                aria-haspopup="dialog"
+                aria-expanded={modelPickerOpen}
+                aria-controls={modelPickerOpen ? 'model-picker-popover' : undefined}
+              >
                 <span className="model-summary-label">
                   {session.model?.name ?? session.model?.id ?? '选择模型'}
                 </span>
-                {session.thinkingLevel && availableThinkingLevels.includes(session.thinkingLevel) ? (
-                  <span className="model-summary-meta">{thinkingLabel(session.thinkingLevel)}</span>
+                {currentThinkingLevel !== null ? (
+                  <span className="model-summary-meta">
+                    {thinkingOptionLabel(currentThinkingLevel)}
+                  </span>
                 ) : null}
               </summary>
-              <section className="model-picker-popover" aria-label="模型和思考强度设置">
-                <div className="model-picker-main-panel">
-                  <nav className="model-picker-navigation" aria-label="设置分类">
-                    <button
-                      className={`model-picker-category${activeModelPickerPanel === 'model' ? ' active' : ''}`}
-                      type="button"
-                      aria-pressed={activeModelPickerPanel === 'model'}
-                      onClick={() => setActiveModelPickerPanel('model')}
+              {modelPickerOpen && modelPickerPosition !== null
+                ? createPortal(
+                    <div
+                      ref={modelPickerPopoverRef}
+                      id="model-picker-popover"
+                      className="model-picker-popover"
+                      role="dialog"
+                      aria-label="模型和思考强度设置"
+                      data-placement={modelPickerPosition.placement}
+                      style={modelPickerPosition.style}
                     >
-                      <span className="model-picker-category-copy">
-                        <span className="model-picker-category-label">模型</span>
-                        <span className="model-picker-category-value">
-                          {session.model?.name ?? session.model?.id ?? '未选择'}
-                        </span>
-                      </span>
-                      <Icon name="arrow-right" />
-                    </button>
-                    <button
-                      className={`model-picker-category${activeModelPickerPanel === 'thinking' ? ' active' : ''}`}
-                      type="button"
-                      aria-pressed={activeModelPickerPanel === 'thinking'}
-                      onClick={() => setActiveModelPickerPanel('thinking')}
-                    >
-                      <span className="model-picker-category-copy">
-                        <span className="model-picker-category-label">思考强度</span>
-                        <span className="model-picker-category-value">
-                          {session.model === null
-                            ? '未选择模型'
-                            : session.model.reasoning === false
-                            ? '当前模型不支持'
-                            : session.thinkingLevel && availableThinkingLevels.includes(session.thinkingLevel)
-                              ? thinkingLabel(session.thinkingLevel)
-                              : '未设置'}
-                        </span>
-                      </span>
-                      <Icon name="arrow-right" />
-                    </button>
-                  </nav>
+                      <div className="model-picker-content">
+                        <section className="model-picker-thinking-section" aria-label="思考强度">
+                          <h3 className="model-picker-section-heading">思考强度</h3>
+                          {session.model === null ? (
+                            <p className="model-picker-empty" role="status">请先选择模型</p>
+                          ) : session.model.reasoning === false ? (
+                            <p className="model-picker-empty" role="status">
+                              当前模型不支持思考强度
+                            </p>
+                          ) : availableThinkingLevels.length === 0 ? (
+                            <p className="model-picker-empty" role="status">
+                              当前模型没有可用的思考强度
+                            </p>
+                          ) : (
+                            <div className="model-picker-thinking-list">
+                              {availableThinkingLevels.map((level) => {
+                                const selected = session.thinkingLevel === level
+                                return (
+                                  <button
+                                    className={`picker-option model-picker-item${selected ? ' selected' : ''}`}
+                                    type="button"
+                                    key={level}
+                                    aria-pressed={selected}
+                                    disabled={busy || runtime.status !== 'ready'}
+                                    onClick={() => {
+                                      closeModelPickerAndRestoreFocus()
+                                      void onSetThinkingLevel(level).catch(() => undefined)
+                                    }}
+                                  >
+                                    <span className="model-picker-option-copy">
+                                      <span className="model-picker-option-label">
+                                        {thinkingOptionLabel(level)}
+                                      </span>
+                                      <span className="model-picker-option-meta">
+                                        {thinkingLabel(level)}
+                                      </span>
+                                    </span>
+                                    {selected
+                                      ? <span className="model-picker-selected">当前</span>
+                                      : null}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </section>
 
-                  <section
-                    className="model-picker-option-panel"
-                    aria-label={activeModelPickerPanel === 'model' ? '模型选项' : '思考强度选项'}
-                  >
-                    <header className="model-picker-column-heading">
-                      <span>{activeModelPickerPanel === 'model' ? '模型' : '思考强度'}</span>
-                    </header>
-                    {activeModelPickerPanel === 'model' ? (
-                      availableModels.length > 0 ? (
-                        <div className="model-picker-option-list" aria-label="模型">
-                          {availableModels.map((model) => {
-                            const selected =
-                              session.model?.provider === model.provider && session.model.id === model.id
-                            return (
-                              <button
-                                className={`picker-option model-picker-item${selected ? ' selected' : ''}`}
-                                type="button"
-                                key={`${model.provider}:${model.id}`}
-                                aria-pressed={selected}
-                                disabled={busy || runtime.status !== 'ready'}
-                                onClick={() => {
-                                  if (!selected) {
-                                    void onSetModel(model.provider, model.id).catch(() => undefined)
-                                  }
-                                }}
-                              >
-                                <span className="model-picker-option-copy">
-                                  <span className="model-picker-option-label">
-                                    {model.name.trim() || model.id}
-                                  </span>
-                                  <span className="model-picker-option-meta">
-                                    {model.provider}/{model.id}
-                                  </span>
-                                </span>
-                                {selected ? <span className="model-picker-selected">当前</span> : null}
-                              </button>
-                            )
-                          })}
-                        </div>
-                      ) : (
-                        <p className="model-picker-empty" role="status">暂无可用模型</p>
-                      )
-                    ) : session.model === null ? (
-                      <p className="model-picker-empty" role="status">尚未选择模型</p>
-                    ) : session.model.reasoning === false ? (
-                      <p className="model-picker-empty" role="status">当前模型不支持思考强度</p>
-                    ) : availableThinkingLevels.length === 0 ? (
-                      <p className="model-picker-empty" role="status">当前模型没有可用的思考强度</p>
-                    ) : (
-                      <div className="model-picker-option-list" aria-label="思考强度">
-                        {availableThinkingLevels.map((level) => {
-                          const selected = session.thinkingLevel === level
-                          return (
-                            <button
-                              className={`picker-option model-picker-item${selected ? ' selected' : ''}`}
-                              type="button"
-                              key={level}
-                              aria-pressed={selected}
-                              disabled={busy || runtime.status !== 'ready'}
-                              onClick={() => void onSetThinkingLevel(level).catch(() => undefined)}
-                            >
-                              <span className="model-picker-option-copy">
-                                <span className="model-picker-option-label">{thinkingLabel(level)}</span>
-                                <span className="model-picker-option-meta">{level}</span>
+                        <div className="model-picker-model-menu">
+                          <button
+                            ref={modelMenuTriggerRef}
+                            className="model-picker-model-button"
+                            type="button"
+                            aria-label="选择其他模型"
+                            aria-haspopup="menu"
+                            aria-expanded={modelMenuOpen}
+                            aria-controls={modelMenuOpen ? 'model-picker-model-popover' : undefined}
+                            data-placement={modelMenuPosition?.placement ?? 'right'}
+                            onClick={() => setModelMenuOpen((open) => !open)}
+                          >
+                            <span className="model-picker-option-copy">
+                              <span className="model-picker-heading-label">模型</span>
+                              <span className="model-picker-option-label">
+                                {session.model?.name ?? session.model?.id ?? '选择模型'}
                               </span>
-                              {selected ? <span className="model-picker-selected">当前</span> : null}
-                            </button>
-                          )
-                        })}
+                            </span>
+                            <Icon name="arrow-right" />
+                          </button>
+                          {modelMenuOpen && modelMenuPosition !== null
+                            ? createPortal(
+                                <div
+                                  ref={modelMenuPopoverRef}
+                                  id="model-picker-model-popover"
+                                  className="model-picker-model-popover"
+                                  role="menu"
+                                  aria-label="选择模型"
+                                  data-placement={modelMenuPosition.placement}
+                                  style={modelMenuPosition.style}
+                                >
+                                  {availableModels.length > 0 ? (
+                                    <div className="model-picker-model-list">
+                                      {availableModels.map((model) => {
+                                        const selected =
+                                          session.model?.provider === model.provider &&
+                                          session.model.id === model.id
+                                        return (
+                                          <button
+                                            className={`picker-option model-picker-item${selected ? ' selected' : ''}`}
+                                            type="button"
+                                            role="menuitemradio"
+                                            key={`${model.provider}:${model.id}`}
+                                            aria-checked={selected}
+                                            disabled={busy || runtime.status !== 'ready'}
+                                            onClick={() => {
+                                              closeModelPickerAndRestoreFocus()
+                                              if (!selected) {
+                                                void onSetModel(model.provider, model.id).catch(() => undefined)
+                                              }
+                                            }}
+                                          >
+                                            <span className="model-picker-option-copy">
+                                              <span className="model-picker-option-label">
+                                                {model.name.trim() || model.id}
+                                              </span>
+                                              <span className="model-picker-option-meta">
+                                                {model.provider}/{model.id}
+                                              </span>
+                                            </span>
+                                            {selected
+                                              ? <span className="model-picker-selected">当前</span>
+                                              : null}
+                                          </button>
+                                        )
+                                      })}
+                                    </div>
+                                  ) : (
+                                    <p className="model-picker-empty" role="status">暂无可用模型</p>
+                                  )}
+                                </div>,
+                                document.body
+                              )
+                            : null}
+                        </div>
                       </div>
-                    )}
-                  </section>
-                </div>
-              </section>
+                    </div>,
+                    document.body
+                  )
+                : null}
             </details>
           )}
 
-          <span className="context-indicator unknown" title="当前未提供 token 使用量">
-            <span className="context-ring" aria-hidden="true" />
-          </span>
+          <ContextIndicator usage={viewingInactiveSession ? null : session.usage} />
         </div>
       </div>
     </form>
   )
 }
 
-function composerPlaceholder(state: KernelState): string {
+function ContextIndicator({ usage }: { usage: KernelSessionUsage | null }): React.JSX.Element {
+  const contextPercent = usage?.contextPercent ?? null
+  const ringPercent = contextPercent === null ? 0 : clampPercent(contextPercent)
+  const promptTokens = usage === null
+    ? null
+    : usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens
+  const cacheRate = usage === null || promptTokens === null || promptTokens === 0
+    ? null
+    : (usage.cacheReadTokens / promptTokens) * 100
+  const tooltipId = 'composer-context-tooltip'
+  const contextLabel = usage === null
+    ? '上下文使用量不可用'
+    : contextPercent === null
+      ? '上下文占比暂不可用'
+      : `上下文已使用 ${contextPercent.toFixed(1)}%`
+
+  return (
+    <div
+      className={`context-indicator${contextPercent === null ? ' unknown' : ''}`}
+      style={{ '--context-percent': `${ringPercent}%` } as React.CSSProperties}
+      tabIndex={0}
+      aria-label={contextLabel}
+      aria-describedby={tooltipId}
+    >
+      <span className="context-ring" aria-hidden="true" />
+      <div id={tooltipId} className="context-tooltip" role="tooltip">
+        <strong>上下文使用情况</strong>
+        {usage === null ? (
+          <span>当前未提供 token 使用量</span>
+        ) : (
+          <>
+            <span className="context-tooltip-context">{contextUsageLabel(usage)}</span>
+            <dl className="context-tooltip-stats">
+              <dt>输入（总量）</dt>
+              <dd>{formatTokenCount(promptTokens)}</dd>
+              <dt>缓存读取</dt>
+              <dd>{formatTokenCount(usage.cacheReadTokens)}</dd>
+              <dt>缓存写入</dt>
+              <dd>{formatTokenCount(usage.cacheWriteTokens)}</dd>
+              <dt>输出</dt>
+              <dd>{formatTokenCount(usage.outputTokens)}</dd>
+              <dt>缓存率</dt>
+              <dd>{formatPercent(cacheRate)}</dd>
+            </dl>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function contextUsageLabel(usage: KernelSessionUsage): string {
+  const tokens = usage.contextTokens === null
+    ? '—'
+    : formatTokenCount(usage.contextTokens)
+  const window = usage.contextWindow === null
+    ? '—'
+    : formatTokenCount(usage.contextWindow)
+  const percent = formatPercent(usage.contextPercent)
+  return `上下文 ${tokens} / ${window} · ${percent}`
+}
+
+function formatTokenCount(value: number | null): string {
+  return value === null ? '—' : value.toLocaleString()
+}
+
+function formatPercent(value: number | null): string {
+  return value === null ? '—' : `${value.toFixed(1)}%`
+}
+
+function clampPercent(value: number): number {
+  return Math.min(100, Math.max(0, value))
+}
+
+function composerPlaceholder(
+  state: KernelState,
+  viewingInactiveSession: boolean,
+  viewingNewSession: boolean
+): string {
   if (state.activeProjectKey === null) return '先选择项目文件夹'
+  if (viewingNewSession && state.runtime.status === 'crashed') return '新对话启动失败'
+  if (viewingNewSession) return ''
+  if (viewingInactiveSession && canChangeRuntimeContext(state.runtime.status)) return ''
   if (state.runtime.status === 'stopped') return '启动 Pi 后开始对话'
   if (state.runtime.status === 'starting') return '正在启动 Pi…'
-  if (state.runtime.status === 'running') return 'Pi 正在执行当前任务…'
+  if (state.runtime.status === 'running') return '继续输入：Enter 跟进，Alt+Enter 转向'
   if (state.runtime.status === 'crashed') return 'Pi Runtime 已退出'
   return ''
 }
 
 function thinkingLabel(level: ThinkingLevel): string {
   return {
+    off: '关闭',
+    minimal: '最小',
     low: '低',
     medium: '中',
     high: '高',
     xhigh: '极高',
     max: '最高'
   }[level]
+}
+
+function thinkingOptionLabel(level: ThinkingLevel): string {
+  return {
+    off: 'Off',
+    minimal: 'Minimal',
+    low: 'Low',
+    medium: 'Medium',
+    high: 'High',
+    xhigh: 'Extra High',
+    max: 'Max'
+  }[level]
+}
+
+function isThinkingLevelAvailable(
+  level: ThinkingLevel,
+  thinkingLevelMap: Partial<Record<ThinkingLevel, string | null>>
+): boolean {
+  const mappedLevel = thinkingLevelMap[level]
+  if (mappedLevel === null) return false
+  if (level === 'xhigh' || level === 'max') return mappedLevel !== undefined
+  return true
 }
 
 function commandSourceLabel(source: KernelCommandDescriptor['source']): string {
@@ -578,6 +1054,10 @@ function commandSourceLabel(source: KernelCommandDescriptor['source']): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function hasDraggedFiles(dataTransfer: DataTransfer): boolean {
+  return Array.from(dataTransfer.types).includes('Files')
 }
 
 function isRuntimeContextAction(action: string): boolean {

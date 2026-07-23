@@ -1,10 +1,8 @@
 import {
   memo,
-  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
-  useState,
   type MouseEvent,
   type ReactNode
 } from 'react'
@@ -43,9 +41,8 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   text,
   streaming
 }: MarkdownMessageProps): React.JSX.Element {
-  const frameText = useFrameCoalescedText(text, streaming)
   return streaming
-    ? <StreamingMarkdownDocument text={frameText} />
+    ? <StreamingMarkdownDocument text={text} />
     : <div className="markdown-message"><MarkdownFragment text={text} /></div>
 })
 
@@ -126,34 +123,4 @@ function openExternalLink(event: MouseEvent<HTMLAnchorElement>, href: string): v
 
 function normalizeMarkdownUrl(url: string): string {
   return normalizeExternalUrl(url) ?? ''
-}
-
-function useFrameCoalescedText(text: string, streaming: boolean): string {
-  const [frameText, setFrameText] = useState(text)
-  const latestTextRef = useRef(text)
-  const frameRef = useRef<number | null>(null)
-  latestTextRef.current = text
-
-  useLayoutEffect(() => {
-    if (!streaming) {
-      if (frameRef.current !== null) {
-        cancelAnimationFrame(frameRef.current)
-        frameRef.current = null
-      }
-      setFrameText(text)
-      return
-    }
-
-    if (frameRef.current !== null) return
-    frameRef.current = requestAnimationFrame(() => {
-      frameRef.current = null
-      setFrameText(latestTextRef.current)
-    })
-  }, [streaming, text])
-
-  useEffect(() => () => {
-    if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
-  }, [])
-
-  return streaming ? frameText : text
 }

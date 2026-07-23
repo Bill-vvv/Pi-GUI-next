@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 
 import type {
+  AppearanceSettings,
+  GeneralSettings,
+  KernelPromptAttachment,
+  KernelSessionPreview,
   KernelStatePatch,
   KernelState,
   SessionNamingSettings,
@@ -12,18 +16,91 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+type SessionViewTarget =
+  | {
+      kind: 'session'
+      projectKey: string
+      sessionKey: string
+    }
+  | {
+      kind: 'new'
+      projectKey: string
+      prepared: boolean
+      sawProvisional: boolean
+    }
+
 export function App(): React.JSX.Element {
   const [kernelState, setKernelState] = useState<KernelState | null>(null)
   const [ipcError, setIpcError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<string | null>(null)
+  const [sessionPreview, setSessionPreview] = useState<KernelSessionPreview | null>(null)
+  const [sessionViewTarget, setSessionViewTarget] = useState<SessionViewTarget | null>(null)
+  const [previewPendingKey, setPreviewPendingKey] = useState<string | null>(null)
+  const [systemFonts, setSystemFonts] = useState<string[] | null>(null)
+  const [systemFontsError, setSystemFontsError] = useState<string | null>(null)
   const [completedAction, setCompletedAction] = useState<{
     action: string
     succeeded: boolean
   } | null>(null)
   const [connectionAttempt, setConnectionAttempt] = useState(0)
   const kernelStateRef = useRef<KernelState | null>(null)
+  const pendingActionRef = useRef<string | null>(null)
+  const sessionViewTargetRef = useRef<SessionViewTarget | null>(null)
+  const previewRequestRevision = useRef(0)
+  const sessionStartPromiseRef = useRef<Promise<void> | null>(null)
+  const coldStartHandledRef = useRef(false)
   const eventRevision = useRef(0)
+
+  useEffect(() => {
+    let active = true
+    void window.piGui.listSystemFonts().then(
+      (fonts) => {
+        if (!active) return
+        setSystemFonts(fonts)
+        setSystemFontsError(null)
+      },
+      (error: unknown) => {
+        if (!active) return
+        setSystemFontsError(errorMessage(error))
+      }
+    )
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    const rootStyle = document.documentElement.style
+    applySelectedFont(rootStyle, '--font-ui-selected', kernelState?.appearance.uiFontFamily ?? null)
+    applySelectedFont(rootStyle, '--font-code-selected', kernelState?.appearance.codeFontFamily ?? null)
+    const textSize = kernelState?.appearance.textSize ?? 'default'
+    rootStyle.setProperty('--text-root', textSize === 'small' ? '14px' : textSize === 'large' ? '16px' : '15px')
+  }, [kernelState?.appearance])
+
+  useEffect(() => {
+    const root = document.documentElement
+    root.dataset.accent = kernelState?.appearance.accentColor ?? 'amber'
+    root.style.setProperty(
+      '--surface-transparency',
+      `${kernelState?.appearance.surfaceTransparency ?? 20}%`
+    )
+  }, [kernelState?.appearance.accentColor, kernelState?.appearance.surfaceTransparency])
+
+  useEffect(() => {
+    const preference = kernelState?.appearance.theme ?? 'system'
+    const systemTheme = window.matchMedia('(prefers-color-scheme: light)')
+    const applyTheme = (): void => {
+      document.documentElement.dataset.theme = preference === 'system'
+        ? systemTheme.matches ? 'light' : 'dark'
+        : preference
+    }
+
+    applyTheme()
+    if (preference !== 'system') return
+    systemTheme.addEventListener('change', applyTheme)
+    return () => systemTheme.removeEventListener('change', applyTheme)
+  }, [kernelState?.appearance.theme])
 
   useEffect(() => {
     let active = true
@@ -33,6 +110,7 @@ export function App(): React.JSX.Element {
     let unsubscribe = (): void => undefined
 
     const commitImmediately = (state: KernelState): void => {
+      const initializing = kernelStateRef.current === null
       if (renderFrame !== null) {
         cancelAnimationFrame(renderFrame)
         renderFrame = null
@@ -40,6 +118,17 @@ export function App(): React.JSX.Element {
       framePatches = []
       kernelStateRef.current = state
       setKernelState(state)
+      const nextTarget = initializing && state.activeProjectKey !== null
+        ? {
+            kind: 'new' as const,
+            projectKey: state.activeProjectKey,
+            prepared: false,
+            sawProvisional: state.activeSessionKey === null
+          }
+        : keepValidSessionViewTarget(sessionViewTargetRef.current, state)
+      sessionViewTargetRef.current = nextTarget
+      setSessionViewTarget(nextTarget)
+      setSessionPreview((preview) => keepValidPreview(preview, state))
     }
 
     const schedulePatch = (patch: KernelStatePatch): void => {
@@ -97,11 +186,23 @@ export function App(): React.JSX.Element {
     }
   }, [connectionAttempt])
 
+  useEffect(() => {
+    if (coldStartHandledRef.current || kernelState === null) return
+    coldStartHandledRef.current = true
+    if (
+      kernelState.activeProjectKey === null ||
+      kernelState.runtime.status !== 'stopped' ||
+      sessionViewTargetRef.current?.kind !== 'new'
+    ) return
+    void startSession().catch(() => undefined)
+  }, [kernelState])
+
   async function runAction(
     action: string,
     operation: () => Promise<KernelState>
   ): Promise<void> {
-    if (pendingAction !== null) throw new Error('Another action is already running.')
+    if (pendingActionRef.current !== null) throw new Error('Another action is already running.')
+    pendingActionRef.current = action
     setPendingAction(action)
     setActionError(null)
     let succeeded = false
@@ -118,8 +219,95 @@ export function App(): React.JSX.Element {
       throw error
     } finally {
       setCompletedAction({ action, succeeded })
+      pendingActionRef.current = null
       setPendingAction(null)
     }
+  }
+
+  async function previewSession(sessionKey: string): Promise<void> {
+    const state = kernelStateRef.current
+    if (state?.activeProjectKey === null || state?.activeProjectKey === undefined) {
+      throw new Error('No active project is available.')
+    }
+    const requestRevision = previewRequestRevision.current + 1
+    previewRequestRevision.current = requestRevision
+    const target: SessionViewTarget = {
+      kind: 'session',
+      projectKey: state.activeProjectKey,
+      sessionKey
+    }
+    sessionViewTargetRef.current = target
+    setSessionViewTarget(target)
+    setSessionPreview(null)
+    setPreviewPendingKey(sessionKey)
+    setActionError(null)
+    try {
+      const preview = await window.piGui.previewSession(sessionKey)
+      if (
+        previewRequestRevision.current !== requestRevision ||
+        sessionViewTargetRef.current?.kind !== 'session' ||
+        sessionViewTargetRef.current.sessionKey !== sessionKey
+      ) return
+      setSessionPreview(preview)
+    } catch (error) {
+      if (previewRequestRevision.current !== requestRevision) return
+      setActionError(errorMessage(error))
+      throw error
+    } finally {
+      if (previewRequestRevision.current === requestRevision) setPreviewPendingKey(null)
+    }
+  }
+
+  function clearSessionView(): void {
+    previewRequestRevision.current += 1
+    sessionViewTargetRef.current = null
+    setSessionViewTarget(null)
+    setSessionPreview(null)
+    setPreviewPendingKey(null)
+    setActionError(null)
+  }
+
+  function startSession(): Promise<void> {
+    if (sessionStartPromiseRef.current !== null) return sessionStartPromiseRef.current
+    const projectKey = kernelStateRef.current?.activeProjectKey
+    if (projectKey !== null && projectKey !== undefined) {
+      previewRequestRevision.current += 1
+      const target: SessionViewTarget = {
+        kind: 'new',
+        projectKey,
+        prepared: false,
+        sawProvisional: kernelStateRef.current?.activeSessionKey === null
+      }
+      sessionViewTargetRef.current = target
+      setSessionViewTarget(target)
+      setSessionPreview(null)
+      setPreviewPendingKey(null)
+      setActionError(null)
+    }
+
+    const operation = runAction('start-session', () => window.piGui.startSession()).then(() => {
+      const target = sessionViewTargetRef.current
+      if (target?.kind === 'new') {
+        const preparedTarget = { ...target, prepared: true }
+        sessionViewTargetRef.current = preparedTarget
+        setSessionViewTarget(preparedTarget)
+      }
+    })
+    sessionStartPromiseRef.current = operation
+    void operation.then(
+      () => {
+        if (sessionStartPromiseRef.current === operation) sessionStartPromiseRef.current = null
+      },
+      () => {
+        if (sessionStartPromiseRef.current === operation) sessionStartPromiseRef.current = null
+      }
+    )
+    return operation
+  }
+
+  async function waitForSessionStart(): Promise<void> {
+    const operation = sessionStartPromiseRef.current
+    if (operation !== null) await operation
   }
 
   if (kernelState === null) {
@@ -151,18 +339,85 @@ export function App(): React.JSX.Element {
   return (
     <ChatWorkbench
       state={kernelState}
+      sessionPreview={sessionPreview}
+      viewedSessionKey={
+        sessionViewTarget?.kind === 'session' ? sessionViewTarget.sessionKey : null
+      }
+      viewingNewSession={sessionViewTarget?.kind === 'new'}
+      newSessionPrepared={
+        sessionViewTarget?.kind === 'new' && sessionViewTarget.prepared
+      }
+      sessionPreviewPending={
+        sessionViewTarget?.kind === 'session' &&
+        previewPendingKey === sessionViewTarget.sessionKey
+      }
       pendingAction={pendingAction}
       completedAction={completedAction}
       actionError={actionError ?? ipcError}
+      systemFonts={systemFonts}
+      systemFontsError={systemFontsError}
       onAddProject={() => runAction('add-project', () => window.piGui.addProject())}
-      onActivateProject={(projectKey) =>
-        runAction('activate-project', () => window.piGui.activateProject(projectKey))
+      onActivateProject={async (projectKey) => {
+        await runAction('activate-project', () => window.piGui.activateProject(projectKey))
+        clearSessionView()
+      }}
+      onStartSession={startSession}
+      onWaitForSessionStart={waitForSessionStart}
+      onActivateSession={async (sessionKey) => {
+        await runAction('activate-session', () => window.piGui.activateSession(sessionKey))
+        clearSessionView()
+      }}
+      onPreviewSession={previewSession}
+      onClearSessionPreview={clearSessionView}
+      onArchiveSession={async (sessionKey) => {
+        if (
+          sessionViewTargetRef.current?.kind === 'session' &&
+          sessionViewTargetRef.current.sessionKey === sessionKey
+        ) clearSessionView()
+        await runAction('archive-session', () => window.piGui.archiveSession(sessionKey))
+        setSessionPreview((preview) =>
+          preview?.sessionKey === sessionKey ? null : preview
+        )
+      }}
+      onReorderProjects={(projectKeys) =>
+        runAction('reorder-projects', () => window.piGui.reorderProjects(projectKeys))
       }
-      onStartSession={() => runAction('start-session', () => window.piGui.startSession())}
-      onActivateSession={(sessionKey) =>
-        runAction('activate-session', () => window.piGui.activateSession(sessionKey))
+      onReorderSessions={(sessionKeys) =>
+        runAction('reorder-sessions', () => window.piGui.reorderSessions(sessionKeys))
       }
-      onPrompt={(message) => runAction('prompt', () => window.piGui.prompt(message))}
+      onInstallExtension={(kind) =>
+        runAction('install-extension', () => window.piGui.installExtension(kind))
+      }
+      onRemoveExtension={(path) =>
+        runAction('remove-extension', () => window.piGui.removeExtension(path))
+      }
+      onSearchPiDevExtensions={(query) => window.piGui.searchPiDevExtensions(query)}
+      onSearchPiDevPackages={(query) => window.piGui.searchPiDevPackages(query)}
+      onListPiPackages={() => window.piGui.listPiPackages()}
+      onInstallPiDevPackage={(name) =>
+        runAction('install-pi-dev-package', () => window.piGui.installPiDevPackage(name))
+      }
+      onRemovePiPackage={(source) =>
+        runAction('remove-pi-package', () => window.piGui.removePiPackage(source))
+      }
+      onUpdatePiPackage={(source) =>
+        runAction('update-pi-package', () => window.piGui.updatePiPackage(source))
+      }
+      onUpdatePiPackages={() =>
+        runAction('update-pi-packages', () => window.piGui.updatePiPackages())
+      }
+      onOpenExternal={(url) => window.piGui.openExternal(url)}
+      onListProviders={window.piGui.listProviders}
+      onSaveProvider={window.piGui.saveProvider}
+      onRemoveProvider={window.piGui.removeProvider}
+      onTestProvider={window.piGui.testProvider}
+      onSelectPromptAttachments={() => window.piGui.selectPromptAttachments()}
+      onPrompt={(message, attachments?: KernelPromptAttachment[]) =>
+        runAction('prompt', () => window.piGui.prompt(message, attachments))}
+      onSteer={(message, attachments?: KernelPromptAttachment[]) =>
+        runAction('steer', () => window.piGui.steer(message, attachments))}
+      onFollowUp={(message, attachments?: KernelPromptAttachment[]) =>
+        runAction('follow-up', () => window.piGui.followUp(message, attachments))}
       onInvokeCommand={(commandId, argument) =>
         runAction('invoke-command', () => window.piGui.invokeCommand(commandId, argument))
       }
@@ -176,8 +431,53 @@ export function App(): React.JSX.Element {
       onSetSessionNaming={(settings: SessionNamingSettings) =>
         runAction('set-session-naming', () => window.piGui.setSessionNaming(settings))
       }
+      onSetGeneral={(settings: GeneralSettings) =>
+        runAction('set-general', () => window.piGui.setGeneral(settings))
+      }
+      onSetAppearance={(settings: AppearanceSettings) =>
+        runAction('set-appearance', () => window.piGui.setAppearance(settings))
+      }
     />
   )
+}
+
+function applySelectedFont(
+  style: CSSStyleDeclaration,
+  property: '--font-ui-selected' | '--font-code-selected',
+  fontFamily: string | null
+): void {
+  if (fontFamily === null) style.removeProperty(property)
+  else style.setProperty(property, `${JSON.stringify(fontFamily)},`)
+}
+
+function keepValidPreview(
+  preview: KernelSessionPreview | null,
+  state: KernelState
+): KernelSessionPreview | null {
+  if (
+    preview === null ||
+    preview.projectKey !== state.activeProjectKey ||
+    preview.sessionKey === state.activeSessionKey ||
+    !state.sessions.some(({ key }) => key === preview.sessionKey)
+  ) {
+    return null
+  }
+  return preview
+}
+
+function keepValidSessionViewTarget(
+  target: SessionViewTarget | null,
+  state: KernelState
+): SessionViewTarget | null {
+  if (target === null || target.projectKey !== state.activeProjectKey) return null
+  if (target.kind === 'session') {
+    if (target.sessionKey === state.activeSessionKey) return null
+    return state.sessions.some(({ key }) => key === target.sessionKey) ? target : null
+  }
+  if (state.activeSessionKey === null) {
+    return target.sawProvisional ? target : { ...target, sawProvisional: true }
+  }
+  return target.sawProvisional ? null : target
 }
 
 function applyStatePatches(state: KernelState, patches: KernelStatePatch[]): KernelState {
