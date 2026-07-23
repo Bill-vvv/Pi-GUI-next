@@ -24,6 +24,8 @@ import { errorMessage } from '../utils/errors.ts'
 const DEFAULT_RPC_TIMEOUT_MS = 10_000
 const STOP_GRACE_MS = 1_000
 const PROBE_SESSION_NAME = 'Pi GUI S11 probe'
+const PROGRESS_SYSTEM_PROMPT =
+  'For non-trivial tasks, provide brief user-visible commentary before important tool operations and after important discoveries. Do not narrate every tool call. Use commentary for progress updates and final_answer for the final response.'
 
 export type LinuxLocalRuntimeOptions = {
   cwd: string
@@ -39,7 +41,13 @@ export function buildPiRpcArguments(sessionFile?: string, noSession = false): st
   if (sessionFile !== undefined && noSession) {
     throw new Error('Session file and no-session mode cannot be used together.')
   }
-  const arguments_ = ['--mode', 'rpc', '--offline']
+  const arguments_ = [
+    '--mode',
+    'rpc',
+    '--offline',
+    '--append-system-prompt',
+    PROGRESS_SYSTEM_PROMPT
+  ]
   if (sessionFile !== undefined) {
     if (!isAbsolute(sessionFile)) {
       throw new Error(`Session file must be an absolute path: ${sessionFile}`)
@@ -194,13 +202,28 @@ export class LinuxLocalRuntime implements RuntimeHost {
     if (command.type === 'get_state') {
       const state = await this.client.getState()
       this.updateStreamingState(state.isStreaming === true)
-      return { type: 'state', state }
+      try {
+        const sessionStats = await this.client.getSessionStats()
+        return { type: 'state', state: { ...state, sessionStats } }
+      } catch {
+        // Older Pi runtimes may not expose session statistics. Keep the normal
+        // session-state path usable and let the UI retain its last known usage.
+        return { type: 'state', state }
+      }
     }
     if (command.type === 'get_messages') {
       return { type: 'messages', messages: await this.client.getMessages() }
     }
     if (command.type === 'prompt') {
-      await this.client.prompt(command.message)
+      await this.client.prompt(command.message, command.images)
+      return { type: 'accepted' }
+    }
+    if (command.type === 'steer') {
+      await this.client.steer(command.message, command.images)
+      return { type: 'accepted' }
+    }
+    if (command.type === 'follow_up') {
+      await this.client.followUp(command.message, command.images)
       return { type: 'accepted' }
     }
     if (command.type === 'abort') {

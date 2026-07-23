@@ -46,7 +46,7 @@ export const generateSessionNameWithPi: SessionNameGenerator = async (request) =
   ].join('\n')
 
   try {
-    const { stdout } = await execFileAsync(request.executable, [
+    const titleProcess = execFileAsync(request.executable, [
       '--print',
       '--no-session',
       '--no-tools',
@@ -70,6 +70,8 @@ export const generateSessionNameWithPi: SessionNameGenerator = async (request) =
       timeout: TITLE_REQUEST_TIMEOUT_MS,
       windowsHide: true
     })
+    titleProcess.child.stdin?.end()
+    const { stdout } = await titleProcess
     return stdout
   } catch (error) {
     if (request.signal.aborted || errorName(error) === 'AbortError') throw abortError()

@@ -2,13 +2,25 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
 
-import type { ThinkingLevel, ThinkingLevelMap } from '../../shared/kernel-contract.ts'
+import type {
+  KernelPromptImage,
+  ThinkingLevel,
+  ThinkingLevelMap
+} from '../../shared/kernel-contract.ts'
 import { isRecord } from '../utils/guards.ts'
 import { LfJsonlParser, type JsonlParseBatch } from './jsonl-framing.ts'
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
 const DEFAULT_COMPACT_TIMEOUT_MS = 120_000
-const GUI_THINKING_LEVELS: ThinkingLevel[] = ['low', 'medium', 'high', 'xhigh', 'max']
+const GUI_THINKING_LEVELS: ThinkingLevel[] = [
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max'
+]
 
 export type PiRpcModel = {
   id: string
@@ -29,6 +41,29 @@ export type PiRpcAvailableModel = {
   contextWindow?: number
 }
 
+export type PiRpcSessionStats = {
+  sessionFile?: string
+  sessionId: string
+  userMessages: number
+  assistantMessages: number
+  toolCalls: number
+  toolResults: number
+  totalMessages: number
+  tokens: {
+    input: number
+    output: number
+    cacheRead: number
+    cacheWrite: number
+    total: number
+  }
+  cost: number
+  contextUsage?: {
+    tokens: number | null
+    contextWindow: number
+    percent: number | null
+  }
+}
+
 export type PiRpcSessionState = {
   sessionId?: string
   sessionFile?: string
@@ -39,6 +74,7 @@ export type PiRpcSessionState = {
   isCompacting?: boolean
   messageCount?: number
   pendingMessageCount?: number
+  sessionStats?: PiRpcSessionStats
   [key: string]: unknown
 }
 
@@ -65,8 +101,11 @@ export type PiRpcClientOptions = {
 
 type PiRpcCommandName =
   | 'get_state'
+  | 'get_session_stats'
   | 'get_messages'
   | 'prompt'
+  | 'steer'
+  | 'follow_up'
   | 'abort'
   | 'set_model'
   | 'set_thinking_level'
@@ -147,6 +186,14 @@ export class PiRpcClient {
     return data
   }
 
+  async getSessionStats(timeoutMs = this.requestTimeoutMs): Promise<PiRpcSessionStats> {
+    const data = await this.request({ type: 'get_session_stats' }, true, timeoutMs)
+    if (!isPiRpcSessionStats(data)) {
+      throw new Error('Invalid Pi RPC get_session_stats response')
+    }
+    return data
+  }
+
   async getMessages(timeoutMs = this.requestTimeoutMs): Promise<unknown[]> {
     const data = await this.request({ type: 'get_messages' }, true, timeoutMs)
     if (!isRecord(data) || !Array.isArray(data.messages)) {
@@ -155,8 +202,40 @@ export class PiRpcClient {
     return data.messages
   }
 
-  async prompt(message: string, timeoutMs = this.requestTimeoutMs): Promise<void> {
-    await this.request({ type: 'prompt', message }, false, timeoutMs)
+  async prompt(
+    message: string,
+    images?: readonly KernelPromptImage[],
+    timeoutMs = this.requestTimeoutMs
+  ): Promise<void> {
+    await this.request({
+      type: 'prompt',
+      message,
+      ...(images !== undefined && images.length > 0 ? { images: images.map(copyPromptImage) } : {})
+    }, false, timeoutMs)
+  }
+
+  async steer(
+    message: string,
+    images?: readonly KernelPromptImage[],
+    timeoutMs = this.requestTimeoutMs
+  ): Promise<void> {
+    await this.request({
+      type: 'steer',
+      message,
+      ...(images !== undefined && images.length > 0 ? { images: images.map(copyPromptImage) } : {})
+    }, false, timeoutMs)
+  }
+
+  async followUp(
+    message: string,
+    images?: readonly KernelPromptImage[],
+    timeoutMs = this.requestTimeoutMs
+  ): Promise<void> {
+    await this.request({
+      type: 'follow_up',
+      message,
+      ...(images !== undefined && images.length > 0 ? { images: images.map(copyPromptImage) } : {})
+    }, false, timeoutMs)
   }
 
   async abort(timeoutMs = this.requestTimeoutMs): Promise<void> {
@@ -392,6 +471,49 @@ function isPiRpcAvailableModel(value: unknown): value is PiRpcAvailableModel {
   )
 }
 
+function isPiRpcSessionStats(value: unknown): value is PiRpcSessionStats {
+  if (!isRecord(value) || typeof value.sessionId !== 'string' || typeof value.cost !== 'number') {
+    return false
+  }
+  const tokens = value.tokens
+  if (
+    !isRecord(tokens) ||
+    !isNonNegativeNumber(tokens.input) ||
+    !isNonNegativeNumber(tokens.output) ||
+    !isNonNegativeNumber(tokens.cacheRead) ||
+    !isNonNegativeNumber(tokens.cacheWrite) ||
+    !isNonNegativeNumber(tokens.total)
+  ) {
+    return false
+  }
+  const contextUsage = value.contextUsage
+  return (
+    (!('sessionFile' in value) || typeof value.sessionFile === 'string') &&
+    isNonNegativeNumber(value.userMessages) &&
+    isNonNegativeNumber(value.assistantMessages) &&
+    isNonNegativeNumber(value.toolCalls) &&
+    isNonNegativeNumber(value.toolResults) &&
+    isNonNegativeNumber(value.totalMessages) &&
+    (
+      contextUsage === undefined ||
+      (
+        isRecord(contextUsage) &&
+        (contextUsage.tokens === null || isNonNegativeNumber(contextUsage.tokens)) &&
+        isPositiveNumber(contextUsage.contextWindow) &&
+        (contextUsage.percent === null || isNonNegativeNumber(contextUsage.percent))
+      )
+    )
+  )
+}
+
+function isNonNegativeNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
+function isPositiveNumber(value: unknown): value is number {
+  return isNonNegativeNumber(value) && value > 0
+}
+
 function normalizePiRpcModel(model: PiRpcModel): PiRpcModel {
   return {
     ...model,
@@ -430,4 +552,8 @@ function isPiRpcSlashCommand(value: unknown): value is PiRpcSlashCommand {
 
 function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value))
+}
+
+function copyPromptImage(image: KernelPromptImage): KernelPromptImage {
+  return { type: 'image', mimeType: image.mimeType, data: image.data }
 }

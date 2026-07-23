@@ -1,4 +1,5 @@
 import { accessSync, constants, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { delimiter, join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 
@@ -13,6 +14,7 @@ const MAX_STDOUT_BYTES = 4_096
 export interface ResolvePiExecutableOptions {
   explicitPath?: string
   path?: string
+  homeDir?: string
 }
 
 export interface CheckPiVersionOptions {
@@ -45,7 +47,12 @@ export function resolvePiExecutable(options: ResolvePiExecutableOptions = {}): s
     }
   }
 
-  throw new Error('Pi was not found in the current PATH. Provide the path to the Pi executable and try again.')
+  const userLocalExecutable = resolve(options.homeDir ?? homedir(), '.local/bin/pi')
+  if (isExecutableFile(userLocalExecutable)) {
+    return userLocalExecutable
+  }
+
+  throw new Error('Pi was not found in the current PATH or ~/.local/bin. Provide the path to the Pi executable and try again.')
 }
 
 export async function checkPiVersion(options: CheckPiVersionOptions): Promise<string> {

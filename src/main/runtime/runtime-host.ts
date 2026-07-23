@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from '../../shared/kernel-contract.ts'
+import type { KernelPromptImage, ThinkingLevel } from '../../shared/kernel-contract.ts'
 import type {
   PiRpcEvent,
   PiRpcAvailableModel,
@@ -10,7 +10,9 @@ import type {
 export type RuntimeCommand =
   | { type: 'get_state' }
   | { type: 'get_messages' }
-  | { type: 'prompt'; message: string }
+  | { type: 'prompt'; message: string; images?: KernelPromptImage[] }
+  | { type: 'steer'; message: string; images?: KernelPromptImage[] }
+  | { type: 'follow_up'; message: string; images?: KernelPromptImage[] }
   | { type: 'abort' }
   | { type: 'set_model'; provider: string; modelId: string }
   | { type: 'set_thinking_level'; level: ThinkingLevel }

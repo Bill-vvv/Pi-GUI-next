@@ -27,7 +27,7 @@ const BUILTIN_COMMANDS: readonly KernelCommandDescriptor[] = [
     name: 'thinking',
     description: '设置思考强度',
     source: 'pi-rpc',
-    argumentHint: '<low|medium|high|xhigh|max>'
+    argumentHint: '<off|minimal|low|medium|high|xhigh|max>'
   },
   {
     id: COMPACT_COMMAND_ID,

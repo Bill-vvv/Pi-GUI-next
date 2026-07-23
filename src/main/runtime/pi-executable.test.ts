@@ -42,10 +42,19 @@ test('PATH directories are checked in order', (t) => {
   assert.equal(resolvePiExecutable({ path: `${firstDirectory}:${secondDirectory}` }), resolve(first))
 })
 
+test('the user-local Pi install is found when Electron PATH omits it', (t) => {
+  const root = temporaryDirectory(t)
+  const directory = join(root, '.local/bin')
+  mkdirSync(directory, { recursive: true })
+  const executable = writeExecutable(directory)
+
+  assert.equal(resolvePiExecutable({ path: '', homeDir: root }), resolve(executable))
+})
+
 test('missing Pi asks for an explicit path', (t) => {
   const directory = temporaryDirectory(t)
 
-  assert.throws(() => resolvePiExecutable({ path: directory }), /not found.*Provide the path/i)
+  assert.throws(() => resolvePiExecutable({ path: directory, homeDir: directory }), /not found.*Provide the path/i)
 })
 
 test('an explicit non-executable file fails immediately', (t) => {

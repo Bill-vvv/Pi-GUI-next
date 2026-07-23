@@ -1,10 +1,12 @@
 import type {
   KernelConversationEntry,
   KernelMessageEntry,
+  KernelMessagePhase,
   KernelThinkingEntry,
   KernelToolEntry
 } from '../../shared/kernel-contract.ts'
 import type { PiRpcEvent } from '../pi-rpc/pi-rpc-client.ts'
+import { projectPromptDisplay } from '../prompt/prompt-attachments.ts'
 import { isRecord } from '../utils/guards.ts'
 
 const MAX_DISPLAY_CHARS = 30_000
@@ -119,7 +121,7 @@ function projectMessage(
   const timestamp = numberValue(value.timestamp) ?? Date.now()
 
   if (value.role === 'user') {
-    const text = textFromContent(value.content)
+    const display = projectPromptDisplay(value.content)
     const messageId = historicalIdentity === undefined
       ? `message:user:${timestamp}`
       : `message:${historicalIdentity}:user`
@@ -127,11 +129,13 @@ function projectMessage(
       id: messageId,
       kind: 'message',
       role: 'user',
-      text,
+      phase: null,
+      text: display.text,
       timestamp,
       streaming: false,
       stopReason: null,
-      error: null
+      error: null,
+      ...(display.attachments.length === 0 ? {} : { attachments: display.attachments })
     }
     return upsert(entries, entry)
   }
@@ -141,19 +145,7 @@ function projectMessage(
     const messageId = historicalIdentity === undefined
       ? `message:assistant:${timestamp}`
       : `message:${historicalIdentity}:assistant`
-    const messageEntry: KernelMessageEntry = {
-      id: messageId,
-      kind: 'message',
-      role: 'assistant',
-      text: content
-        .filter((item) => isRecord(item) && item.type === 'text')
-        .map((item) => stringValue(item.text) ?? '')
-        .join(''),
-      timestamp,
-      streaming,
-      stopReason: stringValue(value.stopReason),
-      error: stringValue(value.errorMessage)
-    }
+    const lastTextIndex = content.findLastIndex((item) => isRecord(item) && item.type === 'text')
     let nextEntries = entries
     let messageProjected = false
     for (const [contentIndex, item] of content.entries()) {
@@ -163,6 +155,7 @@ function projectMessage(
           id: `${messageId}:thinking:${contentIndex}`,
           kind: 'thinking',
           text: stringValue(item.thinking) ?? '',
+          summary: isThinkingSummary(item.thinkingSignature),
           timestamp,
           streaming
         }
@@ -170,10 +163,19 @@ function projectMessage(
         continue
       }
       if (item.type === 'text') {
-        if (!messageProjected) {
-          nextEntries = upsert(nextEntries, messageEntry)
-          messageProjected = true
+        const messageEntry: KernelMessageEntry = {
+          id: messageProjected ? `${messageId}:text:${contentIndex}` : messageId,
+          kind: 'message',
+          role: 'assistant',
+          phase: phaseFromTextSignature(item.textSignature),
+          text: stringValue(item.text) ?? '',
+          timestamp,
+          streaming,
+          stopReason: contentIndex === lastTextIndex ? stringValue(value.stopReason) : null,
+          error: contentIndex === lastTextIndex ? stringValue(value.errorMessage) : null
         }
+        nextEntries = upsert(nextEntries, messageEntry)
+        messageProjected = true
         continue
       }
       if (item.type !== 'toolCall') continue
@@ -194,8 +196,19 @@ function projectMessage(
         durationMs: existing?.durationMs ?? null
       })
     }
-    if (!messageProjected && messageEntry.error !== null) {
-      nextEntries = upsert(nextEntries, messageEntry)
+    const error = stringValue(value.errorMessage)
+    if (!messageProjected && error !== null) {
+      nextEntries = upsert(nextEntries, {
+        id: messageId,
+        kind: 'message',
+        role: 'assistant',
+        phase: null,
+        text: '',
+        timestamp,
+        streaming,
+        stopReason: stringValue(value.stopReason),
+        error
+      })
     }
     return nextEntries
   }
@@ -275,6 +288,32 @@ function limitText(value: string): { text: string; truncated: boolean } {
 
 function stringValue(value: unknown): string | null {
   return typeof value === 'string' ? value : null
+}
+
+function phaseFromTextSignature(value: unknown): KernelMessagePhase | null {
+  if (typeof value !== 'string' || !value.startsWith('{')) return null
+  try {
+    const signature: unknown = JSON.parse(value)
+    if (!isRecord(signature) || signature.v !== 1 || typeof signature.id !== 'string') return null
+    return signature.phase === 'commentary' || signature.phase === 'final_answer'
+      ? signature.phase
+      : null
+  } catch {
+    return null
+  }
+}
+
+function isThinkingSummary(value: unknown): boolean {
+  if (typeof value !== 'string' || !value.startsWith('{')) return false
+  try {
+    const signature: unknown = JSON.parse(value)
+    if (!isRecord(signature) || !Array.isArray(signature.summary)) return false
+    return signature.summary.some(
+      (item) => isRecord(item) && item.type === 'summary_text' && typeof item.text === 'string'
+    )
+  } catch {
+    return false
+  }
 }
 
 function numberValue(value: unknown): number | null {

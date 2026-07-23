@@ -163,7 +163,17 @@ test('maps the S5 command set and validates data-bearing responses', async () =>
     const data = request.type === 'get_messages'
       ? { messages: [{ role: 'user', content: 'hello', timestamp: 1 }] }
       : request.type === 'set_model'
-        ? { id: 'gpt-test', provider: 'openai', name: 'GPT Test' }
+        ? {
+            id: 'gpt-test',
+            provider: 'openai',
+            name: 'GPT Test',
+            thinkingLevelMap: {
+              off: 'none',
+              minimal: 'minimal',
+              low: null,
+              unknown: 'unknown'
+            }
+          }
         : undefined
     fake.stdout.write(`${JSON.stringify({
       type: 'response',
@@ -176,7 +186,16 @@ test('maps the S5 command set and validates data-bearing responses', async () =>
 
   await Promise.all([prompt, abort, thinking])
   assert.deepEqual(await messages, [{ role: 'user', content: 'hello', timestamp: 1 }])
-  assert.deepEqual(await model, { id: 'gpt-test', provider: 'openai', name: 'GPT Test' })
+  assert.deepEqual(await model, {
+    id: 'gpt-test',
+    provider: 'openai',
+    name: 'GPT Test',
+    thinkingLevelMap: {
+      off: 'none',
+      minimal: 'minimal',
+      low: null
+    }
+  })
   assert.deepEqual(requests.map((request) => request.type), [
     'prompt',
     'abort',
@@ -184,6 +203,48 @@ test('maps the S5 command set and validates data-bearing responses', async () =>
     'set_model',
     'set_thinking_level'
   ])
+})
+
+test('maps prompt, steer, and follow_up with optional native image payloads', async () => {
+  const fake = createFakeProcess()
+  const client = new PiRpcClient(fake.child)
+  const image = { type: 'image' as const, mimeType: 'image/png', data: 'aGVsbG8=' }
+  const prompt = client.prompt('Inspect the image', [image])
+  const steer = client.steer('Change direction now', [image])
+  const followUp = client.followUp('Summarize when finished', [image])
+  const requests = readRequests(fake.stdin) as Array<Record<string, unknown> & {
+    id: string
+    type: string
+  }>
+
+  assert.deepEqual(requests.map(({ id: _id, ...request }) => request), [
+    { type: 'prompt', message: 'Inspect the image', images: [image] },
+    { type: 'steer', message: 'Change direction now', images: [image] },
+    { type: 'follow_up', message: 'Summarize when finished', images: [image] }
+  ])
+
+  for (const request of requests) {
+    fake.stdout.write(`${JSON.stringify({
+      type: 'response',
+      id: request.id,
+      command: request.type,
+      success: true
+    })}\n`)
+  }
+
+  await Promise.all([prompt, steer, followUp])
+})
+
+test('keeps the legacy prompt payload unchanged without images', () => {
+  const fake = createFakeProcess()
+  const client = new PiRpcClient(fake.child, { createRequestId: () => 'request-prompt' })
+
+  void client.prompt('Plain prompt')
+
+  assert.equal(
+    fake.stdin.read()?.toString('utf8'),
+    '{"id":"request-prompt","type":"prompt","message":"Plain prompt"}\n'
+  )
 })
 
 test('maps the S11 command set with exact payloads and strips command sourceInfo', async () => {
@@ -284,7 +345,8 @@ test('gets available models and strips provider internals', async () => {
           medium: 'medium',
           high: 'high',
           xhigh: null,
-          max: null
+          max: null,
+          unknown: 'unknown'
         },
         contextWindow: 128000,
         baseUrl: 'https://private.example',
@@ -301,6 +363,8 @@ test('gets available models and strips provider internals', async () => {
     name: 'GPT Test',
     reasoning: true,
     thinkingLevelMap: {
+      off: 'none',
+      minimal: 'minimal',
       low: 'low',
       medium: 'medium',
       high: 'high',
@@ -309,6 +373,65 @@ test('gets available models and strips provider internals', async () => {
     },
     contextWindow: 128000
   }])
+})
+
+test('gets session token and context usage statistics', async () => {
+  const fake = createFakeProcess()
+  const client = new PiRpcClient(fake.child)
+  const stats = client.getSessionStats()
+  const [request] = readRequests(fake.stdin)
+
+  assert.equal(request?.type, 'get_session_stats')
+  fake.stdout.write(`${JSON.stringify({
+    type: 'response',
+    id: request?.id,
+    success: true,
+    data: {
+      sessionFile: '/tmp/session.jsonl',
+      sessionId: 'session-1',
+      userMessages: 3,
+      assistantMessages: 4,
+      toolCalls: 5,
+      toolResults: 5,
+      totalMessages: 12,
+      tokens: {
+        input: 42000,
+        output: 3600,
+        cacheRead: 18000,
+        cacheWrite: 2000,
+        total: 65600
+      },
+      cost: 0.42,
+      contextUsage: {
+        tokens: 56000,
+        contextWindow: 200000,
+        percent: 28
+      }
+    }
+  })}\n`)
+
+  assert.deepEqual(await stats, {
+    sessionFile: '/tmp/session.jsonl',
+    sessionId: 'session-1',
+    userMessages: 3,
+    assistantMessages: 4,
+    toolCalls: 5,
+    toolResults: 5,
+    totalMessages: 12,
+    tokens: {
+      input: 42000,
+      output: 3600,
+      cacheRead: 18000,
+      cacheWrite: 2000,
+      total: 65600
+    },
+    cost: 0.42,
+    contextUsage: {
+      tokens: 56000,
+      contextWindow: 200000,
+      percent: 28
+    }
+  })
 })
 
 test('rejects malformed get_available_models responses', async () => {

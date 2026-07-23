@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { access, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -9,7 +9,10 @@ import { buildPiRpcArguments, LinuxLocalRuntime } from './linux-local-runtime.ts
 test('runtime leaves project resource trust to Pi defaults', () => {
   const arguments_ = buildPiRpcArguments()
 
-  assert.deepEqual(arguments_, ['--mode', 'rpc', '--offline'])
+  assert.deepEqual(arguments_.slice(0, 3), ['--mode', 'rpc', '--offline'])
+  assert.equal(arguments_[3], '--append-system-prompt')
+  assert.match(arguments_[4] ?? '', /commentary/)
+  assert.match(arguments_[4] ?? '', /final_answer/)
   assert.equal(arguments_.includes('--approve'), false)
   assert.equal(arguments_.includes('--no-approve'), false)
 })
@@ -21,6 +24,8 @@ test('runtime resumes an absolute session file', () => {
     '--mode',
     'rpc',
     '--offline',
+    '--append-system-prompt',
+    buildPiRpcArguments()[4]!,
     '--session',
     sessionFile
   ])
@@ -35,6 +40,8 @@ test('runtime supports stateless probes and rejects conflicting session modes', 
     '--mode',
     'rpc',
     '--offline',
+    '--append-system-prompt',
+    buildPiRpcArguments()[4]!,
     '--no-session'
   ])
   assert.throws(
@@ -45,6 +52,60 @@ test('runtime supports stateless probes and rejects conflicting session modes', 
     () => new LinuxLocalRuntime({ cwd: '/tmp', sessionFile: '/tmp/pi-session.jsonl', noSession: true }),
     /cannot be used together/
   )
+})
+
+test('runtime forwards native images for prompt, steer, and follow-up', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-runtime-images-'))
+  t.after(async () => rm(directory, { recursive: true, force: true }))
+  const executable = join(directory, 'pi')
+  const requestLog = join(directory, 'requests.jsonl')
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs')
+if (process.argv[2] === '--version') {
+  process.stdout.write('0.80.10\\n')
+  process.exit(0)
+}
+let input = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  input += chunk
+  let newline
+  while ((newline = input.indexOf('\\n')) >= 0) {
+    const request = JSON.parse(input.slice(0, newline))
+    input = input.slice(newline + 1)
+    appendFileSync(${JSON.stringify(requestLog)}, JSON.stringify(request) + '\\n')
+    process.stdout.write(JSON.stringify({
+      type: 'response',
+      id: request.id,
+      success: true,
+      ...(request.type === 'get_state' ? { data: {} } : {})
+    }) + '\\n')
+  }
+})
+`,
+    { mode: 0o755 }
+  )
+  const runtime = new LinuxLocalRuntime({ cwd: directory, explicitExecutable: executable })
+  const image = { type: 'image' as const, mimeType: 'image/png', data: 'aGVsbG8=' }
+
+  await runtime.start()
+  await runtime.send({ type: 'prompt', message: 'Prompt', images: [image] })
+  await runtime.send({ type: 'steer', message: 'Steer', images: [image] })
+  await runtime.send({ type: 'follow_up', message: 'Follow up', images: [image] })
+  await runtime.stop()
+
+  const requests = (await readFile(requestLog, 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .map(({ id: _id, ...request }) => request)
+  assert.deepEqual(requests.slice(-3), [
+    { type: 'prompt', message: 'Prompt', images: [image] },
+    { type: 'steer', message: 'Steer', images: [image] },
+    { type: 'follow_up', message: 'Follow up', images: [image] }
+  ])
 })
 
 test('runtime state summarizes stderr without retaining secret text', async (t) => {

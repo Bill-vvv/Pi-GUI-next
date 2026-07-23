@@ -5,7 +5,11 @@ import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 
 import {
+  DEFAULT_APPEARANCE_SETTINGS,
+  DEFAULT_GENERAL_SETTINGS,
   DEFAULT_SESSION_NAMING_SETTINGS,
+  type AppearanceSettings,
+  type GeneralSettings,
   type SessionNamingSettings
 } from '../../shared/kernel-contract.ts'
 import { isRecord } from '../utils/guards.ts'
@@ -26,11 +30,71 @@ type ProjectConfigFileV2 = {
   activeProjectKey: string | null
 }
 
-type ProjectConfigFile = {
+type ProjectConfigFileV3 = {
   version: 3
   projects: Array<{ path: string }>
   activeProjectKey: string | null
   sessionNaming: SessionNamingSettings
+}
+
+type LegacyAppearanceSettingsV4 = {
+  uiFontFamily: string | null
+  codeFontFamily: string | null
+}
+
+type LegacyAppearanceSettingsV5 = LegacyAppearanceSettingsV4 & {
+  theme: AppearanceSettings['theme']
+}
+
+type ProjectConfigFileV4 = {
+  version: 4
+  projects: Array<{ path: string }>
+  activeProjectKey: string | null
+  sessionNaming: SessionNamingSettings
+  appearance: LegacyAppearanceSettingsV4
+}
+
+type ProjectConfigFileV5 = {
+  version: 5
+  projects: Array<{ path: string }>
+  activeProjectKey: string | null
+  sessionNaming: SessionNamingSettings
+  appearance: LegacyAppearanceSettingsV5
+}
+
+type ProjectConfigFileV6 = {
+  version: 6
+  projects: Array<{ path: string }>
+  activeProjectKey: string | null
+  sessionNaming: SessionNamingSettings
+  appearance: LegacyAppearanceSettingsV5
+  general: GeneralSettings
+}
+
+type LegacyAppearanceSettingsV7 = {
+  theme: AppearanceSettings['theme']
+  accentColor: AppearanceSettings['accentColor']
+  surfaceTransparency: AppearanceSettings['surfaceTransparency']
+  uiFontFamily: string | null
+  codeFontFamily: string | null
+}
+
+type ProjectConfigFileV7 = {
+  version: 7
+  projects: Array<{ path: string }>
+  activeProjectKey: string | null
+  sessionNaming: SessionNamingSettings
+  appearance: LegacyAppearanceSettingsV7
+  general: GeneralSettings
+}
+
+type ProjectConfigFile = {
+  version: 8
+  projects: Array<{ path: string }>
+  activeProjectKey: string | null
+  sessionNaming: SessionNamingSettings
+  appearance: AppearanceSettings
+  general: GeneralSettings
 }
 
 export type ProjectRegistry = {
@@ -40,6 +104,8 @@ export type ProjectRegistry = {
 
 type ProjectConfiguration = ProjectRegistry & {
   sessionNaming: SessionNamingSettings
+  appearance: AppearanceSettings
+  general: GeneralSettings
 }
 
 type ProjectStateFileV1 = {
@@ -57,10 +123,17 @@ type ActiveSessionSelection = {
   sessionKey: string
 }
 
-type ProjectStateFile = {
+type ProjectStateFileV3 = {
   version: 3
   sessions: SessionPointer[]
   activeSessionKeys: ActiveSessionSelection[]
+}
+
+type ProjectStateFile = {
+  version: 4
+  sessions: SessionPointer[]
+  activeSessionKeys: ActiveSessionSelection[]
+  archivedSessionKeys: ActiveSessionSelection[]
 }
 
 export type ProjectStoreOptions = {
@@ -88,6 +161,14 @@ export class ProjectStore {
     return copySessionNaming((await this.readConfiguration()).sessionNaming)
   }
 
+  async loadAppearance(): Promise<AppearanceSettings> {
+    return copyAppearance((await this.readConfiguration()).appearance)
+  }
+
+  async loadGeneral(): Promise<GeneralSettings> {
+    return copyGeneral((await this.readConfiguration()).general)
+  }
+
   addProject(project: { path: string }): Promise<ProjectRegistry> {
     assertProject(project)
     return this.enqueueSave(async () => {
@@ -98,12 +179,19 @@ export class ProjectStore {
       const next: ProjectConfiguration = {
         projects: [...configuration.projects, { ...project }],
         activeProjectKey: configuration.activeProjectKey,
-        sessionNaming: configuration.sessionNaming
+        sessionNaming: configuration.sessionNaming,
+        appearance: configuration.appearance,
+        general: configuration.general
       }
       await writeJson(this.configFile, toProjectConfigFile(next))
       await ensureJson(
         this.stateFile,
-        { version: 3, sessions: [], activeSessionKeys: [] } satisfies ProjectStateFile
+        {
+          version: 4,
+          sessions: [],
+          activeSessionKeys: [],
+          archivedSessionKeys: []
+        } satisfies ProjectStateFile
       )
       return copyRegistry(next)
     })
@@ -123,6 +211,18 @@ export class ProjectStore {
     })
   }
 
+  reorderProjects(projectKeys: string[]): Promise<void> {
+    return this.enqueueSave(async () => {
+      const configuration = await this.readConfiguration()
+      const projectsByPath = new Map(configuration.projects.map((project) => [project.path, project]))
+      assertStrictPermutation(projectKeys, [...projectsByPath.keys()], 'Project keys')
+      await writeJson(this.configFile, toProjectConfigFile({
+        ...configuration,
+        projects: projectKeys.map((projectKey) => projectsByPath.get(projectKey)!)
+      }))
+    })
+  }
+
   saveSessionNaming(settings: SessionNamingSettings): Promise<void> {
     assertSessionNaming(settings)
     return this.enqueueSave(async () => {
@@ -130,6 +230,28 @@ export class ProjectStore {
       await writeJson(this.configFile, toProjectConfigFile({
         ...configuration,
         sessionNaming: copySessionNaming(settings)
+      }))
+    })
+  }
+
+  saveAppearance(settings: AppearanceSettings): Promise<void> {
+    assertAppearance(settings)
+    return this.enqueueSave(async () => {
+      const configuration = await this.readConfiguration()
+      await writeJson(this.configFile, toProjectConfigFile({
+        ...configuration,
+        appearance: copyAppearance(settings)
+      }))
+    })
+  }
+
+  saveGeneral(settings: GeneralSettings): Promise<void> {
+    assertGeneral(settings)
+    return this.enqueueSave(async () => {
+      const configuration = await this.readConfiguration()
+      await writeJson(this.configFile, toProjectConfigFile({
+        ...configuration,
+        general: copyGeneral(settings)
       }))
     })
   }
@@ -143,7 +265,9 @@ export class ProjectStore {
         return {
           projects: [],
           activeProjectKey: null,
-          sessionNaming: { ...DEFAULT_SESSION_NAMING_SETTINGS }
+          sessionNaming: { ...DEFAULT_SESSION_NAMING_SETTINGS },
+          appearance: { ...DEFAULT_APPEARANCE_SETTINGS },
+          general: { ...DEFAULT_GENERAL_SETTINGS }
         }
       }
       throw error
@@ -153,17 +277,61 @@ export class ProjectStore {
     if (isProjectConfigFile(value)) {
       return copyConfiguration(value)
     }
+    if (isProjectConfigFileV7(value)) {
+      return {
+        ...copyRegistry(value),
+        sessionNaming: copySessionNaming(value.sessionNaming),
+        appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
+        general: copyGeneral(value.general)
+      }
+    }
+    if (isProjectConfigFileV6(value)) {
+      return {
+        ...copyRegistry(value),
+        sessionNaming: copySessionNaming(value.sessionNaming),
+        appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
+        general: copyGeneral(value.general)
+      }
+    }
+    if (isProjectConfigFileV5(value)) {
+      return {
+        ...copyRegistry(value),
+        sessionNaming: copySessionNaming(value.sessionNaming),
+        appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
+        general: { ...DEFAULT_GENERAL_SETTINGS }
+      }
+    }
+    if (isProjectConfigFileV4(value)) {
+      return {
+        ...copyRegistry(value),
+        sessionNaming: copySessionNaming(value.sessionNaming),
+        appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
+        general: { ...DEFAULT_GENERAL_SETTINGS }
+      }
+    }
+    if (isProjectConfigFileV3(value)) {
+      return {
+        ...copyRegistry(value),
+        sessionNaming: copySessionNaming(value.sessionNaming),
+        appearance: { ...DEFAULT_APPEARANCE_SETTINGS },
+        general: { ...DEFAULT_GENERAL_SETTINGS }
+      }
+    }
     if (isProjectConfigFileV2(value)) {
       return {
         ...copyRegistry(value),
-        sessionNaming: { ...DEFAULT_SESSION_NAMING_SETTINGS }
+        sessionNaming: { ...DEFAULT_SESSION_NAMING_SETTINGS },
+        appearance: { ...DEFAULT_APPEARANCE_SETTINGS },
+        general: { ...DEFAULT_GENERAL_SETTINGS }
       }
     }
     if (isProjectConfigFileV1(value)) {
       return {
         projects: [{ path: value.project.path }],
         activeProjectKey: value.project.path,
-        sessionNaming: { ...DEFAULT_SESSION_NAMING_SETTINGS }
+        sessionNaming: { ...DEFAULT_SESSION_NAMING_SETTINGS },
+        appearance: { ...DEFAULT_APPEARANCE_SETTINGS },
+        general: { ...DEFAULT_GENERAL_SETTINGS }
       }
     }
     throw new Error(`Invalid Pi GUI project config: ${this.configFile}`)
@@ -181,8 +349,15 @@ export class ProjectStore {
   async loadSessionRegistry(projectPath: string): Promise<ProjectSessionRegistry> {
     assertAbsolute(projectPath, 'Project path')
     const state = await this.readSessionState()
+    const archivedSessionKeys = new Set(
+      state.archivedSessionKeys
+        .filter((selection) => selection.projectPath === projectPath)
+        .map((selection) => selection.sessionKey)
+    )
     const sessions = state.sessions
-      .filter((pointer) => pointer.projectPath === projectPath)
+      .filter((pointer) =>
+        pointer.projectPath === projectPath && !archivedSessionKeys.has(pointer.sessionFile)
+      )
       .map((pointer) => ({ ...pointer }))
     const activeSessionKey = state.activeSessionKeys
       .find((selection) => selection.projectPath === projectPath)?.sessionKey ?? null
@@ -223,6 +398,12 @@ export class ProjectStore {
     return this.enqueueSave(async () => {
       const canonicalPointer = await this.validateSession(pointer)
       const state = await this.readSessionState()
+      if (state.archivedSessionKeys.some((selection) =>
+        selection.projectPath === canonicalPointer.projectPath &&
+        selection.sessionKey === canonicalPointer.sessionFile
+      )) {
+        throw new Error(`Session is archived for the project: ${canonicalPointer.sessionFile}`)
+      }
       const existing = state.sessions.find(({ sessionFile }) => sessionFile === canonicalPointer.sessionFile)
       if (existing !== undefined && existing.projectPath !== canonicalPointer.projectPath) {
         throw new Error(`Session is registered to another project: ${canonicalPointer.sessionFile}`)
@@ -236,9 +417,69 @@ export class ProjectStore {
         sessionKey: canonicalPointer.sessionFile
       })
       await writeJson(this.stateFile, {
-        version: 3,
+        version: 4,
         sessions,
-        activeSessionKeys
+        activeSessionKeys,
+        archivedSessionKeys: state.archivedSessionKeys
+      } satisfies ProjectStateFile)
+    })
+  }
+
+  reorderSessions(projectPath: string, sessionKeys: string[]): Promise<void> {
+    assertAbsolute(projectPath, 'Project path')
+    return this.enqueueSave(async () => {
+      const state = await this.readSessionState()
+      const archivedSessionKeys = new Set(
+        state.archivedSessionKeys
+          .filter((selection) => selection.projectPath === projectPath)
+          .map((selection) => selection.sessionKey)
+      )
+      const projectSessions = state.sessions.filter((pointer) =>
+        pointer.projectPath === projectPath && !archivedSessionKeys.has(pointer.sessionFile)
+      )
+      const pointersBySessionFile = new Map(
+        projectSessions.map((pointer) => [pointer.sessionFile, pointer])
+      )
+      assertStrictPermutation(sessionKeys, [...pointersBySessionFile.keys()], 'Session keys')
+      const reorderedPointers = sessionKeys.map((sessionKey) => pointersBySessionFile.get(sessionKey)!)
+      let projectSessionIndex = 0
+      const sessions = state.sessions.map((pointer) =>
+        pointer.projectPath === projectPath && !archivedSessionKeys.has(pointer.sessionFile)
+          ? reorderedPointers[projectSessionIndex++]!
+          : pointer
+      )
+      await writeJson(this.stateFile, {
+        version: 4,
+        sessions,
+        activeSessionKeys: state.activeSessionKeys,
+        archivedSessionKeys: state.archivedSessionKeys
+      } satisfies ProjectStateFile)
+    })
+  }
+
+  archiveSession(projectPath: string, sessionKey: string): Promise<void> {
+    assertAbsolute(projectPath, 'Project path')
+    assertAbsolute(sessionKey, 'Session key')
+    return this.enqueueSave(async () => {
+      const state = await this.readSessionState()
+      if (!state.sessions.some((pointer) =>
+        pointer.projectPath === projectPath && pointer.sessionFile === sessionKey
+      )) {
+        throw new Error(`Session is not registered for the project: ${sessionKey}`)
+      }
+      if (state.archivedSessionKeys.some((selection) =>
+        selection.projectPath === projectPath && selection.sessionKey === sessionKey
+      )) return
+      await writeJson(this.stateFile, {
+        version: 4,
+        sessions: state.sessions,
+        activeSessionKeys: state.activeSessionKeys.filter((selection) =>
+          selection.projectPath !== projectPath || selection.sessionKey !== sessionKey
+        ),
+        archivedSessionKeys: [
+          ...state.archivedSessionKeys,
+          { projectPath, sessionKey }
+        ]
       } satisfies ProjectStateFile)
     })
   }
@@ -249,13 +490,14 @@ export class ProjectStore {
       text = await readFile(this.stateFile, 'utf8')
     } catch (error) {
       if (isNodeError(error) && error.code === 'ENOENT') {
-        return { version: 3, sessions: [], activeSessionKeys: [] }
+        return { version: 4, sessions: [], activeSessionKeys: [], archivedSessionKeys: [] }
       }
       throw error
     }
 
     const value: unknown = JSON.parse(text)
     if (isProjectStateFile(value)) return copyProjectState(value)
+    if (isProjectStateFileV3(value)) return migrateProjectStateV3(value)
     if (isProjectStateFileV2(value)) return migrateSessionPointers(value.recentSessions)
     if (isProjectStateFileV1(value)) {
       return migrateSessionPointers(value.recentSession === null ? [] : [value.recentSession])
@@ -277,6 +519,16 @@ function xdgHome(name: 'XDG_CONFIG_HOME' | 'XDG_STATE_HOME', fallback: string): 
 function assertAbsolute(path: string, label: string): string {
   if (!isAbsolute(path)) throw new Error(`${label} must be an absolute path: ${path}`)
   return path
+}
+
+function assertStrictPermutation(actual: string[], expected: string[], label: string): void {
+  if (
+    actual.length !== expected.length ||
+    new Set(actual).size !== actual.length ||
+    !actual.every((key) => expected.includes(key))
+  ) {
+    throw new Error(`${label} must be a strict permutation of the registered keys.`)
+  }
 }
 
 async function ensureJson(path: string, value: unknown): Promise<void> {
@@ -331,7 +583,7 @@ function isProjectConfigFileV2(value: unknown): value is ProjectConfigFileV2 {
   return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
 }
 
-function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
+function isProjectConfigFileV3(value: unknown): value is ProjectConfigFileV3 {
   if (
     !isRecord(value) ||
     Object.keys(value).length !== 4 ||
@@ -347,12 +599,102 @@ function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
   return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
 }
 
+function isProjectConfigFileV5(value: unknown): value is ProjectConfigFileV5 {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 5 ||
+    value.version !== 5 ||
+    !Array.isArray(value.projects) ||
+    !value.projects.every(isProject) ||
+    new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
+    (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
+    !isSessionNaming(value.sessionNaming) ||
+    !isAppearanceV5(value.appearance)
+  ) {
+    return false
+  }
+  return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
+}
+
+function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 6 ||
+    value.version !== 8 ||
+    !Array.isArray(value.projects) ||
+    !value.projects.every(isProject) ||
+    new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
+    (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
+    !isSessionNaming(value.sessionNaming) ||
+    !isAppearance(value.appearance) ||
+    !isGeneral(value.general)
+  ) {
+    return false
+  }
+  return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
+}
+
+function isProjectConfigFileV7(value: unknown): value is ProjectConfigFileV7 {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 6 ||
+    value.version !== 7 ||
+    !Array.isArray(value.projects) ||
+    !value.projects.every(isProject) ||
+    new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
+    (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
+    !isSessionNaming(value.sessionNaming) ||
+    !isAppearanceV7(value.appearance) ||
+    !isGeneral(value.general)
+  ) {
+    return false
+  }
+  return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
+}
+
+function isProjectConfigFileV6(value: unknown): value is ProjectConfigFileV6 {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 6 ||
+    value.version !== 6 ||
+    !Array.isArray(value.projects) ||
+    !value.projects.every(isProject) ||
+    new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
+    (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
+    !isSessionNaming(value.sessionNaming) ||
+    !isAppearanceV5(value.appearance) ||
+    !isGeneral(value.general)
+  ) {
+    return false
+  }
+  return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
+}
+
+function isProjectConfigFileV4(value: unknown): value is ProjectConfigFileV4 {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 5 ||
+    value.version !== 4 ||
+    !Array.isArray(value.projects) ||
+    !value.projects.every(isProject) ||
+    new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
+    (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
+    !isSessionNaming(value.sessionNaming) ||
+    !isAppearanceV4(value.appearance)
+  ) {
+    return false
+  }
+  return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
+}
+
 function toProjectConfigFile(configuration: ProjectConfiguration): ProjectConfigFile {
   return {
-    version: 3,
+    version: 8,
     projects: configuration.projects.map((project) => ({ ...project })),
     activeProjectKey: configuration.activeProjectKey,
-    sessionNaming: copySessionNaming(configuration.sessionNaming)
+    sessionNaming: copySessionNaming(configuration.sessionNaming),
+    appearance: copyAppearance(configuration.appearance),
+    general: copyGeneral(configuration.general)
   }
 }
 
@@ -366,7 +708,9 @@ function copyRegistry(registry: ProjectRegistry): ProjectRegistry {
 function copyConfiguration(configuration: ProjectConfiguration): ProjectConfiguration {
   return {
     ...copyRegistry(configuration),
-    sessionNaming: copySessionNaming(configuration.sessionNaming)
+    sessionNaming: copySessionNaming(configuration.sessionNaming),
+    appearance: copyAppearance(configuration.appearance),
+    general: copyGeneral(configuration.general)
   }
 }
 
@@ -374,6 +718,95 @@ function copySessionNaming(settings: SessionNamingSettings): SessionNamingSettin
   return settings.mode === 'model'
     ? { mode: 'model', provider: settings.provider, modelId: settings.modelId }
     : { mode: settings.mode }
+}
+
+function copyAppearance(settings: AppearanceSettings): AppearanceSettings {
+  return {
+    theme: settings.theme,
+    accentColor: settings.accentColor,
+    surfaceTransparency: settings.surfaceTransparency,
+    textSize: settings.textSize,
+    uiFontFamily: settings.uiFontFamily,
+    codeFontFamily: settings.codeFontFamily
+  }
+}
+
+function copyGeneral(settings: GeneralSettings): GeneralSettings {
+  return { startupWorkspaceRestore: settings.startupWorkspaceRestore }
+}
+
+function assertGeneral(value: GeneralSettings): void {
+  if (!isGeneral(value)) throw new Error('Invalid Pi GUI general settings.')
+}
+
+function isGeneral(value: unknown): value is GeneralSettings {
+  return isRecord(value) &&
+    Object.keys(value).length === 1 &&
+    (value.startupWorkspaceRestore === 'restore' || value.startupWorkspaceRestore === 'none')
+}
+
+function assertAppearance(value: AppearanceSettings): void {
+  if (!isAppearance(value)) throw new Error('Invalid Pi GUI appearance settings.')
+}
+
+function isAppearance(value: unknown): value is AppearanceSettings {
+  return isRecord(value) &&
+    Object.keys(value).length === 6 &&
+    isAppearanceTheme(value.theme) &&
+    isAppearanceAccentColor(value.accentColor) &&
+    isSurfaceTransparency(value.surfaceTransparency) &&
+    isTextSize(value.textSize) &&
+    isOptionalFontFamily(value.uiFontFamily) &&
+    isOptionalFontFamily(value.codeFontFamily)
+}
+
+function isAppearanceV7(value: unknown): value is LegacyAppearanceSettingsV7 {
+  return isRecord(value) &&
+    Object.keys(value).length === 5 &&
+    isAppearanceTheme(value.theme) &&
+    isAppearanceAccentColor(value.accentColor) &&
+    isSurfaceTransparency(value.surfaceTransparency) &&
+    isOptionalFontFamily(value.uiFontFamily) &&
+    isOptionalFontFamily(value.codeFontFamily)
+}
+
+function isAppearanceV5(value: unknown): value is LegacyAppearanceSettingsV5 {
+  return isRecord(value) &&
+    Object.keys(value).length === 3 &&
+    isAppearanceTheme(value.theme) &&
+    isOptionalFontFamily(value.uiFontFamily) &&
+    isOptionalFontFamily(value.codeFontFamily)
+}
+
+function isAppearanceV4(value: unknown): value is LegacyAppearanceSettingsV4 {
+  return isRecord(value) &&
+    Object.keys(value).length === 2 &&
+    isOptionalFontFamily(value.uiFontFamily) &&
+    isOptionalFontFamily(value.codeFontFamily)
+}
+
+function isAppearanceTheme(value: unknown): value is AppearanceSettings['theme'] {
+  return value === 'system' || value === 'dark' || value === 'light'
+}
+
+function isAppearanceAccentColor(value: unknown): value is AppearanceSettings['accentColor'] {
+  return value === 'amber' ||
+    value === 'blue' ||
+    value === 'green' ||
+    value === 'purple' ||
+    value === 'rose'
+}
+
+function isSurfaceTransparency(value: unknown): value is AppearanceSettings['surfaceTransparency'] {
+  return value === 0 || value === 10 || value === 20 || value === 30 || value === 40
+}
+
+function isTextSize(value: unknown): value is AppearanceSettings['textSize'] {
+  return value === 'small' || value === 'default' || value === 'large'
+}
+
+function isOptionalFontFamily(value: unknown): value is string | null {
+  return value === null || (typeof value === 'string' && value.trim().length > 0)
 }
 
 function assertSessionNaming(value: SessionNamingSettings): void {
@@ -407,6 +840,49 @@ function isProject(value: unknown): value is { path: string } {
 }
 
 function isProjectStateFile(value: unknown): value is ProjectStateFile {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 4 ||
+    value.version !== 4 ||
+    !Array.isArray(value.sessions) ||
+    !Array.isArray(value.activeSessionKeys) ||
+    !Array.isArray(value.archivedSessionKeys)
+  ) return false
+  const sessions = value.sessions
+  const activeSessionKeys = value.activeSessionKeys
+  const archivedSessionKeys = value.archivedSessionKeys
+  return (
+    sessions.every(isSessionPointer) &&
+    new Set(sessions.map(({ sessionFile }) => sessionFile)).size === sessions.length &&
+    new Set(sessions.map(({ projectPath, sessionId }) => `${projectPath}\u0000${sessionId}`)).size ===
+      sessions.length &&
+    activeSessionKeys.every(isActiveSessionSelection) &&
+    new Set(activeSessionKeys.map(({ projectPath }) => projectPath)).size ===
+      activeSessionKeys.length &&
+    activeSessionKeys.every((selection) =>
+      sessions.some((pointer) =>
+        pointer.projectPath === selection.projectPath &&
+        pointer.sessionFile === selection.sessionKey
+      )
+    ) &&
+    archivedSessionKeys.every(isActiveSessionSelection) &&
+    new Set(archivedSessionKeys.map(({ projectPath, sessionKey }) =>
+      `${projectPath}\u0000${sessionKey}`
+    )).size === archivedSessionKeys.length &&
+    archivedSessionKeys.every((selection) =>
+      sessions.some((pointer) =>
+        pointer.projectPath === selection.projectPath &&
+        pointer.sessionFile === selection.sessionKey
+      ) &&
+      !activeSessionKeys.some((activeSelection) =>
+        activeSelection.projectPath === selection.projectPath &&
+        activeSelection.sessionKey === selection.sessionKey
+      )
+    )
+  )
+}
+
+function isProjectStateFileV3(value: unknown): value is ProjectStateFileV3 {
   if (
     !isRecord(value) ||
     Object.keys(value).length !== 3 ||
@@ -481,20 +957,31 @@ function isSessionPointer(value: unknown): value is SessionPointer {
 
 function migrateSessionPointers(pointers: SessionPointer[]): ProjectStateFile {
   return {
-    version: 3,
+    version: 4,
     sessions: pointers.map((pointer) => ({ ...pointer })),
     activeSessionKeys: pointers.map((pointer) => ({
       projectPath: pointer.projectPath,
       sessionKey: pointer.sessionFile
-    }))
+    })),
+    archivedSessionKeys: []
+  }
+}
+
+function migrateProjectStateV3(state: ProjectStateFileV3): ProjectStateFile {
+  return {
+    version: 4,
+    sessions: state.sessions.map((pointer) => ({ ...pointer })),
+    activeSessionKeys: state.activeSessionKeys.map((selection) => ({ ...selection })),
+    archivedSessionKeys: []
   }
 }
 
 function copyProjectState(state: ProjectStateFile): ProjectStateFile {
   return {
-    version: 3,
+    version: 4,
     sessions: state.sessions.map((pointer) => ({ ...pointer })),
-    activeSessionKeys: state.activeSessionKeys.map((selection) => ({ ...selection }))
+    activeSessionKeys: state.activeSessionKeys.map((selection) => ({ ...selection })),
+    archivedSessionKeys: state.archivedSessionKeys.map((selection) => ({ ...selection }))
   }
 }
 
