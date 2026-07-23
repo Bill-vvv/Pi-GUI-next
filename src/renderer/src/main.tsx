@@ -6,6 +6,11 @@ import './tokens.css'
 import './styles.css'
 import './features/chat/chat.css'
 import './features/composer/composer.css'
+import './features/settings/settings.css'
+
+document.documentElement.dataset.theme = window.matchMedia('(prefers-color-scheme: light)').matches
+  ? 'light'
+  : 'dark'
 
 async function bootstrap(): Promise<void> {
   const previewRequested = new URLSearchParams(window.location.search).get('preview') === '1'

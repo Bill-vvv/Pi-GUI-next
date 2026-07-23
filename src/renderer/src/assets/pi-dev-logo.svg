@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1530 800" role="img" aria-labelledby="title">
+  <title id="title">pi.dev</title>
+  <!-- Official Pi mark copied from https://pi.dev/logo.svg; wordmark combined into one image asset. -->
+  <path fill="#fff" fill-rule="evenodd" d="
+    M165.29 165.29
+    H517.36
+    V400
+    H400
+    V517.36
+    H282.65
+    V634.72
+    H165.29
+    Z
+    M282.65 282.65
+    V400
+    H400
+    V282.65
+    Z
+  "/>
+  <path fill="#fff" d="M517.36 400 H634.72 V634.72 H517.36 Z"/>
+  <text
+    x="690"
+    y="548"
+    fill="#fff"
+    font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace"
+    font-size="330"
+    font-weight="600"
+    letter-spacing="-18"
+  >.dev</text>
+</svg>

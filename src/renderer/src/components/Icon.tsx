@@ -1,16 +1,27 @@
 export type IconName =
   | 'archive'
+  | 'appearance'
   | 'arrow-right'
   | 'attach'
+  | 'chevron-down'
   | 'enter'
+  | 'extensions'
   | 'folder'
   | 'folder-open'
   | 'left-sidebar-close'
   | 'left-sidebar-open'
   | 'logs'
+  | 'messages'
+  | 'model'
+  | 'packages'
+  | 'pin'
+  | 'pin-filled'
   | 'plus'
+  | 'unread'
+  | 'preferences'
   | 'right-sidebar'
   | 'settings'
+  | 'skills'
   | 'stop'
 
 export function Icon({ name }: { name: IconName }): React.JSX.Element {
@@ -24,6 +35,13 @@ export function Icon({ name }: { name: IconName }): React.JSX.Element {
   }
 
   switch (name) {
+    case 'appearance':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="3.5" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6 18 18M18 6l-1.4 1.4M7.4 16.6 6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      )
     case 'archive':
       return (
         <svg {...common}>
@@ -46,11 +64,25 @@ export function Icon({ name }: { name: IconName }): React.JSX.Element {
           <path d="m9.55 15.15 6.1-6.1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
         </svg>
       )
+    case 'chevron-down':
+      return (
+        <svg {...common}>
+          <path d="m6.5 9.5 5.5 5 5.5-5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
     case 'enter':
       return (
         <svg {...common}>
           <path d="M6.75 5.25v5.5a3 3 0 0 0 3 3h7.5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
           <path d="m13.25 9.75 4 4-4 4" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'extensions':
+      return (
+        <svg {...common}>
+          <rect x="4" y="10" width="6" height="7" rx="1.25" stroke="currentColor" strokeWidth="1.8" />
+          <rect x="14" y="4" width="6" height="6" rx="1.25" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M7 10V7a3 3 0 0 1 3-3h4M10 13.5h3a4 4 0 0 0 4-3.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
         </svg>
       )
     case 'folder':
@@ -89,10 +121,61 @@ export function Icon({ name }: { name: IconName }): React.JSX.Element {
           <path d="M14 4.25V8.5h4M8 11h8M8 14.5h8M8 18h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       )
+    case 'messages':
+      return (
+        <svg {...common}>
+          <path d="M5.25 5.25h13.5A2.25 2.25 0 0 1 21 7.5v7A2.25 2.25 0 0 1 18.75 16.75H10l-4.75 3v-3.3A2.25 2.25 0 0 1 3 14.2V7.5a2.25 2.25 0 0 1 2.25-2.25Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+          <path d="M7.5 9.25h9M7.5 12.75h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      )
+    case 'model':
+      return (
+        <svg {...common}>
+          <rect x="4" y="4" width="16" height="6" rx="2" stroke="currentColor" strokeWidth="1.8" />
+          <rect x="4" y="14" width="16" height="6" rx="2" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M8 7h.01M8 17h.01M12 7h5M12 17h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      )
+    case 'packages':
+      return (
+        <svg {...common}>
+          <path d="m4.5 8 7.5-4 7.5 4-7.5 4-7.5-4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+          <path d="M4.5 8v8l7.5 4 7.5-4V8M12 12v8" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'pin':
+      return (
+        <svg {...common}>
+          <path d="M8 4h8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          <path d="M9.25 4.5v5.35c0 1.08-.43 2.12-1.2 2.88L6.5 14.28V16h11v-1.72l-1.55-1.55a4.07 4.07 0 0 1-1.2-2.88V4.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M12 16v5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      )
+    case 'pin-filled':
+      return (
+        <svg {...common}>
+          <path d="M8 3.1a.9.9 0 0 0 0 1.8h.35v4.95c0 .84-.33 1.64-.92 2.23l-1.56 1.56a.9.9 0 0 0-.27.64V16a.9.9 0 0 0 .9.9h4.6V21a.9.9 0 0 0 1.8 0v-4.1h4.6a.9.9 0 0 0 .9-.9v-1.72a.9.9 0 0 0-.27-.64l-1.56-1.56a3.15 3.15 0 0 1-.92-2.23V4.9H16a.9.9 0 0 0 0-1.8H8Z" fill="currentColor" />
+        </svg>
+      )
     case 'plus':
       return (
         <svg {...common}>
           <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      )
+    case 'unread':
+      return (
+        <svg {...common}>
+          <path d="M5 8.25A3.25 3.25 0 0 1 8.25 5h7.5A3.25 3.25 0 0 1 19 8.25v5.5A3.25 3.25 0 0 1 15.75 17h-7.5A3.25 3.25 0 0 1 5 13.75v-5.5Z" stroke="currentColor" strokeWidth="1.8" />
+          <circle cx="16.75" cy="7.25" r="2.75" fill="currentColor" stroke="var(--color-surface-popover)" strokeWidth="1.5" />
+        </svg>
+      )
+    case 'preferences':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.8" />
+          <circle cx="12" cy="9" r="2.4" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M6.8 17c.75-2.45 2.5-3.7 5.2-3.7s4.45 1.25 5.2 3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
         </svg>
       )
     case 'right-sidebar':
@@ -110,6 +193,13 @@ export function Icon({ name }: { name: IconName }): React.JSX.Element {
           <circle cx="11.75" cy="7" r="2" stroke="currentColor" strokeWidth="1.8" />
           <circle cx="14.75" cy="12" r="2" stroke="currentColor" strokeWidth="1.8" />
           <circle cx="9.25" cy="17" r="2" stroke="currentColor" strokeWidth="1.8" />
+        </svg>
+      )
+    case 'skills':
+      return (
+        <svg {...common}>
+          <path d="M7 4.5h11.5v15H7a3 3 0 0 1 0-6h11.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M7 4.5a3 3 0 0 0-3 3v9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
         </svg>
       )
     case 'stop':

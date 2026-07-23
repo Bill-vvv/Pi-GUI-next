@@ -3,9 +3,18 @@
   overflow: hidden;
   color-scheme: dark;
 
-  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Geist", "Segoe UI Variable", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
-  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Geist", "Segoe UI Variable", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
-  --font-mono: "SF Mono", "Geist Mono", "JetBrains Mono", "Cascadia Code", "Menlo", "Consolas", "Noto Sans Mono CJK SC", "Sarasa Mono SC", "Microsoft YaHei Mono", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", monospace;
+  /*
+   * Typography families:
+   * display — page-level headings and headings embedded in prose only.
+   * ui — section/card headings, body, controls, status, metadata, and configuration summaries.
+   * code — code, commands, paths, and raw tool input/output only.
+   */
+  --font-ui-system: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Geist", "Segoe UI Variable", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  --font-display-system: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Geist", "Segoe UI Variable", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  --font-code-system: "SF Mono", "Geist Mono", "JetBrains Mono", "Cascadia Code", "Menlo", "Consolas", "Noto Sans Mono CJK SC", "Sarasa Mono SC", "Microsoft YaHei Mono", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", monospace;
+  --font-ui: var(--font-ui-selected, ) var(--font-ui-system);
+  --font-display: var(--font-ui-selected, ) var(--font-display-system);
+  --font-code: var(--font-code-selected, ) var(--font-code-system);
 
   --app-shell-padding: 12px;
   --panel-float-gap: 12px;
@@ -15,25 +24,38 @@
   --composer-reserved-space: clamp(7.25rem, 18vh, 9rem);
   --composer-meta-control-height: 32px;
 
+  /*
+   * Typography levels:
+   * page-title / display — display family for page titles and lead text.
+   * section-title / body / body-sm / control / list-item / meta / caption — UI family,
+   * ordered from structural headings through reading text to supporting text.
+   * code — code family; inline code inherits context, blocks use --line-code.
+   */
   --text-root: 15px;
-  --text-caption: 0.74rem;
-  --text-meta: 0.82rem;
-  --text-control: 0.9rem;
-  --text-body-sm: 0.95rem;
+  --text-page-title: 28px;
+  --text-display: clamp(1.08rem, 1.7vw, 1.42rem);
+  --text-section-title: 1rem;
   --text-body: 1rem;
+  --text-body-sm: 0.95rem;
+  --text-control: 0.9rem;
   --text-list-item: 0.84rem;
-  --chat-text-body: var(--text-body);
-  --chat-line-body: 1.75;
-  --line-control: 1.35;
-  --line-body-sm: 1.55;
+  --text-meta: 0.82rem;
+  --text-caption: 0.74rem;
+
+  --line-title: 1.2;
+  --line-heading: 1.28;
   --line-body: 1.75;
+  --line-body-sm: 1.55;
+  --line-control: 1.35;
+  --line-meta: 1.45;
+  --line-caption: 1.35;
+  --line-code: 1.5;
 
   --icon-size-sm: 15px;
   --icon-size-control: 18px;
   --icon-size-lg: 21px;
 
   --weight-normal: 400;
-  --weight-regular: 400;
   --weight-medium: 500;
   --weight-semibold: 620;
   --weight-bold: 700;
@@ -41,10 +63,11 @@
   --tracking-label: 0.08em;
 
   --color-bg-app: #1b1b1a;
+  --surface-transparency: 20%;
   --color-surface: #343433;
   --color-surface-hover: #44413d;
-  --color-surface-panel: rgb(45 45 43 / 82%);
-  --color-surface-sidebar: rgb(36 36 35 / 82%);
+  --color-surface-panel: rgb(45 45 43 / calc(100% - var(--surface-transparency)));
+  --color-surface-sidebar: rgb(36 36 35 / calc(100% - var(--surface-transparency)));
   --color-surface-input: #2b2b2a;
   --color-surface-input-focus: #323231;
   --color-surface-dark: rgb(20 20 19 / 46%);
@@ -112,4 +135,83 @@
   font-family: var(--font-ui);
   background: var(--color-bg-app);
   color: var(--color-text-primary);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --color-bg-app: #f4f4f2;
+  --color-surface: #e8e8e5;
+  --color-surface-hover: #deded9;
+  --color-surface-panel: rgb(235 235 232 / calc(100% - var(--surface-transparency)));
+  --color-surface-sidebar: rgb(242 242 239 / calc(100% - var(--surface-transparency)));
+  --color-surface-input: #f0f0ed;
+  --color-surface-input-focus: #fafaf8;
+  --color-surface-dark: rgb(214 214 209 / 62%);
+  --color-surface-inset: rgb(220 220 215 / 72%);
+  --color-surface-popover: rgb(250 250 248 / 98%);
+  --color-surface-subtle: rgb(31 31 29 / 3%);
+  --color-surface-subtle-strong: rgb(31 31 29 / 7%);
+  --color-code-bg: rgb(225 225 220 / 78%);
+  --color-text-primary: #20201e;
+  --color-text-body: #282825;
+  --color-text-soft: #53534e;
+  --color-text-muted: #7c7c75;
+  --color-border: #c8c8c1;
+  --color-border-hover: #b6b6ae;
+  --color-border-input: #d2d2cc;
+  --color-border-subtle: rgb(55 55 50 / 12%);
+  --color-border-panel: rgb(55 55 50 / 16%);
+  --color-border-focus: rgb(55 55 50 / 25%);
+  --color-border-divider: rgb(55 55 50 / 10%);
+  --color-hover-subtle: rgb(55 55 50 / 8%);
+  --color-hover-muted: rgb(55 55 50 / 7%);
+  --color-focus-ring: rgb(55 55 50 / 7%);
+  --color-focus-outline: rgb(55 55 50 / 30%);
+  --color-error-border: #e1b5aa;
+  --color-error-bg: #f6ddd7;
+  --color-error-bg-subtle: rgb(246 221 215 / 62%);
+  --color-error-text: #9b3e2d;
+  --color-warning-text: #805b12;
+  --color-status-success: #2d7c49;
+  --color-status-warning: #8c6417;
+  --color-status-error: #ae4834;
+  --color-accent-primary: #8c6417;
+  --color-scrollbar-thumb: rgb(55 55 50 / 24%);
+  --color-scrollbar-thumb-hover: rgb(55 55 50 / 36%);
+  --color-thinking-glint: rgb(32 32 30 / 28%);
+  --background-noise-opacity: 0.03;
+  --shadow-composer: 0 18px 48px rgb(52 52 48 / 13%), 0 4px 14px rgb(52 52 48 / 8%), inset 0 1px 0 rgb(255 255 255 / 72%);
+}
+
+:root[data-accent='blue'] {
+  --color-accent-primary: #7aa7ff;
+}
+
+:root[data-accent='green'] {
+  --color-accent-primary: #74c991;
+}
+
+:root[data-accent='purple'] {
+  --color-accent-primary: #b09aee;
+}
+
+:root[data-accent='rose'] {
+  --color-accent-primary: #e38b9c;
+}
+
+:root[data-theme='light'][data-accent='blue'] {
+  --color-accent-primary: #285fbd;
+}
+
+:root[data-theme='light'][data-accent='green'] {
+  --color-accent-primary: #267344;
+}
+
+:root[data-theme='light'][data-accent='purple'] {
+  --color-accent-primary: #6745a5;
+}
+
+:root[data-theme='light'][data-accent='rose'] {
+  --color-accent-primary: #a43e58;
 }
