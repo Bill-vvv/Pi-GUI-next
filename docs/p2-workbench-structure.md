@@ -2,7 +2,8 @@
 
 > 适用阶段：P2 — Workbench Foundation
 > 当前状态：S8 Complete / Confirmed
-> 最后更新：2026-07-21
+> 最后更新：2026-07-22
+> 2026-07-23 修订：本文中的“单活动 Runtime”是 S8–S10 的历史边界，已由 [`D-017`](decisions.md#d-017--恢复按-session-隔离的多-runtime-并行) 替代；当前实现允许多个 Session Runtime 并行，Renderer 仍保持单一当前投影。
 
 ## 1. 用途
 
@@ -14,11 +15,11 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 
 - Electron Main / Workbench Kernel 继续是唯一 control plane 和 Pi 子进程 owner。
 - Renderer 只展示 normalized state 并发出 typed command，不维护 Project、Session 或 Conversation 的第二份事实。
-- P2 可以保存和切换多个 Project、多个 Session，但同一时间只允许一个活动 Runtime。
+- P2 最初只允许一个活动 Runtime；该限制已被 D-017 替代，当前按 Session 隔离并行 Runtime。
 - 正常 GUI 进程使用 Electron 单实例锁，避免两个 Main 进程并发改写同一 XDG 状态；无状态 `probe-only` 验证不取得该锁，也不初始化 ProjectStore。
 - Pi session 文件继续是 Conversation 事实来源；GUI 只保存 Project 注册信息、Session 指针和当前选择。
 - Project 切换不得自动中止正在运行的 turn；用户先等待 settled 或显式 abort。
-- 不为未来并行 Runtime、远程后端、插件平台或数据库预留空接口。
+- 并行 Runtime 已按真实需求落地；仍不为远程后端、插件平台或数据库预留空接口。
 
 ## 3. Workbench 信息架构
 
@@ -36,6 +37,8 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 └───────────────────────────────┴──────────────────────────────────────────┘
 ```
 
+- 标题下不保留重复标题语义、无实际作用的介绍性文案；确有必要的补充说明放在对应控件的 tooltip 中，由鼠标悬浮显示，不占用常驻布局。
+
 ### 3.1 左侧 Navigator
 
 - 同时展示多个 Project；每个 Project 下展示其 Session。
@@ -43,7 +46,15 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 - Session 行负责打开已有 Session；选中的 Project 和 Session 必须有唯一、清晰的选中态。
 - 全局只保留一个“添加 Project”入口。
 - Project path 放在 Project 行的次级信息或 tooltip，不继续占用 Composer 底部。
-- P2 不展示尚未实现的归档、附件、搜索或管理入口。
+- Navigator 只展示已经贯通真实能力的行内操作；Session 归档已在 S14 接入，附件、搜索和其他管理入口仍不得提前展示。
+
+#### 3.1.1 导航行命中与拖拽要求
+
+- Project / Session 行同时承载选择、排序和行内操作时，行容器不得常驻原生 `draggable`。只有主行内容收到鼠标主键按下后才临时武装对应行，并在 `pointerup`、`pointercancel` 或 `dragend` 任一路径立即解除。
+- 新建、归档等 action slot 不得武装行拖拽；行内按钮必须拥有独立点击边界，阻止其手势进入祖先拖拽流程。
+- action slot 内叠放时间文字、运行指示和操作按钮时，操作按钮必须位于最上层并独占可见区域的指针命中；被隐藏或替换的文字、图标及状态层必须使用 `pointer-events: none`，文字层同时禁止文本选择。
+- `opacity: 0` 只改变绘制结果，不代表元素已经退出 hit testing。任何悬浮切换实现都必须分别核对视觉层、pointer events、文本选择和 stacking order，不能只验证图标是否显示。
+- 排序、单击选择和行内操作必须分别可用：未按下时悬浮只改变操作可见性；从主行按下并移动时才开始排序；从行内按钮按下时始终执行按钮动作。
 
 ### 3.2 Session Header
 
@@ -61,7 +72,7 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 
 ### 3.4 Composer 与命令入口
 
-- Composer 继续根据 Runtime 状态提供发送或 abort，并保留 Enter 发送、Shift+Enter 换行和 Escape abort。
+- Composer 在 Runtime `ready` 时使用 Enter 发送普通 prompt；在 `running` 时继续可编辑，Enter 排队 `steer`、Alt+Enter 排队 `follow_up`，同时保留显式按钮、Shift+Enter 换行和 Escape abort。
 - 输入 `/` 时，命令菜单在 Composer 上方进入正常交互层；S8 只提供明确指向 S11 的空态，不实现假命令、查询或执行。
 - S11 的命令表区分 GUI 本地命令、typed Pi RPC 命令，以及 Pi `get_commands` 返回的 extension、prompt 和 skill 命令。
 - 不建立一个可绕过 typed Kernel 边界的通用“执行任意命令”IPC。

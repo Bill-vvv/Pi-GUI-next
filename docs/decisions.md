@@ -121,3 +121,19 @@
 - 决策：自动模式只在 Pi `get_available_models` 返回的目录中、当前活动 provider 内按 `gpt-5.4-nano`、`gpt-5.4-mini`、`gpt-5.6-luna` 的顺序选择低成本模型，并使用 `--thinking off`；没有这些模型时保持未命名，不回退到活动的高成本模型。用户可在设置中选择自动、关闭或指定目录中的任一已授权 provider/model。
 - 原因：标题生成是短文本目的归纳，不需要主对话模型的能力和 reasoning 成本；同时 OAuth 与 API key 用户可用的 provider/model 不同，不能硬编码本机 provider，也不能要求第二份凭据。
 - 影响：Pi 继续独占 OAuth token、API key 与刷新流程；GUI config v3 只保存命名模式及可选 provider/model ID，不保存认证材料。指定模型在当前目录不可用时 Fail Fast；运行期间修改设置会取消旧命名请求，失败或无低成本候选时 Session 保持未命名。
+
+## D-016 — 自定义 Provider/Model 直接编辑 Pi 官方配置并显式测试
+
+- 日期：2026-07-22
+- 状态：Accepted；澄清 D-004、D-015 的 Provider 配置边界
+- 决策：GUI 通过 typed Main IPC 编辑 Pi 用户目录中的 `models.json`，支持新增、编辑、删除自定义 Provider 与 Model。API key 可使用字面值、环境变量引用或命令引用；Renderer 只提交用户本次输入并接收“是否已配置”，不回读原值，也不写入 GUI config。连接测试使用隔离的 `pi --print --no-session` 短请求，只允许测试当前已配置的自定义 Provider/Model，并禁用工具、Extension、Skill、Prompt Template、Theme 与项目 context。
+- 原因：Pi 0.80.10 RPC 只有 `get_available_models` 与 `set_model`，没有 Provider 配置或连通性测试命令；`models.json` 是 Pi 官方的自定义 Provider/Model 事实源。目录刷新只能证明配置可发现，不能证明端点、鉴权和模型实际可调用。
+- 影响：Pi 仍负责解析凭据、发起 Provider 请求和使用配置；GUI 不建立第二份 Provider 数据库。写入时保留未知配置字段并以 `0600` 原子替换；测试会产生一次最小实际模型请求，失败信息不返回 stdout、stderr 正文或密钥。活动 RPC Runtime 不支持热重载配置，新配置在下一次新建或重新打开对话时进入模型目录。
+
+## D-017 — 恢复按 Session 隔离的多 Runtime 并行
+
+- 日期：2026-07-23
+- 状态：Accepted；替代 D-014、P2 S8–S10 中“单一活动 Runtime”的所有权限制，不改变 D-003 的 Electron Main 单一 control plane
+- 决策：Workbench Kernel 按 Project/Session 管理独立 `RuntimeContext`。多个 Pi RPC Runtime 可以同时运行；Renderer 继续只展示当前 Session 的完整投影，并通过 Session summary 展示后台 `starting/ready/running/stopping/crashed` 状态。
+- 原因：旧 Pi GUI 已具备多个 `runtimeId` 共存的 RuntimeSupervisor；新项目从零重建时把多 Project/Session 收缩为只可切换，造成用户在一个对话运行时无法继续下一个对话。这是核心工作台能力回退，不应继续作为产品边界。
+- 影响：切换 Project/Session 或新建对话不再停止其他 Runtime；命令与事件必须按 context 路由；归档只停止目标 Session；应用退出必须尝试收口全部 Runtime。Pi session 文件仍是 Conversation 事实源，Electron Main 仍是唯一子进程 owner，不恢复旧 GUI server、WebSocket、SQLite 或 launcher/mirror 拓扑。

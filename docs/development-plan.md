@@ -1,10 +1,10 @@
 # Pi GUI 开发计划
 
 > 当前阶段：P2 — Workbench Foundation
-> 计划版本：1.5
-> 最后更新：2026-07-22
+> 计划版本：4.8
+> 最后更新：2026-07-23
 > 总体状态：In Progress
-> 当前 Slice：S14 — 优化（Ready）
+> 当前 Slice：S14 — 优化（In Progress）
 
 ## 1. 计划用途
 
@@ -455,9 +455,9 @@ P2 先用一个短 Slice 固定结构，再实现基础功能，随后在真实�
 | S12 | UI 视觉收敛 | `Complete` | 真实构建版通过隔离 XDG 的 ProjectStore/WorkbenchKernel 载入 2 个 Project、3 个 Session，切换后只显示目标 Project 的 Session；真实 Pi 0.80.10 启动到 ready 并展示 `/new`、`/model`、`/thinking`、`/compact`、`/name` catalog；slash menu 位于 Composer 上方且无溢出，Header/流内诊断不覆盖 Timeline；109 项 core tests、`pnpm typecheck`、生产 build、diff check 通过 |
 | S12.5 | 重复职责解耦 | `Complete` | 审计当前实现后只收敛跨模块高重复且存在语义漂移风险的纯逻辑：Main 通用 record guard、错误文本归一化、Project Session pointer 类型与 upsert，以及 Renderer Runtime 状态判定；不按文件大小拆分，不为单次逻辑增加函数、类或中间层；109 项 core tests、`pnpm typecheck`、生产 build 和 diff check 通过 |
 | S13 | 交互优化与 P2 发布证据 | `Complete` | 完成低成本可配置的 Session 语义命名、Tab/Arrow slash 补全与 combobox 语义、Runtime context action 成功后的 Composer 焦点恢复、Project/Session 切换反馈、Kernel 连接重试以及空对话与无详情 crash 状态；候选 `fe1e559` 的 AppImage 通过 17 步 P1 回归与 P2 双 Project、双 Session、slash command、单 Runtime 和交互链路，schema v2 脱敏报告与六张截图位于 `release/evidence/2026-07-22T03-37-46-614Z-fe1e559bca43/` |
-| S14 | 优化 | `Ready` | 不预先拆分具体计划；按实际使用中发现的零散交互问题逐项优化 |
+| S14 | 优化 | `In Progress` | 不预先拆分具体计划；按实际使用中发现的零散交互问题逐项优化；三十五项已实现并通过定向验证，另有一项协议适配待后续处理 |
 
-P2 的“多 Project、多 Session”首先指多个对象可保存、可发现、可切换，不等于多个 Pi Runtime 并行运行。只有出现明确并行使用需求后，才单独决定是否扩展 runtime ownership 和调度模型，不预留空的并行抽象。
+P2 最初把“多 Project、多 Session”限定为可保存、发现和切换。2026-07-23 用户确认并行是旧版已有且当前必须恢复的核心能力后，D-017 替代该限制：Workbench Kernel 现在按 Session 管理独立 Runtime context，允许多个 Pi Runtime 并行，同时保持 Electron Main 单一 control plane。
 
 #### S14 — 优化记录
 
@@ -465,10 +465,41 @@ P2 的“多 Project、多 Session”首先指多个对象可保存、可发现�
 
 | 编号 | 类型 | 记录 | 状态 |
 | --- | --- | --- | --- |
-| S14-01 | 交互缺陷 | 部分控件展开菜单后，点击菜单外空间不会自动收起菜单 | 待定位 |
-| S14-02 | 设置界面 | 从零搭建设置界面；首期候选范围只包含“外观”和“扩展” | 待确认 |
-| S14-03 | Session 切换 | 切换 Session 会触发 Runtime 启动，但用户有时只想切换过去查看上下文；需要讨论“查看”与“激活运行”的处理方式 | 待讨论 |
-| S14-04 | 导航排序 | 评估 Project 和 Session 是否支持拖拽调整位置 | 待讨论 |
+| S14-01 | 交互缺陷 | 当前已识别的模型选择器与 slash command 菜单支持点击外部收起；内容型 disclosure 不改变 | 已完成（首批） |
+| S14-02 | 设置界面 | 新建独立设置界面，以左侧栏导航各设置分类；删除常驻的无用介绍，必要说明移入对应控件 tooltip；拓展页展示 Extension 本体，不以命令目录代替 | 已完成（首期） |
+| S14-03 | Session 切换 | Session 单击无感切换并显示历史，不停止或启动 Runtime，也不暴露特殊查看模式；首次发送消息或执行命令时后台自动激活目标 Session 后继续操作 | 已完成 |
+| S14-04 | 导航排序 | Project 与当前 Project 下的 Session 支持拖拽排序；严格校验全排列并持久化，活动身份和 Runtime ownership 不变 | 已完成 |
+| S14-05 | 运行中输入 | 当前任务执行时 Composer 不应锁定；接入 Pi 0.80.10 原生 `steer` / `follow_up` 与 `queue_update`，运行中支持 Enter 转向、Alt+Enter 跟进，并保留显式中止 | 已完成 |
+| S14-06 | 对话归档 | Session 行右侧在悬浮或键盘聚焦时显示归档入口；归档只在 XDG 索引标记并从普通列表隐藏，不删除 Pi session 文件；活动 Session 先受控停止 Runtime 再清空投影 | 已完成 |
+| S14-07 | 拓展管理 | 设置页直接展示 Pi 用户设置 `extensions` 中的 Extension 路径；可选择 `.ts` / `.js` 文件或目录写入配置，并从配置中卸载，源码文件始终保留；权限和生效时机仅放在 tooltip，不接入 Package、npm、Git、命令目录或内嵌市场 | 已完成 |
+| S14-08 | 组件样式 | 将偏好设置中的原生下拉替换为共享 `Select` 组件；展开面板复用 Workbench popover、hover、focus 与文字 token，并支持分组、禁用项、外点收起和键盘选择 | 已完成 |
+| S14-09 | 运行中输入语义 | Pi 运行时普通输入默认作为 `follow_up`，`steer` 只通过 Alt+Enter 特别提交；右侧不再并列展示 Follow up / Steer 按钮，保留显式中止 | 已完成 |
+| S14-10 | 运行中队列可见性 | 保留 Pi `queue_update` 的 steering / followUp 正文并显示在 Composer 上方，但界面只展示排队内容、不展示类型；两类原生处理时序保持不变；面板限高滚动且参与 Composer clearance | 已完成 |
+| S14-11 | 工具过程密度 | 工具过程提供紧凑汇总、标准步骤和详细卡片三档；默认标准档弱化徽标、时间线和详情容器，偏好仅保存在 Renderer 本机；thinking 展示与 Kernel/RPC contract 不变 | 已完成 |
+| S14-12 | 导航拖拽命中 | Project / Session 排序只在主行按下后临时启用拖拽，松开或取消后立即关闭；Session 归档按钮不触发拖拽，并固定在时间文字之上独占指针命中；长期约束见 [`p2-workbench-structure.md`](p2-workbench-structure.md#311-导航行命中与拖拽要求) 3.1.1 | 已完成 |
+| S14-13 | 队列管理适配 | 后续支持排队内容拖拽排序、follow-up 转 steer、单条删除及对应移动/移除动效；Pi 0.80.10 RPC 当前没有删除、重排、转换或替换队列命令，等待评估上游 typed RPC 与能力探测方案 | 待适配 |
+| S14-14 | 对话导航感知 | Session 点击当帧先切换 Renderer 视图，再异步读取历史；旧响应使用请求序号丢弃。新建对话先进入空白工作区并允许输入，再后台启动 Runtime；首次提交复用同一启动任务。失败保留目标页并显式展示错误 | 已完成 |
+| S14-15 | 对话过程层级 | 完成态工作过程默认收起为“已处理 + 可观测真实耗时”的极简 disclosure，移除卡片、状态点和统计串；展开后 thinking 使用独立“思考了 + 可观测耗时”折叠与低强调正文，工具继续保持原始时序和三档密度，最终回答始终位于过程之外；历史无可靠耗时时不伪造 | 已完成 |
+| S14-16 | 外观设置布局 | 外观页按主题、Agent 对话、字体分组；组内使用连续设置行与右侧紧凑控件，窄窗口改为上下布局；只重排已有主题状态、工具密度和字体设置，不增加未接通的外观能力 | 已完成 |
+| S14-17 | 冷启动对话 | 已有活动 Project 时冷启动直接进入空白新对话并后台启动 Runtime，不再默认选中最近 Session 或要求选择恢复；历史 Session 仍可在侧栏查看并在首次操作时恢复，Project 切换与崩溃恢复语义不变 | 已完成 |
+| S14-18 | 主题与密度说明 | 外观主题提供跟随系统、深色、浅色三项共享下拉；跟随系统监听系统明暗变化，浅色使用完整 token 覆盖，选择经 Kernel 与 XDG config 持久化；核查工具密度三档真实分支，并在滑杆下用极简图示展示聚合摘要、逐条操作与展开详情的差异 | 已完成 |
+| S14-19 | pi.dev 拓展目录 | 拓展页接入 pi.dev 的 Extension 类型筛选目录、搜索、详情和对应 Package 安装状态；保留 50 项结果并使用最多约 3 行高的滚动列表，品牌头使用完整的单一 `pi.dev` SVG；安装与卸载明确作用于承载 Extension 的整个 Package，并严格调用固定 Pi 版本的用户级 `pi install/remove npm:<name> --no-approve`；本地路径 Extension 入口继续独立保留 | 已完成 |
+| S14-20 | 新建技能 | 技能页增加新建入口，收集合法技能名称、用途和用户级/当前项目范围后，将受约束的创建请求发送给当前 Pi 会话；Pi 必须先检查目标、展示完整拟写内容并等待用户确认，不新增旁路文件写入 API | 已完成 |
+| S14-21 | Package 分类 | 设置导航新增独立 Package 页面并展示不带资源类型过滤的完整 pi.dev Package 目录；拓展页保留 Extension 类型筛选目录与直接维护 `settings.json.extensions` 的本地 `.ts` / `.js`、目录入口。Package 是安装与分发单位，Extension 是其中一种资源；npm 安装和卸载始终作用于整个 Package | 已完成 |
+| S14-22 | Package 管理 | Package 页增加用户级已安装列表，展示 Pi 配置中的完整 source 与资源过滤状态；支持单项更新、全部更新和卸载，分别调用 Pi 0.80.10 原生 `update --extension`、`update --extensions` 和 `remove`，不实现第二套下载、依赖或配置引擎 | 已完成 |
+| S14-23 | Pi 路径解析 | Electron 从桌面环境启动且 `PATH` 缺少用户目录时，除显式路径与 `PATH` 外继续检查 `~/.local/bin/pi`；仍执行固定版本校验，不硬编码具体用户名或绕过可执行权限检查 | 已完成 |
+| S14-24 | 模型菜单布局 | 模型与思考强度菜单使用共享 viewport 定位并挂载到顶层浮层；按触发器右侧对齐，依据可用空间上下翻转、动态限宽限高并保留列表内部滚动；补齐打开聚焦、Escape 关闭和上下文切换收起 | 已完成 |
+| S14-25 | 模型菜单结构 | 删除模型/思考强度左右分类栏；主菜单改为上方直接列出当前模型的全部可用思考强度、下方显示当前模型，点击模型行才展开紧凑模型列表 | 已完成 |
+| S14-26 | 思考强度能力语义 | 按 Pi 0.80.10 的 `getSupportedThinkingLevels` 规则解释稀疏 `thinkingLevelMap`：基础档位缺失时仍可用、显式 `null` 才隐藏，`xhigh`/`max` 需显式声明；GUI contract 与 IPC 支持完整七档 | 已完成 |
+| S14-27 | 模型子菜单方向 | 点击主菜单底部模型行后，以独立顶层浮层从右侧展开模型列表；右侧空间不足时才向左避让，主菜单高度保持不变，并保留外点收起、分层 Escape 与打开聚焦 | 已完成 |
+| S14-28 | 强调色与透明度 | 外观页增加琥珀、蓝、绿、紫、玫红五种强调色和 0–40% 面板透明度；选择即时作用于统一 token，并经 Kernel 与 XDG config v7 持久化；旧 v4–v6 配置使用默认强调色与透明度迁移 | 已完成 |
+| S14-30 | 模型设置真实性 | Provider 与 Model 选择行只保留选择本身；Provider 模型详情分开显示 `models.json` 的已保存配置与 `/models?client_version=` 的只读目录信息，远端目录不进入编辑草稿或写回配置；凭据状态同时识别 Pi `auth.json` 与 Provider 内联 `apiKey`，不再误报现有凭据；模型能力使用三态设置，底部无效说明已删除 | 已完成 |
+| S14-29 | 工作过程密度 | 将既有工具三级扩展为统一工作过程三级：紧凑档实时只保留一行轮换状态；标准档保留首段有效 thinking 并在下方轮换单行状态；详细档继续展示完整 thinking 与工具时序。三档完成后都收进“已处理”，完整记录始终可展开 | 已完成 |
+| S14-31 | Thinking 摘要识别 | 纠正标准档按“第一段 thinking”保留正文的错误理解：从 Pi `thinkingSignature.summary` 投影显式摘要标记；摘要 thinking 只进入折叠过程，commentary 与非摘要 thinking 才保留在实时正文。活动状态只认最后一项真实运行内容，已完成摘要不再持续显示“正在思考”或自动展开 | 已完成 |
+| S14-32 | 多对话并行恢复 | 将单一全局 Runtime ownership 改为按 Project/Session 隔离的 Runtime context；运行中的对话可留在后台并继续接收事件，用户可立即新建或切换其他对话。Session summary 展示各自运行状态；归档只停止目标 Runtime，应用退出收口全部 Runtime | 已完成 |
+| S14-33 | 思考正文排版稳定 | commentary 与非摘要 thinking 在流式、完成和展开状态统一使用正文大小与行高；状态只通过动效、标题、颜色和最终折叠变化，不再因进入过程层而缩小并重新换行 | 已完成 |
+| S14-34 | 状态动效 | Project 行按真实 Runtime context 汇总进行中的对话数量；Session 行以启动、处理、收尾三段生命周期轨迹替代无限转圈；thinking 使用独立短波形呼吸，并在减少动态效果偏好下静态展示。不伪造百分比、剩余时间或后端未提供的子阶段 | 已完成 |
+| S14-35 | Session 圆形动效纠正 | Session 运行指示恢复常规圆形，不再使用三段轨迹；圆内使用渐变弧、前端光点和非匀速转动，starting/running/stopping 只调整节奏与强调度。Project 汇总和 thinking 动效保持不变 | 已完成 |
 
 #### S12.5 — 重复职责解耦
 
@@ -514,6 +545,10 @@ P3 在 P2 的导航、命令入口和交互容器上接入扩展生态，当前�
 - Skill 与 prompt template 的发现、说明和调用；复用 P2 的统一命令入口。
 - MCP server、tool、resource、配置和运行状态；先核对届时固定 Pi 版本的真实支持边界，不预设能够经 Pi RPC 直接透传。
 - 为上述能力统一来源标识、错误、权限提示和诊断体验。
+
+S14-07 已按用户要求前移 Pi Extension 本地路径的列出、安装和卸载最小链路，只读写用户级 `settings.json` 的 `extensions` 字段。S14-19 进一步前移 pi.dev 中带 Extension 资源的 npm Package 目录与用户级 Package 安装/卸载；S14-21 增加完整 Package 目录，但保留 Extension 类型筛选视图；S14-22 补齐用户级已安装列表、更新和卸载。新增 Git/本地 Package 来源以及已安装 Package 的逐资源过滤仍留在 P3，不与本地路径 Extension 语义混用。
+
+S14-20 前移 Skill 的最小创建入口：Pi 0.80.10 没有独立的新建技能 RPC 或命令，GUI 只按官方能力向当前 Pi 会话发送结构化创建请求，并固定用户级 `~/.pi/agent/skills/` 与项目级 `.pi/skills/` 目标；Skill 目录管理、编辑、删除和 Package 分发仍留在 P3。
 
 P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核验后追加到本计划。后续拆分必须继续遵循 KISS：先接入一条真实可验证的能力链路，再扩展第二类资源或管理界面。
 
@@ -568,8 +603,45 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-22 | S13 Interaction Completion | 多 Agent 并行审计键盘/焦点、滚动、切换反馈、命令补全和加载/错误/空状态；确认 Timeline 的底部跟随、用户上滚保持、Session/Project 切换重置和历史展开视口补偿链路成立；补齐 Tab/Arrow slash 补全、combobox ARIA、Runtime context action 成功后的 Composer 焦点恢复、可访问切换状态、空对话、无详情 crash fallback 和 Kernel 连接重试。119 项 core tests、typecheck、生产 build、真实 Pi 0.80.10 无状态 smoke 与 diff check 通过 | 在干净 commit 的打包产物上执行 P2 完整真实 UI 链路，确认交互时序并生成脱敏证据 |
 | 2026-07-22 | S13 P2 Release Verifier | 保留 P1 的 13 步真实 AppImage 回归，新增双 Project 发现/切换与单 Runtime 采样、同 Project 双 Session materialize/list/switch/restore、slash 来源与 Arrow/Tab 补全、typed `/thinking`、未知命令 Fail Fast、空态/切换反馈/焦点恢复断言；报告升级为 schema v2 与 P2 摘要。复核时同步移除 S12 后失效的 DOM 选择器，并按当前 XDG state v3 的 `sessions[]` / `activeSessionKeys[]` 读取恢复事实；脚本语法、diff check 与 AppImage package 通过 | 先整理当前 P2 工作区为干净 commit，再运行 `pnpm verify:linux`；passed 报告和六张脱敏截图生成前，S13/P2 保持 In Progress |
 | 2026-07-22 | S14 Planning | 新增后续 Slice S14“优化”；不预先拆分具体事项，实际交互问题按出现顺序处理 | S13 继续 In Progress；完成后进入 S14 |
-| 2026-07-22 | S14 Intake | 记录首批四项实际体验问题：菜单外点击收起、设置界面首期范围、只读查看 Session 与 Runtime 启动语义、Project/Session 拖拽排序 | 继续接收问题；具体方案和顺序留待逐项讨论 |
+| 2026-07-22 | S14 Intake | 记录首批四项实际体验问题：菜单外点击收起、设置界面首期范围、无感浏览 Session 与 Runtime 启动语义、Project/Session 拖拽排序 | 继续接收问题；具体方案和顺序留待逐项讨论 |
 | 2026-07-22 | S13 Complete / S14 Ready | 候选 `fe1e559` 从 AppImage 完成 17 步真实 UI 验证：完整保留 P1 launch、probe、tool、abort、crash、restart/resume、reopen 链路，并通过 2 个 Project 发现/切换、同 Project 2 个 Session 落盘/列出/切换/恢复、5 个命令与 2 类来源发现、Arrow/Tab 补全、typed `/thinking`、未知命令 Fail Fast、空态、切换反馈、焦点恢复和单 Runtime 采样；schema v2 报告为 passed，六张 1271px 宽截图均非空且正文、工具详情和标题已脱敏。119 项 core tests、typecheck、生产 build、真实 Pi 0.80.10 smoke 与 AppImage package 均通过 | S13 完成；S14 Ready，按优化记录逐项讨论和实施 |
+| 2026-07-22 | S14 首批优化 | 修复模型与 slash 菜单外点收起；建立只含外观/扩展的首期设置页；Session 浏览不改变 Runtime，首次发送或执行命令时后台自动激活目标 Session；增加 Project/Session 拖拽排序和 XDG 持久化。76 项定向 core tests、typecheck、生产 build、开发 Renderer HTTP 检查通过 | S14 保持 In Progress；继续逐项接收和处理实际体验问题 |
+| 2026-07-22 | P2 Re-audit Repair | 修复 Project 切换期间可并发启动旧 Project Runtime、同路径并发添加导致内存 registry 重复两项 lifecycle 缺陷；发布验证器的 typed `/thinking` 现在必须观察目标 thinking level；设置页关闭后焦点回到设置入口。135 项 core tests、typecheck、生产 build、验证器语法和 diff check 通过 | P2 既有发布证据保持历史记录；S14 继续 In Progress，下一次候选发布时从真实 AppImage 重跑完整 gate |
+| 2026-07-22 | S14 Steer / Follow up | 修复 Runtime `running` 时 Composer 被禁用且只能 abort 的交互缺口；按固定 Pi 0.80.10 原生协议贯通 `steer`、`follow_up` 和 `queue_update`，运行中可继续输入，Enter 发送转向消息、Alt+Enter 发送完成后跟进，两个动作均有显式按钮，排队数量由 Kernel 状态投影 | S14 保持 In Progress；继续按实际体验追加优化，下一次候选发布时重跑完整 AppImage gate |
+| 2026-07-22 | S14 Session 归档 | Session 行增加右侧悬浮/聚焦归档按钮；typed IPC、Kernel 与 ProjectStore 使用 XDG state v4 的独立归档索引闭环，v1/v2/v3 自动迁移；非活动归档不影响 Runtime，活动 ready Session 先停止再清空投影，Pi JSONL 保留。142 项 core tests、`pnpm typecheck`、生产 build 与 diff check 通过 | S14 保持 In Progress；归档管理与取消归档不在本项范围，继续按实际体验追加优化 |
+| 2026-07-22 | S14 拓展管理修正 | 严格区分 Extension 与 Package：删除 `pi install/remove/list`、npm/Git 来源和 package 目录入口；Main 直接维护 Pi 用户 `settings.json` 的 `extensions` 路径数组，设置页选择 `.ts` / `.js` 文件或目录，卸载仅移除配置且不删除源码；权限与生效时机移入 tooltip | S14 保持 In Progress；Pi Package 继续作为 P3 的独立能力，不与拓展页混用 |
+| 2026-07-22 | S14 下拉组件 | 偏好设置不再使用系统原生菜单；新增共享 `Select`，使用既有前端 token 实现触发器、popover、分组、选中/禁用态、外点收起及 Arrow/Home/End/Enter/Escape 键盘交互，并由“自动对话命名”首个接入。`pnpm typecheck` 与生产 build 通过 | S14 保持 In Progress；后续仅在出现第二个真实下拉调用点时继续复用，不改造语义不同的模型与 slash 菜单 |
+| 2026-07-22 | S14 运行中输入语义 | 将运行态普通提交改为 `follow_up`，Alt+Enter 作为 `steer` 特别提交；移除输入框右侧并列的 Follow up / Steer 按钮，仅保留中止按钮和排队数量。`pnpm typecheck` 与 diff check 通过 | S14 保持 In Progress；下一次候选发布时从真实 AppImage 重跑完整 gate |
+| 2026-07-22 | S14 运行中队列可见性 | 核对 Pi 0.80.10 原生语义：steer 在当前工具调用结束后、下一次 LLM 调用前送达，follow_up 只在 agent 停止后送达；Kernel 不再丢弃 `queue_update` 正文，Composer 上方只显示实际排队内容、不显示类型，面板限高滚动并由既有高度测量为 Timeline 自动让位。149 项 core tests、`pnpm typecheck` 与 diff check 通过 | S14 保持 In Progress；下一次候选发布时从真实 AppImage 重跑完整 gate |
+| 2026-07-22 | S14 工具过程密度 | 将工具过程从单一高强调时间线改为三档 Renderer 展示：紧凑档聚合文件、命令与其他工具数量；标准档使用无徽标、无圆点、无详情盒的轻量步骤；详细档按工具卡片展示输入与输出。外观设置提供三段滑杆并用 localStorage 保存，默认标准档；thinking 投影与展示未改。149 项 core tests、`pnpm typecheck`、生产 build 与 diff check 通过 | S14 保持 In Progress；下一项单独处理 thinking 与整体对话流层级 |
+| 2026-07-22 | S14 导航拖拽命中修复 | Project / Session 行不再常驻原生 draggable；仅从主行内容按下时临时启用，pointer up、pointer cancel 或 drag end 后关闭，行内新增/归档操作不武装拖拽；归档按钮显式置于时间文字上层，底层时间与运行指示不接收指针或文本选择。`pnpm typecheck` 与定向 diff check 通过 | S14 保持 In Progress；继续按实际体验追加优化 |
+| 2026-07-22 | S14 队列管理适配记录 | 记录队列拖拽排序、follow-up 转 steer、单条删除和动效需求；确认 Pi 0.80.10 公开 RPC 只支持入队与队列模式，不支持修改已有队列，Renderer 不能伪造状态 | 暂缓实现；优先评估 Pi 上游 typed RPC，并通过能力探测渐进启用；Pi GUI 不默认携带 Extension、不静默修改用户已安装的 Pi |
+| 2026-07-22 | S14 对话导航感知 | 将可见 Session 目标与 Kernel 活动 Session 分离：已有对话先更新选中态并清空旧正文，再异步补历史；快速连续切换只接收最后一次 preview。新建对话先显示空白页并聚焦 Composer，后台启动期间可先输入，提交等待同一启动 Promise 后继续；未修改 Kernel contract、XDG schema 或单 Runtime ownership。`pnpm typecheck`、生产 build 与定向 diff check 通过 | S14 保持 In Progress；下一次候选发布时从真实 AppImage 重跑完整 gate |
+| 2026-07-22 | S14 对话过程层级 | 按用户确认的参考样式重做 settled 工作过程与 thinking：外层使用“已处理 + 耗时 + 箭头 + 分隔线”，内层 thinking 独立折叠并弱化正文，删除旧卡片、状态点、过程统计和重复文件汇总；Renderer 只记录当前实际观察到的 run/thinking 时长，历史无数据时省略耗时。工具三档、原始顺序与最终回答层级不变。`pnpm typecheck`、生产 build 与定向 diff check 通过 | S14 保持 In Progress；下一次候选发布时从真实 AppImage 重跑完整 gate |
+| 2026-07-22 | S14 外观设置布局 | 参考成熟外观页的信息层级，将已有主题状态、工具过程密度、界面字体和代码字体收为主题、Agent 对话、字体三组；同组采用连续设置行与右侧紧凑控件，窄窗口自动上下排列；未新增无后端语义的换行、色调、透明度或字号选项。`pnpm typecheck`、生产 build 与定向 diff check 通过 | S14 保持 In Progress；继续按实际体验追加优化 |
+| 2026-07-22 | S14 冷启动对话 | 冷启动取得首份 KernelState 后立即投影空白新对话，并在已有活动 Project 时复用现有新建链路后台启动 Runtime；最近 Session 不再成为默认启动页，历史浏览、首次操作恢复、Project 切换和 crash resume 均保持原语义。`pnpm typecheck`、生产 build 与定向 diff check 通过 | S14 保持 In Progress；下一次候选发布时从真实 AppImage 重跑完整 gate |
+| 2026-07-22 | S14 主题与密度说明 | 外观页主题由只读“深色”改为共享下拉，支持跟随系统、深色和浅色；Renderer 在 system 模式监听 `prefers-color-scheme`，浅色覆盖完整界面 token，设置经 typed Kernel contract 与 XDG config v6 持久化，旧 v4 配置默认迁移为 system。复核工具密度三档真实渲染后，增加聚合摘要、逐条操作、展开详情三种极简图示。153 项 core tests、`pnpm typecheck`、生产 build 与定向 diff check 通过 | S14 保持 In Progress；下一次候选发布时从真实 AppImage 重跑主题切换与核心链路 |
+| 2026-07-22 | S14 pi.dev 拓展接入 | 在现有本地路径拓展区之外增加 pi.dev Extension 目录、显式搜索、详情跳转与安装状态；目录请求固定到 pi.dev 并对当前服务端 package card 元数据 Fail Fast 解析，安装/卸载只接受合法 npm 包名并通过 Pi 0.80.10 用户级包管理命令执行。真实 pi.dev 搜索 HTML 解析通过，156 项 core tests、`pnpm typecheck`、生产 build 与 diff check 通过 | S14 保持 In Progress；真实安装涉及执行第三方代码，本次未选择任意第三方包做破坏性验收，下一次候选发布时从 AppImage 复核完整交互 |
+| 2026-07-22 | S14 新建技能 | 技能页增加“新建技能”表单，按 Pi 标准校验名称并选择用户级或当前项目目录；提交后复用现有 Session 激活与 prompt 链路，将技能用途、固定目标和“先展示、确认后写入”的约束交给 Pi。156 项 core tests、`pnpm typecheck`、生产 build 与 diff check 通过 | S14 保持 In Progress；本次未实际写入技能目录，后续在真实交互中由用户审查并确认具体技能内容 |
+| 2026-07-22 | S14 pi.dev 目录修复 | 真实 Electron 请求因 pi.dev 对冗余排序参数和查询顺序返回 302，而严格重定向策略 Fail Fast；目录 URL 改为站点规范形式并继续禁止跳转，同时补齐目录错误/状态句位于卡片末尾时的底部留白。真实响应头确认规范 URL 为 200，3 项定向测试、`pnpm typecheck`、生产 build 与 diff check 通过 | S14 保持 In Progress；不放宽跨域或任意重定向策略 |
+| 2026-07-22 | S14 pi.dev 目录密度与品牌（首轮理解） | 首轮将“一次最多展示三个”理解为只返回 3 项并移除滚动，同时只采用 Press Kit 的 Pi 图形标记；随后用户明确需要保留滚动列表，并指出品牌头缺少 `.dev` | 由下一条记录纠正，不把首轮理解保留为当前行为 |
+| 2026-07-23 | S14 pi.dev 列表与品牌纠正 | 恢复每次最多解析 50 项；列表以 288px 高度滚动，常规密度下最多可见约 3 行。品牌头使用官网真实 Pi 标记并追加 `.dev` 形成完整组合，保留本地 SVG 与明暗主题适配。3 项目录定向测试、生产 build 与 diff check 通过；全量 typecheck 被并行 provider API 改动中 preview fixture 缺少四个方法阻断 | S14 保持 In Progress；provider 类型缺口由其所属改动修复，本项不越界修改 |
+| 2026-07-23 | S14 Package 分类 | 设置导航新增 Package 分类和独立图标；pi.dev/npm 目录移入 Package 页面并统一 Package 文案，本地路径 Extension 继续单独留在拓展页。`pnpm typecheck` 与定向 diff check 通过 | S14 保持 In Progress；后续 Package 能力和 Extension 原生 UI 适配在该边界上分别演进 |
+| 2026-07-23 | S14 Package / Extension 边界纠正 | 依据固定 Pi 0.80.10 的真实模型纠正首轮迁移：Package 是可包含 Extension、Skill、Prompt、Theme 的安装分发单位，Extension 是其中一类可执行资源。Package 页使用完整 pi.dev 目录；拓展页恢复 `type=extension` 筛选目录并保留本地路径，安装提示明确作用于整个 Package；`pi.dev` 品牌改为单一 SVG 图像。4 项目录定向测试、`pnpm typecheck` 与 diff check 通过 | S14 保持 In Progress；逐资源启停仍由 Pi `config` 语义负责，未在本项提前实现 |
+| 2026-07-23 | S14 Package 管理 | Package 页增加用户级已安装列表和资源过滤标记；支持单项更新、全部更新及卸载，Main 对 Renderer 提交的 source 先与 Pi 用户设置核对，并把无版本 npm 身份解析回实际固定 source。所有修改调用 Pi 原生命令，不复制下载或依赖处理逻辑。4 项目录/命令定向测试、`pnpm typecheck` 与 diff check 通过 | S14 保持 In Progress；本项不新增 Git/本地来源输入或资源级启停 |
+| 2026-07-23 | S14 Pi 路径修复 | 修复 Electron 主进程缺少用户级 PATH 时 Package 命令报“Pi was not found”的问题；解析顺序保持显式配置、PATH、`~/.local/bin/pi`，并继续校验可执行文件和固定 Pi 版本。13 项 Package/路径定向测试、`pnpm typecheck`、diff check及空 PATH 下真实 `/home/vvv/.local/bin/pi` 0.80.10 探测通过；开发主进程已重启 | S14 保持 In Progress；不增加平台外路径猜测或第二套 Pi 安装机制 |
+| 2026-07-23 | S14 模型菜单布局 | 多 Agent 分别审计根因、既有浮层模式、响应式边界与验证范围；模型复合菜单改用共享 viewport 定位和 body portal，从固定大面板收敛为首选 520×360px，并按实际空间翻转、缩放和滚动；补齐 portal 外点判断、打开聚焦、Escape 关闭及上下文切换收起。160 项 core tests、`pnpm typecheck`、生产 build 与 diff check 通过 | S14 保持 In Progress；下一次真实工作流中复核模型与思考强度切换的最终视觉 |
+| 2026-07-23 | S14 模型菜单结构纠正 | 用户复核后删除不必要的左右分类与面板切换；浮层收窄为首选 380px 单列，上方直接显示思考强度选项，下方模型行按需展开最多 220px 高的滚动列表；保留 viewport 定位、外点收起、Escape 与焦点行为 | S14 保持 In Progress；在当前开发窗口复核最终信息层级 |
+| 2026-07-23 | S14 思考强度能力修复 | 实测 Pi 0.80.10 当前 `vvqq-cpa/gpt-5.6-luna` 返回稀疏 map `{xhigh,max}` 但当前状态为 `high`；核对 Pi 本机源码确认 `off/minimal/low/medium/high` 缺失时默认支持。GUI 改为相同判定并贯通七档 shared contract、RPC 投影、IPC 校验与 slash 参数；160 项 core tests、`pnpm typecheck`、生产 build 与 diff check 通过 | S14 保持 In Progress；当前 Luna 菜单应展示七个真实可选档位 |
+| 2026-07-23 | S14 模型子菜单方向 | 模型行不再在主菜单内向下展开列表；主浮层移到入口左侧预留空间，模型列表使用独立 portal 优先从模型行右侧展开，并只在可用宽度不足时向左避让。外点收起覆盖两层浮层，Escape 先收子菜单再收主菜单，打开后聚焦当前模型；160 项 core tests、`pnpm typecheck` 与生产 build 通过 | S14 保持 In Progress；在当前开发窗口复核右侧级联菜单的最终位置与宽度 |
+| 2026-07-23 | S14 强调色与透明度 | 外观页主题组增加五种强调色和 0–40% 面板透明度选择；Renderer 通过统一 CSS token 即时更新强调状态、侧栏、卡片与 Composer 面板，配置 schema 升级到 v7 并迁移旧 v4–v6 外观设置。81 项 ProjectStore/Kernel 定向测试、`pnpm typecheck` 与 diff check 通过 | S14 保持 In Progress；下一次真实工作流中复核深浅主题下的颜色与通透程度 |
+| 2026-07-23 | S14 模型设置真实性 | 纠正只检查本地 `models.json` 的错误判断：CPA 标准 `/v1/models` 只返回 ID，但同一接口带固定 Pi 版本的 `client_version` 后会返回完整 Codex 模型元数据。Provider Store 现在使用 `auth.json` 凭据在锁外读取该目录，严格只解析当前已配置模型；本地显式字段优先，远端名称、上下文、推理和输入能力只读回退，绝不进入编辑草稿或写回配置。真实读取确认 Luna/Sol/Terra 为 372000 且支持图片，5.5/5.4/5.4-mini/Grok 为 272000 且支持图片，Spark 为 128000 且仅文本；接口未声明最大输出，因此保持“未声明”。默认值污染、三态设置和底部说明删除修复继续保留；`pnpm typecheck`、生产 build、diff check 与真实目录读取通过 | S14 保持 In Progress；后续只展示 Provider 实际返回的字段，不按模型名称猜测 |
+| 2026-07-23 | S14 工作过程密度 | 复用既有紧凑、标准、详细设置统一控制活动 thinking 与工具过程：紧凑档单行轮换“正在思考/阅读/运行/修改”，标准档固定首段有效 thinking 并只轮换后续状态，详细档保留完整过程；完成态继续统一收起，展开仍可查看原始记录。设置文案同步改为“工作过程密度”。`pnpm typecheck`、生产 build 与定向 diff check 通过 | S14 保持 In Progress；在当前开发窗口中按三个档位观察真实长任务的实时切换节奏 |
+| 2026-07-23 | S14 Thinking 摘要识别纠正 | 复核真实 Pi Session 后确认截图中的英文粗体 thinking 来自 `thinkingSignature.summary`，长段中文过程正文来自 `phase=commentary`。Kernel thinking 投影增加摘要标记；标准档不再固定首条，而是保留 commentary 与非摘要 thinking，摘要和工具留在单行状态的折叠详情中；同一流式 assistant message 中只有最后一项真实活动显示运行态，旧摘要默认收起。5 项投影测试通过；全量 typecheck 仅被并行 `WorkbenchKernel/contextKey` 与 Preview `runtimeStatus` 未完成改动阻断 | S14 保持 In Progress；用同类真实长任务复核摘要收起、正文保留和状态轮换 |
+| 2026-07-23 | S14 多对话并行恢复 | 纠正重建时移除旧版多 Runtime 能力的范围回退；Kernel 按 Session 隔离 Runtime、事件、provisional materialization、命名和 Conversation 投影，Renderer 允许运行中切换/新建并显示后台运行状态。166 项 core tests、`pnpm typecheck`、生产 build 与 `git diff --check` 通过 | S14 保持 In Progress；下一次 AppImage 候选将发布验证器的单 Runtime 断言升级为并行 Runtime 断言 |
+| 2026-07-23 | S14 思考正文排版稳定 | 移除过程层对 commentary 和 thinking 正文的 `text-control/line-meta` 缩小覆盖，统一使用 `text-body/line-body`；流式正文被识别为过程内容后不再重新换行和跳动，完成态继续依靠低强调颜色与整体折叠收敛。生产 build 与定向 diff check 通过 | S14 保持 In Progress；用真实长段流式 commentary 复核完成瞬间的滚动与换行稳定性 |
+| 2026-07-23 | S14 状态动效 | Project 摘要增加由真实多 Runtime context 派生的进行中 Session 数量，后台 Project 状态变化也会刷新前台；Session 无限转圈改为启动、处理、收尾三段轨迹，thinking 改为独立短波形呼吸，并补齐 reduced-motion 静态表现。69 项 Kernel 定向测试、`pnpm typecheck`、生产 build 与定向 diff check 通过 | S14 保持 In Progress；在后续真实长任务中观察多 Project 并行与 thinking 动效节奏 |
+| 2026-07-23 | S14 Session 圆形动效纠正 | 按用户反馈撤回 Session 三段轨迹，恢复圆形轮廓；使用由弱到强的渐变弧、前端光点与带节奏变化的旋转替代单根边框匀速转圈。Project 活动数量和 thinking 短波形均未修改。`pnpm typecheck`、生产 build 与定向 diff check 通过 | S14 保持 In Progress；在真实并行对话中观察圆弧运动质感 |
 
 ## 17. 计划变更记录
 
@@ -590,3 +662,36 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-22 | 1.3 | S13 增加首轮目的导向的 Session 语义命名，并记录隔离 Pi metadata 子进程边界 | 用户明确拒绝复制首条消息作为标题，要求像 GPT 一样按对话目的命名；Pi 0.80.10 RPC 又没有独立标题接口 | 单一活动 Runtime 与 Pi Session 事实源不变；名称生成复用 Pi provider/auth，不引入 SDK 或第二套 credential 配置，失败时保持未命名 |
 | 2026-07-22 | 1.4 | 在 S13 后增加 S14“优化”，不预设具体事项清单 | 后续将处理零散交互优化，不适合提前固化为详细计划 | S13 仍为当前 Slice；S14 保持 Pending，具体事项在实际处理时记录 |
 | 2026-07-22 | 1.5 | 自动命名改为授权目录内的低成本模型选择，并增加自动、关闭、指定模型设置 | 用户指出复用主对话模型成本过高，并要求覆盖 OAuth 登录用户与可修改界面 | 不硬编码 provider、不读取或保存凭据、不回退高成本主模型；Project config 升级为 v3 并保存非敏感命名偏好 |
+| 2026-07-22 | 1.6 | S14 首批落地菜单外点收起、两类设置页、Session 无感浏览和导航拖拽排序 | 用户要求拉起现有服务后先处理已记录的四项实际体验问题 | 不新增 Extension 管理假能力，不改变 Pi session 事实源或单 Runtime ownership；浏览不触发 Runtime，实际操作时自动激活，排序仅改变持久化顺序 |
+| 2026-07-22 | 1.7 | S14 接入运行中 `steer` / `follow_up` 输入 | 用户指出当前任务执行中 Composer 被锁定，与 Pi 原生消息队列能力不一致 | 扩展 typed Kernel/Runtime/Pi RPC 命令边界并投影队列数量；不改变单 Runtime ownership、Session 事实源或现有 abort 语义 |
+| 2026-07-22 | 1.8 | S14 增加 Session 行内归档入口与持久化归档索引 | 用户要求鼠标悬浮 Session 时可在右侧直接归档对话 | XDG state 升级到 v4 并保留旧版本迁移；归档 Session 从普通导航隐藏但不删除 Pi 对话文件，不提前实现归档管理或批量能力 |
+| 2026-07-22 | 1.9 | 将 Pi Extension 路径的列出、安装和卸载最小链路前移到 S14 | 用户明确要求 Extension 就是 Extension，不能借 Package 命令或 package 目录表达 | 只维护 Pi 用户设置的 `extensions` 字段；不调用 Package CLI，不接受 npm/Git 来源，卸载不删除源码；Package 仍是 P3 的独立范围 |
+| 2026-07-22 | 2.0 | 将运行中普通输入固定为 `follow_up`，并将 `steer` 收敛为 Alt+Enter 特别提交 | 用户明确两者应分别作为默认输入与特别输入存在，不应作为右侧同级按钮 | 只调整 Composer 提交映射、提示和按钮呈现；Pi RPC、Kernel command、排队投影与中止语义不变 |
+| 2026-07-22 | 2.1 | 将 Pi 原生运行中队列正文纳入 KernelState 与 Composer 展示 | 用户需要确认消息是否已排队、排队内容及 steer / follow_up 的真实处理时机 | 新增两组只读状态投影和限高队列面板；不改变 Pi 原生命令、队列顺序、Runtime ownership 或 Timeline 布局模型 |
+| 2026-07-22 | 2.2 | 队列面板只显示排队正文，不显示 steer / follow_up 类型 | 用户明确不需要在队列内容旁展示“转向”或“跟进” | 只移除 Renderer 类型标签；Kernel 仍分别保留两类队列，Pi 原生时序不变 |
+| 2026-07-22 | 2.3 | 工具过程增加紧凑、标准、详细三档展示密度，并默认采用低强调的标准档 | 当前工具时间线、徽标和详情容器过于突出，压过最终回答；用户要求先独立收敛工具展示，再处理 thinking | 仅改变 Renderer 展示与本机偏好；不修改 thinking、Pi RPC、Kernel conversation contract 或 Session 事实源 |
+| 2026-07-22 | 2.4 | 将队列修改能力记录为后续协议适配项，不在当前 Renderer 伪实现 | Pi 0.80.10 RPC 缺少单条删除、重排、转换与替换命令；本机补丁无法直接成为可分发能力 | 保留当前只读队列内容展示；后续优先推动上游核心 RPC，并做显式 capability detection；不以默认 Extension 或静默补丁填补协议缺口 |
+| 2026-07-22 | 2.5 | Session 切换与新建采用“先跳转、后补票”的 Renderer 导航时序 | preview 文件读取和 Runtime 完整启动此前都阻塞可见选中态，导致切换感知过强 | Renderer view target 立即提交，异步 preview 使用最新请求获胜；首次动作仍经过现有 Kernel 激活边界，不改变 Session 事实源或 Runtime ownership |
+| 2026-07-22 | 2.6 | settled 工作过程改为极简外层 disclosure，并为每段 thinking 增加独立低强调折叠 | 用户确认结束后统一收起的结构保留，但旧卡片、状态点和统计串样式不符合目标；参考界面使用“已处理 / 思考了 + 耗时”的两层文档流 | 只改变 Renderer 展示与当前可观测耗时；工具密度、Conversation 顺序、Kernel/RPC contract 和历史事实源不变，缺少可靠历史耗时时不显示数字 |
+| 2026-07-22 | 2.7 | 外观页改为分类标题、组内连续行与右侧紧凑控件的设置布局 | 用户提供成熟外观页作为视觉参考；当前四张独立卡片缺少同类设置的层级和密度 | 只重排已有 Renderer 设置；主题仍是只读状态，工具密度与字体持久化语义不变，不新增未接通功能 |
+| 2026-07-22 | 2.8 | 冷启动默认创建新对话，不再把最近 Session 作为启动意图 | 用户明确认为每次进入应用应新建对话，恢复旧对话不应成为默认启动处理 | 只调整 Renderer 冷启动落点并复用现有后台启动链路；保留最近 Project、历史 Session、按需恢复、Project 切换和显式 crash resume |
+| 2026-07-22 | 2.9 | 主题设置接通跟随系统、深色与浅色，并为工具密度三档补充真实差异图示 | 用户指出主题仍不可修改，并要求核查工具密度是否确有三档及其实际差异 | Appearance contract 增加严格 theme 字段并持久化；旧配置明确迁移为 system；Renderer 监听系统主题并提供浅色 token；工具密度实现不变，只补充与真实分支一致的说明图 |
+| 2026-07-22 | 3.0 | 拓展页接入 pi.dev Extension 目录和 npm Package 安装/卸载 | 用户明确要求在拓展页直接发现并安装、卸载 pi.dev 拓展 | 固定使用 pi.dev Extension 目录和 Pi 0.80.10 用户级包管理命令；保留本地路径拓展，第三方代码仍需显式确认；不提前增加更新、Git 来源或通用 Package 管理 |
+| 2026-07-22 | 3.1 | 技能页增加由 Pi 驱动的新建技能入口 | 用户明确要求技能部分可以调用 Pi 创建新技能 | 复用当前 Pi prompt 与 Session 激活链路；固定标准技能目录和名称规则，写入前必须展示并确认；不增加直接文件写入、技能编辑或删除能力 |
+| 2026-07-22 | 3.2 | 收敛 pi.dev 目录展示密度并采用官方 Logo | 用户希望设置页一次只显示两三个拓展，并用 pi.dev 品牌标识替代文字标题 | 单次结果上限固定为 3；保留搜索与外部完整目录入口；复制官方 SVG 到本地构建资产，不增加远程图片依赖 |
+| 2026-07-23 | 3.3 | 纠正 pi.dev 列表与完整品牌组合 | 用户澄清“最多三个”指滚动视窗的可见数量，不是截断结果；官方 SVG 只有 Pi 图形，界面仍需要完整的 `.dev` | 恢复 50 项目录数据并固定三行高滚动视窗；使用官方 Pi 标记加 `.dev` 组合，不依赖远程图片 |
+| 2026-07-23 | 3.4 | 将 Package 与 Extension 拆为独立设置分类 | 用户明确 Package 是后续组合、适配和维护的独立边界，不能继续只作为拓展页中的 npm 来源呈现 | pi.dev/npm 安装目录进入 Package 页面；本地 Extension 路径继续由拓展页管理；当前 CLI、IPC 和 Pi 配置语义不变 |
+| 2026-07-23 | 3.5 | 按 Pi 真实资源模型纠正 Package 与 Extension 页面职责 | 用户指出首轮把 Extension 目录整体移到 Package 页，混淆了安装单位与资源类型 | Package 页展示完整 Package 目录；拓展页保留 Extension 筛选目录和本地路径；两处 npm 操作均明确安装或卸载整个 Package，逐资源启停不在本项扩展 |
+| 2026-07-23 | 3.6 | 将 Package 页面补为用户级管理入口 | 用户确认 GUI 必须管理 Package，但不另写安装引擎 | 复用 Pi 原生 list/settings、install、remove 和 update 语义，增加已安装列表、单项/全部更新与卸载；下载、依赖和持久化继续由 Pi 负责 |
+| 2026-07-23 | 3.7 | 补齐桌面启动环境中的用户级 Pi 路径解析 | Package 操作在 Electron PATH 不含 `~/.local/bin` 时无法找到已安装的 Pi | 在现有解析器增加单一 Linux 用户级 fallback，并保留显式路径优先级、权限检查和固定版本约束 |
+| 2026-07-23 | 3.8 | 模型复合菜单改用共享 viewport 定位和顶层 portal | 固定 620×420px 的 Composer 内绝对定位面板在实际窗口中过大，并会受到主工作区 overflow 裁剪 | 保留模型/思考强度双栏语义；浮层首选 520×360px，依据触发器与视口动态对齐、翻转和限高，不改变 Kernel/RPC contract |
+| 2026-07-23 | 3.9 | 模型菜单从左右分类改为强度优先的上下单列 | 用户指出左右栏增加理解和操作成本；换模型是低频次级操作，思考强度应直接可见 | 主浮层上方展示全部可用强度，下方模型行展开紧凑列表；首选宽度收窄为 380px，保留 S14-24 的 viewport 与键盘边界 |
+| 2026-07-23 | 4.0 | 思考强度支持完整 Pi 七档并采用稀疏 map 语义 | GUI 把 map 缺失键误判为不支持，导致只显示显式声明的 `xhigh/max`；Pi 实际仅以 `null` 禁用基础档位 | `off/minimal/low/medium/high` 默认可用且可被 `null` 禁用，`xhigh/max` 保持显式 opt-in；类型、IPC、slash 与 Renderer 使用同一七档集合 |
+| 2026-07-23 | 4.1 | 模型列表改为优先向右展开的级联子菜单 | 用户指出向下展开难以显示，并要求点击模型后从右侧打开小菜单 | 模型列表脱离主面板高度并使用独立 viewport 定位；右侧空间不足时才向左避让，不改变模型或思考强度协议 |
+| 2026-07-23 | 4.2 | 外观设置增加强调色与面板透明度 | 用户明确要求 UI 支持选择强调色和透明度 | Appearance contract 增加强调色与透明度枚举，config 升级为 v7；Renderer 只调整统一强调 token 和表面层 alpha，不降低文字及整个窗口的不透明度 |
+| 2026-07-23 | 4.3 | 将工具过程三级扩展为统一工作过程三级 | 用户确认实时过程应按紧凑、标准、详细形成明确差异，并先按该方案实际观察 | 只改变 Renderer 活动态投影与设置文案；默认仍为标准，完成态、Kernel/RPC contract、Session 事实源和本机偏好存储不变 |
+| 2026-07-23 | 4.4 | 标准档从“第一段 thinking”纠正为“非摘要正文” | 真实 Pi Session 证明截图中的短英文条目有明确 `thinkingSignature.summary`，而长段过程正文是签名为 commentary 的 text；按顺序无法表达用户要求 | KernelThinkingEntry 增加 summary 标记；Renderer 标准档保留 commentary 与非摘要 thinking，摘要仍可在完整过程里查看；Pi Session 原文和 RPC 事件不变 |
+| 2026-07-23 | 4.5 | 恢复多个顶层对话并行 Runtime | 用户确认并行是旧 Pi GUI 已实现的核心工作台能力；新项目 S8–S10 的单 Runtime 收缩导致对话运行时无法继续下一个对话 | D-017 替代单活动 Runtime 限制；Kernel 按 Session 管理 Runtime context，切换不停止后台任务，归档定向停止，退出全量收口；不恢复旧 server/SQLite 拓扑 |
+| 2026-07-23 | 4.6 | 思考过程正文在状态转换前后保持相同排版 | commentary/thinking 进入过程层后使用较小字号，导致完成瞬间重新换行、容器高度变化和滚动跳跃 | 过程正文统一使用正文 token；只保留动效、标题、颜色和折叠层级变化，不修改 conversation contract 或内容分类 |
+| 2026-07-23 | 4.7 | 用真实阶段与项目汇总替代通用加载转圈 | 原 Session 圆环只能表达 `running`，Project 没有后台对话汇总，且导航与 thinking 动效缺少语义区分 | Project 增加非持久化 busy Session 计数；Session 展示 starting/running/stopping 生命周期阶段；thinking 保持消息级独立动效；不扩展百分比或预计完成时间 contract |
+| 2026-07-23 | 4.8 | Session 运行指示恢复圆形并精修圆内运动 | 用户明确问题在原圆形动效的转动形态，不要求改成阶段轨迹；当前 thinking 动效可保持 | Session 仍使用圆形，但改为渐变弧与光点的节奏旋转；Project 汇总、thinking 与 Kernel activity contract 不变 |
