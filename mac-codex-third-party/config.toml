@@ -1,0 +1,17 @@
+# OpenAI Codex user configuration example for a third-party Responses API.
+# Install this at ~/.codex/config.toml after replacing the placeholder values.
+
+model = "YOUR_MODEL_ID"
+model_provider = "third_party"
+
+[model_providers.third_party]
+name = "Third-party OpenAI-compatible platform"
+base_url = "https://YOUR_PLATFORM.example/v1"
+wire_api = "responses"
+
+# macOS Keychain-backed bearer token. The installer creates this keychain item.
+[model_providers.third_party.auth]
+command = "/usr/bin/security"
+args = ["find-generic-password", "-a", "YOUR_MACOS_USERNAME", "-s", "codex-third-party-api-key", "-w"]
+timeout_ms = 5000
+refresh_interval_ms = 0
