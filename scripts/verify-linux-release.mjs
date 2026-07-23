@@ -63,12 +63,19 @@ const processTotals = { stdoutChars: 0, stderrChars: 0 }
 const p2Summary = {
   projects: { configured: 0, discovered: 0, switched: false },
   sessions: { materialized: 0, listed: 0, switched: false, restored: false },
-  commands: { discovered: 0, sources: 0, completed: false, unknownRejected: false },
+  commands: {
+    discovered: 0,
+    sources: 0,
+    completed: false,
+    completionSideEffectFree: false,
+    requiredArgumentRejected: false,
+    unknownRejected: false
+  },
   interaction: {
     composerFocusRestored: false,
     emptyConversationVisible: false,
     switchFeedbackObserved: false,
-    singleRuntime: false
+    parallelRuntimes: false
   }
 }
 
@@ -428,23 +435,24 @@ async function exerciseUi() {
     if (discovered !== projectPaths.length) fail('E_P2_PROJECT_DISCOVERY')
     p2Summary.projects.discovered = discovered
 
-    await assertSingleProjectRuntime(primaryProjectPath)
-    await monitorSingleRuntimeOwners(async () => {
-      const feedbackObserved = await clickTitledButtonWithFeedback(
-        activeCdp,
-        '.project-select',
-        secondaryProjectPath
-      )
-      if (!feedbackObserved) fail('E_P2_PROJECT_SWITCH_FEEDBACK')
-      p2Summary.interaction.switchFeedbackObserved = true
-      await waitForTitledSelection(
-        activeCdp,
-        '.project-select',
-        secondaryProjectPath,
-        TIMEOUT.ready,
-        'E_P2_PROJECT_SWITCH'
-      )
-    })
+    await assertConfiguredProjectRuntimeCounts(new Map([
+      [primaryProjectPath, 1],
+      [secondaryProjectPath, 0]
+    ]))
+    const feedbackObserved = await clickTitledButtonWithFeedback(
+      activeCdp,
+      '.project-select',
+      secondaryProjectPath
+    )
+    if (!feedbackObserved) fail('E_P2_PROJECT_SWITCH_FEEDBACK')
+    p2Summary.interaction.switchFeedbackObserved = true
+    await waitForTitledSelection(
+      activeCdp,
+      '.project-select',
+      secondaryProjectPath,
+      TIMEOUT.ready,
+      'E_P2_PROJECT_SWITCH'
+    )
     await waitForExpression(
       activeCdp,
       `document.querySelector('.conversation-empty-state[role="status"]') !== null`,
@@ -455,19 +463,20 @@ async function exerciseUi() {
 
     await clickButtonText(activeCdp, '.composer-start-action', '启动 Pi')
     await waitForRuntime(activeCdp, 'ready', TIMEOUT.ready)
-    await assertSingleProjectRuntime(secondaryProjectPath)
+    await assertConfiguredProjectRuntimeCounts(new Map([
+      [primaryProjectPath, 1],
+      [secondaryProjectPath, 1]
+    ]))
     await waitForComposerFocus(activeCdp)
 
-    await monitorSingleRuntimeOwners(async () => {
-      await clickTitledButton(activeCdp, '.project-select', primaryProjectPath)
-      await waitForTitledSelection(
-        activeCdp,
-        '.project-select',
-        primaryProjectPath,
-        TIMEOUT.ready,
-        'E_P2_PROJECT_RESTORE'
-      )
-    })
+    await clickTitledButton(activeCdp, '.project-select', primaryProjectPath)
+    await waitForTitledSelection(
+      activeCdp,
+      '.project-select',
+      primaryProjectPath,
+      TIMEOUT.ready,
+      'E_P2_PROJECT_RESTORE'
+    )
     const primaryReady = await evaluateValue(
       activeCdp,
       `window.piGui.getState().then((state) => state.runtime.status === 'ready')`
@@ -478,21 +487,27 @@ async function exerciseUi() {
     }
     await waitForMessageCount(activeCdp, messagesBeforeReopen, TIMEOUT.ready)
     await assertSameSessionPointer(sessionPointer, primaryProjectPath)
-    await assertSingleProjectRuntime(primaryProjectPath)
+    await assertConfiguredProjectRuntimeCounts(new Map([
+      [primaryProjectPath, 1],
+      [secondaryProjectPath, 1]
+    ]))
     await waitForComposerFocus(activeCdp)
     p2Summary.projects.switched = true
     p2Summary.interaction.composerFocusRestored = true
-    p2Summary.interaction.singleRuntime = true
+    p2Summary.interaction.parallelRuntimes = true
   })
 
   await runStep('p2_sessions', async () => {
+    const [primaryProjectPath, secondaryProjectPath] = projectPaths
     const originalSessionKey = await selectedTitledButton(activeCdp, '.session-item')
     if (originalSessionKey === null) fail('E_P2_SESSION_ORIGINAL')
 
-    await monitorSingleRuntimeOwners(async () => {
-      await clickSelector(activeCdp, '.project-new-chat')
-      await waitForRuntime(activeCdp, 'ready', TIMEOUT.ready)
-    })
+    await clickSelector(activeCdp, '.project-new-chat')
+    await waitForRuntime(activeCdp, 'ready', TIMEOUT.ready)
+    await assertConfiguredProjectRuntimeCounts(new Map([
+      [primaryProjectPath, 2],
+      [secondaryProjectPath, 1]
+    ]))
     await waitForExpression(
       activeCdp,
       `document.querySelector('.conversation-empty-state[role="status"]') !== null`,
@@ -527,19 +542,21 @@ async function exerciseUi() {
     p2Summary.sessions.materialized = 2
     p2Summary.sessions.listed = listed
 
-    await monitorSingleRuntimeOwners(async () => {
-      await clickTitledButton(activeCdp, '.session-item', originalSessionKey)
-      await waitForTitledSelection(
-        activeCdp,
-        '.session-item',
-        originalSessionKey,
-        TIMEOUT.ready,
-        'E_P2_SESSION_SWITCH'
-      )
-      await waitForRuntime(activeCdp, 'ready', TIMEOUT.ready)
-    })
+    await clickTitledButton(activeCdp, '.session-item', originalSessionKey)
+    await waitForTitledSelection(
+      activeCdp,
+      '.session-item',
+      originalSessionKey,
+      TIMEOUT.ready,
+      'E_P2_SESSION_SWITCH'
+    )
+    await waitForRuntime(activeCdp, 'ready', TIMEOUT.ready)
     await waitForMessageCount(activeCdp, messagesBeforeReopen, TIMEOUT.ready)
     await assertSameSessionPointer(sessionPointer, projectPath)
+    await assertConfiguredProjectRuntimeCounts(new Map([
+      [primaryProjectPath, 2],
+      [secondaryProjectPath, 1]
+    ]))
     await waitForComposerFocus(activeCdp)
     p2Summary.sessions.switched = true
     p2Summary.sessions.restored = true
@@ -572,6 +589,64 @@ async function exerciseUi() {
     p2Summary.commands.discovered = catalogSummary.commands
     p2Summary.commands.sources = catalogSummary.sources
 
+    const completionBaseline = await evaluateValue(
+      activeCdp,
+      `window.piGui.getState().then((state) => ({
+        activeSessionKey: state.activeSessionKey,
+        sessionKeys: state.sessions.map((session) => session.key),
+        conversationEntries: state.conversation.entries.length,
+        runtimeStatus: state.runtime.status
+      }))`
+    )
+    await dispatchKey(activeCdp, 'Tab', 'Tab')
+    await waitForExpression(
+      activeCdp,
+      `(() => {
+        const input = document.querySelector('textarea[aria-label="发送给 Pi 的任务"]')
+        return input?.value === '/new' && document.activeElement === input
+      })()`,
+      TIMEOUT.page,
+      'E_P2_TAB_COMPLETION'
+    )
+    const afterTabCompletion = await evaluateValue(
+      activeCdp,
+      `window.piGui.getState().then((state) => ({
+        activeSessionKey: state.activeSessionKey,
+        sessionKeys: state.sessions.map((session) => session.key),
+        conversationEntries: state.conversation.entries.length,
+        runtimeStatus: state.runtime.status
+      }))`
+    )
+    if (JSON.stringify(afterTabCompletion) !== JSON.stringify(completionBaseline)) {
+      fail('E_P2_TAB_SIDE_EFFECT')
+    }
+
+    await clearComposer(activeCdp)
+    await insertText(activeCdp, '/')
+    await dispatchKey(activeCdp, 'Enter', 'Enter')
+    await waitForExpression(
+      activeCdp,
+      `(() => {
+        const input = document.querySelector('textarea[aria-label="发送给 Pi 的任务"]')
+        return input?.value === '/new' && document.activeElement === input
+      })()`,
+      TIMEOUT.page,
+      'E_P2_ENTER_COMPLETION'
+    )
+    const afterEnterCompletion = await evaluateValue(
+      activeCdp,
+      `window.piGui.getState().then((state) => ({
+        activeSessionKey: state.activeSessionKey,
+        sessionKeys: state.sessions.map((session) => session.key),
+        conversationEntries: state.conversation.entries.length,
+        runtimeStatus: state.runtime.status
+      }))`
+    )
+    if (JSON.stringify(afterEnterCompletion) !== JSON.stringify(completionBaseline)) {
+      fail('E_P2_ENTER_SIDE_EFFECT')
+    }
+    p2Summary.commands.completionSideEffectFree = true
+
     await clearComposer(activeCdp)
     await insertText(activeCdp, '/thi')
     await waitForExpression(
@@ -591,6 +666,31 @@ async function exerciseUi() {
       TIMEOUT.page,
       'E_P2_COMMAND_COMPLETION'
     )
+    await dispatchKey(activeCdp, 'Enter', 'Enter')
+    await waitForExpression(
+      activeCdp,
+      `(() => {
+        const input = document.querySelector('textarea[aria-label="发送给 Pi 的任务"]')
+        const error = document.querySelector('.composer-command-error[role="alert"]')
+        return input?.value === '/thinking ' && error?.textContent?.startsWith('/thinking 需要参数：') === true
+      })()`,
+      TIMEOUT.page,
+      'E_P2_REQUIRED_ARGUMENT'
+    )
+    const afterRequiredArgumentRejection = await evaluateValue(
+      activeCdp,
+      `window.piGui.getState().then((state) => ({
+        activeSessionKey: state.activeSessionKey,
+        sessionKeys: state.sessions.map((session) => session.key),
+        conversationEntries: state.conversation.entries.length,
+        runtimeStatus: state.runtime.status
+      }))`
+    )
+    if (JSON.stringify(afterRequiredArgumentRejection) !== JSON.stringify(completionBaseline)) {
+      fail('E_P2_REQUIRED_ARGUMENT_SIDE_EFFECT')
+    }
+    p2Summary.commands.requiredArgumentRejected = true
+
     const availableThinkingLevel = await availableThinkingLevelFromGui(activeCdp)
     await focusComposer(activeCdp)
     await insertText(activeCdp, availableThinkingLevel)
@@ -603,6 +703,12 @@ async function exerciseUi() {
       })()`,
       TIMEOUT.ready,
       'E_P2_TYPED_COMMAND'
+    )
+    await waitForExpression(
+      activeCdp,
+      `window.piGui.getState().then((state) => state.session.thinkingLevel === ${JSON.stringify(availableThinkingLevel)})`,
+      TIMEOUT.ready,
+      'E_P2_TYPED_COMMAND_RESULT'
     )
     p2Summary.commands.completed = true
 
@@ -929,9 +1035,14 @@ async function availableThinkingLevelFromGui(cdp) {
   await openThinkingOptions(cdp)
   const level = await evaluateValue(
     cdp,
-    `Array.from(document.querySelectorAll('.model-picker-option-panel .model-picker-item:not(:disabled)'))
-      .map((button) => button.querySelector('.model-picker-option-meta')?.textContent?.trim())
-      .find((value) => ['low', 'medium', 'high', 'xhigh', 'max'].includes(value)) ?? null`
+    `window.piGui.getState().then((state) =>
+      Array.from(document.querySelectorAll('.model-picker-option-panel .model-picker-item:not(:disabled)'))
+        .map((button) => button.querySelector('.model-picker-option-meta')?.textContent?.trim())
+        .find((value) =>
+          ['low', 'medium', 'high', 'xhigh', 'max'].includes(value) &&
+          value !== state.session.thinkingLevel
+        ) ?? null
+    )`
   )
   await evaluateValue(
     cdp,
@@ -1252,34 +1363,24 @@ async function piProcessesForConfiguredProjects() {
   )).filter((process) => process !== null)
 }
 
-async function assertSingleProjectRuntime(projectPath) {
+async function assertConfiguredProjectRuntimeCounts(expectedCounts) {
+  if (
+    expectedCounts.size !== projectPaths.length ||
+    projectPaths.some((projectPath) => !Number.isInteger(expectedCounts.get(projectPath)))
+  ) {
+    fail('E_P2_RUNTIME_OWNERSHIP_EXPECTATION')
+  }
   const processes = await piProcessesForConfiguredProjects()
-  if (processes.length !== 1 || processes[0].cwd !== projectPath) {
-    fail('E_P2_RUNTIME_OWNER')
+  const actualCounts = new Map(projectPaths.map((projectPath) => [projectPath, 0]))
+  for (const process of processes) {
+    activeApp.knownPids.add(process.pid)
+    actualCounts.set(process.cwd, actualCounts.get(process.cwd) + 1)
   }
-  activeApp.knownPids.add(processes[0].pid)
-}
-
-async function monitorSingleRuntimeOwners(operation) {
-  let monitoring = true
-  let violation = false
-  const monitor = (async () => {
-    while (monitoring) {
-      const processes = await piProcessesForConfiguredProjects()
-      if (processes.length > 1) {
-        violation = true
-        return
-      }
-      await delay(100)
-    }
-  })()
-  try {
-    await operation()
-  } finally {
-    monitoring = false
-    await monitor
+  if (projectPaths.some(
+    (projectPath) => actualCounts.get(projectPath) !== expectedCounts.get(projectPath)
+  )) {
+    fail('E_P2_RUNTIME_OWNERSHIP')
   }
-  if (violation) fail('E_P2_RUNTIME_CONCURRENCY')
 }
 
 async function readRecentSessionPointer(projectPath) {
@@ -1294,9 +1395,10 @@ async function readRecentSessionPointer(projectPath) {
   if (
     typeof state !== 'object' ||
     state === null ||
-    state.version !== 3 ||
+    state.version !== 4 ||
     !Array.isArray(state.sessions) ||
-    !Array.isArray(state.activeSessionKeys)
+    !Array.isArray(state.activeSessionKeys) ||
+    !Array.isArray(state.archivedSessionKeys)
   ) {
     fail('E_SESSION_POINTER')
   }
