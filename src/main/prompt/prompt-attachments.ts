@@ -79,7 +79,12 @@ export function projectPromptDisplay(content: unknown): PromptDisplay {
 }
 
 export function stripPromptFileBlocks(message: string): string {
-  return parseLeadingFileBlocks(message).text
+  const parsed = parseLeadingFileBlocks(message)
+  if (parsed.blocks.length === 0) return parsed.text
+  const references = parsed.blocks.map((block) => `@${fileName(block.path)}`).join(' ')
+  return parsed.text.trim().length === 0
+    ? references
+    : `${parsed.text}\n${references}`
 }
 
 type ParsedFileBlock = {

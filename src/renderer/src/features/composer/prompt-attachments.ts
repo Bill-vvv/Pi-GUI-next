@@ -17,7 +17,7 @@ type SupportedImageMimeType =
 export async function readDroppedPromptAttachments(
   files: readonly File[]
 ): Promise<KernelPromptAttachment[]> {
-  const uniqueFiles = deduplicateFiles(files)
+  const uniqueFiles = deduplicateFiles(files).filter((file) => file.size > 0)
   return Promise.all(uniqueFiles.map(readPromptAttachment))
 }
 

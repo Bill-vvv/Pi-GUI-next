@@ -603,7 +603,12 @@ export function Composer({
               viewingNewSession
             )}
             onPaste={(event) => {
-              const files = [...event.clipboardData.files]
+              const files = event.clipboardData.files.length > 0
+                ? [...event.clipboardData.files]
+                : [...event.clipboardData.items]
+                  .filter((item) => item.kind === 'file')
+                  .map((item) => item.getAsFile())
+                  .filter((file): file is File => file !== null)
               if (files.length === 0) return
               event.preventDefault()
               void addDroppedAttachments(files)

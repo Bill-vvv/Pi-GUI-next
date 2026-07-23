@@ -1612,10 +1612,10 @@ test('queue updates project steering and follow-up messages until the agent sett
 
   let session = kernel.getState().session
   assert.deepEqual(session.pendingSteeringMessages, [
-    'Refine the current answer',
+    'Refine the current answer\n@context.txt',
     'Check the edge case'
   ])
-  assert.deepEqual(session.pendingFollowUpMessages, ['Summarize the result'])
+  assert.deepEqual(session.pendingFollowUpMessages, ['Summarize the result\n@chart.png'])
   assert.equal(session.pendingMessageCount, 3)
 
   runtime.emit({ type: 'pi-event', event: { type: 'agent_settled' } })

@@ -721,7 +721,9 @@ export class WorkbenchKernel {
       ? this.provisionalSession
       : null
     if (provisional !== null) {
-      provisional.initialPrompt = message
+      provisional.initialPrompt = message.trim().length > 0
+        ? message
+        : attachments.map((attachment) => attachment.name).join(', ')
     }
 
     this.state = {

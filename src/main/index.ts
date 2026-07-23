@@ -48,6 +48,7 @@ let mainWindow: BrowserWindow | null = null
 let kernel: WorkbenchKernel | null = null
 let shutdownPromise: Promise<void> | null = null
 let allowQuit = false
+const MAX_PROMPT_IMAGE_BASE64_CHARS = 4.5 * 1024 * 1024
 
 async function createMainWindow(rendererTarget: RendererTarget): Promise<void> {
   if (mainWindow !== null) {
@@ -534,6 +535,7 @@ function isPromptImage(value: unknown): boolean {
       value.mimeType === 'image/webp'
     ) &&
     typeof value.data === 'string' &&
+    value.data.length < MAX_PROMPT_IMAGE_BASE64_CHARS &&
     isBase64(value.data)
 }
 
