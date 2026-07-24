@@ -11,6 +11,7 @@ import { isRecord } from '../utils/guards.ts'
 import { LfJsonlParser, type JsonlParseBatch } from './jsonl-framing.ts'
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
+const DEFAULT_ABORT_TIMEOUT_MS = 120_000
 const DEFAULT_COMPACT_TIMEOUT_MS = 120_000
 const GUI_THINKING_LEVELS: ThinkingLevel[] = [
   'off',
@@ -238,7 +239,8 @@ export class PiRpcClient {
     }, false, timeoutMs)
   }
 
-  async abort(timeoutMs = this.requestTimeoutMs): Promise<void> {
+  async abort(timeoutMs = Math.max(this.requestTimeoutMs, DEFAULT_ABORT_TIMEOUT_MS)): Promise<void> {
+    // Pi abort waits for agent_settled after tools stop; long bash kills can exceed the default RPC timeout.
     await this.request({ type: 'abort' }, false, timeoutMs)
   }
 

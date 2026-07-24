@@ -29,7 +29,13 @@ test('project registrations persist in XDG config and initialize non-sensitive X
   })
   assert.deepEqual(
     JSON.parse(await readFile(join(stateHome, 'pi-gui-next', 'state.json'), 'utf8')),
-    { version: 4, sessions: [], activeSessionKeys: [], archivedSessionKeys: [] }
+    {
+      version: 5,
+      sessions: [],
+      activeSessionKeys: [],
+      archivedSessionKeys: [],
+      manuallyOrderedProjectPaths: []
+    }
   )
 })
 
@@ -380,7 +386,8 @@ test('session order roundtrips in global slots while preserving pointers and act
 
   assert.deepEqual(await new ProjectStore(options).loadSessionRegistry(projectPath), {
     sessions: [secondPointer, firstPointer],
-    activeSessionKey: secondPointer.sessionFile
+    activeSessionKey: secondPointer.sessionFile,
+    manualOrder: true
   })
   assert.deepEqual(await new ProjectStore(options).loadSessionRegistry(otherProjectPath), {
     sessions: [otherPointer],
@@ -403,7 +410,11 @@ test('session order roundtrips in global slots while preserving pointers and act
     store.reorderSessions(projectPath, [secondPointer.sessionFile, join(root, 'unknown.jsonl')]),
     /Session keys must be a strict permutation/
   )
-  assert.deepEqual((await store.loadSessionRegistry(projectPath)).sessions, [secondPointer, firstPointer])
+  assert.deepEqual(await store.loadSessionRegistry(projectPath), {
+    sessions: [secondPointer, firstPointer],
+    activeSessionKey: secondPointer.sessionFile,
+    manualOrder: true
+  })
 })
 
 test('malformed recent session state fails fast', async (t) => {
@@ -490,14 +501,16 @@ test('version 1 project and session files migrate on the next write', async (t) 
       uiFontFamily: null,
       codeFontFamily: null
     },
-    general: { startupWorkspaceRestore: 'restore' }
+    general: { startupWorkspaceRestore: 'restore', doubleClickBorderMaximize: true }
   })
   const state = JSON.parse(await readFile(join(stateDirectory, 'state.json'), 'utf8')) as {
     version: number
     sessions: Array<{ projectPath: string }>
     activeSessionKeys: Array<{ projectPath: string; sessionKey: string }>
+    manuallyOrderedProjectPaths: string[]
   }
-  assert.equal(state.version, 4)
+  assert.equal(state.version, 5)
+  assert.deepEqual(state.manuallyOrderedProjectPaths, [])
   assert.deepEqual(state.sessions.map(({ projectPath }) => projectPath), [
     oldProject.path,
     newProject.path
@@ -560,12 +573,40 @@ test('version 2 recent sessions migrate to a multi-session index on the next wri
   const state = JSON.parse(await readFile(join(stateDirectory, 'state.json'), 'utf8')) as {
     version: number
     sessions: unknown[]
+    manuallyOrderedProjectPaths: string[]
   }
-  assert.equal(state.version, 4)
+  assert.equal(state.version, 5)
   assert.equal(state.sessions.length, 2)
+  assert.deepEqual(state.manuallyOrderedProjectPaths, [])
 })
 
-test('version 3 session state migrates to version 4 on the next write', async (t) => {
+test('version 4 session state loads without assuming manual order', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-gui-project-store-v4-migration-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const stateHome = join(root, 'state')
+  const stateDirectory = join(stateHome, 'pi-gui-next')
+  const pointer = {
+    projectPath: join(root, 'project'),
+    sessionFile: join(root, 'sessions', 'session.jsonl'),
+    sessionId: 'session-1',
+    sessionName: null
+  }
+  await mkdir(stateDirectory, { recursive: true })
+  await writeFile(join(stateDirectory, 'state.json'), JSON.stringify({
+    version: 4,
+    sessions: [pointer],
+    activeSessionKeys: [{ projectPath: pointer.projectPath, sessionKey: pointer.sessionFile }],
+    archivedSessionKeys: []
+  }))
+  const store = new ProjectStore({ configHome: join(root, 'config'), stateHome })
+
+  assert.deepEqual(await store.loadSessionRegistry(pointer.projectPath), {
+    sessions: [pointer],
+    activeSessionKey: pointer.sessionFile
+  })
+})
+
+test('version 3 session state migrates to version 5 on the next write', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-gui-project-store-v3-migration-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const stateHome = join(root, 'state')
@@ -587,10 +628,11 @@ test('version 3 session state migrates to version 4 on the next write', async (t
   await store.reorderSessions(pointer.projectPath, [pointer.sessionFile])
 
   assert.deepEqual(JSON.parse(await readFile(join(stateDirectory, 'state.json'), 'utf8')), {
-    version: 4,
+    version: 5,
     sessions: [pointer],
     activeSessionKeys: [{ projectPath: pointer.projectPath, sessionKey: pointer.sessionFile }],
-    archivedSessionKeys: []
+    archivedSessionKeys: [],
+    manuallyOrderedProjectPaths: [pointer.projectPath]
   })
 })
 
@@ -652,10 +694,11 @@ test('visible session reorder preserves an archived pointer in its original slot
 
   await store.reorderSessions(projectPath, [thirdPointer.sessionFile, firstPointer.sessionFile])
 
-  assert.deepEqual((await store.loadSessionRegistry(projectPath)).sessions, [
-    thirdPointer,
-    firstPointer
-  ])
+  assert.deepEqual(await store.loadSessionRegistry(projectPath), {
+    sessions: [thirdPointer, firstPointer],
+    activeSessionKey: thirdPointer.sessionFile,
+    manualOrder: true
+  })
   const state = JSON.parse(
     await readFile(join(stateHome, 'pi-gui-next', 'state.json'), 'utf8')
   )

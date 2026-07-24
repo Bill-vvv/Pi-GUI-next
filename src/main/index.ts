@@ -113,6 +113,7 @@ async function startApplication(): Promise<void> {
   const appearance = await projectStore.loadAppearance()
   const extensionStore = new PiExtensionStore()
   const providerStore = new PiProviderStore()
+  await providerStore.synchronize()
   const piDevPackageService = new PiDevPackageService({
     piExecutablePath: process.env.PI_GUI_PI_EXECUTABLE,
     fetch: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init)

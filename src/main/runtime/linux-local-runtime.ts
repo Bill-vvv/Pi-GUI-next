@@ -74,6 +74,7 @@ export class LinuxLocalRuntime implements RuntimeHost {
   private child: ChildProcessWithoutNullStreams | null = null
   private client: PiRpcClient | null = null
   private streaming = false
+  private streamingRevision = 0
   private startPromise: Promise<void> | null = null
   private stopPromise: Promise<void> | null = null
   private stopRequested = false
@@ -166,9 +167,12 @@ export class LinuxLocalRuntime implements RuntimeHost {
     this.client = client
 
     try {
+      const streamingRevision = this.streamingRevision
       const initialState = await client.getState()
       this.assertStartNotCancelled()
-      this.streaming = initialState.isStreaming === true
+      if (this.streamingRevision === streamingRevision) {
+        this.setStreamingSnapshot(initialState.isStreaming === true)
+      }
     } catch (error) {
       const cancelled = this.stopRequested
       let cleanupError: unknown = null
@@ -200,8 +204,13 @@ export class LinuxLocalRuntime implements RuntimeHost {
     }
 
     if (command.type === 'get_state') {
+      const streamingRevision = this.streamingRevision
       const state = await this.client.getState()
-      this.updateStreamingState(state.isStreaming === true)
+      // get_state is only a snapshot. A lifecycle event received while the
+      // request was in flight is newer and must not be overwritten by it.
+      if (this.streamingRevision === streamingRevision) {
+        this.updateStreamingState(state.isStreaming === true)
+      }
       try {
         const sessionStats = await this.client.getSessionStats()
         return { type: 'state', state: { ...state, sessionStats } }
@@ -325,20 +334,28 @@ export class LinuxLocalRuntime implements RuntimeHost {
 
   private handlePiEvent(event: PiRpcEvent): void {
     if (event.type === 'agent_start') {
-      this.streaming = true
+      this.setStreamingFromLifecycleEvent(true)
     } else if (event.type === 'agent_settled') {
-      this.streaming = false
+      this.setStreamingFromLifecycleEvent(false)
     }
     this.emit({ type: 'pi-event', event })
   }
 
-  private updateStreamingState(nextStreaming: boolean): void {
-    if (!this.streaming && nextStreaming) {
-      this.emit({ type: 'activity-started' })
-    } else if (this.streaming && !nextStreaming) {
-      this.emit({ type: 'activity-settled' })
-    }
+  private setStreamingFromLifecycleEvent(nextStreaming: boolean): void {
     this.streaming = nextStreaming
+    this.streamingRevision += 1
+  }
+
+  private setStreamingSnapshot(nextStreaming: boolean): void {
+    if (this.streaming === nextStreaming) return
+    this.streaming = nextStreaming
+    this.streamingRevision += 1
+  }
+
+  private updateStreamingState(nextStreaming: boolean): void {
+    if (this.streaming === nextStreaming) return
+    this.setStreamingSnapshot(nextStreaming)
+    this.emit({ type: nextStreaming ? 'activity-started' : 'activity-settled' })
   }
 
   private handleDiagnostic(diagnostic: PiRpcDiagnostic): void {

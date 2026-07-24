@@ -108,6 +108,63 @@ process.stdin.on('data', (chunk) => {
   ])
 })
 
+test('stale get_state snapshots cannot revive a settled activity', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-runtime-stale-state-'))
+  t.after(async () => rm(directory, { recursive: true, force: true }))
+  const executable = join(directory, 'pi')
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+if (process.argv[2] === '--version') {
+  process.stdout.write('0.80.10\\n')
+  process.exit(0)
+}
+let input = ''
+let stateRequests = 0
+const respond = (request, data) => {
+  process.stdout.write(JSON.stringify({ type: 'response', id: request.id, success: true, data }) + '\\n')
+}
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  input += chunk
+  let newline
+  while ((newline = input.indexOf('\\n')) >= 0) {
+    const request = JSON.parse(input.slice(0, newline))
+    input = input.slice(newline + 1)
+    if (request.type === 'get_state') {
+      stateRequests += 1
+      if (stateRequests === 1) {
+        respond(request, { isStreaming: false })
+      } else {
+        process.stdout.write(JSON.stringify({ type: 'agent_settled' }) + '\\n')
+        setTimeout(() => respond(request, { isStreaming: true }), 20)
+      }
+      continue
+    }
+    if (request.type === 'prompt') {
+      process.stdout.write(JSON.stringify({ type: 'agent_start' }) + '\\n')
+      respond(request)
+      continue
+    }
+    respond(request, {})
+  }
+})
+`,
+    { mode: 0o755 }
+  )
+  const runtime = new LinuxLocalRuntime({ cwd: directory, explicitExecutable: executable })
+  const events: string[] = []
+  runtime.subscribe((event) => events.push(event.type))
+
+  await runtime.start()
+  await runtime.send({ type: 'prompt', message: 'Run once' })
+  await runtime.send({ type: 'get_state' })
+  await runtime.stop()
+
+  assert.deepEqual(events.filter((type) => type.startsWith('activity-')), [])
+  assert.deepEqual(events.filter((type) => type === 'pi-event'), ['pi-event', 'pi-event'])
+})
+
 test('runtime state summarizes stderr without retaining secret text', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'pi-runtime-stderr-'))
   t.after(async () => rm(directory, { recursive: true, force: true }))

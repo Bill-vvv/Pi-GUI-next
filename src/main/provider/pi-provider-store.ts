@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { lock } from 'proper-lockfile'
 
@@ -13,9 +14,12 @@ import {
   type KernelProviderModelConfig
 } from '../../shared/kernel-contract.ts'
 import { resolvePiAgentDir } from '../extension/pi-extension-store.ts'
-import { SUPPORTED_PI_VERSION } from '../runtime/pi-executable.ts'
+import { resolvePiExecutable, SUPPORTED_PI_VERSION } from '../runtime/pi-executable.ts'
 
 type JsonObject = Record<string, unknown>
+type PiBuiltinCatalog = {
+  getBuiltinModel: (providerId: string, modelId: string) => unknown
+}
 
 const PROVIDER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u
 const RESERVED_PROPERTY_NAMES = new Set(['__proto__', 'constructor', 'prototype'])
@@ -24,21 +28,45 @@ const CATALOG_TIMEOUT_MS = 10_000
 export class PiProviderStore {
   private readonly modelsPath: string
   private readonly authPath: string
+  private readonly explicitPiExecutable: string | undefined
+  private builtinCatalog: Promise<PiBuiltinCatalog | null> | null = null
 
-  constructor(agentDir = resolvePiAgentDir()) {
+  constructor(agentDir = resolvePiAgentDir(), explicitPiExecutable = process.env.PI_GUI_PI_EXECUTABLE) {
     this.modelsPath = join(agentDir, 'models.json')
     this.authPath = join(agentDir, 'auth.json')
+    this.explicitPiExecutable = explicitPiExecutable
   }
 
   async list(): Promise<KernelProviderConfig[]> {
     const providers = await this.withModelsLock((root) => Promise.resolve(describeProviders(readProviders(root))))
-    return hydrateProviderCatalogs(providers, this.authPath)
+    return hydrateProviderCatalogs(providers, this.authPath, await this.loadBuiltinCatalog())
+  }
+
+  async synchronize(): Promise<KernelProviderConfig[]> {
+    const providers = await this.withModelsLock((root) => Promise.resolve(describeProviders(readProviders(root))))
+    const hydrated = await hydrateProviderCatalogs(providers, this.authPath, await this.loadBuiltinCatalog())
+    const catalogByProvider = new Map(hydrated.map((provider) => [provider.id, provider.catalogModels]))
+
+    return this.withModelsLock(async (root) => {
+      const nextProviders = synchronizeProviderModels(readProviders(root), catalogByProvider)
+      if (nextProviders.changed) {
+        root.providers = nextProviders.providers
+        await writeModelsFile(this.modelsPath, root)
+      }
+      const synchronized = describeProviders(nextProviders.providers)
+      return synchronized.map((provider) => ({
+        ...provider,
+        apiKeyConfigured: hydrated.find((candidate) => candidate.id === provider.id)?.apiKeyConfigured
+          ?? provider.apiKeyConfigured,
+        catalogModels: catalogByProvider.get(provider.id) ?? []
+      }))
+    })
   }
 
   async save(provider: KernelProviderInput): Promise<KernelProviderConfig[]> {
     const input = validateProviderInput(provider)
 
-    const providers = await this.withModelsLock(async (root) => {
+    await this.withModelsLock(async (root) => {
       const providers = readProviders(root)
       const originalId = input.originalId
       const existing = originalId === null ? undefined : providers[originalId]
@@ -71,7 +99,7 @@ export class PiProviderStore {
       await writeModelsFile(this.modelsPath, root)
       return describeProviders(nextProviders)
     })
-    return hydrateProviderCatalogs(providers, this.authPath)
+    return this.synchronize()
   }
 
   async remove(providerId: string): Promise<KernelProviderConfig[]> {
@@ -87,7 +115,12 @@ export class PiProviderStore {
       await writeModelsFile(this.modelsPath, root)
       return describeProviders(nextProviders)
     })
-    return hydrateProviderCatalogs(providers, this.authPath)
+    return hydrateProviderCatalogs(providers, this.authPath, await this.loadBuiltinCatalog())
+  }
+
+  private loadBuiltinCatalog(): Promise<PiBuiltinCatalog | null> {
+    this.builtinCatalog ??= loadPiBuiltinCatalog(this.explicitPiExecutable)
+    return this.builtinCatalog
   }
 
   private async withModelsLock<T>(operation: (root: JsonObject) => Promise<T>): Promise<T> {
@@ -293,9 +326,63 @@ function describeProvider(idValue: string, provider: JsonObject): KernelProvider
   }
 }
 
+function synchronizeProviderModels(
+  providers: JsonObject,
+  catalogByProvider: ReadonlyMap<string, readonly KernelProviderCatalogModel[]>
+): { providers: JsonObject; changed: boolean } {
+  const nextProviders: JsonObject = { ...providers }
+  let changed = false
+
+  for (const [providerId, value] of Object.entries(providers)) {
+    if (!isRecord(value) || !Array.isArray(value.models)) continue
+    const catalogById = new Map(
+      (catalogByProvider.get(providerId) ?? [])
+        .filter(isCompleteCatalogModel)
+        .map((model) => [model.id, model])
+    )
+    if (catalogById.size === 0) continue
+
+    const models = value.models.map((model) => {
+      if (!isRecord(model) || typeof model.id !== 'string') return model
+      const catalogModel = catalogById.get(model.id)
+      if (catalogModel === undefined) return model
+      const nextModel: JsonObject = {
+        ...model,
+        name: catalogModel.name,
+        reasoning: catalogModel.reasoning,
+        input: [...catalogModel.input],
+        contextWindow: catalogModel.contextWindow,
+        maxTokens: catalogModel.maxTokens
+      }
+      if (JSON.stringify(nextModel) !== JSON.stringify(model)) changed = true
+      return nextModel
+    })
+    nextProviders[providerId] = { ...value, models }
+  }
+
+  return { providers: nextProviders, changed }
+}
+
+function isCompleteCatalogModel(model: KernelProviderCatalogModel): model is KernelProviderCatalogModel & {
+  name: string
+  reasoning: boolean
+  input: Array<'text' | 'image'>
+  contextWindow: number
+  maxTokens: number
+} {
+  return (
+    model.name !== null &&
+    model.reasoning !== null &&
+    model.input !== null &&
+    model.contextWindow !== null &&
+    model.maxTokens !== null
+  )
+}
+
 async function hydrateProviderCatalogs(
   providers: readonly KernelProviderConfig[],
-  authPath: string
+  authPath: string,
+  builtinCatalog: PiBuiltinCatalog | null
 ): Promise<KernelProviderConfig[]> {
   const credentials = await readProviderCredentials(authPath)
   return Promise.all(providers.map(async (provider) => {
@@ -303,7 +390,7 @@ async function hydrateProviderCatalogs(
     return {
       ...provider,
       apiKeyConfigured: provider.apiKeyConfigured || credential !== undefined,
-      catalogModels: await fetchProviderCatalog(provider, credential)
+      catalogModels: await fetchProviderCatalog(provider, credential, builtinCatalog)
     }
   }))
 }
@@ -331,26 +418,71 @@ async function readProviderCredentials(path: string): Promise<Map<string, string
 
 async function fetchProviderCatalog(
   provider: KernelProviderConfig,
-  credential: string | undefined
+  credential: string | undefined,
+  builtinCatalog: PiBuiltinCatalog | null
 ): Promise<KernelProviderCatalogModel[]> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), CATALOG_TIMEOUT_MS)
   try {
     const headers = credential === undefined ? undefined : { Authorization: `Bearer ${credential}` }
-    const response = await fetch(
-      `${provider.baseUrl.replace(/\/+$/u, '')}/models?client_version=${encodeURIComponent(SUPPORTED_PI_VERSION)}`,
-      { headers, signal: controller.signal }
-    )
-    if (!response.ok) return []
-    return parseProviderCatalog(
-      await response.json(),
-      new Set(provider.models.map((model) => model.id))
-    )
+    const baseUrl = provider.baseUrl.replace(/\/+$/u, '')
+    const [standardValue, extendedValue] = await Promise.all([
+      fetchCatalogJson(`${baseUrl}/models`, headers, controller.signal),
+      fetchCatalogJson(
+        `${baseUrl}/models?client_version=${encodeURIComponent(SUPPORTED_PI_VERSION)}`,
+        headers,
+        controller.signal
+      )
+    ])
+    const configuredIds = new Set(provider.models.map((model) => model.id))
+    const owners = standardValue === null
+      ? new Map<string, string>()
+      : parseProviderModelOwners(standardValue, configuredIds)
+    const extendedModels = extendedValue === null
+      ? []
+      : parseProviderCatalog(extendedValue, configuredIds)
+    const extendedById = new Map(extendedModels.map((model) => [model.id, model]))
+
+    return provider.models.flatMap((model) => {
+      const owner = owners.get(model.id)
+      const builtinValue = owner === undefined || builtinCatalog === null
+        ? undefined
+        : builtinCatalog.getBuiltinModel(owner, model.id)
+      const extendedModel = extendedById.get(model.id)
+      if (builtinValue === undefined) return extendedModel === undefined ? [] : [extendedModel]
+      return [parsePiBuiltinModel(builtinValue, extendedModel)]
+    })
   } catch {
     return []
   } finally {
     clearTimeout(timeout)
   }
+}
+
+async function fetchCatalogJson(
+  url: string,
+  headers: Record<string, string> | undefined,
+  signal: AbortSignal
+): Promise<unknown | null> {
+  try {
+    const response = await fetch(url, { headers, signal })
+    return response.ok ? response.json() : null
+  } catch {
+    return null
+  }
+}
+
+function parseProviderModelOwners(
+  value: unknown,
+  configuredModelIds: ReadonlySet<string>
+): Map<string, string> {
+  if (!isRecord(value) || !Array.isArray(value.data)) throw new Error('Invalid provider model list.')
+  const owners = new Map<string, string>()
+  for (const model of value.data) {
+    if (!isRecord(model) || typeof model.id !== 'string' || !configuredModelIds.has(model.id)) continue
+    owners.set(model.id, catalogNonEmptyString(model.owned_by))
+  }
+  return owners
 }
 
 function parseProviderCatalog(
@@ -380,6 +512,50 @@ function parseProviderCatalogModel(value: unknown): KernelProviderCatalogModel {
     ? null
     : catalogPositiveInteger(value.max_output_tokens)
   return { id, name, reasoning, input, contextWindow, maxTokens }
+}
+
+function parsePiBuiltinModel(
+  value: unknown,
+  extended: KernelProviderCatalogModel | undefined
+): KernelProviderCatalogModel {
+  if (!isRecord(value)) throw new Error('Invalid Pi built-in model.')
+  const id = catalogNonEmptyString(value.id)
+  const name = catalogNonEmptyString(value.name)
+  const reasoning = extended?.reasoning ?? (
+    typeof value.reasoning === 'boolean' ? value.reasoning : null
+  )
+  const input = extended?.input ?? catalogInput(value.input)
+  const contextWindow = catalogPositiveInteger(value.contextWindow)
+  const maxTokens = catalogPositiveInteger(value.maxTokens)
+  return { id, name, reasoning, input, contextWindow, maxTokens }
+}
+
+async function loadPiBuiltinCatalog(explicitPiExecutable: string | undefined): Promise<PiBuiltinCatalog | null> {
+  try {
+    const executable = resolvePiExecutable({ explicitPath: explicitPiExecutable })
+    const cliPath = await realpath(executable)
+    const packageRoot = dirname(dirname(cliPath))
+    const catalogPath = join(
+      packageRoot,
+      'node_modules',
+      '@earendil-works',
+      'pi-ai',
+      'dist',
+      'providers',
+      'all.js'
+    )
+    const loaded: unknown = await import(/* @vite-ignore */ pathToFileURL(catalogPath).href)
+    if (!isRecord(loaded)) {
+      throw new Error('Pi built-in provider catalog is unavailable.')
+    }
+    const getBuiltinModel = loaded.getBuiltinModel
+    if (typeof getBuiltinModel !== 'function') throw new Error('Pi built-in provider catalog is unavailable.')
+    return {
+      getBuiltinModel: (providerId, modelId) => getBuiltinModel(providerId, modelId)
+    }
+  } catch {
+    return null
+  }
 }
 
 function catalogNonEmptyString(value: unknown): string {

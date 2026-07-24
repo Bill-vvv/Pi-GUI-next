@@ -8,6 +8,7 @@ export type SessionPointer = {
 export type ProjectSessionRegistry = {
   sessions: SessionPointer[]
   activeSessionKey: string | null
+  manualOrder?: boolean
 }
 
 export function upsertSessionPointer(

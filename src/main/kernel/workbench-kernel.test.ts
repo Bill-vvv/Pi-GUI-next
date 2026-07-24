@@ -186,8 +186,8 @@ class DelayedStartRuntimeHost extends FakeRuntimeHost {
   private readonly startGate: Promise<void>
   private readonly releaseStartGate: () => void
 
-  constructor() {
-    super()
+  constructor(sessionState?: PiRpcSessionState) {
+    super(sessionState)
     let markStartEntered!: () => void
     let releaseStartGate!: () => void
     this.startEntered = new Promise((resolve) => {
@@ -208,6 +208,13 @@ class DelayedStartRuntimeHost extends FakeRuntimeHost {
 
   releaseStart(): void {
     this.releaseStartGate()
+  }
+}
+
+class FailingStartRuntimeHost extends FakeRuntimeHost {
+  override async start(): Promise<void> {
+    this.startCalls += 1
+    throw new Error('start failed')
   }
 }
 
@@ -829,6 +836,141 @@ test('automatic naming never falls back to an expensive active model and allows 
   })
   releaseGeneration('OAuth title model')
   await named
+})
+
+test('automatic naming still persists after the session is no longer foreground', async () => {
+  const firstPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/background-name-a.jsonl',
+    sessionId: 'background-name-a',
+    sessionName: null
+  }
+  const secondPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/background-name-b.jsonl',
+    sessionId: 'background-name-b',
+    sessionName: 'Already named'
+  }
+  const runtimeA = new FakeRuntimeHost(
+    {
+      sessionId: firstPointer.sessionId,
+      sessionFile: firstPointer.sessionFile,
+      model: { provider: 'openai', id: 'gpt-purpose' }
+    },
+    [
+      { role: 'user', content: [{ type: 'text', text: 'Name me after I leave the foreground.' }], timestamp: 10 },
+      { role: 'assistant', content: [{ type: 'text', text: 'I will finish the title later.' }], timestamp: 20 }
+    ]
+  )
+  const runtimeB = new FakeRuntimeHost({
+    sessionId: secondPointer.sessionId,
+    sessionFile: secondPointer.sessionFile,
+    sessionName: secondPointer.sessionName ?? undefined,
+    model: { provider: 'openai', id: 'gpt-purpose' }
+  })
+  const runtimes = [runtimeA, runtimeB]
+  const persisted: SessionPointer[] = []
+  let releaseGeneration!: (name: string) => void
+  const generatedName = new Promise<string>((resolve) => {
+    releaseGeneration = resolve
+  })
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(firstPointer, persisted, [], [], async () => generatedName),
+      sessionRegistry: {
+        sessions: [firstPointer, secondPointer],
+        activeSessionKey: firstPointer.sessionFile
+      }
+    }
+  )
+
+  await kernel.resumeSession()
+  assert.equal(kernel.getState().session.id, firstPointer.sessionId)
+  assert.equal(kernel.getState().session.name, null)
+
+  await kernel.activateSession(secondPointer.sessionFile)
+  assert.equal(kernel.getState().session.id, secondPointer.sessionId)
+
+  const named = new Promise<void>((resolve) => {
+    const unsubscribe = kernel.subscribe(() => {
+      const summary = kernel.getState().sessions.find(({ id }) => id === firstPointer.sessionId)
+      const persistedName = persisted.some((pointer) =>
+        pointer.sessionFile === firstPointer.sessionFile &&
+        pointer.sessionName === 'Background purpose title'
+      )
+      if (summary?.name === 'Background purpose title' && persistedName) {
+        unsubscribe()
+        resolve()
+      }
+    })
+  })
+  releaseGeneration('Background purpose title')
+  await named
+
+  assert.equal(
+    kernel.getState().sessions.find(({ id }) => id === firstPointer.sessionId)?.name,
+    'Background purpose title'
+  )
+  assert.equal(kernel.getState().session.id, secondPointer.sessionId)
+  assert.equal(kernel.getState().session.name, 'Already named')
+  assert.deepEqual(
+    runtimeA.commands.filter(({ type }) => type === 'set_session_name'),
+    [{ type: 'set_session_name', name: 'Background purpose title' }]
+  )
+  assert.ok(persisted.some((pointer) =>
+    pointer.sessionFile === firstPointer.sessionFile &&
+    pointer.sessionName === 'Background purpose title'
+  ))
+})
+
+test('automatic naming prefers mini then codex-spark within the active provider', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/auto-model-order-session.jsonl',
+    sessionId: 'auto-model-order-session',
+    sessionName: null
+  }
+  const runtime = new FakeRuntimeHost(
+    {
+      sessionId: pointer.sessionId,
+      sessionFile: pointer.sessionFile,
+      model: { provider: 'vvqq-cpa', id: 'gpt-5.6-sol' }
+    },
+    [
+      { role: 'user', content: [{ type: 'text', text: 'Choose a cheap title model.' }], timestamp: 10 },
+      { role: 'assistant', content: [{ type: 'text', text: 'I will use the authorized low-cost model.' }], timestamp: 20 }
+    ],
+    [],
+    [
+      { id: 'gpt-5.6-sol', provider: 'vvqq-cpa', name: 'Sol', reasoning: true },
+      { id: 'gpt-5.3-codex-spark', provider: 'vvqq-cpa', name: 'Spark', reasoning: true },
+      { id: 'gpt-5.6-luna', provider: 'vvqq-cpa', name: 'Luna', reasoning: true }
+    ]
+  )
+  let generationRequest: SessionNameGenerationRequest | null = null
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions(pointer, [], [], [], async (request) => {
+      generationRequest = request
+      return 'Spark title model'
+    })
+  )
+
+  await kernel.resumeSession()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  const request = generationRequest as SessionNameGenerationRequest | null
+  assert.ok(request)
+  assert.deepEqual({ provider: request.provider, modelId: request.modelId }, {
+    provider: 'vvqq-cpa',
+    modelId: 'gpt-5.3-codex-spark'
+  })
 })
 
 test('a manual session name cancels an in-flight generated name', async () => {
@@ -1559,14 +1701,24 @@ test('message attachment changes use the full-state fallback', async () => {
   assert.equal(events.at(-1)?.type, 'kernel.state-changed')
 })
 
-test('Pi lifecycle patches runtime, session, and run boundary without changing state semantics', async () => {
-  const runtime = new FakeRuntimeHost()
+test('Pi lifecycle publishes complete activity summaries without changing state semantics', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/session.jsonl',
+    sessionId: 'session-1',
+    sessionName: 'Session'
+  }
+  const runtime = new FakeRuntimeHost({
+    sessionId: pointer.sessionId,
+    sessionFile: pointer.sessionFile,
+    sessionName: pointer.sessionName ?? undefined
+  })
   const kernel = new WorkbenchKernel(
     () => runtime,
     { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
-    kernelOptions()
+    kernelOptions(pointer)
   )
-  await kernel.start()
+  await kernel.activateSession(pointer.sessionFile)
   const events: KernelEvent[] = []
   kernel.subscribe((event) => events.push(event))
 
@@ -1575,12 +1727,13 @@ test('Pi lifecycle patches runtime, session, and run boundary without changing s
 
   assert.equal(events.length, 2)
   const started = events[0]
-  assert.equal(started?.type, 'kernel.state-patched')
-  if (started?.type === 'kernel.state-patched') {
-    assert.equal(started.patch.runtime?.status, 'running')
-    assert.equal(started.patch.session?.settled, false)
-    assert.equal(started.patch.conversation?.activeRunStartIndex, 0)
-    assert.equal(started.patch.conversation?.entries, undefined)
+  assert.equal(started?.type, 'kernel.state-changed')
+  if (started?.type === 'kernel.state-changed') {
+    assert.equal(started.state.runtime.status, 'running')
+    assert.equal(started.state.session.settled, false)
+    assert.equal(started.state.conversation.activeRunStartIndex, 0)
+    assert.equal(started.state.sessions[0]?.runtimeStatus, 'running')
+    assert.equal(started.state.projects[0]?.busySessionCount, 1)
   }
   const settled = events[1]
   assert.equal(settled?.type, 'kernel.state-changed')
@@ -1589,6 +1742,8 @@ test('Pi lifecycle patches runtime, session, and run boundary without changing s
     assert.equal(settled.state.session.settled, true)
     assert.equal(settled.state.session.pendingMessageCount, 0)
     assert.equal(settled.state.conversation.activeRunStartIndex, null)
+    assert.equal(settled.state.sessions[0]?.runtimeStatus, 'ready')
+    assert.equal(settled.state.projects[0]?.busySessionCount, 0)
     assert.equal(typeof settled.state.sessions[0]?.lastActivityAt, 'number')
   }
   assert.equal(kernel.getState().runtime.status, 'ready')
@@ -1675,6 +1830,78 @@ test('session summaries refresh activity time from the configured metadata reade
   await kernel.refreshSessionActivities()
 
   assert.equal(kernel.getState().sessions[0]?.lastActivityAt, 1_784_630_000_000)
+})
+
+test('session summaries are ordered by latest activity with unknown times last', async () => {
+  const oldestPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/oldest-session.jsonl',
+    sessionId: 'oldest-session',
+    sessionName: 'Oldest'
+  }
+  const unknownPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/unknown-session.jsonl',
+    sessionId: 'unknown-session',
+    sessionName: 'Unknown'
+  }
+  const newestPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/newest-session.jsonl',
+    sessionId: 'newest-session',
+    sessionName: 'Newest'
+  }
+  const activityBySession = new Map<string, number | null>([
+    [oldestPointer.sessionFile, 1_000],
+    [unknownPointer.sessionFile, null],
+    [newestPointer.sessionFile, 3_000]
+  ])
+  const kernel = new WorkbenchKernel(
+    () => new FakeRuntimeHost(),
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [oldestPointer, unknownPointer, newestPointer],
+        activeSessionKey: oldestPointer.sessionFile
+      },
+      readSessionActivityAt: async (pointer) => activityBySession.get(pointer.sessionFile) ?? null
+    }
+  )
+
+  await kernel.refreshSessionActivities()
+
+  assert.deepEqual(kernel.getState().sessions.map(({ key }) => key), [
+    newestPointer.sessionFile,
+    oldestPointer.sessionFile,
+    unknownPointer.sessionFile
+  ])
+
+  const manualOrder = [
+    unknownPointer.sessionFile,
+    oldestPointer.sessionFile,
+    newestPointer.sessionFile
+  ]
+  await kernel.reorderSessions(manualOrder)
+  activityBySession.set(newestPointer.sessionFile, 9_000)
+  await kernel.refreshSessionActivities()
+  assert.deepEqual(kernel.getState().sessions.map(({ key }) => key), manualOrder)
+
+  const restarted = new WorkbenchKernel(
+    () => new FakeRuntimeHost(),
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [unknownPointer, oldestPointer, newestPointer],
+        activeSessionKey: oldestPointer.sessionFile,
+        manualOrder: true
+      },
+      readSessionActivityAt: async (pointer) => activityBySession.get(pointer.sessionFile) ?? null
+    }
+  )
+  await restarted.refreshSessionActivities()
+  assert.deepEqual(restarted.getState().sessions.map(({ key }) => key), manualOrder)
 })
 
 test('new session persists its recent-session pointer', async () => {
@@ -1987,7 +2214,7 @@ test('the first assistant message materializes a provisional session before sett
     key: canonicalPointer.sessionFile,
     id: canonicalPointer.sessionId,
     name: canonicalPointer.sessionName,
-    runtimeStatus: 'running'
+    runtimeStatus: 'ready'
   }])
   assert.equal(typeof state.sessions[0]?.lastActivityAt, 'number')
   assert.equal(state.activeSessionKey, canonicalPointer.sessionFile)
@@ -2151,6 +2378,117 @@ test('activating a registered session preserves and reuses managed runtimes', as
     /Session is not registered for the active project/
   )
   assert.equal(secondRuntime.stopCalls, 0)
+})
+
+test('starting a registered session attributes lifecycle status to its target before activation commits', async () => {
+  const firstPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/session-1.jsonl',
+    sessionId: 'session-1',
+    sessionName: 'First session'
+  }
+  const secondPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/session-2.jsonl',
+    sessionId: 'session-2',
+    sessionName: 'Second session'
+  }
+  const firstRuntime = new FakeRuntimeHost({
+    sessionId: firstPointer.sessionId,
+    sessionFile: firstPointer.sessionFile,
+    sessionName: firstPointer.sessionName ?? undefined
+  })
+  const secondRuntime = new DelayedStartRuntimeHost({
+    sessionId: secondPointer.sessionId,
+    sessionFile: secondPointer.sessionFile,
+    sessionName: secondPointer.sessionName ?? undefined
+  })
+  const runtimes = [firstRuntime, secondRuntime]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [firstPointer, secondPointer],
+        activeSessionKey: firstPointer.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(firstPointer.sessionFile)
+  const activation = kernel.activateSession(secondPointer.sessionFile)
+  await secondRuntime.startEntered
+
+  let state = kernel.getState()
+  assert.equal(state.activeSessionKey, firstPointer.sessionFile)
+  assert.equal(state.sessions.find(({ key }) => key === firstPointer.sessionFile)?.runtimeStatus, 'ready')
+  assert.equal(state.sessions.find(({ key }) => key === secondPointer.sessionFile)?.runtimeStatus, 'starting')
+
+  secondRuntime.releaseStart()
+  await activation
+
+  state = kernel.getState()
+  assert.equal(state.activeSessionKey, secondPointer.sessionFile)
+  assert.equal(state.sessions.find(({ key }) => key === firstPointer.sessionFile)?.runtimeStatus, 'ready')
+  assert.equal(state.sessions.find(({ key }) => key === secondPointer.sessionFile)?.runtimeStatus, 'ready')
+})
+
+test('registered session start failure restores the ready runtime and releases target ownership', async () => {
+  const firstPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/session-1.jsonl',
+    sessionId: 'session-1',
+    sessionName: 'First session'
+  }
+  const secondPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/session-2.jsonl',
+    sessionId: 'session-2',
+    sessionName: 'Second session'
+  }
+  const firstRuntime = new FakeRuntimeHost({
+    sessionId: firstPointer.sessionId,
+    sessionFile: firstPointer.sessionFile,
+    sessionName: firstPointer.sessionName ?? undefined
+  })
+  const secondRuntime = new FailingStartRuntimeHost({
+    sessionId: secondPointer.sessionId,
+    sessionFile: secondPointer.sessionFile,
+    sessionName: secondPointer.sessionName ?? undefined
+  })
+  const runtimes = [firstRuntime, secondRuntime]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [firstPointer, secondPointer],
+        activeSessionKey: firstPointer.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(firstPointer.sessionFile)
+  await assert.rejects(kernel.activateSession(secondPointer.sessionFile), /start failed/)
+
+  const state = kernel.getState()
+  assert.equal(secondRuntime.stopCalls, 1)
+  assert.equal(state.activeSessionKey, firstPointer.sessionFile)
+  assert.equal(state.runtime.status, 'ready')
+  assert.equal(state.session.id, firstPointer.sessionId)
+  assert.equal(state.sessions.find(({ key }) => key === firstPointer.sessionFile)?.runtimeStatus, 'ready')
+  assert.equal(state.sessions.find(({ key }) => key === secondPointer.sessionFile)?.runtimeStatus, 'stopped')
+  assert.deepEqual(state.projects, [{ path: '/tmp/project', busySessionCount: 0 }])
 })
 
 test('previewing another session while ready projects its messages without changing runtime or kernel state', async () => {

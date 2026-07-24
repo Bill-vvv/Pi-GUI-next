@@ -129,11 +129,19 @@ type ProjectStateFileV3 = {
   activeSessionKeys: ActiveSessionSelection[]
 }
 
-type ProjectStateFile = {
+type ProjectStateFileV4 = {
   version: 4
   sessions: SessionPointer[]
   activeSessionKeys: ActiveSessionSelection[]
   archivedSessionKeys: ActiveSessionSelection[]
+}
+
+type ProjectStateFile = {
+  version: 5
+  sessions: SessionPointer[]
+  activeSessionKeys: ActiveSessionSelection[]
+  archivedSessionKeys: ActiveSessionSelection[]
+  manuallyOrderedProjectPaths: string[]
 }
 
 export type ProjectStoreOptions = {
@@ -187,10 +195,11 @@ export class ProjectStore {
       await ensureJson(
         this.stateFile,
         {
-          version: 4,
+          version: 5,
           sessions: [],
           activeSessionKeys: [],
-          archivedSessionKeys: []
+          archivedSessionKeys: [],
+          manuallyOrderedProjectPaths: []
         } satisfies ProjectStateFile
       )
       return copyRegistry(next)
@@ -361,7 +370,12 @@ export class ProjectStore {
       .map((pointer) => ({ ...pointer }))
     const activeSessionKey = state.activeSessionKeys
       .find((selection) => selection.projectPath === projectPath)?.sessionKey ?? null
-    return { sessions, activeSessionKey }
+    const manualOrder = state.manuallyOrderedProjectPaths.includes(projectPath)
+    return {
+      sessions,
+      activeSessionKey,
+      ...(manualOrder ? { manualOrder: true } : {})
+    }
   }
 
   async validateSession(pointer: SessionPointer): Promise<SessionPointer> {
@@ -417,10 +431,11 @@ export class ProjectStore {
         sessionKey: canonicalPointer.sessionFile
       })
       await writeJson(this.stateFile, {
-        version: 4,
+        version: 5,
         sessions,
         activeSessionKeys,
-        archivedSessionKeys: state.archivedSessionKeys
+        archivedSessionKeys: state.archivedSessionKeys,
+        manuallyOrderedProjectPaths: state.manuallyOrderedProjectPaths
       } satisfies ProjectStateFile)
     })
   }
@@ -449,10 +464,13 @@ export class ProjectStore {
           : pointer
       )
       await writeJson(this.stateFile, {
-        version: 4,
+        version: 5,
         sessions,
         activeSessionKeys: state.activeSessionKeys,
-        archivedSessionKeys: state.archivedSessionKeys
+        archivedSessionKeys: state.archivedSessionKeys,
+        manuallyOrderedProjectPaths: state.manuallyOrderedProjectPaths.includes(projectPath)
+          ? state.manuallyOrderedProjectPaths
+          : [...state.manuallyOrderedProjectPaths, projectPath]
       } satisfies ProjectStateFile)
     })
   }
@@ -471,7 +489,7 @@ export class ProjectStore {
         selection.projectPath === projectPath && selection.sessionKey === sessionKey
       )) return
       await writeJson(this.stateFile, {
-        version: 4,
+        version: 5,
         sessions: state.sessions,
         activeSessionKeys: state.activeSessionKeys.filter((selection) =>
           selection.projectPath !== projectPath || selection.sessionKey !== sessionKey
@@ -479,7 +497,8 @@ export class ProjectStore {
         archivedSessionKeys: [
           ...state.archivedSessionKeys,
           { projectPath, sessionKey }
-        ]
+        ],
+        manuallyOrderedProjectPaths: state.manuallyOrderedProjectPaths
       } satisfies ProjectStateFile)
     })
   }
@@ -490,13 +509,20 @@ export class ProjectStore {
       text = await readFile(this.stateFile, 'utf8')
     } catch (error) {
       if (isNodeError(error) && error.code === 'ENOENT') {
-        return { version: 4, sessions: [], activeSessionKeys: [], archivedSessionKeys: [] }
+        return {
+          version: 5,
+          sessions: [],
+          activeSessionKeys: [],
+          archivedSessionKeys: [],
+          manuallyOrderedProjectPaths: []
+        }
       }
       throw error
     }
 
     const value: unknown = JSON.parse(text)
     if (isProjectStateFile(value)) return copyProjectState(value)
+    if (isProjectStateFileV4(value)) return migrateProjectStateV4(value)
     if (isProjectStateFileV3(value)) return migrateProjectStateV3(value)
     if (isProjectStateFileV2(value)) return migrateSessionPointers(value.recentSessions)
     if (isProjectStateFileV1(value)) {
@@ -842,15 +868,51 @@ function isProject(value: unknown): value is { path: string } {
 function isProjectStateFile(value: unknown): value is ProjectStateFile {
   if (
     !isRecord(value) ||
-    Object.keys(value).length !== 4 ||
-    value.version !== 4 ||
+    Object.keys(value).length !== 5 ||
+    value.version !== 5 ||
     !Array.isArray(value.sessions) ||
     !Array.isArray(value.activeSessionKeys) ||
-    !Array.isArray(value.archivedSessionKeys)
+    !Array.isArray(value.archivedSessionKeys) ||
+    !Array.isArray(value.manuallyOrderedProjectPaths)
   ) return false
   const sessions = value.sessions
-  const activeSessionKeys = value.activeSessionKeys
-  const archivedSessionKeys = value.archivedSessionKeys
+  const manuallyOrderedProjectPaths = value.manuallyOrderedProjectPaths
+  return (
+    isProjectStateCollectionsValid(
+      sessions,
+      value.activeSessionKeys,
+      value.archivedSessionKeys
+    ) &&
+    manuallyOrderedProjectPaths.every((path) =>
+      typeof path === 'string' &&
+      isAbsolute(path) &&
+      sessions.some((pointer) => pointer.projectPath === path)
+    ) &&
+    new Set(manuallyOrderedProjectPaths).size === manuallyOrderedProjectPaths.length
+  )
+}
+
+function isProjectStateFileV4(value: unknown): value is ProjectStateFileV4 {
+  return (
+    isRecord(value) &&
+    Object.keys(value).length === 4 &&
+    value.version === 4 &&
+    Array.isArray(value.sessions) &&
+    Array.isArray(value.activeSessionKeys) &&
+    Array.isArray(value.archivedSessionKeys) &&
+    isProjectStateCollectionsValid(
+      value.sessions,
+      value.activeSessionKeys,
+      value.archivedSessionKeys
+    )
+  )
+}
+
+function isProjectStateCollectionsValid(
+  sessions: unknown[],
+  activeSessionKeys: unknown[],
+  archivedSessionKeys: unknown[]
+): sessions is SessionPointer[] {
   return (
     sessions.every(isSessionPointer) &&
     new Set(sessions.map(({ sessionFile }) => sessionFile)).size === sessions.length &&
@@ -957,31 +1019,44 @@ function isSessionPointer(value: unknown): value is SessionPointer {
 
 function migrateSessionPointers(pointers: SessionPointer[]): ProjectStateFile {
   return {
-    version: 4,
+    version: 5,
     sessions: pointers.map((pointer) => ({ ...pointer })),
     activeSessionKeys: pointers.map((pointer) => ({
       projectPath: pointer.projectPath,
       sessionKey: pointer.sessionFile
     })),
-    archivedSessionKeys: []
+    archivedSessionKeys: [],
+    manuallyOrderedProjectPaths: []
   }
 }
 
 function migrateProjectStateV3(state: ProjectStateFileV3): ProjectStateFile {
   return {
-    version: 4,
+    version: 5,
     sessions: state.sessions.map((pointer) => ({ ...pointer })),
     activeSessionKeys: state.activeSessionKeys.map((selection) => ({ ...selection })),
-    archivedSessionKeys: []
+    archivedSessionKeys: [],
+    manuallyOrderedProjectPaths: []
+  }
+}
+
+function migrateProjectStateV4(state: ProjectStateFileV4): ProjectStateFile {
+  return {
+    version: 5,
+    sessions: state.sessions.map((pointer) => ({ ...pointer })),
+    activeSessionKeys: state.activeSessionKeys.map((selection) => ({ ...selection })),
+    archivedSessionKeys: state.archivedSessionKeys.map((selection) => ({ ...selection })),
+    manuallyOrderedProjectPaths: []
   }
 }
 
 function copyProjectState(state: ProjectStateFile): ProjectStateFile {
   return {
-    version: 4,
+    version: 5,
     sessions: state.sessions.map((pointer) => ({ ...pointer })),
     activeSessionKeys: state.activeSessionKeys.map((selection) => ({ ...selection })),
-    archivedSessionKeys: state.archivedSessionKeys.map((selection) => ({ ...selection }))
+    archivedSessionKeys: state.archivedSessionKeys.map((selection) => ({ ...selection })),
+    manuallyOrderedProjectPaths: [...state.manuallyOrderedProjectPaths]
   }
 }
 
