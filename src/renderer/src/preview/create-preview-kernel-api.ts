@@ -593,6 +593,7 @@ export function createPreviewKernelApi(): KernelApi {
     },
     testProvider: async (providerId, modelId) => ({ provider: providerId, modelId, durationMs: 842 }),
     selectPromptAttachments: async () => [],
+    getPathForFile: (file) => `/preview/${file.name}`,
     prompt: current,
     steer: current,
     followUp: current,

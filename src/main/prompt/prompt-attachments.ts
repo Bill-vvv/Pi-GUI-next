@@ -18,18 +18,18 @@ export function materializePrompt(
   message: string,
   attachments: readonly KernelPromptAttachment[] = []
 ): MaterializedPrompt {
-  let fileText = ''
+  let attachmentText = ''
   const images: KernelPromptImage[] = []
   for (const attachment of attachments) {
     if (attachment.type === 'file') {
-      fileText += `<file name="${attachment.path}">\n${attachment.content}\n</file>\n`
+      attachmentText += `${formatFileReference(attachment.path)}\n`
       continue
     }
     const hints = attachment.hints.join('\n')
-    fileText += `<file name="${attachment.path}">${hints}</file>\n`
+    attachmentText += `<file name="${attachment.path}">${hints}</file>\n`
     images.push(attachment.image)
   }
-  return { message: `${fileText}${message}`, images }
+  return { message: `${attachmentText}${message}`, images }
 }
 
 export function projectPromptDisplay(content: unknown): PromptDisplay {
@@ -50,20 +50,26 @@ export function projectPromptDisplay(content: unknown): PromptDisplay {
         .filter((item): item is string => item !== null)
         .join('\n')
       : ''
-  const parsed = parseLeadingFileBlocks(text)
-  const imageBlockIndexes = selectImageBlockIndexes(parsed.blocks, images.length)
+  const parsed = parseLeadingAttachments(text)
+  const blocks = parsed.attachments.filter(
+    (attachment): attachment is ParsedFileBlock => attachment.type === 'block'
+  )
+  const imageBlocks = new Set(selectImageBlocks(blocks, images.length))
   let imageIndex = 0
-  const attachments = parsed.blocks.map<KernelMessageAttachment>((block, index) => {
-    if (imageBlockIndexes.has(index)) {
+  const attachments = parsed.attachments.map<KernelMessageAttachment>((attachment) => {
+    if (attachment.type === 'reference') {
+      return { type: 'file', name: fileName(attachment.path), path: attachment.path }
+    }
+    if (imageBlocks.has(attachment)) {
       imageIndex += 1
       return {
         type: 'image',
-        name: fileName(block.path),
-        path: block.path,
-        hints: block.body.length === 0 ? [] : block.body.split('\n')
+        name: fileName(attachment.path),
+        path: attachment.path,
+        hints: attachment.body.length === 0 ? [] : attachment.body.split('\n')
       }
     }
-    return { type: 'file', name: fileName(block.path), path: block.path }
+    return { type: 'file', name: fileName(attachment.path), path: attachment.path }
   })
   if (imageIndex < images.length) {
     for (; imageIndex < images.length; imageIndex += 1) {
@@ -79,53 +85,128 @@ export function projectPromptDisplay(content: unknown): PromptDisplay {
 }
 
 export function stripPromptFileBlocks(message: string): string {
-  const parsed = parseLeadingFileBlocks(message)
-  if (parsed.blocks.length === 0) return parsed.text
-  const references = parsed.blocks.map((block) => `@${fileName(block.path)}`).join(' ')
+  const parsed = parseLeadingAttachments(message)
+  if (parsed.attachments.length === 0) return parsed.text
+  const references = parsed.attachments
+    .map((attachment) => formatFileReference(fileName(attachment.path)))
+    .join(' ')
   return parsed.text.trim().length === 0
     ? references
     : `${parsed.text}\n${references}`
 }
 
 type ParsedFileBlock = {
+  type: 'block'
   path: string
   body: string
 }
 
-function parseLeadingFileBlocks(value: string): { text: string; blocks: ParsedFileBlock[] } {
-  const blocks: ParsedFileBlock[] = []
-  let offset = 0
-  while (value.startsWith('<file name="', offset)) {
-    const nameStart = offset + '<file name="'.length
-    const nameEnd = value.indexOf('">', nameStart)
-    if (nameEnd === -1) break
-    const path = value.slice(nameStart, nameEnd)
-    if (path.length === 0 || /[\r\n"]/u.test(path)) break
-    const bodyStart = nameEnd + 2
-    const close = value.indexOf('</file>\n', bodyStart)
-    if (close === -1) break
-    const rawBody = value.slice(bodyStart, close)
-    const body = rawBody.startsWith('\n') && rawBody.endsWith('\n')
-      ? rawBody.slice(1, -1)
-      : rawBody
-    blocks.push({ path, body })
-    offset = close + '</file>\n'.length
-  }
-  return { text: value.slice(offset), blocks }
+type ParsedFileReference = {
+  type: 'reference'
+  path: string
 }
 
-function selectImageBlockIndexes(blocks: ParsedFileBlock[], imageCount: number): Set<number> {
-  const result = new Set<number>()
+type ParsedAttachment = ParsedFileBlock | ParsedFileReference
+
+function parseLeadingAttachments(value: string): { text: string; attachments: ParsedAttachment[] } {
+  const attachments: ParsedAttachment[] = []
+  let offset = 0
+  while (offset < value.length) {
+    const block = parseFileBlock(value, offset)
+    if (block !== null) {
+      attachments.push(block.attachment)
+      offset = block.offset
+      continue
+    }
+    const reference = parseFileReference(value, offset)
+    if (reference !== null) {
+      attachments.push(reference.attachment)
+      offset = reference.offset
+      continue
+    }
+    break
+  }
+  return { text: value.slice(offset), attachments }
+}
+
+function parseFileBlock(
+  value: string,
+  offset: number
+): { attachment: ParsedFileBlock; offset: number } | null {
+  if (!value.startsWith('<file name="', offset)) return null
+  const nameStart = offset + '<file name="'.length
+  const nameEnd = value.indexOf('">', nameStart)
+  if (nameEnd === -1) return null
+  const path = value.slice(nameStart, nameEnd)
+  if (path.length === 0 || /[\r\n"]/u.test(path)) return null
+  const bodyStart = nameEnd + 2
+  const close = value.indexOf('</file>\n', bodyStart)
+  if (close === -1) return null
+  const rawBody = value.slice(bodyStart, close)
+  const body = rawBody.startsWith('\n') && rawBody.endsWith('\n')
+    ? rawBody.slice(1, -1)
+    : rawBody
+  return {
+    attachment: { type: 'block', path, body },
+    offset: close + '</file>\n'.length
+  }
+}
+
+function parseFileReference(
+  value: string,
+  offset: number
+): { attachment: ParsedFileReference; offset: number } | null {
+  if (value[offset] !== '@') return null
+  const lineEnd = value.indexOf('\n', offset)
+  if (lineEnd === -1) return null
+  const token = value.slice(offset + 1, lineEnd)
+  let path: string
+  if (token.startsWith('"')) {
+    if (!token.endsWith('"')) return null
+    path = unescapeQuotedPath(token.slice(1, -1))
+  } else {
+    if (token.length === 0 || /\s/u.test(token)) return null
+    path = token
+  }
+  if (path.length === 0 || /[\r\n]/u.test(path)) return null
+  return {
+    attachment: { type: 'reference', path },
+    offset: lineEnd + 1
+  }
+}
+
+function selectImageBlocks(blocks: ParsedFileBlock[], imageCount: number): ParsedFileBlock[] {
+  const result: ParsedFileBlock[] = []
   if (imageCount === 0) return result
-  for (const [index, block] of blocks.entries()) {
+  for (const block of blocks) {
     if (
-      result.size < imageCount &&
+      result.length < imageCount &&
       (
         block.body.length === 0 ||
         block.body.split('\n').every((line) => /^\[Image(?::| ).*\]$/u.test(line))
       )
     ) {
-      result.add(index)
+      result.push(block)
+    }
+  }
+  return result
+}
+
+function formatFileReference(path: string): string {
+  return /\s/u.test(path)
+    ? `@"${path.replace(/\\/gu, '\\\\').replace(/"/gu, '\\"')}"`
+    : `@${path}`
+}
+
+function unescapeQuotedPath(path: string): string {
+  let result = ''
+  for (let index = 0; index < path.length; index += 1) {
+    const character = path[index]
+    if (character === '\\' && index + 1 < path.length) {
+      index += 1
+      result += path[index]
+    } else {
+      result += character
     }
   }
   return result

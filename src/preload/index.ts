@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 
 import {
   KERNEL_COMMAND_CHANNEL,
@@ -17,6 +17,7 @@ import {
 } from '../shared/kernel-contract'
 
 const kernelApi: KernelApi = {
+  getPathForFile: (file) => webUtils.getPathForFile(file),
   getState: () => {
     const command: KernelCommand = { type: 'kernel.get-state' }
 

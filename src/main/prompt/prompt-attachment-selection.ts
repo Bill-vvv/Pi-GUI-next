@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises'
+import { open, readFile, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { nativeImage } from 'electron'
 
@@ -10,6 +10,7 @@ import type {
 const MAX_WIDTH = 2000
 const MAX_HEIGHT = 2000
 const MAX_BASE64_BYTES = 4.5 * 1024 * 1024
+const IMAGE_DETECTION_BYTES = 64 * 1024
 
 export async function readPromptAttachments(
   filePaths: readonly string[]
@@ -18,13 +19,17 @@ export async function readPromptAttachments(
   for (const path of filePaths) {
     const fileStat = await stat(path)
     if (fileStat.size === 0) continue
-    const bytes = await readFile(path)
-    const detected = detectImage(bytes)
+    const detected = detectImage(await readFileHead(path, fileStat.size))
     if (detected.kind === 'unsupported-image') {
       throw new Error(`Unsupported image file: ${path}`)
     }
     if (detected.kind === 'image') {
-      const processed = processImage(bytes, detected.mimeType, path)
+      const bytes = await readFile(path)
+      const fullDetection = detectImage(bytes)
+      if (fullDetection.kind !== 'image') {
+        throw new Error(`Unsupported image file: ${path}`)
+      }
+      const processed = processImage(bytes, fullDetection.mimeType, path)
       attachments.push({
         type: 'image',
         name: basename(path),
@@ -37,11 +42,21 @@ export async function readPromptAttachments(
     attachments.push({
       type: 'file',
       name: basename(path),
-      path,
-      content: bytes.toString('utf8')
+      path
     })
   }
   return attachments
+}
+
+async function readFileHead(path: string, size: number): Promise<Buffer> {
+  const handle = await open(path, 'r')
+  try {
+    const buffer = Buffer.alloc(Math.min(size, IMAGE_DETECTION_BYTES))
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+    return buffer.subarray(0, bytesRead)
+  } finally {
+    await handle.close()
+  }
 }
 
 function processImage(

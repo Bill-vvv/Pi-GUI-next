@@ -510,10 +510,9 @@ function isKernelCommand(value: unknown): value is KernelCommand {
 function isPromptAttachment(value: unknown): value is KernelPromptAttachment {
   if (!isRecord(value) || typeof value.type !== 'string') return false
   if (value.type === 'file') {
-    return Object.keys(value).length === 4 &&
+    return Object.keys(value).length === 3 &&
       isNonEmptyString(value.name) &&
-      isNonEmptyString(value.path) &&
-      typeof value.content === 'string'
+      isNonEmptyString(value.path)
   }
   return value.type === 'image' &&
     Object.keys(value).length === 5 &&

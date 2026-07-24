@@ -216,7 +216,6 @@ export type KernelPromptAttachment =
       type: 'file'
       name: string
       path: string
-      content: string
     }
   | {
       type: 'image'
@@ -406,6 +405,7 @@ export type KernelEvent =
     }
 
 export type KernelApi = {
+  getPathForFile: (file: File) => string
   getState: () => Promise<KernelState>
   listSystemFonts: () => Promise<string[]>
   addProject: () => Promise<KernelState>

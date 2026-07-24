@@ -1336,7 +1336,7 @@ test('projects streaming messages and tools without duplication and settles only
   ])
 })
 
-test('materializes prompt attachments and forwards native images to the runtime', async () => {
+test('materializes file references without content and forwards native images to the runtime', async () => {
   const runtime = new FakeRuntimeHost()
   const kernel = new WorkbenchKernel(
     () => runtime,
@@ -1344,19 +1344,27 @@ test('materializes prompt attachments and forwards native images to the runtime'
     kernelOptions()
   )
   const image = { type: 'image' as const, mimeType: 'image/png', data: 'aGVsbG8=' }
+  const file = {
+    type: 'file' as const,
+    name: 'project notes.txt',
+    path: '/tmp/project notes.txt'
+  }
 
   await kernel.start()
-  await kernel.prompt('', [{
-    type: 'image',
-    name: 'diagram.png',
-    path: '/tmp/diagram.png',
-    image,
-    hints: []
-  }])
+  await kernel.prompt('', [
+    file,
+    {
+      type: 'image',
+      name: 'diagram.png',
+      path: '/tmp/diagram.png',
+      image,
+      hints: []
+    }
+  ])
 
   assert.deepEqual(runtime.commands.at(-1), {
     type: 'prompt',
-    message: '<file name="/tmp/diagram.png"></file>\n',
+    message: '@"/tmp/project notes.txt"\n<file name="/tmp/diagram.png"></file>\n',
     images: [image]
   })
 })
@@ -1603,7 +1611,7 @@ test('queue updates project steering and follow-up messages until the agent sett
     event: {
       type: 'queue_update',
       steering: [
-        '<file name="/tmp/context.txt">\nprivate body\n</file>\nRefine the current answer',
+        '@"/tmp/context file.txt"\nRefine the current answer',
         'Check the edge case'
       ],
       followUp: ['<file name="/tmp/chart.png"></file>\nSummarize the result']
@@ -1612,7 +1620,7 @@ test('queue updates project steering and follow-up messages until the agent sett
 
   let session = kernel.getState().session
   assert.deepEqual(session.pendingSteeringMessages, [
-    'Refine the current answer\n@context.txt',
+    'Refine the current answer\n@"context file.txt"',
     'Check the edge case'
   ])
   assert.deepEqual(session.pendingFollowUpMessages, ['Summarize the result\n@chart.png'])

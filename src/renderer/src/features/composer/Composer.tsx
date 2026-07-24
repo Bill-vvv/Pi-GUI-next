@@ -28,6 +28,7 @@ type PendingAttachment = {
 type ComposerProps = {
   state: KernelState
   sessionPreview: KernelSessionPreview | null
+  viewedSessionKey: string | null
   viewingInactiveSession: boolean
   viewingNewSession: boolean
   newSessionPrepared: boolean
@@ -59,6 +60,7 @@ const THINKING_LEVELS: ThinkingLevel[] = [
 export function Composer({
   state,
   sessionPreview,
+  viewedSessionKey,
   viewingInactiveSession,
   viewingNewSession,
   newSessionPrepared,
@@ -109,15 +111,24 @@ export function Composer({
     })
   const modelMenuPlaced = modelMenuPosition !== null
   const { activeProjectKey, activeSessionKey, runtime, session } = state
+  const displayedContextKey = [
+    activeProjectKey ?? 'no-project',
+    viewingNewSession ? 'new-session' : viewedSessionKey ?? activeSessionKey ?? 'no-session'
+  ].join(':')
+  const displayedContextKeyRef = useRef(displayedContextKey)
+  displayedContextKeyRef.current = displayedContextKey
   const preparingNewSession =
     viewingNewSession && !newSessionPrepared && pendingAction === 'start-session'
   const submissionBusy = busy && !preparingNewSession
   const commands = preparingNewSession ? [] : state.commands ?? []
   const availableModels = state.availableModels ?? []
   const thinkingLevelMap = session.model?.thinkingLevelMap ?? {}
+  const viewedSessionRuntimeStatus = viewingInactiveSession
+    ? state.sessions.find(({ key }) => key === viewedSessionKey)?.runtimeStatus ?? 'stopped'
+    : runtime.status
   const running = !viewingInactiveSession && runtime.status === 'running'
   const ready = viewingInactiveSession
-    ? canChangeRuntimeContext(runtime.status)
+    ? canChangeRuntimeContext(viewedSessionRuntimeStatus)
     : viewingNewSession && !newSessionPrepared
       ? preparingNewSession
       : runtime.status === 'ready'
@@ -350,33 +361,52 @@ export function Composer({
 
   async function selectAttachments(): Promise<void> {
     if (!editable || attachmentProcessingRef.current) return
+    const attachmentContextKey = displayedContextKeyRef.current
     attachmentProcessingRef.current = true
     setAttachmentProcessing(true)
     setCommandError(null)
     try {
-      appendPendingAttachments(await onSelectPromptAttachments())
+      const attachments = await onSelectPromptAttachments()
+      if (displayedContextKeyRef.current === attachmentContextKey) {
+        appendPendingAttachments(attachments)
+      }
     } catch (error) {
-      setCommandError(errorMessage(error))
+      if (displayedContextKeyRef.current === attachmentContextKey) {
+        setCommandError(errorMessage(error))
+      }
     } finally {
       attachmentProcessingRef.current = false
       setAttachmentProcessing(false)
-      restoreFocusRef.current = true
+      if (displayedContextKeyRef.current === attachmentContextKey) {
+        restoreFocusRef.current = true
+      }
     }
   }
 
   async function addDroppedAttachments(files: readonly File[]): Promise<void> {
     if (!editable || attachmentProcessingRef.current || files.length === 0) return
+    const attachmentContextKey = displayedContextKeyRef.current
     attachmentProcessingRef.current = true
     setAttachmentProcessing(true)
     setCommandError(null)
     try {
-      appendPendingAttachments(await readDroppedPromptAttachments(files))
+      const attachments = await readDroppedPromptAttachments(
+        files,
+        (file) => window.piGui.getPathForFile(file)
+      )
+      if (displayedContextKeyRef.current === attachmentContextKey) {
+        appendPendingAttachments(attachments)
+      }
     } catch (error) {
-      setCommandError(errorMessage(error))
+      if (displayedContextKeyRef.current === attachmentContextKey) {
+        setCommandError(errorMessage(error))
+      }
     } finally {
       attachmentProcessingRef.current = false
       setAttachmentProcessing(false)
-      restoreFocusRef.current = true
+      if (displayedContextKeyRef.current === attachmentContextKey) {
+        restoreFocusRef.current = true
+      }
     }
   }
 
@@ -551,7 +581,12 @@ export function Composer({
           {pendingAttachments.length > 0 ? (
             <ul className="composer-attachment-list" aria-label="待发送附件">
               {pendingAttachments.map(({ id, attachment }) => (
-                <li className={`composer-attachment ${attachment.type}`} key={id} title={attachment.path}>
+                <li
+                  className={`composer-attachment ${attachment.type}`}
+                  key={id}
+                  data-tooltip={attachment.path}
+                  data-tooltip-variant="mono"
+                >
                   {attachment.type === 'image' ? (
                     <img
                       className="composer-attachment-thumbnail"
@@ -559,7 +594,7 @@ export function Composer({
                       alt=""
                     />
                   ) : (
-                    <span className="composer-attachment-file-kind" aria-hidden="true">文件</span>
+                    <span className="composer-attachment-file-kind" aria-hidden="true">引用</span>
                   )}
                   <span className="composer-attachment-name">{attachment.name}</span>
                   <button
@@ -670,7 +705,7 @@ export function Composer({
           <IconButton
             className="composer-attach-action"
             icon="attach"
-            label="添加图片或文件"
+            label="添加图片或引用文件"
             type="button"
             disabled={!editable}
             aria-busy={attachmentProcessing ? true : undefined}

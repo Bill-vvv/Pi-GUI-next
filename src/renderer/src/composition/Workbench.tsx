@@ -815,6 +815,7 @@ export function Workbench({
         <Composer
           state={state}
           sessionPreview={sessionPreview}
+          viewedSessionKey={viewedSessionKey}
           viewingInactiveSession={viewingInactiveSession}
           viewingNewSession={viewingNewSession}
           newSessionPrepared={newSessionPrepared}

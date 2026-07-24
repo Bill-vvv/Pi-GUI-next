@@ -6,6 +6,7 @@ import type {
 const MAX_WIDTH = 2000
 const MAX_HEIGHT = 2000
 const MAX_BASE64_BYTES = 4.5 * 1024 * 1024
+const IMAGE_SIGNATURE_BYTES = 12
 
 type SupportedImageMimeType =
   | 'image/jpeg'
@@ -15,31 +16,34 @@ type SupportedImageMimeType =
   | 'image/bmp'
 
 export async function readDroppedPromptAttachments(
-  files: readonly File[]
+  files: readonly File[],
+  getPathForFile: (file: File) => string
 ): Promise<KernelPromptAttachment[]> {
   const uniqueFiles = deduplicateFiles(files).filter((file) => file.size > 0)
-  return Promise.all(uniqueFiles.map(readPromptAttachment))
+  return Promise.all(uniqueFiles.map((file) => readPromptAttachment(file, getPathForFile)))
 }
 
-async function readPromptAttachment(file: File): Promise<KernelPromptAttachment> {
-  const bytes = new Uint8Array(await file.arrayBuffer())
-  const mimeType = detectImage(bytes, file)
-  const path = filePath(file)
+async function readPromptAttachment(
+  file: File,
+  getPathForFile: (file: File) => string
+): Promise<KernelPromptAttachment> {
+  const header = new Uint8Array(await file.slice(0, IMAGE_SIGNATURE_BYTES).arrayBuffer())
+  const mimeType = detectImage(header, file)
   if (mimeType === null) {
     if (looksLikeImage(file)) throw new Error(`无法处理图片：${file.name}`)
     return {
       type: 'file',
       name: file.name,
-      path,
-      content: await file.text()
+      path: requiredFilePath(file, getPathForFile)
     }
   }
 
+  const bytes = new Uint8Array(await file.arrayBuffer())
   const processed = await processImage(file, bytes, mimeType)
   return {
     type: 'image',
     name: file.name,
-    path,
+    path: filePathOrName(file, getPathForFile),
     image: processed.image,
     hints: processed.hints
   }
@@ -197,8 +201,18 @@ function looksLikeImage(file: File): boolean {
   return file.type.startsWith('image/') || /\.(?:bmp|gif|jpe?g|png|webp)$/i.test(file.name)
 }
 
-function filePath(file: File): string {
-  return (file as File & { path?: string }).path || file.webkitRelativePath || file.name
+function requiredFilePath(file: File, getPathForFile: (file: File) => string): string {
+  const path = getPathForFile(file).trim()
+  if (path.length === 0) throw new Error(`无法获取文件的本地路径：${file.name}`)
+  return path
+}
+
+function filePathOrName(file: File, getPathForFile: (file: File) => string): string {
+  try {
+    return requiredFilePath(file, getPathForFile)
+  } catch {
+    return file.name
+  }
 }
 
 function startsWith(bytes: Uint8Array, prefix: number[]): boolean {

@@ -151,15 +151,77 @@ test('user and unsigned assistant messages remain compatible without a phase', (
   ])
 })
 
-test('materializes ordered file blocks and projects safe attachment summaries', () => {
-  const image = { type: 'image' as const, mimeType: 'image/png', data: 'aGVsbG8=' }
-  const materialized = materializePrompt('Review these.', [
+test('historical tools without results settle as interrupted errors', () => {
+  const entries = projectMessages([
     {
-      type: 'file',
-      name: 'notes.txt',
-      path: '/tmp/notes.txt',
-      content: 'first\nsecond'
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'Running a command.' },
+        { type: 'toolCall', id: 'call_abort', name: 'bash', arguments: { command: 'sleep 60' } }
+      ],
+      stopReason: 'toolUse',
+      timestamp: 21
+    }
+  ])
+
+  const tool = entries.find((entry) => entry.kind === 'tool')
+  assert.equal(tool?.kind === 'tool' ? tool.status : null, 'error')
+  assert.equal(tool?.kind === 'tool' ? tool.output : null, '已中止')
+})
+
+test('unsigned assistant text accompanying tool calls is projected as commentary', () => {
+  const entries = projectMessages([
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'thinking',
+          thinking: 'Inspect the project.',
+          thinkingSignature: JSON.stringify({
+            type: 'reasoning',
+            summary: [{ type: 'summary_text', text: 'Inspect the project.' }]
+          })
+        },
+        {
+          type: 'text',
+          text: '先查看项目入口。',
+          textSignature: JSON.stringify({ v: 1, id: 'msg_tool_intro' })
+        },
+        { type: 'toolCall', id: 'call_1', name: 'read', arguments: { path: '/tmp/a' } }
+      ],
+      stopReason: 'toolUse',
+      timestamp: 13
     },
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: '检查完成。',
+          textSignature: JSON.stringify({ v: 1, id: 'msg_answer' })
+        }
+      ],
+      stopReason: 'stop',
+      timestamp: 14
+    }
+  ])
+
+  const messages = entries.filter((entry) => entry.kind === 'message')
+  assert.deepEqual(messages.map(({ text, phase }) => ({ text, phase })), [
+    { text: '先查看项目入口。', phase: 'commentary' },
+    { text: '检查完成。', phase: null }
+  ])
+})
+
+test('materializes file path references without content and projects safe attachment summaries', () => {
+  const image = { type: 'image' as const, mimeType: 'image/png', data: 'aGVsbG8=' }
+  const file = {
+    type: 'file' as const,
+    name: 'notes.txt',
+    path: '/tmp/project notes.txt'
+  }
+  const materialized = materializePrompt('Review these.', [
+    file,
     {
       type: 'image',
       name: 'diagram.png',
@@ -171,7 +233,7 @@ test('materializes ordered file blocks and projects safe attachment summaries', 
 
   assert.equal(
     materialized.message,
-    '<file name="/tmp/notes.txt">\nfirst\nsecond\n</file>\n' +
+    '@"/tmp/project notes.txt"\n' +
       '<file name="/tmp/diagram.png">[Image: original 4000x2000, displayed at 2000x1000.]</file>\n' +
       'Review these.'
   )
@@ -187,7 +249,7 @@ test('materializes ordered file blocks and projects safe attachment summaries', 
   }])
   assert.equal(entry?.kind === 'message' ? entry.text : null, 'Review these.')
   assert.deepEqual(entry?.kind === 'message' ? entry.attachments : null, [
-    { type: 'file', name: 'notes.txt', path: '/tmp/notes.txt' },
+    { type: 'file', name: 'project notes.txt', path: '/tmp/project notes.txt' },
     {
       type: 'image',
       name: 'diagram.png',
@@ -196,7 +258,6 @@ test('materializes ordered file blocks and projects safe attachment summaries', 
     }
   ])
   assert.equal(JSON.stringify(entry).includes('aGVsbG8='), false)
-  assert.equal(JSON.stringify(entry).includes('first'), false)
 })
 
 test('keeps ordinary file-like text and projects attachment-only image messages', () => {

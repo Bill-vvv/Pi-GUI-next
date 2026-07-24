@@ -16,7 +16,28 @@ export function projectMessages(messages: unknown[]): KernelConversationEntry[] 
   for (const [messageIndex, message] of messages.entries()) {
     entries = projectMessage(entries, message, false, `history:${messageIndex}`)
   }
-  return entries
+  // History loads an idle session snapshot. Any tool still missing a result was
+  // interrupted mid-run (abort/crash/kill) and must not stay pending/running.
+  return settleInterruptedHistoricalTools(entries)
+}
+
+function settleInterruptedHistoricalTools(
+  entries: KernelConversationEntry[]
+): KernelConversationEntry[] {
+  let changed = false
+  const next = entries.map((entry) => {
+    if (
+      entry.kind !== 'tool' ||
+      (entry.status !== 'pending' && entry.status !== 'running')
+    ) return entry
+    changed = true
+    return {
+      ...entry,
+      status: 'error' as const,
+      output: entry.output.length > 0 ? entry.output : '已中止'
+    }
+  })
+  return changed ? next : entries
 }
 
 export function projectPiEvent(
@@ -142,6 +163,7 @@ function projectMessage(
 
   if (value.role === 'assistant') {
     const content = Array.isArray(value.content) ? value.content : []
+    const hasToolCall = content.some((item) => isRecord(item) && item.type === 'toolCall')
     const messageId = historicalIdentity === undefined
       ? `message:assistant:${timestamp}`
       : `message:${historicalIdentity}:assistant`
@@ -167,7 +189,7 @@ function projectMessage(
           id: messageProjected ? `${messageId}:text:${contentIndex}` : messageId,
           kind: 'message',
           role: 'assistant',
-          phase: phaseFromTextSignature(item.textSignature),
+          phase: phaseFromTextSignature(item.textSignature) ?? (hasToolCall ? 'commentary' : null),
           text: stringValue(item.text) ?? '',
           timestamp,
           streaming,
