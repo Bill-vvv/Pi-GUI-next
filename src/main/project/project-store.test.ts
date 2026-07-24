@@ -96,7 +96,7 @@ test('concurrent project registrations complete in FIFO order without temporary 
       uiFontFamily: null,
       codeFontFamily: null
     },
-    general: { startupWorkspaceRestore: 'restore' }
+    general: { startupWorkspaceRestore: 'restore', doubleClickBorderMaximize: true }
   })
   assert.equal((await readdir(configDirectory)).some((name) => name.includes('.tmp-')), false)
   assert.equal(
@@ -181,7 +181,7 @@ test('session naming settings migrate to the current config without storing OAut
       uiFontFamily: null,
       codeFontFamily: null
     },
-    general: { startupWorkspaceRestore: 'restore' }
+    general: { startupWorkspaceRestore: 'restore', doubleClickBorderMaximize: true }
   })
 })
 
@@ -237,7 +237,7 @@ test('appearance settings migrate config v4 to v8 and persist theme, accent, tra
       uiFontFamily: 'Noto Sans',
       codeFontFamily: 'JetBrains Mono'
     },
-    general: { startupWorkspaceRestore: 'restore' }
+    general: { startupWorkspaceRestore: 'restore', doubleClickBorderMaximize: true }
   })
 })
 
@@ -262,7 +262,7 @@ test('config v7 gains the default text size and roundtrips startup workspace res
         uiFontFamily: null,
         codeFontFamily: null
       },
-      general: { startupWorkspaceRestore: 'restore' }
+      general: { startupWorkspaceRestore: 'restore', doubleClickBorderMaximize: true }
     })
   )
   const options = { configHome, stateHome: join(root, 'state') }
@@ -276,11 +276,12 @@ test('config v7 gains the default text size and roundtrips startup workspace res
     uiFontFamily: null,
     codeFontFamily: null
   })
-  assert.deepEqual(await store.loadGeneral(), { startupWorkspaceRestore: 'restore' })
-  await store.saveGeneral({ startupWorkspaceRestore: 'none' })
+  assert.deepEqual(await store.loadGeneral(), { startupWorkspaceRestore: 'restore', doubleClickBorderMaximize: true })
+  await store.saveGeneral({ startupWorkspaceRestore: 'none', doubleClickBorderMaximize: true })
 
   assert.deepEqual(await new ProjectStore(options).loadGeneral(), {
-    startupWorkspaceRestore: 'none'
+    startupWorkspaceRestore: 'none',
+    doubleClickBorderMaximize: true
   })
   assert.deepEqual(JSON.parse(await readFile(join(configDirectory, 'config.json'), 'utf8')), {
     version: 8,
@@ -295,9 +296,69 @@ test('config v7 gains the default text size and roundtrips startup workspace res
       uiFontFamily: null,
       codeFontFamily: null
     },
-    general: { startupWorkspaceRestore: 'none' }
+    general: { startupWorkspaceRestore: 'none', doubleClickBorderMaximize: true }
   })
 })
+
+test('legacy general border settings migrate to double-click maximize', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-gui-project-store-general-legacy-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const configHome = join(root, 'config')
+  const configDirectory = join(configHome, 'pi-gui-next')
+  await mkdir(configDirectory, { recursive: true })
+  const project = { path: join(root, 'project') }
+  const base = {
+    version: 8,
+    projects: [project],
+    activeProjectKey: project.path,
+    sessionNaming: { mode: 'auto' },
+    appearance: {
+      theme: 'dark',
+      accentColor: 'amber',
+      surfaceTransparency: 20,
+      textSize: 'default',
+      uiFontFamily: null,
+      codeFontFamily: null
+    }
+  } as const
+
+  await writeFile(join(configDirectory, 'config.json'), JSON.stringify({
+    ...base,
+    general: { startupWorkspaceRestore: 'none' }
+  }))
+  assert.deepEqual(await new ProjectStore({ configHome, stateHome: join(root, 'state') }).loadGeneral(), {
+    startupWorkspaceRestore: 'none',
+    doubleClickBorderMaximize: true
+  })
+
+  await writeFile(join(configDirectory, 'config.json'), JSON.stringify({
+    ...base,
+    general: { startupWorkspaceRestore: 'restore', doubleClickBorderAction: 'off' }
+  }))
+  assert.deepEqual(await new ProjectStore({ configHome, stateHome: join(root, 'state') }).loadGeneral(), {
+    startupWorkspaceRestore: 'restore',
+    doubleClickBorderMaximize: false
+  })
+
+  await writeFile(join(configDirectory, 'config.json'), JSON.stringify({
+    ...base,
+    general: { startupWorkspaceRestore: 'restore', doubleClickBorderFullscreen: true }
+  }))
+  assert.deepEqual(await new ProjectStore({ configHome, stateHome: join(root, 'state') }).loadGeneral(), {
+    startupWorkspaceRestore: 'restore',
+    doubleClickBorderMaximize: true
+  })
+
+  await writeFile(join(configDirectory, 'config.json'), JSON.stringify({
+    ...base,
+    general: { startupWorkspaceRestore: 'none', doubleClickBorderMaximize: false }
+  }))
+  assert.deepEqual(await new ProjectStore({ configHome, stateHome: join(root, 'state') }).loadGeneral(), {
+    startupWorkspaceRestore: 'none',
+    doubleClickBorderMaximize: false
+  })
+})
+
 
 test('session pointers roundtrip as a per-project index with an active selection', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-gui-project-store-session-'))

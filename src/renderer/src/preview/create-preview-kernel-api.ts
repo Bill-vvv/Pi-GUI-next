@@ -338,7 +338,7 @@ const initialState: KernelState = {
   ...initialSelection,
   availableModels,
   sessionNaming: { mode: 'auto' },
-  general: { startupWorkspaceRestore: 'restore' },
+  general: { startupWorkspaceRestore: 'restore', doubleClickBorderMaximize: true },
   appearance: {
     theme: 'system',
     textSize: 'default',
@@ -615,6 +615,12 @@ export function createPreviewKernelApi(): KernelApi {
     openExternal: async (url) => {
       window.open(url, '_blank', 'noopener,noreferrer')
     },
+    toggleFullscreen: async () => false,
+    isFullscreen: async () => false,
+    subscribeFullscreen: () => () => undefined,
+    toggleMaximize: async () => false,
+    isMaximized: async () => false,
+    subscribeMaximized: () => () => undefined,
     subscribe: (listener) => {
       listeners.add(listener)
       return () => listeners.delete(listener)

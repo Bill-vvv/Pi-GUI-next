@@ -436,14 +436,38 @@ test('general settings default to restore and update only after persistence succ
     }
   )
 
-  assert.deepEqual(kernel.getState().general, { startupWorkspaceRestore: 'restore' })
-  await kernel.setGeneral({ startupWorkspaceRestore: 'none' })
-  assert.deepEqual(persisted, [{ startupWorkspaceRestore: 'none' }])
-  assert.deepEqual(kernel.getState().general, { startupWorkspaceRestore: 'none' })
+  assert.deepEqual(kernel.getState().general, { startupWorkspaceRestore: 'restore', doubleClickBorderMaximize: true })
+  await kernel.setGeneral({ startupWorkspaceRestore: 'none', doubleClickBorderMaximize: true })
+  assert.deepEqual(persisted, [{ startupWorkspaceRestore: 'none', doubleClickBorderMaximize: true }])
+  assert.deepEqual(kernel.getState().general, { startupWorkspaceRestore: 'none', doubleClickBorderMaximize: true })
   await assert.rejects(
-    kernel.setGeneral({ startupWorkspaceRestore: 'invalid' } as unknown as GeneralSettings),
+    kernel.setGeneral({ startupWorkspaceRestore: 'invalid', doubleClickBorderMaximize: true } as unknown as GeneralSettings),
     /Invalid general settings/
   )
+})
+
+test('general settings can toggle double-click border maximize', async () => {
+  const persisted: GeneralSettings[] = []
+  const kernel = new WorkbenchKernel(
+    () => new FakeRuntimeHost(),
+    { projects: [], activeProjectKey: null },
+    {
+      ...kernelOptions(),
+      persistGeneral: async (settings) => {
+        persisted.push(settings)
+      }
+    }
+  )
+
+  await kernel.setGeneral({
+    startupWorkspaceRestore: 'restore',
+    doubleClickBorderMaximize: false
+  })
+  assert.deepEqual(persisted, [{
+    startupWorkspaceRestore: 'restore',
+    doubleClickBorderMaximize: false
+  }])
+  assert.equal(kernel.getState().general.doubleClickBorderMaximize, false)
 })
 
 test('exposes a normalized model catalog and keeps model selection typed', async () => {

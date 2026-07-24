@@ -1,6 +1,12 @@
 export const KERNEL_COMMAND_CHANNEL = 'pi-gui:kernel-command'
 export const KERNEL_EVENT_CHANNEL = 'pi-gui:kernel-event'
 export const OPEN_EXTERNAL_CHANNEL = 'pi-gui:open-external'
+export const WINDOW_TOGGLE_FULLSCREEN_CHANNEL = 'pi-gui:window.toggle-fullscreen'
+export const WINDOW_IS_FULLSCREEN_CHANNEL = 'pi-gui:window.is-fullscreen'
+export const WINDOW_FULLSCREEN_CHANGED_CHANNEL = 'pi-gui:window.fullscreen-changed'
+export const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = 'pi-gui:window.toggle-maximize'
+export const WINDOW_IS_MAXIMIZED_CHANNEL = 'pi-gui:window.is-maximized'
+export const WINDOW_MAXIMIZED_CHANGED_CHANNEL = 'pi-gui:window.maximized-changed'
 
 export type RuntimeStatus =
   | 'stopped'
@@ -183,10 +189,13 @@ export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
 
 export type GeneralSettings = {
   startupWorkspaceRestore: 'restore' | 'none'
+  /** Double-click window border toggles maximize/restore. Exclusive fullscreen uses F11. */
+  doubleClickBorderMaximize: boolean
 }
 
 export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
-  startupWorkspaceRestore: 'restore'
+  startupWorkspaceRestore: 'restore',
+  doubleClickBorderMaximize: true
 }
 
 export type KernelSessionState = {
@@ -441,5 +450,11 @@ export type KernelApi = {
   setGeneral: (settings: GeneralSettings) => Promise<KernelState>
   invokeCommand: (commandId: string, argument: string) => Promise<KernelState>
   openExternal: (url: string) => Promise<void>
+  toggleFullscreen: () => Promise<boolean>
+  isFullscreen: () => Promise<boolean>
+  subscribeFullscreen: (listener: (fullscreen: boolean) => void) => () => void
+  toggleMaximize: () => Promise<boolean>
+  isMaximized: () => Promise<boolean>
+  subscribeMaximized: (listener: (maximized: boolean) => void) => () => void
   subscribe: (listener: (event: KernelEvent) => void) => () => void
 }

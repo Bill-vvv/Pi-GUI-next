@@ -216,11 +216,51 @@ export function SettingsPanel({
                       disabled={busy}
                       onValueChange={(startupWorkspaceRestore) => {
                         if (startupWorkspaceRestore !== 'restore' && startupWorkspaceRestore !== 'none') return
-                        void onSetGeneral({ startupWorkspaceRestore }).catch(() => undefined)
+                        void onSetGeneral({
+                          ...state.general,
+                          startupWorkspaceRestore
+                        }).catch(() => undefined)
                       }}
                     />
                   </div>
                 </div>
+              </div>
+            </section>
+
+            <section className="settings-group" aria-labelledby="settings-general-window">
+              <h3 id="settings-general-window" className="settings-group-heading">窗口</h3>
+              <div className="settings-group-card">
+                <div className="settings-row">
+                  <div className="settings-row-copy">
+                    <h4>双击边框最大化</h4>
+                    <p>双击窗口四周边框时切换最大化。独占全屏请用 F11</p>
+                  </div>
+                  <div className="settings-row-control">
+                    <Select
+                      id="general-double-click-border-maximize"
+                      value={state.general.doubleClickBorderMaximize === false ? 'off' : 'on'}
+                      groups={[{
+                        options: [
+                          { value: 'on', label: '开启' },
+                          { value: 'off', label: '关闭' }
+                        ]
+                      }]}
+                      disabled={busy}
+                      onValueChange={(value) => {
+                        if (value !== 'on' && value !== 'off') return
+                        void onSetGeneral({
+                          ...state.general,
+                          doubleClickBorderMaximize: value === 'on'
+                        }).catch(() => undefined)
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="settings-group" aria-label="界面强调">
+              <div className="settings-group-card">
                 <div className="settings-row">
                   <div className="settings-row-copy">
                     <h4>强调色</h4>

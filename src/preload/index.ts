@@ -4,6 +4,12 @@ import {
   KERNEL_COMMAND_CHANNEL,
   KERNEL_EVENT_CHANNEL,
   OPEN_EXTERNAL_CHANNEL,
+  WINDOW_FULLSCREEN_CHANGED_CHANNEL,
+  WINDOW_IS_FULLSCREEN_CHANNEL,
+  WINDOW_IS_MAXIMIZED_CHANNEL,
+  WINDOW_MAXIMIZED_CHANGED_CHANNEL,
+  WINDOW_TOGGLE_FULLSCREEN_CHANNEL,
+  WINDOW_TOGGLE_MAXIMIZE_CHANNEL,
   type KernelApi,
   type KernelCommand,
   type KernelEvent,
@@ -201,6 +207,32 @@ const kernelApi: KernelApi = {
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
   },
   openExternal: (url) => ipcRenderer.invoke(OPEN_EXTERNAL_CHANNEL, url) as Promise<void>,
+  toggleFullscreen: () => ipcRenderer.invoke(WINDOW_TOGGLE_FULLSCREEN_CHANNEL) as Promise<boolean>,
+  isFullscreen: () => ipcRenderer.invoke(WINDOW_IS_FULLSCREEN_CHANNEL) as Promise<boolean>,
+  subscribeFullscreen: (listener) => {
+    const handleFullscreenChange = (_event: IpcRendererEvent, fullscreen: boolean): void => {
+      listener(fullscreen)
+    }
+
+    ipcRenderer.on(WINDOW_FULLSCREEN_CHANGED_CHANNEL, handleFullscreenChange)
+
+    return () => {
+      ipcRenderer.removeListener(WINDOW_FULLSCREEN_CHANGED_CHANNEL, handleFullscreenChange)
+    }
+  },
+  toggleMaximize: () => ipcRenderer.invoke(WINDOW_TOGGLE_MAXIMIZE_CHANNEL) as Promise<boolean>,
+  isMaximized: () => ipcRenderer.invoke(WINDOW_IS_MAXIMIZED_CHANNEL) as Promise<boolean>,
+  subscribeMaximized: (listener) => {
+    const handleMaximizedChange = (_event: IpcRendererEvent, maximized: boolean): void => {
+      listener(maximized)
+    }
+
+    ipcRenderer.on(WINDOW_MAXIMIZED_CHANGED_CHANNEL, handleMaximizedChange)
+
+    return () => {
+      ipcRenderer.removeListener(WINDOW_MAXIMIZED_CHANGED_CHANNEL, handleMaximizedChange)
+    }
+  },
   subscribe: (listener) => {
     const handleKernelEvent = (_event: IpcRendererEvent, event: KernelEvent): void => {
       listener(event)

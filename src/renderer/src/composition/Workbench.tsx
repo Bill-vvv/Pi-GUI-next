@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 
 import type {
@@ -221,6 +221,14 @@ export function Workbench({
       window.clearTimeout(projectCardCloseTimerRef.current)
     }
   }, [])
+  const doubleClickBorderMaximize = state.general.doubleClickBorderMaximize !== false
+  const handleWindowEdgeDoubleClick = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    if (!doubleClickBorderMaximize || event.defaultPrevented || event.button !== 0) return
+    if (typeof window.piGui.toggleMaximize !== 'function') return
+    event.preventDefault()
+    event.stopPropagation()
+    void window.piGui.toggleMaximize().catch(() => undefined)
+  }
   // 仅在切换到另一个 Project 时自动展开；当前 Project 的展开/收起由点击切换，不被强制回写。
   useEffect(() => {
     if (previousActiveProjectKeyRef.current === activeProjectKey) return
@@ -353,9 +361,16 @@ export function Workbench({
       return next
     })
   }
-
   return (
     <main className={`app-shell${sidebarCollapsed ? ' left-sidebar-collapsed' : ''}${settingsOpen ? ' settings-open' : ''}`}>
+      {doubleClickBorderMaximize ? (
+        <div className="window-edge-hit-layer" aria-hidden="true">
+          <div className="window-edge-hit top" onDoubleClick={handleWindowEdgeDoubleClick} />
+          <div className="window-edge-hit right" onDoubleClick={handleWindowEdgeDoubleClick} />
+          <div className="window-edge-hit bottom" onDoubleClick={handleWindowEdgeDoubleClick} />
+          <div className="window-edge-hit left" onDoubleClick={handleWindowEdgeDoubleClick} />
+        </div>
+      ) : null}
       <aside className="left-sidebar" aria-label={settingsOpen ? '设置导航' : '项目与对话'}>
         <div className={`sidebar-content${settingsOpen ? ' settings-sidebar-content' : ''}`}>
           {settingsOpen ? (

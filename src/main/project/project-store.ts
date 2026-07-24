@@ -291,7 +291,7 @@ export class ProjectStore {
         ...copyRegistry(value),
         sessionNaming: copySessionNaming(value.sessionNaming),
         appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
-        general: copyGeneral(value.general)
+        general: requireGeneral(value.general)
       }
     }
     if (isProjectConfigFileV6(value)) {
@@ -299,7 +299,7 @@ export class ProjectStore {
         ...copyRegistry(value),
         sessionNaming: copySessionNaming(value.sessionNaming),
         appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
-        general: copyGeneral(value.general)
+        general: requireGeneral(value.general)
       }
     }
     if (isProjectConfigFileV5(value)) {
@@ -653,7 +653,7 @@ function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
     (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
     !isSessionNaming(value.sessionNaming) ||
     !isAppearance(value.appearance) ||
-    !isGeneral(value.general)
+    !acceptsGeneral(value.general)
   ) {
     return false
   }
@@ -671,7 +671,7 @@ function isProjectConfigFileV7(value: unknown): value is ProjectConfigFileV7 {
     (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
     !isSessionNaming(value.sessionNaming) ||
     !isAppearanceV7(value.appearance) ||
-    !isGeneral(value.general)
+    !acceptsGeneral(value.general)
   ) {
     return false
   }
@@ -689,7 +689,7 @@ function isProjectConfigFileV6(value: unknown): value is ProjectConfigFileV6 {
     (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
     !isSessionNaming(value.sessionNaming) ||
     !isAppearanceV5(value.appearance) ||
-    !isGeneral(value.general)
+    !acceptsGeneral(value.general)
   ) {
     return false
   }
@@ -736,7 +736,7 @@ function copyConfiguration(configuration: ProjectConfiguration): ProjectConfigur
     ...copyRegistry(configuration),
     sessionNaming: copySessionNaming(configuration.sessionNaming),
     appearance: copyAppearance(configuration.appearance),
-    general: copyGeneral(configuration.general)
+    general: requireGeneral(configuration.general)
   }
 }
 
@@ -758,7 +758,10 @@ function copyAppearance(settings: AppearanceSettings): AppearanceSettings {
 }
 
 function copyGeneral(settings: GeneralSettings): GeneralSettings {
-  return { startupWorkspaceRestore: settings.startupWorkspaceRestore }
+  return {
+    startupWorkspaceRestore: settings.startupWorkspaceRestore,
+    doubleClickBorderMaximize: settings.doubleClickBorderMaximize
+  }
 }
 
 function assertGeneral(value: GeneralSettings): void {
@@ -767,8 +770,60 @@ function assertGeneral(value: GeneralSettings): void {
 
 function isGeneral(value: unknown): value is GeneralSettings {
   return isRecord(value) &&
+    Object.keys(value).length === 2 &&
+    (value.startupWorkspaceRestore === 'restore' || value.startupWorkspaceRestore === 'none') &&
+    typeof value.doubleClickBorderMaximize === 'boolean'
+}
+
+function isLegacyGeneral(value: unknown): value is Pick<GeneralSettings, 'startupWorkspaceRestore'> {
+  return isRecord(value) &&
     Object.keys(value).length === 1 &&
     (value.startupWorkspaceRestore === 'restore' || value.startupWorkspaceRestore === 'none')
+}
+
+type LegacyGeneralWithBorderFlag = {
+  startupWorkspaceRestore: GeneralSettings['startupWorkspaceRestore']
+  doubleClickBorderFullscreen?: boolean
+  doubleClickBorderAction?: 'off' | 'maximize' | 'fullscreen'
+}
+
+function isLegacyGeneralWithBorderFlag(value: unknown): value is LegacyGeneralWithBorderFlag {
+  if (!isRecord(value) || Object.keys(value).length !== 2) return false
+  if (value.startupWorkspaceRestore !== 'restore' && value.startupWorkspaceRestore !== 'none') return false
+  return typeof value.doubleClickBorderFullscreen === 'boolean' ||
+    value.doubleClickBorderAction === 'off' ||
+    value.doubleClickBorderAction === 'maximize' ||
+    value.doubleClickBorderAction === 'fullscreen'
+}
+
+function normalizeGeneral(value: unknown): GeneralSettings | null {
+  if (isGeneral(value)) return copyGeneral(value)
+  if (isLegacyGeneralWithBorderFlag(value)) {
+    const enabled = value.doubleClickBorderAction === undefined
+      ? Boolean(value.doubleClickBorderFullscreen)
+      : value.doubleClickBorderAction !== 'off'
+    return {
+      startupWorkspaceRestore: value.startupWorkspaceRestore,
+      doubleClickBorderMaximize: enabled
+    }
+  }
+  if (isLegacyGeneral(value)) {
+    return {
+      startupWorkspaceRestore: value.startupWorkspaceRestore,
+      doubleClickBorderMaximize: DEFAULT_GENERAL_SETTINGS.doubleClickBorderMaximize
+    }
+  }
+  return null
+}
+
+function acceptsGeneral(value: unknown): boolean {
+  return normalizeGeneral(value) !== null
+}
+
+function requireGeneral(value: unknown): GeneralSettings {
+  const general = normalizeGeneral(value)
+  if (general === null) throw new Error('Invalid Pi GUI general settings.')
+  return general
 }
 
 function assertAppearance(value: AppearanceSettings): void {

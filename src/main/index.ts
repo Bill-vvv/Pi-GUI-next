@@ -16,6 +16,12 @@ import {
   KERNEL_EVENT_CHANNEL,
   KERNEL_PROVIDER_APIS,
   OPEN_EXTERNAL_CHANNEL,
+  WINDOW_FULLSCREEN_CHANGED_CHANNEL,
+  WINDOW_IS_FULLSCREEN_CHANNEL,
+  WINDOW_IS_MAXIMIZED_CHANNEL,
+  WINDOW_MAXIMIZED_CHANGED_CHANNEL,
+  WINDOW_TOGGLE_FULLSCREEN_CHANNEL,
+  WINDOW_TOGGLE_MAXIMIZE_CHANNEL,
   type AppearanceSettings,
   type GeneralSettings,
   type KernelCommand,
@@ -68,6 +74,29 @@ async function createMainWindow(rendererTarget: RendererTarget): Promise<void> {
     }
   })
   mainWindow = window
+
+  const publishFullscreenState = (): void => {
+    if (window.isDestroyed()) return
+    window.webContents.send(WINDOW_FULLSCREEN_CHANGED_CHANNEL, window.isFullScreen())
+  }
+  window.on('enter-full-screen', publishFullscreenState)
+  window.on('leave-full-screen', publishFullscreenState)
+
+  const publishMaximizedState = (): void => {
+    if (window.isDestroyed()) return
+    window.webContents.send(WINDOW_MAXIMIZED_CHANGED_CHANNEL, window.isMaximized())
+  }
+  window.on('maximize', publishMaximizedState)
+  window.on('unmaximize', publishMaximizedState)
+
+  window.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || input.key !== 'F11' || input.control || input.alt || input.meta || input.shift) {
+      return
+    }
+    event.preventDefault()
+    if (window.isDestroyed()) return
+    window.setFullScreen(!window.isFullScreen())
+  })
 
   window.on('closed', () => {
     if (mainWindow === window) mainWindow = null
@@ -341,6 +370,42 @@ async function startApplication(): Promise<void> {
     const url = normalizeExternalUrl(value)
     if (url === null) throw new Error('External link protocol is not allowed.')
     await shell.openExternal(url)
+  })
+  ipcMain.handle(WINDOW_TOGGLE_FULLSCREEN_CHANNEL, (event) => {
+    assertTrustedIpcSender(event, rendererTarget)
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (window === null || window.isDestroyed()) return false
+    const next = !window.isFullScreen()
+    window.setFullScreen(next)
+    return next
+  })
+  ipcMain.handle(WINDOW_IS_FULLSCREEN_CHANNEL, (event) => {
+    assertTrustedIpcSender(event, rendererTarget)
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (window === null || window.isDestroyed()) return false
+    return window.isFullScreen()
+  })
+  ipcMain.handle(WINDOW_TOGGLE_MAXIMIZE_CHANNEL, (event) => {
+    assertTrustedIpcSender(event, rendererTarget)
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (window === null || window.isDestroyed()) return false
+    if (window.isFullScreen()) {
+      // Leave exclusive fullscreen first so maximize is visible as a normal state.
+      window.setFullScreen(false)
+    }
+    if (window.isMaximized()) {
+      window.unmaximize()
+      // Some Wayland compositors report maximized asynchronously; force a clear return.
+      return false
+    }
+    window.maximize()
+    return true
+  })
+  ipcMain.handle(WINDOW_IS_MAXIMIZED_CHANNEL, (event) => {
+    assertTrustedIpcSender(event, rendererTarget)
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (window === null || window.isDestroyed()) return false
+    return window.isMaximized()
   })
 
   await createMainWindow(rendererTarget)
@@ -616,8 +681,9 @@ function isPositiveSafeInteger(value: unknown): value is number {
 
 function isGeneralSettings(value: unknown): value is GeneralSettings {
   return isRecord(value) &&
-    Object.keys(value).length === 1 &&
-    (value.startupWorkspaceRestore === 'restore' || value.startupWorkspaceRestore === 'none')
+    Object.keys(value).length === 2 &&
+    (value.startupWorkspaceRestore === 'restore' || value.startupWorkspaceRestore === 'none') &&
+    typeof value.doubleClickBorderMaximize === 'boolean'
 }
 
 function isAppearanceTheme(value: unknown): value is AppearanceSettings['theme'] {

@@ -1,6 +1,10 @@
 .app-shell {
   --sidebar-width: 332px;
   --app-panel-gap: 0px;
+  /* Keep hit strips inside shell padding so they do not steal content clicks. */
+  --window-edge-hit-x: min(10px, var(--app-shell-padding));
+  --window-edge-hit-top: min(12px, var(--app-shell-padding));
+  --window-edge-hit-bottom: min(10px, var(--app-shell-padding));
   display: grid;
   grid-template-columns: minmax(0, var(--sidebar-width)) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
@@ -15,6 +19,51 @@
   background: var(--color-bg-app);
   padding: var(--app-shell-padding);
   transition: grid-template-columns var(--motion-duration-layout) var(--motion-easing-layout);
+}
+
+/* Dedicated client-area edge strips. OS chrome is outside the web view, so
+   maximize must be triggered from in-app edges rather than the system border. */
+.window-edge-hit-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+}
+
+.window-edge-hit {
+  position: absolute;
+  pointer-events: auto;
+  /* Keep hit target inert for single clicks; only dblclick is handled. */
+  background: transparent;
+}
+
+.window-edge-hit.top {
+  top: 0;
+  left: var(--window-edge-hit-x);
+  right: var(--window-edge-hit-x);
+  height: var(--window-edge-hit-top);
+  cursor: default;
+}
+
+.window-edge-hit.bottom {
+  bottom: 0;
+  left: var(--window-edge-hit-x);
+  right: var(--window-edge-hit-x);
+  height: var(--window-edge-hit-bottom);
+}
+
+.window-edge-hit.left {
+  top: var(--window-edge-hit-top);
+  bottom: var(--window-edge-hit-bottom);
+  left: 0;
+  width: var(--window-edge-hit-x);
+}
+
+.window-edge-hit.right {
+  top: var(--window-edge-hit-top);
+  bottom: var(--window-edge-hit-bottom);
+  right: 0;
+  width: var(--window-edge-hit-x);
 }
 
 .app-shell::before {

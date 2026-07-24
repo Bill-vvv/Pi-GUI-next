@@ -2491,15 +2491,22 @@ function sameAppearanceSettings(first: AppearanceSettings, second: AppearanceSet
 }
 
 function copyGeneralSettings(settings: GeneralSettings): GeneralSettings {
-  return { startupWorkspaceRestore: settings.startupWorkspaceRestore }
+  return {
+    startupWorkspaceRestore: settings.startupWorkspaceRestore,
+    doubleClickBorderMaximize: settings.doubleClickBorderMaximize
+  }
 }
 
 function sameGeneralSettings(first: GeneralSettings, second: GeneralSettings): boolean {
-  return first.startupWorkspaceRestore === second.startupWorkspaceRestore
+  return first.startupWorkspaceRestore === second.startupWorkspaceRestore &&
+    first.doubleClickBorderMaximize === second.doubleClickBorderMaximize
 }
 
 function assertGeneralSettings(value: GeneralSettings): void {
-  if (value.startupWorkspaceRestore !== 'restore' && value.startupWorkspaceRestore !== 'none') {
+  if (
+    (value.startupWorkspaceRestore !== 'restore' && value.startupWorkspaceRestore !== 'none') ||
+    typeof value.doubleClickBorderMaximize !== 'boolean'
+  ) {
     throw new Error('Invalid general settings.')
   }
 }
