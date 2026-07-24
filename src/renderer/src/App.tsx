@@ -10,7 +10,7 @@ import type {
   SessionNamingSettings,
   ThinkingLevel
 } from '../../shared/kernel-contract'
-import { ChatWorkbench } from './features/chat/ChatWorkbench'
+import { Workbench } from './composition/Workbench'
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -337,7 +337,7 @@ export function App(): React.JSX.Element {
   }
 
   return (
-    <ChatWorkbench
+    <Workbench
       state={kernelState}
       sessionPreview={sessionPreview}
       viewedSessionKey={

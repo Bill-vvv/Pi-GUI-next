@@ -21,7 +21,7 @@ import { ProviderSettings } from './ProviderSettings'
 import {
   TOOL_DISPLAY_DENSITIES,
   type ToolDisplayDensity
-} from '../chat/tool-display-density'
+} from '../../tool-display-density'
 
 export type SettingsSection =
   | 'general'

@@ -15,17 +15,17 @@ import type {
   KernelState,
   SessionNamingSettings,
   ThinkingLevel
-} from '../../../../shared/kernel-contract'
-import { Icon } from '../../components/Icon'
-import { IconButton } from '../../components/IconButton'
-import { Composer } from '../composer/Composer'
-import { SettingsPanel, type SettingsSection } from '../settings/SettingsPanel'
-import { Timeline } from './Timeline'
+} from '../../../shared/kernel-contract'
+import { Icon } from '../components/Icon'
+import { IconButton } from '../components/IconButton'
+import { Composer } from '../features/composer/Composer'
+import { SettingsPanel, type SettingsSection } from '../features/settings/SettingsPanel'
+import { Timeline } from '../features/chat/Timeline'
 import {
   DEFAULT_TOOL_DISPLAY_DENSITY,
   isToolDisplayDensity,
   type ToolDisplayDensity
-} from './tool-display-density'
+} from '../tool-display-density'
 
 const TOOL_DISPLAY_DENSITY_STORAGE_KEY = 'pi-workbench.tool-display-density'
 const PINNED_PROJECTS_STORAGE_KEY = 'pi-workbench.pinned-projects'
@@ -36,7 +36,7 @@ type ProjectHoverCardState = {
   left: number
 }
 
-type ChatWorkbenchProps = {
+type WorkbenchProps = {
   state: KernelState
   sessionPreview: KernelSessionPreview | null
   viewedSessionKey: string | null
@@ -85,7 +85,7 @@ type ChatWorkbenchProps = {
   onSetAppearance: (settings: AppearanceSettings) => Promise<void>
 }
 
-export function ChatWorkbench({
+export function Workbench({
   state,
   sessionPreview,
   viewedSessionKey,
@@ -132,7 +132,7 @@ export function ChatWorkbench({
   onSetSessionNaming,
   onSetGeneral,
   onSetAppearance
-}: ChatWorkbenchProps): React.JSX.Element {
+}: WorkbenchProps): React.JSX.Element {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
