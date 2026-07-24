@@ -144,7 +144,7 @@
 
 .composer-input-row:focus-within {
   border-color: var(--color-border-focus);
-  box-shadow: 0 0 0 3px var(--color-focus-ring);
+  box-shadow: none;
 }
 
 .composer-editor-column {
@@ -301,6 +301,7 @@
 
 .abort-action {
   border-color: var(--color-border-subtle);
+  border-radius: var(--radius-pill);
   color: var(--color-text-primary);
 }
 
@@ -343,11 +344,6 @@
   border-color: transparent;
   background: var(--color-hover-subtle);
   color: var(--color-text-primary);
-}
-
-.composer-start-action svg {
-  width: var(--icon-size-sm);
-  height: var(--icon-size-sm);
 }
 
 .composer-model-controls {
@@ -530,8 +526,6 @@
 }
 
 .model-picker-model-button svg {
-  width: var(--icon-size-sm);
-  height: var(--icon-size-sm);
   color: var(--color-text-muted);
   transition: transform var(--motion-duration-control) var(--motion-easing-standard);
 }
@@ -641,10 +635,10 @@
   width: max-content;
   min-width: 14rem;
   max-width: min(22rem, calc(100vw - 2rem));
-  border: 1px solid var(--color-border-panel);
-  border-radius: 10px;
-  background: var(--color-surface-popover);
-  box-shadow: var(--shadow-popover);
+  border: 1px solid var(--color-border-tooltip);
+  border-radius: var(--radius-tooltip);
+  background: var(--color-surface-tooltip);
+  box-shadow: var(--shadow-tooltip);
   color: var(--color-text-soft);
   font-size: var(--text-caption);
   line-height: 1.45;

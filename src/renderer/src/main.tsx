@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import { App } from './App'
+import { TooltipProvider } from './components/TooltipProvider'
 import './tokens.css'
 import './styles.css'
 import './features/chat/chat.css'
@@ -29,7 +30,9 @@ async function bootstrap(): Promise<void> {
 
   createRoot(root).render(
     <StrictMode>
-      <App />
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>
     </StrictMode>
   )
 }

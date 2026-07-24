@@ -73,6 +73,7 @@
   --color-surface-dark: rgb(20 20 19 / 46%);
   --color-surface-inset: rgb(20 20 19 / 42%);
   --color-surface-popover: rgb(43 43 41 / 96%);
+  --color-surface-tooltip: var(--color-surface-popover);
   --color-surface-subtle: rgb(255 255 255 / 3%);
   --color-surface-subtle-strong: rgb(255 255 255 / 7%);
   --color-code-bg: rgb(13 13 13 / 56%);
@@ -89,6 +90,7 @@
   --color-border-input: #44413d;
   --color-border-subtle: rgb(181 170 156 / 13%);
   --color-border-panel: rgb(181 170 156 / 16%);
+  --color-border-tooltip: color-mix(in srgb, var(--color-border-panel) 82%, var(--color-border));
   --color-border-focus: rgb(181 170 156 / 22%);
   --color-border-divider: rgb(181 170 156 / 10%);
   --color-hover-subtle: rgb(181 170 156 / 9%);
@@ -123,13 +125,16 @@
   --motion-easing-layout: cubic-bezier(0.2, 0.72, 0.22, 1);
 
   --radius-sm: 6px;
+  --radius-tooltip: 9px;
   --radius-control: 10px;
+  --radius-popover: 12px;
   --radius-panel: 16px;
   --radius-composer: 22px;
   --radius-pill: 999px;
   --shadow-sidebar: none;
   --shadow-composer: 0 18px 48px rgb(0 0 0 / 24%), 0 4px 14px rgb(0 0 0 / 16%), inset 0 1px 0 rgb(255 255 255 / 4%);
   --shadow-popover: none;
+  --shadow-tooltip: var(--shadow-popover);
 
   font-size: var(--text-root);
   font-family: var(--font-ui);

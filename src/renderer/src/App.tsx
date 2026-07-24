@@ -51,6 +51,7 @@ export function App(): React.JSX.Element {
   const sessionStartPromiseRef = useRef<Promise<void> | null>(null)
   const coldStartHandledRef = useRef(false)
   const eventRevision = useRef(0)
+  const actionPresentationRevision = useRef(0)
 
   useEffect(() => {
     let active = true
@@ -199,11 +200,16 @@ export function App(): React.JSX.Element {
 
   async function runAction(
     action: string,
-    operation: () => Promise<KernelState>
+    operation: () => Promise<KernelState>,
+    exclusive = true
   ): Promise<void> {
-    if (pendingActionRef.current !== null) throw new Error('Another action is already running.')
-    pendingActionRef.current = action
-    setPendingAction(action)
+    if (exclusive) {
+      if (pendingActionRef.current !== null) throw new Error('Another action is already running.')
+      pendingActionRef.current = action
+      setPendingAction(action)
+    }
+    const presentationRevision = actionPresentationRevision.current + 1
+    actionPresentationRevision.current = presentationRevision
     setActionError(null)
     let succeeded = false
     const revisionBeforeAction = eventRevision.current
@@ -215,12 +221,18 @@ export function App(): React.JSX.Element {
       }
       succeeded = true
     } catch (error) {
-      setActionError(errorMessage(error))
+      if (actionPresentationRevision.current === presentationRevision) {
+        setActionError(errorMessage(error))
+      }
       throw error
     } finally {
-      setCompletedAction({ action, succeeded })
-      pendingActionRef.current = null
-      setPendingAction(null)
+      if (actionPresentationRevision.current === presentationRevision) {
+        setCompletedAction({ action, succeeded })
+      }
+      if (exclusive) {
+        pendingActionRef.current = null
+        setPendingAction(null)
+      }
     }
   }
 
@@ -370,11 +382,11 @@ export function App(): React.JSX.Element {
       onPreviewSession={previewSession}
       onClearSessionPreview={clearSessionView}
       onArchiveSession={async (sessionKey) => {
+        await runAction('archive-session', () => window.piGui.archiveSession(sessionKey))
         if (
           sessionViewTargetRef.current?.kind === 'session' &&
           sessionViewTargetRef.current.sessionKey === sessionKey
         ) clearSessionView()
-        await runAction('archive-session', () => window.piGui.archiveSession(sessionKey))
         setSessionPreview((preview) =>
           preview?.sessionKey === sessionKey ? null : preview
         )
@@ -413,11 +425,11 @@ export function App(): React.JSX.Element {
       onTestProvider={window.piGui.testProvider}
       onSelectPromptAttachments={() => window.piGui.selectPromptAttachments()}
       onPrompt={(message, attachments?: KernelPromptAttachment[]) =>
-        runAction('prompt', () => window.piGui.prompt(message, attachments))}
+        runAction('prompt', () => window.piGui.prompt(message, attachments), false)}
       onSteer={(message, attachments?: KernelPromptAttachment[]) =>
-        runAction('steer', () => window.piGui.steer(message, attachments))}
+        runAction('steer', () => window.piGui.steer(message, attachments), false)}
       onFollowUp={(message, attachments?: KernelPromptAttachment[]) =>
-        runAction('follow-up', () => window.piGui.followUp(message, attachments))}
+        runAction('follow-up', () => window.piGui.followUp(message, attachments), false)}
       onInvokeCommand={(commandId, argument) =>
         runAction('invoke-command', () => window.piGui.invokeCommand(commandId, argument))
       }

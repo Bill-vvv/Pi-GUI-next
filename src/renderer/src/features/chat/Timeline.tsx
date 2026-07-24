@@ -1,15 +1,16 @@
-import { memo, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import type {
   KernelConversationEntry,
   KernelErrorEntry,
+  KernelMessageAttachment,
   KernelMessageEntry,
   KernelThinkingEntry,
   KernelToolEntry,
   RuntimeStatus
 } from '../../../../shared/kernel-contract'
 import { MarkdownMessage } from './MarkdownMessage'
-import type { ToolDisplayDensity } from './tool-display-density'
+import type { ToolDisplayDensity } from '../../tool-display-density'
 
 type TimelineProps = {
   entries: KernelConversationEntry[]
@@ -67,12 +68,17 @@ export function Timeline({
   title,
   warning
 }: TimelineProps): React.JSX.Element {
+  const shellRef = useRef<HTMLDivElement>(null)
+  const chromeRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const followOutputRef = useRef(true)
+  const pinnedPromptFrameRef = useRef<number | null>(null)
   const revealScrollHeightRef = useRef<number | null>(null)
   const observedRunRef = useRef<{ startedAt: number; turnId: string | null } | null>(null)
   const observedThinkingStartsRef = useRef(new Map<string, number>())
   const [completedTurnWindow, setCompletedTurnWindow] = useState(COMPLETED_TURN_WINDOW_SIZE)
+  const [pinnedPrompt, setPinnedPrompt] = useState<KernelMessageEntry | null>(null)
+  const [pinnedPromptExpanded, setPinnedPromptExpanded] = useState(false)
   const [runElapsedByTurnId, setRunElapsedByTurnId] = useState<ReadonlyMap<string, number>>(
     () => new Map()
   )
@@ -108,6 +114,77 @@ export function Timeline({
     [completedTurnWindow, completedTurns]
   )
   const hiddenCompletedTurnCount = completedTurns.length - visibleCompletedTurns.length
+  const promptByTurnId = useMemo(() => {
+    const prompts = new Map<string, KernelMessageEntry>()
+    for (const turn of [...visibleCompletedTurns, ...activeTurns]) {
+      const { user } = splitTurn(turn)
+      if (user !== null) prompts.set(turn.id, user)
+    }
+    return prompts
+  }, [activeTurns, visibleCompletedTurns])
+  const updatePinnedPrompt = useCallback(() => {
+    const viewport = viewportRef.current
+    if (viewport === null) return
+    const viewportRect = viewport.getBoundingClientRect()
+    const chromeBottom = chromeRef.current?.getBoundingClientRect().bottom ?? viewportRect.top
+    const readingLine = Math.max(viewportRect.top, chromeBottom) + 8
+    const turnElements = viewport.querySelectorAll<HTMLElement>('[data-conversation-turn-id]')
+    let currentTurn: HTMLElement | null = null
+    for (const turnElement of turnElements) {
+      const rect = turnElement.getBoundingClientRect()
+      if (rect.top > readingLine) break
+      if (rect.bottom > readingLine) currentTurn = turnElement
+    }
+
+    const turnId = currentTurn?.dataset.conversationTurnId
+    const nextPrompt = turnId === undefined ? null : promptByTurnId.get(turnId) ?? null
+    const promptElement = currentTurn?.querySelector<HTMLElement>('[data-user-prompt="true"]') ?? null
+    const promptStillAtReadingLine = promptElement !== null &&
+      promptElement.getBoundingClientRect().bottom > readingLine
+    const visiblePrompt = promptStillAtReadingLine ? null : nextPrompt
+    setPinnedPrompt((previous) => {
+      if (previous?.id === visiblePrompt?.id) return previous === visiblePrompt ? previous : visiblePrompt
+      return visiblePrompt
+    })
+  }, [promptByTurnId])
+  const schedulePinnedPromptUpdate = useCallback(() => {
+    if (pinnedPromptFrameRef.current !== null) return
+    pinnedPromptFrameRef.current = requestAnimationFrame(() => {
+      pinnedPromptFrameRef.current = null
+      updatePinnedPrompt()
+    })
+  }, [updatePinnedPrompt])
+
+  useLayoutEffect(() => () => {
+    if (pinnedPromptFrameRef.current !== null) {
+      cancelAnimationFrame(pinnedPromptFrameRef.current)
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    setPinnedPromptExpanded(false)
+  }, [pinnedPrompt?.id])
+
+  useLayoutEffect(() => {
+    const shell = shellRef.current
+    if (shell === null) return
+    const chrome = chromeRef.current
+    const updateChromeHeight = (): void => {
+      shell.style.setProperty(
+        '--conversation-chrome-height',
+        `${chrome?.getBoundingClientRect().height ?? 0}px`
+      )
+    }
+    updateChromeHeight()
+    if (chrome === null) return
+    const observer = new ResizeObserver(updateChromeHeight)
+    observer.observe(chrome)
+    return () => observer.disconnect()
+  }, [pinnedPrompt?.id, pinnedPromptExpanded, title, warning])
+
+  useLayoutEffect(() => {
+    updatePinnedPrompt()
+  }, [activeRunStartIndex, completedTurnWindow, entries, pinnedPrompt?.id, pinnedPromptExpanded, updatePinnedPrompt])
 
   useLayoutEffect(() => {
     const now = Date.now()
@@ -167,11 +244,22 @@ export function Timeline({
   }, [completedTurnWindow])
 
   return (
-    <div className="conversation-shell">
-      {title || warning ? (
-        <div className="conversation-header">
-          {title ? <strong title={title}>{title}</strong> : null}
-          {warning ? <small className="connection-status-warning">{warning}</small> : null}
+    <div className="conversation-shell" ref={shellRef}>
+      {title || warning || pinnedPrompt ? (
+        <div className="conversation-chrome" ref={chromeRef}>
+          {title || warning ? (
+            <div className="conversation-header">
+              {title ? <strong data-tooltip={title}>{title}</strong> : null}
+              {warning ? <small className="connection-status-warning">{warning}</small> : null}
+            </div>
+          ) : null}
+          {pinnedPrompt ? (
+            <PinnedPrompt
+              entry={pinnedPrompt}
+              expanded={pinnedPromptExpanded}
+              onToggle={() => setPinnedPromptExpanded((expanded) => !expanded)}
+            />
+          ) : null}
         </div>
       ) : null}
 
@@ -183,6 +271,7 @@ export function Timeline({
           const target = event.currentTarget
           followOutputRef.current =
             target.scrollHeight - target.scrollTop - target.clientHeight < 120
+          schedulePinnedPromptUpdate()
         }}
       >
         {hasVisibleContent || runtimeStatus === 'running' ? (
@@ -263,8 +352,8 @@ const CompletedTurn = memo(function CompletedTurn({
   )
 
   return (
-    <section className="conversation-run completed">
-      {user ? <MessageEntry entry={user} /> : null}
+    <section className="conversation-run completed" data-conversation-turn-id={turn.id}>
+      {user ? <MessageEntry entry={user} promptAnchor /> : null}
       <div className="assistant-run">
         {processEntries.length > 0 ? (
           <CompletedProcess
@@ -295,8 +384,8 @@ const LiveTurn = memo(function LiveTurn({
   const chunks = buildLiveChunks(responseEntries)
 
   return (
-    <section className="conversation-run active">
-      {user ? <MessageEntry entry={user} /> : null}
+    <section className="conversation-run active" data-conversation-turn-id={turn.id}>
+      {user ? <MessageEntry entry={user} promptAnchor /> : null}
       <div className="assistant-run live">
         {chunks.map((chunk) =>
           chunk.kind === 'process' ? (
@@ -477,25 +566,32 @@ function LiveProcessStatus({
   toolDisplayDensity: ToolDisplayDensity
   thinkingElapsedByEntryId: ReadonlyMap<string, number>
 }): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false)
   const status = <ThinkingStatus label={liveProcessStatusLabel(entries)} />
   if (detailEntries.length === 0) {
     return <li className="live-process-status-row">{status}</li>
   }
   return (
     <li className="live-process-status-row">
-      <details className="live-process-status">
+      <details
+        className="live-process-status"
+        open={expanded}
+        onToggle={(event) => setExpanded(event.currentTarget.open)}
+      >
         <summary className="live-process-status-summary">
           {status}
           <span className="process-step-expand" aria-hidden="true" />
         </summary>
-        <div className="live-process-status-detail">
-          <ProcessSequence
-            activeEntryId={activeEntryId}
-            entries={detailEntries}
-            toolDisplayDensity={toolDisplayDensity}
-            thinkingElapsedByEntryId={thinkingElapsedByEntryId}
-          />
-        </div>
+        {expanded ? (
+          <div className="live-process-status-detail">
+            <ProcessSequence
+              activeEntryId={activeEntryId}
+              entries={detailEntries}
+              toolDisplayDensity={toolDisplayDensity}
+              thinkingElapsedByEntryId={thinkingElapsedByEntryId}
+            />
+          </div>
+        ) : null}
       </details>
     </li>
   )
@@ -510,11 +606,16 @@ function CommentaryStep({ entry }: { entry: CommentaryEntry }): React.JSX.Elemen
 }
 
 function ToolGroupSummary({ entries }: { entries: KernelToolEntry[] }): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false)
   const running = entries.some((entry) => entry.status === 'pending' || entry.status === 'running')
   const failed = entries.some((entry) => entry.status === 'error')
   return (
     <li className={`tool-group-summary${running ? ' running' : ''}${failed ? ' failed' : ''}`}>
-      <details className="tool-group-details">
+      <details
+        className="tool-group-details"
+        open={expanded}
+        onToggle={(event) => setExpanded(event.currentTarget.open)}
+      >
         <summary className="tool-group-summary-row">
           <span className="process-step-text">{summarizeTools(entries)}</span>
           <span className="process-step-meta">
@@ -522,11 +623,13 @@ function ToolGroupSummary({ entries }: { entries: KernelToolEntry[] }): React.JS
           </span>
           <span className="process-step-expand" aria-hidden="true" />
         </summary>
-        <ol className="tool-group-entries" aria-label="工具调用">
-          {entries.map((entry) => (
-            <ToolStep entry={entry} detailed={false} key={entry.id} />
-          ))}
-        </ol>
+        {expanded ? (
+          <ol className="tool-group-entries" aria-label="工具调用">
+            {entries.map((entry) => (
+              <ToolStep entry={entry} detailed={false} key={entry.id} />
+            ))}
+          </ol>
+        ) : null}
       </details>
     </li>
   )
@@ -556,7 +659,7 @@ function ThinkingStep({
     previousActiveRef.current = active
   }, [active, pinned])
   return (
-    <li className={`process-step thinking ${status}`}>
+    <li className={`process-step thinking ${entry.summary ? 'summary' : 'narrative'} ${status}`}>
       <details
         className="process-thinking"
         open={expanded}
@@ -570,7 +673,7 @@ function ThinkingStep({
           </span>
           <span className="process-thinking-expand" aria-hidden="true" />
         </summary>
-        {hasText ? (
+        {expanded && hasText ? (
           <div className="process-thinking-detail">
             <MarkdownMessage text={entry.text} streaming={active} />
           </div>
@@ -587,6 +690,7 @@ function ToolStep({
   entry: KernelToolEntry
   detailed: boolean
 }): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false)
   const status = activityStatus(entry)
   const file = toolFileInfo(entry)
   const target = file?.path ?? toolTarget(entry)
@@ -599,7 +703,11 @@ function ToolStep({
     if (command !== null) {
       return (
         <li className={`process-step tool standard ${status}`}>
-          <details className="process-standard-tool">
+          <details
+            className="process-standard-tool"
+            open={expanded}
+            onToggle={(event) => setExpanded(event.currentTarget.open)}
+          >
             <summary className="process-step-summary tool-standard-summary standard-tool-summary">
               <span className="process-step-text">
                 {entry.status === 'error'
@@ -607,32 +715,38 @@ function ToolStep({
                   : entry.status === 'success' ? '已运行' : '正在运行'}{' '}
                 {compactTarget(command)}
               </span>
-              <span className="process-step-meta">
-                {entry.durationMs === null ? toolStatusLabel(entry) : formatDuration(entry.durationMs)}
-              </span>
+              {entry.status === 'success' ? null : (
+                <span className="process-step-meta">{toolStatusLabel(entry)}</span>
+              )}
               <span className="process-step-expand" aria-hidden="true" />
             </summary>
-            <div className="standard-tool-detail">
-              <pre>{command}</pre>
-            </div>
+            {expanded ? (
+              <div className="standard-tool-detail">
+                <pre>{command}</pre>
+              </div>
+            ) : null}
           </details>
         </li>
       )
     }
     return (
       <li className={`process-step tool standard ${status}`}>
-        <details className="process-standard-tool">
+        <details
+          className="process-standard-tool"
+          open={expanded}
+          onToggle={(event) => setExpanded(event.currentTarget.open)}
+        >
           <summary className="process-step-summary tool-standard-summary standard-tool-summary">
             <span className="process-step-text">
               {toolActivityPrefix(entry, file)}{' '}
               {file ? <FileReference file={{ ...file, entry }} basenameOnly /> : target}
             </span>
-            <span className="process-step-meta">
-              {entry.durationMs === null ? toolStatusLabel(entry) : formatDuration(entry.durationMs)}
-            </span>
+            {entry.status === 'success' ? null : (
+              <span className="process-step-meta">{toolStatusLabel(entry)}</span>
+            )}
             <span className="process-step-expand" aria-hidden="true" />
           </summary>
-          <ToolDetailContent entry={entry} detail={detail} />
+          {expanded ? <ToolDetailContent entry={entry} detail={detail} /> : null}
         </details>
       </li>
     )
@@ -672,7 +786,7 @@ function DetailedToolStep({
           </span>
           <span className="process-step-expand" aria-hidden="true" />
         </summary>
-        <ToolDetailContent entry={entry} detail={detail} />
+        {expanded ? <ToolDetailContent entry={entry} detail={detail} /> : null}
       </details>
     </li>
   )
@@ -746,30 +860,21 @@ function TimelineContentEntry({
   )
 }
 
-function MessageEntry({ entry }: { entry: KernelMessageEntry }): React.JSX.Element | null {
+function MessageEntry({
+  entry,
+  promptAnchor = false
+}: {
+  entry: KernelMessageEntry
+  promptAnchor?: boolean
+}): React.JSX.Element | null {
   const hasText = entry.text.trim().length > 0
   const attachments = entry.attachments ?? []
   const aborted = entry.stopReason === 'aborted'
   if (!hasText && attachments.length === 0 && !entry.error && !entry.streaming && !aborted) return null
 
   return (
-    <div className="conversation-turn">
-      {attachments.length > 0 ? (
-        <ul className={`message-attachment-list ${entry.role}`} aria-label="消息附件">
-          {attachments.map((attachment, index) => (
-            <li
-              className={`message-attachment ${attachment.type}`}
-              title={attachment.path}
-              key={`${attachment.type}:${attachment.path}:${index}`}
-            >
-              <span className="message-attachment-kind">
-                {attachment.type === 'image' ? '图片' : '文件'}
-              </span>
-              <span className="message-attachment-name">{attachment.name}</span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
+    <div className="conversation-turn" data-user-prompt={promptAnchor ? 'true' : undefined}>
+      <MessageAttachments attachments={attachments} role={entry.role} />
       {hasText ? (
         <article className={`chat-message ${entry.role}${entry.streaming ? ' streaming' : ''}`}>
           <MarkdownMessage text={entry.text} streaming={entry.streaming} />
@@ -789,6 +894,75 @@ function MessageEntry({ entry }: { entry: KernelMessageEntry }): React.JSX.Eleme
         </article>
       ) : null}
     </div>
+  )
+}
+
+function PinnedPrompt({
+  entry,
+  expanded,
+  onToggle
+}: {
+  entry: KernelMessageEntry
+  expanded: boolean
+  onToggle: () => void
+}): React.JSX.Element {
+  const attachments = entry.attachments ?? []
+  const canExpand = entry.text.length > 180 || entry.text.split('\n').length > 3 || attachments.length > 2
+  return (
+    <section
+      className={`pinned-prompt${expanded ? ' expanded' : ''}${canExpand ? ' collapsible' : ''}`}
+      aria-label="当前轮次的提示词"
+    >
+      <div className="pinned-prompt-heading">
+        <strong>当前提示词</strong>
+        {canExpand ? (
+          <button
+            className="pinned-prompt-toggle"
+            type="button"
+            aria-expanded={expanded}
+            aria-controls="pinned-prompt-content"
+            onClick={onToggle}
+          >
+            {expanded ? '收起' : '展开'}
+          </button>
+        ) : null}
+      </div>
+      <div className="pinned-prompt-content stealth-scroll" id="pinned-prompt-content">
+        <MessageAttachments attachments={attachments} role="user" label="当前提示词附件" />
+        {entry.text.trim().length > 0 ? (
+          <MarkdownMessage text={entry.text} streaming={false} />
+        ) : null}
+      </div>
+    </section>
+  )
+}
+
+function MessageAttachments({
+  attachments,
+  role,
+  label = '消息附件'
+}: {
+  attachments: KernelMessageAttachment[]
+  role: KernelMessageEntry['role']
+  label?: string
+}): React.JSX.Element | null {
+  if (attachments.length === 0) return null
+  return (
+    <ul className={`message-attachment-list ${role}`} aria-label={label}>
+      {attachments.map((attachment, index) => (
+        <li
+          className={`message-attachment ${attachment.type}`}
+          data-tooltip={attachment.path}
+          data-tooltip-variant="mono"
+          key={`${attachment.type}:${attachment.path}:${index}`}
+        >
+          <span className="message-attachment-kind">
+            {attachment.type === 'image' ? '图片' : '文件'}
+          </span>
+          <span className="message-attachment-name">{attachment.name}</span>
+        </li>
+      ))}
+    </ul>
   )
 }
 

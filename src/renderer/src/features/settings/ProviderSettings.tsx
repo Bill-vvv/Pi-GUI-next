@@ -3,7 +3,6 @@ import { useEffect, useState } from 'react'
 import {
   KERNEL_PROVIDER_APIS,
   type KernelProviderApi,
-  type KernelProviderCatalogModel,
   type KernelProviderConfig,
   type KernelProviderInput,
   type KernelProviderModelConfig,
@@ -253,6 +252,14 @@ export function ProviderSettings({
                     const modelKey = `${provider.id}:${model.id}`
                     const expanded = expandedModelKey === modelKey
                     const catalogModel = provider.catalogModels.find((candidate) => candidate.id === model.id)
+                    const displayedModel = {
+                      ...model,
+                      name: model.name ?? catalogModel?.name ?? null,
+                      reasoning: model.reasoning ?? catalogModel?.reasoning ?? null,
+                      input: model.input ?? catalogModel?.input ?? null,
+                      contextWindow: model.contextWindow ?? catalogModel?.contextWindow ?? null,
+                      maxTokens: model.maxTokens ?? catalogModel?.maxTokens ?? null
+                    }
                     return (
                       <div className="provider-model-item" key={model.id}>
                         <div className="provider-model-row">
@@ -263,8 +270,8 @@ export function ProviderSettings({
                             onClick={() => setExpandedModelKey(expanded ? null : modelKey)}
                           >
                             <span className="provider-model-name">
-                              <strong>{model.name ?? model.id}</strong>
-                              {model.name === null || model.name === model.id ? null : <code>{model.id}</code>}
+                              <strong>{displayedModel.name ?? model.id}</strong>
+                              {displayedModel.name === null || displayedModel.name === model.id ? null : <code>{model.id}</code>}
                             </span>
                             <span className="provider-model-chevron" aria-hidden="true">›</span>
                           </button>
@@ -278,55 +285,26 @@ export function ProviderSettings({
                           </button>
                         </div>
                         {expanded ? (
-                          <>
-                            <div className="provider-model-info-block">
-                              <div className="provider-model-info-heading">已保存配置</div>
-                              <dl className="provider-model-details">
-                                <div>
-                                  <dt>上下文窗口</dt>
-                                  <dd>{model.contextWindow === null ? '未配置' : model.contextWindow.toLocaleString()}</dd>
-                                </div>
-                                <div>
-                                  <dt>最大输出</dt>
-                                  <dd>{model.maxTokens === null ? '未配置' : model.maxTokens.toLocaleString()}</dd>
-                                </div>
-                                <div>
-                                  <dt>推理</dt>
-                                  <dd>{model.reasoning === null ? '未配置' : model.reasoning ? '支持' : '不支持'}</dd>
-                                </div>
-                                <div>
-                                  <dt>输入</dt>
-                                  <dd>{model.input === null ? '未配置' : model.input.includes('image') ? '文本、图片' : '文本'}</dd>
-                                </div>
-                              </dl>
-                            </div>
-                            {catalogModel === undefined ? null : (
-                              <div className="provider-model-info-block provider-model-catalog">
-                                <div className="provider-model-info-heading">
-                                  <span>Provider 目录信息</span>
-                                  <small>自动发现，仅供参考</small>
-                                </div>
-                                <dl className="provider-model-details">
-                                  <div>
-                                    <dt>目录名称</dt>
-                                    <dd>{catalogModel.name ?? '未提供'}</dd>
-                                  </div>
-                                  <div>
-                                    <dt>上下文窗口</dt>
-                                    <dd>{catalogModel.contextWindow === null ? '未提供' : catalogModel.contextWindow.toLocaleString()}</dd>
-                                  </div>
-                                  <div>
-                                    <dt>最大输出</dt>
-                                    <dd>{catalogModel.maxTokens === null ? '未提供' : catalogModel.maxTokens.toLocaleString()}</dd>
-                                  </div>
-                                  <div>
-                                    <dt>推理 / 输入</dt>
-                                    <dd>{catalogCapabilityLabel(catalogModel)}</dd>
-                                  </div>
-                                </dl>
+                          <div className="provider-model-info-block">
+                            <dl className="provider-model-details">
+                              <div>
+                                <dt>上下文窗口</dt>
+                                <dd>{displayedModel.contextWindow === null ? '未提供' : displayedModel.contextWindow.toLocaleString()}</dd>
                               </div>
-                            )}
-                          </>
+                              <div>
+                                <dt>最大输出</dt>
+                                <dd>{displayedModel.maxTokens === null ? '未提供' : displayedModel.maxTokens.toLocaleString()}</dd>
+                              </div>
+                              <div>
+                                <dt>推理</dt>
+                                <dd>{displayedModel.reasoning === null ? '未提供' : displayedModel.reasoning ? '支持' : '不支持'}</dd>
+                              </div>
+                              <div>
+                                <dt>输入</dt>
+                                <dd>{displayedModel.input === null ? '未提供' : displayedModel.input.includes('image') ? '文本、图片' : '文本'}</dd>
+                              </div>
+                            </dl>
+                          </div>
                         ) : null}
                       </div>
                     )
@@ -647,14 +625,6 @@ function capabilityBoolean(value: ModelCapabilityDraft): boolean | null {
 
 function isModelCapabilityDraft(value: string): value is ModelCapabilityDraft {
   return value === 'unset' || value === 'supported' || value === 'unsupported'
-}
-
-function catalogCapabilityLabel(model: KernelProviderCatalogModel): string {
-  const reasoning = model.reasoning === null ? '推理未提供' : model.reasoning ? '支持推理' : '不支持推理'
-  const input = model.input === null
-    ? '输入未提供'
-    : model.input.includes('image') ? '文本、图片' : '文本'
-  return `${reasoning} · ${input}`
 }
 
 function isHttpUrl(value: string): boolean {

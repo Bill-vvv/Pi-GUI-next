@@ -1,0 +1,91 @@
+.app-tooltip {
+  position: fixed;
+  z-index: 1000;
+  width: max-content;
+  max-width: min(22rem, calc(100vw - 1rem));
+  border: 1px solid var(--color-border-tooltip);
+  border-radius: var(--radius-tooltip);
+  background: var(--color-surface-tooltip);
+  box-shadow: var(--shadow-tooltip);
+  color: var(--color-text-soft);
+  font-family: var(--font-ui);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+  line-height: var(--line-caption);
+  overflow-wrap: anywhere;
+  padding: 0.48rem 0.58rem;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.app-tooltip.visible {
+  visibility: visible;
+  animation: app-tooltip-in var(--motion-duration-tooltip) var(--motion-easing-standard) both;
+}
+
+.app-tooltip.mono {
+  font-family: var(--font-code);
+  font-weight: var(--weight-normal);
+  line-height: var(--line-code);
+}
+
+.app-tooltip::after {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border: solid var(--color-border-tooltip);
+  background: var(--color-surface-tooltip);
+  content: '';
+  transform: rotate(45deg);
+}
+
+.app-tooltip[data-placement='top']::after,
+.app-tooltip[data-placement='bottom']::after {
+  left: var(--tooltip-arrow-offset);
+  margin-left: -4px;
+}
+
+.app-tooltip[data-placement='top']::after {
+  bottom: -4px;
+  border-width: 0 1px 1px 0;
+}
+
+.app-tooltip[data-placement='bottom']::after {
+  top: -4px;
+  border-width: 1px 0 0 1px;
+}
+
+.app-tooltip[data-placement='left']::after,
+.app-tooltip[data-placement='right']::after {
+  top: var(--tooltip-arrow-offset);
+  margin-top: -4px;
+}
+
+.app-tooltip[data-placement='left']::after {
+  right: -4px;
+  border-width: 1px 1px 0 0;
+}
+
+.app-tooltip[data-placement='right']::after {
+  left: -4px;
+  border-width: 0 0 1px 1px;
+}
+
+@keyframes app-tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-tooltip.visible {
+    animation: none;
+    opacity: 1;
+  }
+}

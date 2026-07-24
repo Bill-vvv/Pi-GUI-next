@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 
 import { Icon } from './Icon'
 import { useViewportPopoverPosition } from './useViewportPopoverPosition'
+import './selection-control.css'
 import './select.css'
 
 export type SelectOption = {
@@ -155,7 +156,7 @@ export function Select({
           {selectedOption?.label ?? '请选择'}
         </span>
         <span className="select-control-chevron" aria-hidden="true">
-          <Icon name="chevron-down" />
+          <Icon name="chevron-down" size="sm" />
         </span>
       </button>
 

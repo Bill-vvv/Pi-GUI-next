@@ -12,7 +12,6 @@ import type {
 import { Icon } from '../../components/Icon'
 import { IconButton } from '../../components/IconButton'
 import { useViewportPopoverPosition } from '../../components/useViewportPopoverPosition'
-import { canChangeRuntimeContext, canStartRuntime } from '../../runtime-state'
 import {
   filterSlashCommands,
   parseSlashCommandToken,
@@ -418,8 +417,18 @@ export function Composer({
     requestAnimationFrame(() => textareaRef.current?.focus())
   }
 
+  function clearSubmittedDraft(): void {
+    setPrompt('')
+    setPendingAttachments([])
+    if (textareaRef.current) textareaRef.current.style.height = ''
+    requestAnimationFrame(() => textareaRef.current?.focus())
+  }
+
   async function submitPrompt(behavior: 'prompt' | 'steer' | 'follow-up' = running ? 'follow-up' : 'prompt'): Promise<void> {
     const message = prompt.trim()
+    const submittedPrompt = prompt
+    const submittedContextKey = displayedContextKey
+    const submittedPendingAttachments = pendingAttachments
     const attachments = pendingAttachments.map(({ attachment }) => attachment)
     if (
       (!ready && !running) ||
@@ -432,17 +441,21 @@ export function Composer({
     if (running) {
       setSubmitting(true)
       setCommandError(null)
+      clearSubmittedDraft()
       try {
         if (behavior === 'follow-up') await onFollowUp(message, attachments)
         else await onSteer(message, attachments)
-        setPrompt('')
-        setPendingAttachments([])
-        if (textareaRef.current) textareaRef.current.style.height = ''
       } catch (error) {
-        setCommandError(errorMessage(error))
-        return
+        restoreFailedSubmission(
+          submittedContextKey,
+          submittedPrompt,
+          submittedPendingAttachments,
+          error
+        )
       } finally {
-        restoreFocusRef.current = true
+        if (displayedContextKeyRef.current === submittedContextKey) {
+          restoreFocusRef.current = true
+        }
         setSubmitting(false)
       }
       return
@@ -475,18 +488,41 @@ export function Composer({
 
     setSubmitting(true)
     setCommandError(null)
+    clearSubmittedDraft()
     try {
       await onPrompt(message, attachments)
-      setPrompt('')
-      setPendingAttachments([])
-      if (textareaRef.current) textareaRef.current.style.height = ''
     } catch (error) {
-      setCommandError(errorMessage(error))
-      return
+      restoreFailedSubmission(
+        submittedContextKey,
+        submittedPrompt,
+        submittedPendingAttachments,
+        error
+      )
     } finally {
-      restoreFocusRef.current = true
+      if (displayedContextKeyRef.current === submittedContextKey) {
+        restoreFocusRef.current = true
+      }
       setSubmitting(false)
     }
+  }
+
+  function restoreFailedSubmission(
+    submittedContextKey: string,
+    submittedPrompt: string,
+    submittedAttachments: PendingAttachment[],
+    error: unknown
+  ): void {
+    if (displayedContextKeyRef.current !== submittedContextKey) return
+    setCommandError(errorMessage(error))
+    setPrompt(submittedPrompt)
+    setPendingAttachments(submittedAttachments)
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current
+      if (textarea === null) return
+      textarea.style.height = 'auto'
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`
+      textarea.focus()
+    })
   }
 
   return (
@@ -635,7 +671,8 @@ export function Composer({
             placeholder={composerPlaceholder(
               state,
               viewingInactiveSession,
-              viewingNewSession
+              viewingNewSession,
+              viewedSessionRuntimeStatus
             )}
             onPaste={(event) => {
               const files = event.clipboardData.files.length > 0
@@ -765,7 +802,7 @@ export function Composer({
                 }}
               >
                 <span>{runtime.status === 'crashed' ? '重启并恢复' : '恢复对话'}</span>
-                <Icon name="arrow-right" />
+                <Icon name="arrow-right" size="sm" />
               </button>
             </>
           ) : canStartRuntime(runtime.status) ? (
@@ -777,7 +814,7 @@ export function Composer({
               onClick={() => void onStartSession().catch(() => undefined)}
             >
               <span>{runtime.status === 'crashed' ? '重新启动 Pi' : '启动 Pi'}</span>
-              <Icon name="arrow-right" />
+              <Icon name="arrow-right" size="sm" />
             </button>
           ) : runtime.status === 'starting' || runtime.status === 'stopping' ? (
             <span className="composer-runtime-state" role="status" aria-live="polite">
@@ -886,7 +923,7 @@ export function Composer({
                                 {session.model?.name ?? session.model?.id ?? '选择模型'}
                               </span>
                             </span>
-                            <Icon name="arrow-right" />
+                            <Icon name="arrow-right" size="sm" />
                           </button>
                           {modelMenuOpen && modelMenuPosition !== null
                             ? createPortal(
@@ -1035,16 +1072,17 @@ function clampPercent(value: number): number {
 function composerPlaceholder(
   state: KernelState,
   viewingInactiveSession: boolean,
-  viewingNewSession: boolean
+  viewingNewSession: boolean,
+  viewedSessionRuntimeStatus: KernelState['runtime']['status']
 ): string {
   if (state.activeProjectKey === null) return '先选择项目文件夹'
   if (viewingNewSession && state.runtime.status === 'crashed') return '新对话启动失败'
   if (viewingNewSession) return ''
-  if (viewingInactiveSession && canChangeRuntimeContext(state.runtime.status)) return ''
-  if (state.runtime.status === 'stopped') return '启动 Pi 后开始对话'
-  if (state.runtime.status === 'starting') return '正在启动 Pi…'
-  if (state.runtime.status === 'running') return '继续输入：Enter 跟进，Alt+Enter 转向'
-  if (state.runtime.status === 'crashed') return 'Pi Runtime 已退出'
+  if (viewingInactiveSession && canChangeRuntimeContext(viewedSessionRuntimeStatus)) return ''
+  if (viewedSessionRuntimeStatus === 'stopped') return '启动 Pi 后开始对话'
+  if (viewedSessionRuntimeStatus === 'starting') return '正在启动 Pi…'
+  if (viewedSessionRuntimeStatus === 'running') return 'Enter 排队，Alt+Enter 引导'
+  if (viewedSessionRuntimeStatus === 'crashed') return 'Pi Runtime 已退出'
   return ''
 }
 
@@ -1105,4 +1143,12 @@ function isRuntimeContextAction(action: string): boolean {
     action === 'activate-project' ||
     action === 'activate-session' ||
     action === 'start-session'
+}
+
+function canChangeRuntimeContext(status: KernelState['runtime']['status']): boolean {
+  return status === 'stopped' || status === 'ready' || status === 'crashed'
+}
+
+function canStartRuntime(status: KernelState['runtime']['status']): boolean {
+  return status === 'stopped' || status === 'crashed'
 }

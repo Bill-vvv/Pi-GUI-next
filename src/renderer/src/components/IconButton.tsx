@@ -1,16 +1,18 @@
 import { forwardRef, type ButtonHTMLAttributes } from 'react'
 
-import { Icon, type IconName } from './Icon'
+import { Icon, type IconName, type IconSize } from './Icon'
 import './icon-button.css'
 
 type IconButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children'> & {
   icon: IconName
+  iconSize?: IconSize
   label: string
 }
 
 export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
   {
     icon,
+    iconSize,
     label,
     className,
     title = label,
@@ -27,10 +29,10 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
       ref={ref}
       className={classes}
       type={type}
-      title={title}
+      data-tooltip={title}
       aria-label={label}
     >
-      <Icon name={icon} />
+      <Icon name={icon} size={iconSize} />
     </button>
   )
 })

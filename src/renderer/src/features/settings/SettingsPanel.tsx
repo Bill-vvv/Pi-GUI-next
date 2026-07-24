@@ -381,7 +381,7 @@ export function SettingsPanel({
                     density="standard"
                     selected={toolDisplayDensity === 'standard'}
                     title="标准"
-                    description="首段思考与状态"
+                    description="过程正文与单行状态"
                   />
                   <DensityExample
                     density="detailed"
@@ -479,7 +479,7 @@ export function SettingsPanel({
         {section === 'packages' ? (
           <>
             <div className="settings-section-heading">
-              <h2 title="Package 安装或卸载后，将在下一次新建或重新打开对话时生效。">
+              <h2 data-tooltip="Package 安装或卸载后，将在下一次新建或重新打开对话时生效。">
                 Package
               </h2>
             </div>
@@ -523,7 +523,7 @@ export function SettingsPanel({
         {section === 'extensions' ? (
           <>
             <div className="settings-section-heading">
-              <h2 title="安装或卸载后，将在下一次新建或重新打开对话时生效。">拓展</h2>
+              <h2 data-tooltip="安装或卸载后，将在下一次新建或重新打开对话时生效。">拓展</h2>
             </div>
             <PiDevCatalog
               kind="extension"
@@ -544,7 +544,7 @@ export function SettingsPanel({
             <section className="settings-group" aria-labelledby="settings-local-extensions-heading">
               <h3 id="settings-local-extensions-heading" className="settings-group-heading">本地路径</h3>
               <article className="settings-card settings-extension-installer">
-                <h3 title="第三方拓展拥有完整系统权限。选择后，其路径会写入 Pi 用户设置的 extensions。">
+                <h3 data-tooltip="第三方拓展拥有完整系统权限。选择后，其路径会写入 Pi 用户设置的 extensions。">
                   安装本地拓展
                 </h3>
                 <div className="settings-extension-install-actions">
@@ -588,7 +588,7 @@ export function SettingsPanel({
                         className="settings-extension-remove"
                         type="button"
                         aria-label={`卸载拓展 ${extension.name}`}
-                        title="仅从 Pi 用户设置中移除此路径，不删除拓展源码。"
+                        data-tooltip="仅从 Pi 用户设置中移除此路径，不删除拓展源码。"
                         disabled={busy}
                         onClick={() => {
                           if (!window.confirm(`卸载「${extension.name}」？源码文件不会被删除。`)) return
@@ -616,7 +616,7 @@ export function SettingsPanel({
                 className="settings-skill-create-toggle"
                 type="button"
                 disabled={busy || state.activeProjectKey === null || state.runtime.status !== 'ready'}
-                title={
+                data-tooltip={
                   state.activeProjectKey === null
                     ? '请先添加并选择一个项目。'
                     : state.runtime.status !== 'ready' ? '请等待 Pi Runtime 就绪。' : undefined
@@ -715,7 +715,7 @@ export function SettingsPanel({
               <div
                 className="settings-empty-state"
                 role="status"
-                title="技能由 Pi 管理；Workbench 会在 Runtime 提供命令后显示在这里。"
+                data-tooltip="技能由 Pi 管理；Workbench 会在 Runtime 提供命令后显示在这里。"
               >
                 <h3>尚未发现技能命令</h3>
               </div>
@@ -822,7 +822,7 @@ export function SettingsPanel({
               <article className="settings-card settings-card-stacked">
                 <label
                   htmlFor="session-naming-mode"
-                  title="认证由 Pi 管理；自动模式只使用当前已授权 Provider 中的低成本模型。"
+                  data-tooltip="认证由 Pi 管理；自动模式只使用当前已授权 Provider 中的低成本模型。"
                 >
                   自动对话命名
                 </label>

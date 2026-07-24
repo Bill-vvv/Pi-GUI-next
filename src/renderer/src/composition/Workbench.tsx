@@ -29,6 +29,8 @@ import {
 
 const TOOL_DISPLAY_DENSITY_STORAGE_KEY = 'pi-workbench.tool-display-density'
 const PINNED_PROJECTS_STORAGE_KEY = 'pi-workbench.pinned-projects'
+const COLLAPSED_SESSION_LIMIT = 5
+const SESSION_SPINNER_DURATION_MS = 1_180
 
 type ProjectHoverCardState = {
   projectKey: string
@@ -151,6 +153,7 @@ export function Workbench({
   const [expandedProjectKey, setExpandedProjectKey] = useState<string | null>(
     () => state.activeProjectKey
   )
+  const [expandedSessionProjectKey, setExpandedSessionProjectKey] = useState<string | null>(null)
   const [pinnedProjectKeys, setPinnedProjectKeys] = useState<Set<string>>(() => {
     try {
       const stored: unknown = JSON.parse(
@@ -234,6 +237,7 @@ export function Workbench({
     if (previousActiveProjectKeyRef.current === activeProjectKey) return
     previousActiveProjectKeyRef.current = activeProjectKey
     setExpandedProjectKey(activeProjectKey)
+    setExpandedSessionProjectKey(null)
   }, [activeProjectKey])
   const displayedProjects = projects
     .map((project, index) => ({ project, index }))
@@ -261,7 +265,7 @@ export function Workbench({
     setUnreadSessionKeys((current) => {
       let next = current
       for (const summary of sessions) {
-        const status = summary.key === activeSessionKey ? runtime.status : summary.runtimeStatus
+        const status = summary.runtimeStatus
         const running = status === 'running'
         const wasRunning = sessionRunningByKeyRef.current.get(summary.key) === true
 
@@ -279,7 +283,7 @@ export function Workbench({
       }
       return next
     })
-  }, [activeSessionKey, displayedSessionKey, runtime.status, sessions])
+  }, [displayedSessionKey, sessions])
   const projectName = basename(activeProject?.path ?? null) ?? '未选择项目'
   const busy = pendingAction !== null
   const canChangeProjectOrSession = !busy
@@ -469,12 +473,16 @@ export function Workbench({
                 const projectLabel = basename(project.path) ?? project.path
                 const busySessionCount = project.busySessionCount ?? (selected
                   ? sessions.filter((summary) => {
-                      const status = summary.key === activeSessionKey
-                        ? runtime.status
-                        : summary.runtimeStatus
+                      const status = summary.runtimeStatus
                       return status === 'starting' || status === 'running' || status === 'stopping'
                     }).length
                   : 0)
+                const sessionListExpanded = expandedSessionProjectKey === project.path
+                const visibleSessions = sessionListExpanded
+                  ? sessions
+                  : sessions.slice(0, COLLAPSED_SESSION_LIMIT)
+                const hiddenSessionCount = sessions.length - COLLAPSED_SESSION_LIMIT
+                const sessionListId = `project-sessions-${encodeURIComponent(project.path)}`
                 return (
                   <article
                     className={`project-session-group${selected ? ' selected' : ''}${expanded ? ' expanded' : ''}`}
@@ -538,7 +546,7 @@ export function Workbench({
                         }}
                       >
                         <span className="project-icon" aria-hidden="true">
-                          <Icon name={expanded ? 'folder-open' : 'folder'} />
+                          <Icon name={expanded ? 'folder-open' : 'folder'} size="sm" />
                         </span>
                         <span className="project-name">{projectLabel}</span>
                         {busySessionCount > 0 ? (
@@ -546,7 +554,7 @@ export function Workbench({
                             className="project-activity-summary"
                             role="status"
                             aria-label={`有 ${busySessionCount} 个对话进行中`}
-                            title={`有 ${busySessionCount} 个对话进行中`}
+                            data-tooltip={`有 ${busySessionCount} 个对话进行中`}
                           >
                             <span className="project-activity-count" aria-hidden="true">
                               {busySessionCount}
@@ -575,10 +583,10 @@ export function Workbench({
                     </div>
 
                     {expanded ? (
-                      <div className="session-list">
+                      <div className="session-list" id={sessionListId}>
                         {sessions.length === 0 ? (
                           <p className="empty-session-state muted">暂无对话。</p>
-                        ) : sessions.map((summary) => {
+                        ) : visibleSessions.map((summary) => {
                           const selected = summary.key === displayedSessionKey
                           const runtimeActive = summary.key === activeSessionKey
                           const previewSelected = viewedSessionKey === summary.key
@@ -586,9 +594,7 @@ export function Workbench({
                             !selected ||
                             (previewSelected && sessionPreview === null && !sessionPreviewPending)
                           )
-                          const sessionRuntimeStatus = runtimeActive
-                            ? runtime.status
-                            : summary.runtimeStatus
+                          const sessionRuntimeStatus = summary.runtimeStatus
                           const lifecycleLabel = sessionLifecycleLabel(sessionRuntimeStatus)
                           const unread = unreadSessionKeys.has(summary.key)
                           const activityLabel = formatActivityAge(summary.lastActivityAt, activityClock)
@@ -629,7 +635,8 @@ export function Workbench({
                               <button
                                 className="session-item"
                                 type="button"
-                                title={summary.key}
+                                data-tooltip={summary.key}
+                                data-tooltip-variant="mono"
                                 aria-current={selected ? 'true' : undefined}
                                 aria-busy={previewSelected && sessionPreviewPending ? true : undefined}
                                 disabled={busy}
@@ -651,22 +658,20 @@ export function Workbench({
                               >
                                 <span className="session-title">{sessionTitle(summary)}</span>
                               </button>
-                              <div className="session-action-slot">
+                              <div
+                                className="session-action-slot"
+                                data-tooltip={lifecycleLabel ?? (unread ? '有未读更新' : undefined)}
+                              >
                                 {lifecycleLabel !== null ? (
-                                  <span
-                                    className={`session-lifecycle-indicator ${sessionRuntimeStatus}`}
-                                    role="status"
-                                    aria-label={lifecycleLabel}
-                                    title={lifecycleLabel}
-                                  >
-                                    <span className="session-spinner-visual" aria-hidden="true" />
-                                  </span>
+                                  <SessionSpinner
+                                    status={sessionRuntimeStatus}
+                                    label={lifecycleLabel}
+                                  />
                                 ) : unread ? (
                                   <span
                                     className="session-unread-indicator"
                                     role="status"
                                     aria-label="有未读更新"
-                                    title="有未读更新"
                                   />
                                 ) : activityLabel === null ? null : (
                                   <time
@@ -693,6 +698,21 @@ export function Workbench({
                             </div>
                           )
                         })}
+                        {hiddenSessionCount > 0 ? (
+                          <button
+                            className="session-list-toggle"
+                            type="button"
+                            aria-expanded={sessionListExpanded}
+                            aria-controls={sessionListId}
+                            onClick={() => setExpandedSessionProjectKey(
+                              sessionListExpanded ? null : project.path
+                            )}
+                          >
+                            {sessionListExpanded
+                              ? '收起多余对话'
+                              : `展开其余 ${hiddenSessionCount} 个对话`}
+                          </button>
+                        ) : null}
                       </div>
                     ) : null}
                   </article>
@@ -708,12 +728,14 @@ export function Workbench({
             <IconButton
               className="sidebar-collapse-toggle"
               icon="left-sidebar-close"
+              iconSize="lg"
               label="收起侧边栏"
               onClick={() => setSidebarCollapsed(true)}
             />
             <IconButton
               className="add-project-entry"
               icon="plus"
+              iconSize="lg"
               label="添加项目"
               aria-busy={pendingAction === 'add-project' ? true : undefined}
               disabled={!canChangeProjectOrSession}
@@ -723,6 +745,7 @@ export function Workbench({
               ref={settingsButtonRef}
               className="sidebar-settings-toggle"
               icon="settings"
+              iconSize="lg"
               label="设置"
               aria-pressed={false}
               onClick={() => setSettingsOpen(true)}
@@ -877,7 +900,7 @@ export function Workbench({
           <div className="project-hover-card-main">
             <div className="project-hover-card-heading">
               <span className="project-hover-card-folder" aria-hidden="true">
-                <Icon name="folder-open" />
+                <Icon name="folder-open" size="lg" />
               </span>
               <strong>{basename(hoveredProject.path) ?? hoveredProject.path}</strong>
               <button
@@ -885,7 +908,7 @@ export function Workbench({
                 type="button"
                 aria-label={pinnedProjectKeys.has(hoveredProject.path) ? '取消置顶项目' : '置顶项目'}
                 aria-pressed={pinnedProjectKeys.has(hoveredProject.path)}
-                title={pinnedProjectKeys.has(hoveredProject.path) ? '取消置顶' : '置顶项目'}
+                data-tooltip={pinnedProjectKeys.has(hoveredProject.path) ? '取消置顶' : '置顶项目'}
                 onClick={() => togglePinnedProject(hoveredProject.path)}
               >
                 <Icon name={pinnedProjectKeys.has(hoveredProject.path) ? 'pin-filled' : 'pin'} />
@@ -893,14 +916,14 @@ export function Workbench({
             </div>
             <div className="project-hover-card-stats">
               <div className="project-hover-stat">
-                <span className="project-hover-stat-icon" aria-hidden="true"><Icon name="messages" /></span>
+                <span className="project-hover-stat-icon" aria-hidden="true"><Icon name="messages" size="sm" /></span>
                 <span>Session</span>
                 <strong>{hoveredProject.path === activeProjectKey
                   ? sessions.length
                   : sessionCountsByProjectRef.current.get(hoveredProject.path) ?? hoveredProject.sessionCount ?? 0}</strong>
               </div>
               <div className="project-hover-stat">
-                <span className="project-hover-stat-icon" aria-hidden="true"><Icon name="unread" /></span>
+                <span className="project-hover-stat-icon" aria-hidden="true"><Icon name="unread" size="sm" /></span>
                 <span>未读</span>
                 <strong>{hoveredProject.unreadCount ?? 0}</strong>
               </div>
@@ -908,7 +931,9 @@ export function Workbench({
           </div>
           <div className="project-hover-card-path">
             <span>项目路径</span>
-            <code title={hoveredProject.path}>{hoveredProject.path}</code>
+            <code data-tooltip={hoveredProject.path} data-tooltip-variant="mono">
+              {hoveredProject.path}
+            </code>
           </div>
         </aside>,
         document.body
@@ -943,6 +968,31 @@ function sessionLifecycleLabel(status: KernelState['runtime']['status']): string
   if (status === 'running') return '正在处理'
   if (status === 'stopping') return '正在收尾'
   return null
+}
+
+function SessionSpinner({
+  status,
+  label
+}: {
+  status: KernelState['runtime']['status']
+  label: string
+}): React.JSX.Element {
+  const [animationDelay] = useState(
+    () => `${-(Date.now() % SESSION_SPINNER_DURATION_MS)}ms`
+  )
+  return (
+    <span
+      className={`session-lifecycle-indicator ${status}`}
+      role="status"
+      aria-label={label}
+    >
+      <span
+        className="session-spinner-visual"
+        style={{ animationDelay }}
+        aria-hidden="true"
+      />
+    </span>
+  )
 }
 
 function runtimeContextActionStatus(action: string | null): string | null {

@@ -24,10 +24,18 @@ export type IconName =
   | 'skills'
   | 'stop'
 
-export function Icon({ name }: { name: IconName }): React.JSX.Element {
+export type IconSize = 'sm' | 'control' | 'lg'
+
+type IconProps = {
+  name: IconName
+  size?: IconSize
+}
+
+export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
+  const sizeToken = `var(--icon-size-${size})`
   const common = {
-    width: 'var(--icon-size-control)',
-    height: 'var(--icon-size-control)',
+    width: sizeToken,
+    height: sizeToken,
     viewBox: '0 0 24 24',
     fill: 'none',
     xmlns: 'http://www.w3.org/2000/svg',

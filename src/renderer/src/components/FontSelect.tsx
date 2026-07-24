@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 
 import { Icon } from './Icon'
 import { useViewportPopoverPosition } from './useViewportPopoverPosition'
+import './selection-control.css'
 import './font-select.css'
 
 type FontSelectProps = {
@@ -186,7 +187,7 @@ export function FontSelect({
       >
         <span className="font-select-value">{selectedLabel}</span>
         <span className="font-select-chevron" aria-hidden="true">
-          <Icon name="chevron-down" />
+          <Icon name="chevron-down" size="sm" />
         </span>
       </button>
 

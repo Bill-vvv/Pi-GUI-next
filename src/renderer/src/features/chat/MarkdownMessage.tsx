@@ -106,7 +106,7 @@ function ExternalLink({
       href={href}
       rel="noreferrer"
       target="_blank"
-      title={title}
+      data-tooltip={title}
       onClick={(event) => openExternalLink(event, href)}
     >
       {children}
