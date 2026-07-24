@@ -109,17 +109,17 @@
 ## D-014 — 首轮语义名称使用隔离的 Pi metadata 请求
 
 - 日期：2026-07-22
-- 状态：Accepted；澄清 D-003 和 D-012 的单一 Runtime 集成边界
+- 状态：Accepted；澄清 D-003 和 D-012 的外部 Pi Runtime 集成边界
 - 决策：新 Session 的首轮进入 `agent_settled` 且 canonical pointer 已落盘后，由 Electron Main 启动一次短生命周期的 `pi --print --no-session` 请求，使用活动 Session 的 provider/model 与 Pi 已有认证生成目的导向的名称。该请求禁用 tools、extension、skill、prompt template、theme 和项目 context，不创建或恢复 Session；结果只通过现有 typed `set_session_name` 路径写回。切换、停止、崩溃或用户手动 `/name` 时取消请求。
 - 原因：Pi 0.80.10 RPC 没有独立的标题接口；复用活动 `prompt` 会污染对话事实源，内嵌 `AgentSession` SDK 会建立第二套 provider/auth 与生命周期边界。隔离的无 Session CLI 请求可以复用 Pi 管理的认证，同时不改写对话。
-- 影响：D-003 的单一活动 `RuntimeHost` 和 D-012 的“不内嵌 AgentSession、不并行 RPC client”保持不变；Electron Main 额外拥有一个有界、可取消、仅生成 metadata 的 Pi 子进程。生成失败时 Session 保持未命名，不复制首条消息做伪语义 fallback；已有未命名 Session 在下次恢复时补生成。
+- 影响：D-003 的 Electron Main 单一 control plane 与外部 Pi RPC 集成路径保持不变；D-017 生效后，每个 Session Runtime context 各自拥有 `RuntimeHost`。D-012 的“不内嵌 AgentSession、不并行 RPC client”继续成立。Electron Main 额外拥有一个有界、可取消、仅生成 metadata 的 Pi 子进程。生成失败时 Session 保持未命名，不复制首条消息做伪语义 fallback；已有未命名 Session 在下次恢复时补生成。
 
 ## D-015 — 自动命名模型按授权目录选择并允许用户覆盖
 
 - 日期：2026-07-22
-- 状态：Accepted；替代 D-014 中“使用活动 Session 的 provider/model”的模型选择规则
-- 决策：自动模式只在 Pi `get_available_models` 返回的目录中、当前活动 provider 内按 `gpt-5.4-nano`、`gpt-5.4-mini`、`gpt-5.6-luna` 的顺序选择低成本模型，并使用 `--thinking off`；没有这些模型时保持未命名，不回退到活动的高成本模型。用户可在设置中选择自动、关闭或指定目录中的任一已授权 provider/model。
-- 原因：标题生成是短文本目的归纳，不需要主对话模型的能力和 reasoning 成本；同时 OAuth 与 API key 用户可用的 provider/model 不同，不能硬编码本机 provider，也不能要求第二份凭据。
+- 状态：Accepted；替代 D-014 中“使用活动 Session 的 provider/model”的模型选择规则；2026-07-24 修订写回所有权与候选顺序
+- 决策：自动模式只在 Pi `get_available_models` 返回的目录中、当前活动 provider 内按 `gpt-5.4-nano`、`gpt-5.4-mini`、`gpt-5.3-codex-spark`、`gpt-5.6-luna` 的顺序选择低成本模型，并使用 `--thinking off`；没有这些模型时保持未命名，不回退到活动的高成本模型。用户可在设置中选择自动、关闭或指定目录中的任一已授权 provider/model。自动命名请求归属于对应 Session 的 Runtime context：切换前台对话不得取消或丢弃已发起的命名结果，成功后仍通过 `set_session_name` 与导航指针持久化写回。
+- 原因：标题生成是短文本目的归纳，不需要主对话模型的能力和 reasoning 成本；同时 OAuth 与 API key 用户可用的 provider/model 不同，不能硬编码本机 provider，也不能要求第二份凭据。多 Runtime 并行后，若仍把“保持前台 active”作为写回条件，会在用户切换对话时静默丢掉标题。
 - 影响：Pi 继续独占 OAuth token、API key 与刷新流程；GUI config v3 只保存命名模式及可选 provider/model ID，不保存认证材料。指定模型在当前目录不可用时 Fail Fast；运行期间修改设置会取消旧命名请求，失败或无低成本候选时 Session 保持未命名。
 
 ## D-016 — 自定义 Provider/Model 直接编辑 Pi 官方配置并显式测试
@@ -137,3 +137,35 @@
 - 决策：Workbench Kernel 按 Project/Session 管理独立 `RuntimeContext`。多个 Pi RPC Runtime 可以同时运行；Renderer 继续只展示当前 Session 的完整投影，并通过 Session summary 展示后台 `starting/ready/running/stopping/crashed` 状态。
 - 原因：旧 Pi GUI 已具备多个 `runtimeId` 共存的 RuntimeSupervisor；新项目从零重建时把多 Project/Session 收缩为只可切换，造成用户在一个对话运行时无法继续下一个对话。这是核心工作台能力回退，不应继续作为产品边界。
 - 影响：切换 Project/Session 或新建对话不再停止其他 Runtime；命令与事件必须按 context 路由；归档只停止目标 Session；应用退出必须尝试收口全部 Runtime。Pi session 文件仍是 Conversation 事实源，Electron Main 仍是唯一子进程 owner，不恢复旧 GUI server、WebSocket、SQLite 或 launcher/mirror 拓扑。
+
+## D-018 — 文件使用 TUI 上下文语义，图片使用 Pi RPC 原生内容块
+
+- 日期：2026-07-23
+- 状态：Accepted；扩展 D-003 的 typed RPC 映射和 D-004 的 Conversation 事实源边界
+- 决策：Composer 选择、拖放或粘贴的普通文件按 Pi 0.80.10 TUI 的 `<file name="…">…</file>` 语义加入消息文本；图片经过与 TUI 相同的尺寸和 inline payload 边界处理后，作为 `prompt`、`steer`、`follow_up` 的原生 `images?: ImageContent[]` 发送。GUI 不把图片伪装为路径文本，也不建立独立上传服务。
+- 原因：Pi RPC 已原生接受 `{ type: "image", mimeType, data }`，当前 GUI 的 string-only adapter 丢失了这一能力；RPC server 又不会自动展开 `@文件`，因此普通文件必须由 GUI 在明确文件访问边界内预处理。
+- 影响：Main 原生选择器拥有按用户选择读取文件和处理图片的权限；Renderer 仅可处理用户显式拖放或粘贴得到的 DOM `File`。Pi session 保存完整消息与图片块，Kernel/Renderer 只展示不含正文和 base64 的附件摘要；不新增附件数据库、云存储、任意路径读取或第二条 runtime。
+
+## D-019 — 普通文件采用交互式 TUI 的路径引用语义
+
+- 日期：2026-07-24
+- 状态：Accepted；替代 D-018 中普通文件内联 `<file>` 正文的决定，图片原生 `ImageContent` 决定不变
+- 决策：Composer 选择或拖放的普通文件只在消息前加入交互式 TUI 同语义的 `@路径`；GUI 不读取、复制或发送文件全文。Agent 需要内容时使用 Pi 原生 `read` 工具，文本输出按 2,000 行或 50 KiB 截断，并可按 offset/limit 继续。图片仍经过尺寸和 inline payload 边界处理后作为 `prompt`、`steer`、`follow_up` 的原生 `images?: ImageContent[]` 发送。
+- 原因：Pi 的 CLI 启动参数 `pi @file` 会预展开全文，但交互式 TUI 的 `@` 补全只插入路径，提交时不读取文件。GUI 面向交互输入，应参考后者；复制 CLI 启动参数语义会让大文本在首条消息中占满上下文。
+- 影响：普通文件不经过 Renderer/IPC/RPC 正文传输，附件 chip 与历史投影只是路径引用摘要；Main 文件选择和 Renderer 拖放只读取用于图片区分的小段签名头。模型按需读取的片段仍进入上下文，但不会默认一次注入整个文件；图片保持原生多模态输入，不增加上传服务或附件存储。
+
+## D-020 — GUI 承载 Pi 原生项目资源信任，不定义工具权限
+
+- 日期：2026-07-24
+- 状态：Accepted；替代 D-006 中“GUI 不传递或承载任何 Project trust 决定”的部分，保留“不定义项目执行信任等级”的原则
+- 决策：当 Project 存在 Pi 项目级设置、Package、Extension、Skill、Prompt、Theme、系统提示或 `.agents/skills`，且 Pi 没有可继承的既有决定时，GUI 在首个 Runtime 启动前承载与 Pi TUI 相同的项目资源信任提示。持久决定只由 Pi 的 `ProjectTrustStore` 写入 `trust.json`；仅本次决定只作为该 Runtime 的启动输入。GUI 不建立 trust schema，不把决定解释成文件、Shell 或工具执行权限。
+- 原因：非交互 RPC 无法显示 TUI 提示；在默认 `ask` 且没有既有决定时会静默忽略项目资源。完全不承载提示会让项目 Extension、Skill 和配置在 GUI 中无解释地失效，而重新引入自有 trusted/untrusted 等级又会重复 D-006 已纠正的语义错误。
+- 影响：Renderer 只接收项目路径、风险说明和可选动作，不直接读写 `trust.json`。取消提示即取消 Runtime 启动；已有决定和父目录决定不重复询问。决定变化只对新建或手动 reload 的 Runtime 生效，不静默重启正在运行的 Session，也不显示常驻“可信/受限”徽标。
+
+## D-021 — 登录退出复用已验证 Pi 安装的公开认证 SDK
+
+- 日期：2026-07-24
+- 状态：Accepted；澄清 D-003、D-012 和 D-016 的 SDK、credential 与 Runtime 边界
+- 决策：S15 的 Provider login/logout 由 Electron Main 动态加载当前已通过精确版本校验的 Pi 安装所公开的认证 SDK；只调用 Provider 发现、登录、退出和凭证状态接口，不创建进程内 `AgentSession`，不替换外部 Pi RPC Runtime，也不把完整 Pi Coding Agent 或 Provider SDK 复制进 AppImage。无法从当前 Pi 安装加载公开接口时明确报告认证能力不可用，不使用私有 deep import 或直接改写 `auth.json`。
+- 原因：不同 Provider 的 OAuth、设备码、授权码和 API Key 流程由 Pi 统一实现，GUI 自行复制会产生第二套认证逻辑和凭据风险；把完整 SDK 依赖闭包打入 Electron 又会显著增加产物并可能与系统 Pi 版本漂移。认证控制操作不需要改变现有 Session Runtime 拓扑。
+- 影响：token、refresh token 和 API Key 原文始终由 Pi 管理，不进入 Renderer、Kernel state、日志或 GUI config。Renderer 只显示 Provider、认证来源、设备码/授权说明和成功失败状态。认证变化后刷新凭证与模型目录，但不静默切换模型或重启 Session；受影响的 Session 需要用户显式 reload 后才使用新凭证。

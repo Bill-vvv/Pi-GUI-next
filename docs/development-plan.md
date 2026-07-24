@@ -1,8 +1,8 @@
 # Pi GUI 开发计划
 
 > 当前阶段：P2 — Workbench Foundation
-> 计划版本：4.8
-> 最后更新：2026-07-23
+> 计划版本：5.6
+> 最后更新：2026-07-24
 > 总体状态：In Progress
 > 当前 Slice：S14 — 优化（In Progress）
 
@@ -446,6 +446,8 @@ P1 完成后进入 P2。P2/P3 的当前路径见下一节；后续调整继续�
 
 P2 先用一个短 Slice 固定结构，再实现基础功能，随后在真实功能上完成视觉与交互优化。布局、Project/Session 导航和对话流属于结构设计；icon、视觉细节和动效不在结构确定前完整精修。
 
+下表中的 S8–S13 描述保留各 Slice 当时的验收边界和发布证据；其中“单活动 Runtime”属于历史事实，已由 D-017 和 S14-32 替代，不再是当前实现或后续验收要求。
+
 | Slice | 目标 | 状态 | 主要工作与边界 |
 | --- | --- | --- | --- |
 | S8 | Workbench 信息架构与状态模型 | `Complete` | 形成 `p2-workbench-structure.md`：确定主布局、Project/Session 导航、对话流、Composer 与 slash command 入口，明确 identity、事实源、typed command 与单活动 Runtime 切换顺序；低保真 Renderer 已通过 typecheck/build、真实 Electron 折叠/展开诊断复核和用户确认，不做最终视觉精修 |
@@ -455,7 +457,8 @@ P2 先用一个短 Slice 固定结构，再实现基础功能，随后在真实�
 | S12 | UI 视觉收敛 | `Complete` | 真实构建版通过隔离 XDG 的 ProjectStore/WorkbenchKernel 载入 2 个 Project、3 个 Session，切换后只显示目标 Project 的 Session；真实 Pi 0.80.10 启动到 ready 并展示 `/new`、`/model`、`/thinking`、`/compact`、`/name` catalog；slash menu 位于 Composer 上方且无溢出，Header/流内诊断不覆盖 Timeline；109 项 core tests、`pnpm typecheck`、生产 build、diff check 通过 |
 | S12.5 | 重复职责解耦 | `Complete` | 审计当前实现后只收敛跨模块高重复且存在语义漂移风险的纯逻辑：Main 通用 record guard、错误文本归一化、Project Session pointer 类型与 upsert，以及 Renderer Runtime 状态判定；不按文件大小拆分，不为单次逻辑增加函数、类或中间层；109 项 core tests、`pnpm typecheck`、生产 build 和 diff check 通过 |
 | S13 | 交互优化与 P2 发布证据 | `Complete` | 完成低成本可配置的 Session 语义命名、Tab/Arrow slash 补全与 combobox 语义、Runtime context action 成功后的 Composer 焦点恢复、Project/Session 切换反馈、Kernel 连接重试以及空对话与无详情 crash 状态；候选 `fe1e559` 的 AppImage 通过 17 步 P1 回归与 P2 双 Project、双 Session、slash command、单 Runtime 和交互链路，schema v2 脱敏报告与六张截图位于 `release/evidence/2026-07-22T03-37-46-614Z-fe1e559bca43/` |
-| S14 | 优化 | `In Progress` | 不预先拆分具体计划；按实际使用中发现的零散交互问题逐项优化；三十五项已实现并通过定向验证，另有一项协议适配待后续处理 |
+| S14 | 优化 | `In Progress` | 不预先拆分具体计划；按实际使用中发现的零散交互问题逐项优化；四十项已实现并通过定向验证，另有一项协议适配待后续处理 |
+| S15 | TUI 日常能力补齐 | `Pending` | 按逐项确认的产品边界补齐 Session Fork、归档即时补救、精简 HTML 导出、回复复制、`@` 文件搜索、项目资源信任、当前 Session reload、凭证登录/退出、GUI 快捷键、Session 统计和自动压缩状态；不照搬 Tree、Clone、CLI/headless、工具控制或完整生态管理 |
 
 P2 最初把“多 Project、多 Session”限定为可保存、发现和切换。2026-07-23 用户确认并行是旧版已有且当前必须恢复的核心能力后，D-017 替代该限制：Workbench Kernel 现在按 Session 管理独立 Runtime context，允许多个 Pi Runtime 并行，同时保持 Electron Main 单一 control plane。
 
@@ -493,13 +496,62 @@ P2 最初把“多 Project、多 Session”限定为可保存、发现和切换�
 | S14-26 | 思考强度能力语义 | 按 Pi 0.80.10 的 `getSupportedThinkingLevels` 规则解释稀疏 `thinkingLevelMap`：基础档位缺失时仍可用、显式 `null` 才隐藏，`xhigh`/`max` 需显式声明；GUI contract 与 IPC 支持完整七档 | 已完成 |
 | S14-27 | 模型子菜单方向 | 点击主菜单底部模型行后，以独立顶层浮层从右侧展开模型列表；右侧空间不足时才向左避让，主菜单高度保持不变，并保留外点收起、分层 Escape 与打开聚焦 | 已完成 |
 | S14-28 | 强调色与透明度 | 外观页增加琥珀、蓝、绿、紫、玫红五种强调色和 0–40% 面板透明度；选择即时作用于统一 token，并经 Kernel 与 XDG config v7 持久化；旧 v4–v6 配置使用默认强调色与透明度迁移 | 已完成 |
-| S14-30 | 模型设置真实性 | Provider 与 Model 选择行只保留选择本身；Provider 模型详情分开显示 `models.json` 的已保存配置与 `/models?client_version=` 的只读目录信息，远端目录不进入编辑草稿或写回配置；凭据状态同时识别 Pi `auth.json` 与 Provider 内联 `apiKey`，不再误报现有凭据；模型能力使用三态设置，底部无效说明已删除 | 已完成 |
+| S14-30 | 模型设置真实性 | Provider 与 Model 选择行只保留选择本身；Provider 标准 `/models` 提供模型 ID 与 `owned_by`，GUI 再使用固定 Pi 0.80.10 对应的原生 Provider 定义取得 Pi-compatible 的名称、上下文、最大输出和输入能力，并在 Runtime 建立前同步进 `models.json`；详情只展示一套实际模型参数，不再把 Codex-client 目录的 372K 与 Pi 生效值并列；凭据状态同时识别 Pi `auth.json` 与 Provider 内联 `apiKey` | 已完成 |
 | S14-29 | 工作过程密度 | 将既有工具三级扩展为统一工作过程三级：紧凑档实时只保留一行轮换状态；标准档保留首段有效 thinking 并在下方轮换单行状态；详细档继续展示完整 thinking 与工具时序。三档完成后都收进“已处理”，完整记录始终可展开 | 已完成 |
 | S14-31 | Thinking 摘要识别 | 纠正标准档按“第一段 thinking”保留正文的错误理解：从 Pi `thinkingSignature.summary` 投影显式摘要标记；摘要 thinking 只进入折叠过程，commentary 与非摘要 thinking 才保留在实时正文。活动状态只认最后一项真实运行内容，已完成摘要不再持续显示“正在思考”或自动展开 | 已完成 |
 | S14-32 | 多对话并行恢复 | 将单一全局 Runtime ownership 改为按 Project/Session 隔离的 Runtime context；运行中的对话可留在后台并继续接收事件，用户可立即新建或切换其他对话。Session summary 展示各自运行状态；归档只停止目标 Runtime，应用退出收口全部 Runtime | 已完成 |
 | S14-33 | 思考正文排版稳定 | commentary 与非摘要 thinking 在流式、完成和展开状态统一使用正文大小与行高；状态只通过动效、标题、颜色和最终折叠变化，不再因进入过程层而缩小并重新换行 | 已完成 |
 | S14-34 | 状态动效 | Project 行按真实 Runtime context 汇总进行中的对话数量；Session 行以启动、处理、收尾三段生命周期轨迹替代无限转圈；thinking 使用独立短波形呼吸，并在减少动态效果偏好下静态展示。不伪造百分比、剩余时间或后端未提供的子阶段 | 已完成 |
 | S14-35 | Session 圆形动效纠正 | Session 运行指示恢复常规圆形，不再使用三段轨迹；圆内使用渐变弧、前端光点和非匀速转动，starting/running/stopping 只调整节奏与强调度。Project 汇总和 thinking 动效保持不变 | 已完成 |
+| S14-36 | 图片与文件输入 | Composer 支持系统多选、文件拖放和剪贴板图片/文件；普通文件按 Pi 交互式 TUI 的 `@路径` 语义引用，由 Agent 使用原生 `read` 按需分段读取，不把全文塞进首条 prompt；图片按 Pi 0.80.10 原生 `ImageContent` 进入 prompt、steer 与 follow-up；大图遵循 2000×2000 和 4.5 MiB 边界，历史投影只展示附件摘要 | 已完成 |
+| S14-37 | 运行状态归属 | Session 行只显示自身 Runtime context 的 starting/running/stopping 状态；启动目标 Session 时不再把顶层 Runtime 状态误挂到上一个 Session，启动失败清理临时归属；Project 后台任务汇总语义不变 | 已完成 |
+| S14-38 | 发送后交互锁定 | prompt、steer 与 follow-up 只等待各自 Pi RPC 响应，不再占用 Renderer 的全局导航互斥；Composer 派发后立即清空已提交草稿并保持可编辑，失败时仅在仍停留原对话且没有新草稿时恢复；其他 Project/Session 生命周期动作继续串行 | 已完成 |
+| S14-39 | Session 时间与手动排序优先级 | Session 默认按 JSONL 最近活动时间倒序，最新活动在前、未知时间置后且同时间稳定；保留 Session 拖拽，首次拖拽后该 Project 的持久化手动顺序优先于时间排序，XDG session state v5 记录手动排序标记并从 v1–v4 安全迁移；Project 手动排序保持不变 | 已完成 |
+| S14-40 | 对话流时序与可读性 | 默认标准档保留 commentary / 非摘要 thinking 主阅读线，将摘要 thinking 与工具按原始顺序收进同一个轮换状态并支持展开；工具隐藏无价值的成功耗时，过程样式移除默认时间线节点和紧凑汇总卡片感，最终回答继续位于完成过程之外 | 已完成 |
+| S14-41 | 职责边界审计 | 将跨 feature 装配的 Workbench 移回 Renderer composition 层；工作过程密度定义收敛为三个真实调用点共享的纯工具；单消费者 Runtime 状态判定回收到 Composer；同步区分多 Runtime 当前边界与 S8–S13 单 Runtime 历史证据，不拆分仍内聚的大文件或引入通用中间层 | 已完成 |
+
+#### S15 — TUI 日常能力补齐
+
+目标：
+
+- 补齐 GUI 日常替代 TUI 时仍然明显缺失、且已有真实产品价值的能力。
+- 继续使用 Pi Session、RPC、配置和认证作为事实源；Renderer 不模拟 Pi 内部状态。
+- 每项能力只实现已经逐项确认的最小 GUI 语义，不把 CLI、TUI 组件或后续生态平台整体搬入桌面端。
+
+实施顺序：
+
+| 阶段 | 范围 | 明确边界 |
+| --- | --- | --- |
+| S15-1 Session 操作 | 历史用户消息支持 Fork；新 Session 自动登记并切换，选中的原消息回填 Composer。归档后显示约 5 秒提示，提供“撤销”和保持归档的临时只读“查看” | 不实现 Clone、完整 `/tree`、同文件 leaf 切换、branch summary、归档中心、永久删除或批量管理；临时归档预览不启动 Runtime，离开后不可再次进入 |
+| S15-2 阅读与导出 | 导出当前活动分支的离线可阅读 HTML，只含用户消息、Assistant 最终回答、Markdown、代码块和图片；逐条复制 Assistant 最终回答的原始 Markdown；Session 行 tooltip 显示可用的文件路径、ID、消息数、Token 和累计成本；上下文 tooltip 增加 Pi 记录费用 | 导出不含其他分支、JSONL、thinking/commentary、工具参数/输出/diff、system prompt、工具定义、完整项目路径或费用统计；不实现导入、外部分享和完整 Session 档案导出 |
+| S15-3 Composer 与命令 | Composer 输入 `@` 时模糊搜索当前 Project 的文件和目录，只插入 `@relative/path`，不读取或内嵌文件；内建目录增加 typed `/fork`、`/reload`、`/export`、`/copy` | 不增加普通路径 Tab 补全、`!`/`!!` Shell 输入、外部编辑器；`/export` 始终使用系统保存对话框，Slash 文本不直接传给 Pi |
+| S15-4 项目资源与 Runtime | 在首个 Runtime 启动前承载 Pi 原生 Project trust 提示，决定继续由 Pi `trust.json` 或本次 Runtime 参数管理；`/reload` 只受控重启并恢复当前 settled Session，重新获取命令、模型和资源目录 | trust 不是工具权限，不建立 GUI trust schema 或常驻徽标；资源变化不静默 reload，不监听文件变化，不中断其他后台 Session |
+| S15-5 凭证 | 设置新增独立“凭证”页：按 Provider 展示 OAuth/API Key 状态并由 Pi 公开 SDK 驱动登录、退出；现有自定义 Provider 配置迁入同页独立分区。认证变化后刷新凭证与模型目录，并标记受影响 Session 需要 reload | OAuth 是 Provider 的认证方式，不是独立 Provider；token、refresh token 和 API Key 原文不进入 Renderer；不静默切换模型或重启 Session；只动态复用已通过版本校验的 Pi 安装公开 SDK，不把完整 Pi/Provider SDK 打进产物，不使用私有 deep import |
+| S15-6 桌面效率与生命周期 | 设置新增 GUI 原生快捷键页，支持有限应用级动作、冲突检测、清除和恢复默认值；自动压缩开始时显示“正在整理上下文”，结束后刷新 Conversation 与使用量，失败或取消给出提示 | 文本编辑、输入法、Tab、Enter/Shift+Enter、Escape、复制粘贴等基础按键不可重映射；不兼容 TUI `keybindings.json`；压缩继续使用 Pi 默认模型、提示词和参数，不增加高保真压缩、独立压缩模型、二次审查或测评工具 |
+
+快捷键首期只覆盖新建对话、聚焦 Composer、打开设置、打开模型选择器、reload 当前 Session、前后 Project、前后 Session、归档当前 Session 和复制最后一条 Assistant 回答。破坏性操作默认不绑定；其余默认组合必须避开操作系统、Electron 和文本编辑保留键，并在实现时作为一张固定表接受复核。
+
+验收：
+
+1. Fork 只接受当前活动分支中的真实用户消息 ID；原 Session 不变，新 Session 使用 Pi 生成的独立文件与身份，且不继承 GUI 归档或排序私有状态。
+2. 归档提示、撤销和临时只读查看在多 Runtime 下只影响目标 Session；提示自动消失、离开预览和应用重启都不会把归档 Session 暗中恢复。
+3. HTML 导出与复制结果符合精简内容边界，不包含 thinking、工具过程、废弃分支或隐藏元数据；写入只发生在用户通过系统对话框选择的路径。
+4. `@` 搜索只遍历当前 Project，遵守忽略规则并排除 `.git`；选择后只插入相对路径，发送前后均不读取普通文件正文。
+5. 未保存 trust 决定且存在项目资源时必须提示；持久和仅本次决定都与 Pi TUI 语义一致。取消不启动 Runtime，修改决定不静默重启已有 Runtime。
+6. reload 保持同一 Project、Session、Conversation 和 Composer 草稿，只重启目标 Runtime；失败保留可恢复的 Session，并明确进入 error/crashed 状态。
+7. 至少一条 Pi 公开认证流程可在 GUI 完成 login/logout；Renderer、Kernel state、日志和错误中均不出现 credential 原文。认证变化不会影响正在生成的回复，也不会静默切换模型。
+8. 快捷键冲突不能保存，菜单、弹窗和输入法优先于应用级快捷键；清除和恢复默认值经 XDG config 持久化。
+9. 手动与自动压缩事件不会被误判为 `agent_settled`；压缩完成后 Timeline、上下文占用和累计统计一致，失败时保留压缩前投影。
+10. 定向 core tests、`pnpm typecheck`、生产 build、真实 Pi 0.80.10 smoke 和最终 AppImage 核心链路通过；发布报告继续脱敏，不记录 prompt、工具输出、导出正文或 credential。
+
+明确延后或不做：
+
+- 完整 `/tree`、Clone、branch summary、归档中心、永久删除、JSONL 导入/导出和外部分享。
+- 普通路径补全、Shell 快捷输入、外部编辑器、scoped models、模型循环和任意工具 allowlist/exclude。
+- 队列取回、删除、编辑、转换和排序继续等待 Pi typed queue mutation RPC，不在 Renderer 伪实现。
+- Skill、Prompt Template、Package 逐资源管理和 Extension UI 继续由 P3 或专门 Slice 规划；纯净模式不加载第三方 Extension，增强模式的官方 Extension UI RPC 适配不进入 S15。
+- CLI/headless、print/json、管道输入、无持久化 Session、自定义 Session 目录和启动参数表单不是 GUI 产品目标。
+- 高保真压缩与压缩测评后续单独优化；S15 只完成 Pi 默认压缩的状态和投影适配。
 
 #### S12.5 — 重复职责解耦
 
@@ -530,7 +582,7 @@ P2 最初把“多 Project、多 Session”限定为可保存、发现和切换�
 
 P2 只有同时满足以下条件才可完成：
 
-1. 多个 Project 可保存和切换，且任一时刻只有一个明确的活动 Runtime owner。
+1. 多个 Project 可保存和切换；Runtime 按 Session 隔离并可并行运行，每个 Runtime 都有唯一 owner，Renderer 同一时间只展示当前选中 Session 的完整投影。
 2. 每个 Project 下可创建、列出、切换和恢复多个 Session。
 3. 当前支持的 Pi 日常命令与 slash command 在 GUI 中可发现、可执行，并能区分命令来源与执行路径。
 4. 布局、对话流、icon 和基础交互经过真实工作流验证，不再依赖 P1 的单 Project/单 Session 占位结构。
@@ -642,6 +694,14 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-23 | S14 思考正文排版稳定 | 移除过程层对 commentary 和 thinking 正文的 `text-control/line-meta` 缩小覆盖，统一使用 `text-body/line-body`；流式正文被识别为过程内容后不再重新换行和跳动，完成态继续依靠低强调颜色与整体折叠收敛。生产 build 与定向 diff check 通过 | S14 保持 In Progress；用真实长段流式 commentary 复核完成瞬间的滚动与换行稳定性 |
 | 2026-07-23 | S14 状态动效 | Project 摘要增加由真实多 Runtime context 派生的进行中 Session 数量，后台 Project 状态变化也会刷新前台；Session 无限转圈改为启动、处理、收尾三段轨迹，thinking 改为独立短波形呼吸，并补齐 reduced-motion 静态表现。69 项 Kernel 定向测试、`pnpm typecheck`、生产 build 与定向 diff check 通过 | S14 保持 In Progress；在后续真实长任务中观察多 Project 并行与 thinking 动效节奏 |
 | 2026-07-23 | S14 Session 圆形动效纠正 | 按用户反馈撤回 Session 三段轨迹，恢复圆形轮廓；使用由弱到强的渐变弧、前端光点与带节奏变化的旋转替代单根边框匀速转圈。Project 活动数量和 thinking 短波形均未修改。`pnpm typecheck`、生产 build 与定向 diff check 通过 | S14 保持 In Progress；在真实并行对话中观察圆弧运动质感 |
+| 2026-07-23 | S14 图片与文件输入 | 对照本机 Pi 0.80.10 TUI/RPC 源码补齐附件链路：系统多选由 Main 读取，拖放和剪贴板由 Renderer 显式读取；文件包装为 `<file name="…">…</file>`，图片经过尺寸/体积处理后以原生 `images` 发送，Conversation 恢复与运行中队列只投影附件摘要。173 项 core tests、`pnpm typecheck`、生产 build 与 `git diff --check` 通过 | S14 保持 In Progress；下一次 AppImage 候选从真实 Composer 复核选择、粘贴、拖放及支持图片的 Provider 请求 |
+| 2026-07-23 | S14 运行状态归属 | 修复目标 Session 启动期间沿用旧 `activeSessionKey`，导致上一条 Session 错误显示转圈的问题；Kernel 按 Runtime context 重算 Session summary，生命周期变化发送完整状态，Renderer 不再用顶层 Runtime 覆盖单条状态，启动失败同步清理临时归属。175 项 core tests、`pnpm typecheck`、生产 build 与 `git diff --check` 通过 | S14 保持 In Progress；后台真实运行的 Session 继续独立显示状态 |
+| 2026-07-24 | S14 文件引用语义纠正 | 进一步核查 Pi 0.80.10 交互式 TUI 后，确认输入框 `@文件` 只插入路径，CLI 启动参数 `pi @file` 才会预展开全文。GUI 普通文件改为 `@路径` 引用，选择与拖放不再读取全文；Agent 按需调用带 2,000 行/50 KiB 截断的原生 `read`。图片继续通过 RPC 原生 `ImageContent` 发送 | 完成全量 core tests、生产构建与 diff check；在真实 Composer 中复核选择、拖放和图片粘贴 |
+| 2026-07-24 | S14 发送后交互锁定 | 修复发送动作沿用全局 `pendingAction`、导致 Pi prompt RPC 返回前 Session 按钮和 Composer 同时禁用的问题；发送类动作改为非全局互斥，Composer 乐观清空已提交草稿并保持焦点，异步失败只在原对话安全恢复。`pnpm typecheck`、生产 build 与 `git diff --check` 通过 | S14 保持 In Progress；后续真实使用中复核跨对话连续发送与失败恢复 |
+| 2026-07-24 | S14 对话流时序与可读性 | 参考成熟 Agent 对话流的信息层级，保留标准档既定的双层阅读结构：commentary / 非摘要 thinking 进入主阅读线，摘要 thinking 与工具在同一个轮换状态中按原始顺序记录并可展开；成功工具不再显示逐项毫秒耗时，过程样式移除默认节点、竖线和紧凑卡片背景。`pnpm typecheck`、生产 build 与 `git diff --check` 通过 | S14 保持 In Progress；在真实长任务中观察过程正文、单行状态与最终回答的阅读节奏 |
+| 2026-07-24 | S14 职责边界审计 | 按实际依赖图复核 Main、Runtime、Renderer 与文档边界；修正 Workbench composition ownership、跨 feature 密度定义和单消费者 Runtime 状态工具，并将 D-017 多 Runtime 当前规则与 S8–S13 历史证据分开。Kernel context 镜像和 Pi-specific RuntimeHost 经异步生命周期与调用面审计后保持现状，不为形式纯度扩大重构。`pnpm typecheck`、生产 build 与 `git diff --check` 通过 | S14 保持 In Progress；下一次候选发布时从真实 AppImage 重跑完整 gate |
+| 2026-07-24 | S14 模型参数生效纠正 | 复核确认 CPA 的 Codex-client 目录把 Luna/Sol/Terra 报为 372K，但固定 Pi 0.80.10 的原生 OpenAI Provider 定义为 272K；Provider Store 改用标准 `/models` 的 `owned_by` 定位 Pi 原生模型定义，并把完整 Pi-compatible 参数同步进 `models.json`。详情收为一套参数；真实 `pi --list-models vvqq-cpa` 已显示 5.6 三模型 272K / 128K / 图片输入 | S14 保持 In Progress；运行中的旧 Pi 进程不热加载配置，新建 Runtime 使用同步后的模型参数 |
+| 2026-07-24 | S15 Planning | 完成当前 GUI 与 Pi TUI 差距的逐项讨论；将确认纳入的 Session、输入、资源信任、认证、快捷键、统计和压缩状态能力收敛为六个有序阶段，并明确 Tree/Clone、CLI、工具控制、队列修改、Extension UI 和高保真压缩等非目标 | S14 仍为当前 Slice；完成 S14 收口后将 S15 改为 Ready，并按 S15-1 至 S15-6 实施 |
 
 ## 17. 计划变更记录
 
@@ -695,3 +755,11 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-23 | 4.6 | 思考过程正文在状态转换前后保持相同排版 | commentary/thinking 进入过程层后使用较小字号，导致完成瞬间重新换行、容器高度变化和滚动跳跃 | 过程正文统一使用正文 token；只保留动效、标题、颜色和折叠层级变化，不修改 conversation contract 或内容分类 |
 | 2026-07-23 | 4.7 | 用真实阶段与项目汇总替代通用加载转圈 | 原 Session 圆环只能表达 `running`，Project 没有后台对话汇总，且导航与 thinking 动效缺少语义区分 | Project 增加非持久化 busy Session 计数；Session 展示 starting/running/stopping 生命周期阶段；thinking 保持消息级独立动效；不扩展百分比或预计完成时间 contract |
 | 2026-07-23 | 4.8 | Session 运行指示恢复圆形并精修圆内运动 | 用户明确问题在原圆形动效的转动形态，不要求改成阶段轨迹；当前 thinking 动效可保持 | Session 仍使用圆形，但改为渐变弧与光点的节奏旋转；Project 汇总、thinking 与 Kernel activity contract 不变 |
+| 2026-07-23 | 4.9 | Composer 原生接入图片与文件附件 | GUI 只有字符串 prompt，既没有 TUI 的文件上下文预处理，也丢弃 Pi RPC 已支持的 `images`，导致支持图片的模型仍只能收到文本 | 文件沿用 TUI 上下文包装；图片贯通 typed IPC、Kernel、Runtime 与 Pi RPC 原生 image block；不建立第二套上传服务、附件数据库或远程存储 |
+| 2026-07-23 | 5.0 | Session 运行状态按 Runtime context 归属 | 启动目标 Session 时，顶层 Runtime 已切换但 `activeSessionKey` 仍按原子提交规则保留旧值，Renderer 因而把目标启动状态显示在上一条 Session 上 | Kernel summary 成为单条状态事实源并在生命周期变化时完整发布；Renderer 不再按旧活动身份覆盖；不改变并行 Runtime、Project 汇总或 Session identity 提交语义 |
+| 2026-07-24 | 5.1 | 普通文件从 CLI `<file>` 全文内联改为交互式 TUI `@路径` 引用 | 前一实现参考了 `pi @file` 启动参数而非交互式输入框，导致大文本在首条 prompt 中占用完整上下文 | 文件正文不再进入附件 contract、IPC 或 RPC；Agent 通过原生 `read` 按需读取并受 2,000 行/50 KiB 输出边界约束；图片原生输入不变 |
+| 2026-07-24 | 5.2 | 发送类动作从全局工作台互斥中解耦 | Pi prompt RPC 的响应等待被 Renderer 当作全局 busy，造成发送后短暂无法切换对话，Composer 也保留已提交文本并禁用输入 | prompt、steer、follow-up 可与其他对话导航并行等待；Project/Session 启动、激活、归档和设置动作仍保持原有互斥边界 |
+| 2026-07-24 | 5.3 | 收敛标准工作过程的双层阅读结构 | 用户要求简单思考与工具继续折叠在同一个轮换内容中，不能因强调时序而让标准档退化成默认逐项展开 | commentary / 非摘要 thinking 保留主阅读线；摘要 thinking 与工具在单一状态 disclosure 内按原始顺序记录；compact 与 detailed 语义、完成态收起、最终回答层级和 Kernel/RPC contract 不变 |
+| 2026-07-24 | 5.4 | 明确当前多 Runtime 与 Renderer composition 所有权 | 复审发现 P2 当前完成门槛和结构文档仍混用已被 D-017 替代的单 Runtime 约束，Workbench 装配也仍位于 Chat feature 内 | 保留 S8–S13 的历史验收记录；当前规则改为按 Session 隔离 Runtime、Renderer 单前台投影；只移动真实 composition owner 和共享纯定义，不改变 IPC/RPC contract、持久化 schema、视觉或交互 |
+| 2026-07-24 | 5.5 | 自定义 Provider 模型改用 Pi-compatible 原生元数据并同步实际配置 | CPA 的 Codex-client 目录 `context_window` 与 Pi custom model 的 `contextWindow` 语义不一致，导致 GUI 展示 372K、Pi 实际退回 128K | 标准 `/models` 只负责模型身份与所有者；固定 Pi 版本的原生 Provider 定义负责 Pi 模型参数，完整值在 Runtime 启动前写入 `models.json`；运行中进程不伪装为已热更新 |
+| 2026-07-24 | 5.6 | 增加 S15“TUI 日常能力补齐”并固定已逐项确认的范围与非目标 | GUI 已覆盖主体工作流，但仍缺 Session 派生、项目资源确认、认证和若干桌面效率能力；直接照搬全部 TUI/CLI 会混淆产品边界 | S15 以六个有序阶段补齐确认项；Pi Session、配置、trust 和 credential 继续作为事实源；Tree/Clone、CLI/headless、工具控制、Extension UI 与高保真压缩不进入本 Slice |

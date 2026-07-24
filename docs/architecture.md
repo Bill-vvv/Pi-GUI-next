@@ -8,7 +8,7 @@ Electron Renderer
 Workbench Kernel (Electron Main)
     -> RuntimeContext[projectPath, sessionFile]
        -> RuntimeHost
-LinuxLocalRuntime（每个活动 Session 一个）
+LinuxLocalRuntime（每个 Session RuntimeContext 一个）
     -> PiRpcClient / strict LF JSONL
 pi --mode rpc
 ```
@@ -60,9 +60,13 @@ Workbench Kernel 将 Pi message content 按原始顺序投影成 `message`、`th
 
 Kernel 在活动开始时记录当前 run 的 entry 起点，并只以 `agent_settled` 结束该边界。Renderer 对活动 run 线性展示 thinking 与工具状态；run settled 后，把 thinking 和工具项折叠到该轮最终回答上方，展开时仍使用原始顺序。文件操作摘要只从有明确结构化路径的工具参数提取，不猜测 `bash` 的文件副作用。
 
+Composer 附件沿 Pi 0.80.10 的交互式 TUI 与 RPC 边界处理：普通文件只把 `@路径` 放入消息，由 Agent 使用 Pi 原生 `read` 工具按需读取；不在首条 prompt 中内联文件正文。`read` 的文本结果遵循 Pi 的 2,000 行或 50 KiB 截断边界，并可用 offset/limit 继续。图片转换为 RPC `images` 中的 `{ type: "image", mimeType, data }`，直接使用原生多模态输入。系统文件选择由 Main 取得路径，显式拖放由 Renderer 通过 Electron `webUtils.getPathForFile` 取得路径；普通文件只读取小段签名头用于区分图片，图片在进入 IPC/RPC 前满足 2000×2000 与 4.5 MiB base64 边界。
+
+Pi session 仍保存完整用户消息和 image content block。Kernel 对 Renderer 只投影文件名、路径和类型摘要，不把附件正文或图片 base64 放入 `KernelState`；恢复历史和实时事件使用同一投影。附件变化不能走纯文本 append patch，必须回退全量状态以避免静默丢失附件。
+
 高频 Pi message、thinking 和 tool update 不重复发送完整 `KernelState`。Kernel 发送 `kernel.state-patched`：新 entry 按 index 插入，append-only 文本和工具输出只发送起始长度与新增后缀；非前缀改写或无法安全增量化时立即退回 `kernel.state-changed` 全量快照。Renderer 按顺序应用 patch，并最多每动画帧提交一次 React state。
 
-Timeline 默认只挂载最近 60 个 settled turn，用户可按 60 轮继续向前展开且保持当前滚动锚点；折叠的工作过程只保留摘要，展开时才挂载 thinking、工具参数与输出正文。
+Timeline 默认只挂载最近 60 个 settled turn，用户可按 60 轮继续向前展开且保持当前滚动锚点；折叠的工作过程只保留摘要，展开时才挂载 thinking、工具参数与输出正文。长对话滚动时，Renderer 只从当前已投影的用户 message 计算顶部阅读轮次，并在原 prompt 离开视口后将其粘着于 Session Header 下；这只是展示投影，不复制或持久化 Conversation 事实。
 
 ## Runtime 状态机
 
@@ -79,6 +83,7 @@ stopped -> starting -> ready -> running -> ready -> stopping -> stopped
 - stdout 只承载 strict LF JSONL；stderr 单独诊断，不能污染 framing。
 - 诊断默认不记录完整 prompt、tool output、环境变量或 credential。
 - Linux PATH、XDG、进程和权限逻辑只能存在于 runtime/main 边界，不进入 renderer 或会话模型。
+- Renderer 不能按任意路径读取文件；只有 Main 原生选择器返回的文件或用户显式拖放、粘贴产生的 DOM `File` 可以进入附件预处理。普通文件正文不经过 Renderer/IPC，路径只用于发给本地 Pi Agent 按需读取。
 - 对话正文使用无 raw HTML 的 CommonMark/GFM AST 渲染；Markdown 图片不自动发起远程请求。
 - 流式 Markdown 按动画帧合并并复用稳定顶层块；未稳定 tail 超过 16,384 字符时停止额外的分块预解析，改由同一 React Markdown 管线整篇渲染，任何长度都不降级为纯文本。
 - Markdown 外链只能由用户点击触发，经受信 IPC sender 校验及 `http:`、`https:`、`mailto:` 协议白名单后交给系统打开。

@@ -2,7 +2,7 @@
 
 > 适用阶段：P2 — Workbench Foundation
 > 当前状态：S8 Complete / Confirmed
-> 最后更新：2026-07-22
+> 最后更新：2026-07-24
 > 2026-07-23 修订：本文中的“单活动 Runtime”是 S8–S10 的历史边界，已由 [`D-017`](decisions.md#d-017--恢复按-session-隔离的多-runtime-并行) 替代；当前实现允许多个 Session Runtime 并行，Renderer 仍保持单一当前投影。
 
 ## 1. 用途
@@ -46,15 +46,16 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 - Session 行负责打开已有 Session；选中的 Project 和 Session 必须有唯一、清晰的选中态。
 - 全局只保留一个“添加 Project”入口。
 - Project path 放在 Project 行的次级信息或 tooltip，不继续占用 Composer 底部。
-- Navigator 只展示已经贯通真实能力的行内操作；Session 归档已在 S14 接入，附件、搜索和其他管理入口仍不得提前展示。
+- Navigator 只展示已经贯通真实能力的行内操作；Session 归档已在 S14 接入，搜索和其他管理入口仍不得提前展示。
 
-#### 3.1.1 导航行命中与拖拽要求
+#### 3.1.1 导航排序与行命中要求
 
-- Project / Session 行同时承载选择、排序和行内操作时，行容器不得常驻原生 `draggable`。只有主行内容收到鼠标主键按下后才临时武装对应行，并在 `pointerup`、`pointercancel` 或 `dragend` 任一路径立即解除。
+- Project 保留手动拖拽排序；Project 行不得常驻原生 `draggable`，只有主行内容收到鼠标主键按下后才临时武装，并在 `pointerup`、`pointercancel` 或 `dragend` 任一路径立即解除。
+- Session 默认由 Kernel 按 `lastActivityAt` 倒序输出，最新活动在前；无可用活动时间的项放在末尾，同时间项保持稳定顺序。用户拖拽后，该 Project 切换为持久化手动顺序，手动顺序优先于后续活动时间变化并在重启后继续生效。
 - 新建、归档等 action slot 不得武装行拖拽；行内按钮必须拥有独立点击边界，阻止其手势进入祖先拖拽流程。
 - action slot 内叠放时间文字、运行指示和操作按钮时，操作按钮必须位于最上层并独占可见区域的指针命中；被隐藏或替换的文字、图标及状态层必须使用 `pointer-events: none`，文字层同时禁止文本选择。
 - `opacity: 0` 只改变绘制结果，不代表元素已经退出 hit testing。任何悬浮切换实现都必须分别核对视觉层、pointer events、文本选择和 stacking order，不能只验证图标是否显示。
-- 排序、单击选择和行内操作必须分别可用：未按下时悬浮只改变操作可见性；从主行按下并移动时才开始排序；从行内按钮按下时始终执行按钮动作。
+- Project / Session 排序、单击选择和行内操作必须分别可用：未按下时悬浮只改变操作可见性；从主行按下并移动时才开始排序；从行内按钮按下时始终执行按钮动作。
 
 ### 3.2 Session Header
 
@@ -68,11 +69,13 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 - 以一次 user turn 和随后一个 agent run 形成可辨识的 turn group。
 - 活动 run 线性展示 thinking 与 tool；settled 后的工作过程摘要与最终回答保持在同一 turn group 内，不作为脱离回答的独立大卡片。
 - 保留按 `toolCallId` 原地更新、最近 60 轮渐进挂载、用户离开底部后停止自动跟随等现有行为。
-- Project 或 Session 选择变化时，Timeline identity 随活动二元组变化，不复用上一 Session 的局部 UI 状态。
+- 当某轮原始用户 prompt 已滚出顶部、该轮回答仍处于顶部阅读位置时，在 Session Header 下粘着该 prompt；下一轮进入顶部阅读位置时自动切换，长内容可展开，附件摘要同步保留，粘着区域高度计入 Timeline 顶部安全区。
+- Project 或 Session 选择变化时，Timeline identity 随活动二元组变化，不复用上一 Session 的滚动、粘着 prompt 和 disclosure 状态。
 
 ### 3.4 Composer 与命令入口
 
-- Composer 在 Runtime `ready` 时使用 Enter 发送普通 prompt；在 `running` 时继续可编辑，Enter 排队 `steer`、Alt+Enter 排队 `follow_up`，同时保留显式按钮、Shift+Enter 换行和 Escape abort。
+- Composer 在 Runtime `ready` 时使用 Enter 发送普通 prompt；在 `running` 时继续可编辑，Enter 排队 `follow_up`、Alt+Enter 排队 `steer`，同时保留 Shift+Enter 换行和 Escape abort。
+- Composer 支持系统多选、拖放和剪贴板附件；普通文件按 Pi 交互式 TUI 的 `@路径` 语义引用，并由 Agent 使用原生 `read` 工具按需读取；图片走 Pi RPC 原生 `images`。两者都适用于 prompt、steer 与 follow-up。
 - 输入 `/` 时，命令菜单在 Composer 上方进入正常交互层；S8 只提供明确指向 S11 的空态，不实现假命令、查询或执行。
 - S11 的命令表区分 GUI 本地命令、typed Pi RPC 命令，以及 Pi `get_commands` 返回的 extension、prompt 和 skill 命令。
 - 不建立一个可绕过 typed Kernel 边界的通用“执行任意命令”IPC。
@@ -93,23 +96,23 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 - 第一个 assistant `message_end` 后等待 Pi 将 JSONL 落盘，再 canonicalize、校验普通文件并持久化；只有全部成功才发布正式 Session identity。落盘失败时不得登记 ghost Session。
 - Session 索引持久化于 XDG state，只保存恢复和导航必需的指针及名称；不复制 Conversation 内容。
 
-### 4.3 活动投影
+### 4.3 当前投影
 
-P2 继续只向 Renderer 投影一个活动 Runtime 和一份活动 Conversation。集合与活动投影分开：
+Workbench Kernel 按 Session 管理多个相互隔离的 RuntimeContext。Renderer 同一时间只展示当前选中 Session 的 Runtime、Session 和 Conversation；后台 Runtime 状态通过 `sessions[]` 摘要展示。集合与当前投影分开：
 
 ```text
 projects[]
 activeProjectKey
 
-sessions[]             # S10 加入；只含导航摘要
-activeSessionKey       # S10 加入
+sessions[]             # 导航摘要，含各 Session 的 Runtime 状态
+activeSessionKey       # 当前选中的 Session
 
-runtime                # 当前活动 Runtime
-session                # 当前活动 Session 的运行态详情
-conversation           # 当前活动 Session 的展示投影
+runtime                # 当前选中 Session 的 Runtime 投影
+session                # 当前选中 Session 的运行态详情
+conversation           # 当前选中 Session 的展示投影
 ```
 
-S9 只加入多 Project 实际需要的 `projects[]` 与 `activeProjectKey`。S10 再加入 Session 集合与选择；不得为了保持旧字段而长期并存两套 Project/Session contract。
+S9 先加入 `projects[]` 与 `activeProjectKey`，S10 再加入 Session 集合与选择；这是历史演进顺序。当前 contract 只保留一套 Project/Session identity 与一份前台 Conversation 投影，不为后台 Runtime 建立第二份 Renderer 事实源。
 
 ## 5. Typed command 演进
 
@@ -137,24 +140,24 @@ S9 只加入多 Project 实际需要的 `projects[]` 与 `activeProjectKey`。S1
 
 ### 6.1 Project 切换
 
-1. 如果 Runtime 为 `running`，拒绝切换并要求先 settled 或显式 abort；`starting` / `stopping` 期间同样拒绝切换。
-2. 在停止当前 Runtime 前，校验目标 `projectKey` 已登记且仍对应 canonical、可读、可执行的目录，并加载其最近 Session 指针作为 resume availability 输入。
-3. 如果存在已启动 Runtime，使用现有受控 stop 语义收口。
-4. 持久化 `activeProjectKey`，再一次性发布目标 Project 的空 Conversation 投影和 resume availability；不把上一 Project 的 Conversation 标成目标 Project。
-5. 持久化失败时保留旧活动 Project identity 和投影，但 Runtime 可以已经安全停止；错误必须显式返回。
-6. 用户显式选择已有 Session 或新建 Session 后再启动 Pi。
+1. 校验目标 `projectKey` 已登记且仍对应 canonical、可读、可执行的目录，并加载该 Project 的 Session 注册表。
+2. 当前 Project 存在运行中的 Session 时仍允许切换；切换不停止或取消其他 Project 的 Runtime。
+3. 持久化 `activeProjectKey` 后发布目标 Project 的 Session 摘要和当前投影；不得把上一 Project 的 Conversation 标成目标 Project。
+4. 目标 Session 已有受管 RuntimeContext 时直接载入该 context；停止状态的历史 Session 可先预览，并在首次实际操作时按需恢复。
+5. 持久化或加载失败时保留明确错误，不创建 ghost Session，也不静默停止后台 Runtime。
 
 ### 6.2 Session 切换
 
-1. 如果 Runtime 为 `running`，拒绝切换并要求先 settled 或显式 abort；`starting` / `stopping` 期间同样拒绝切换。
-2. 校验目标 Session 指针已登记到目标 Project；将 `sessionFile` canonicalize，并确认它是普通、可读文件。
-3. 受控停止当前 Runtime。
-4. 启动新 Pi 进程并 resume；通过 `get_state` 核对 `sessionId`，再通过 `get_messages` 建立候选 Conversation 投影。
-5. 上述步骤和指针持久化全部成功后，才一次性提交 `activeSessionKey`、Session 运行态和 Conversation 投影。
-6. 持久化期间如果 Pi 异常退出，crashed 状态优先；不得在延迟操作返回后重新提交 `ready` 或目标 Session。
-7. 任一步失败都保留明确错误与原活动 Session identity，不把旧 Conversation 标成目标 Session，也不静默新建 Session。
+1. Renderer 先切换可见目标，再异步加载目标 Session；快速连续切换只接受最后一次读取结果。
+2. 目标 Session 已有受管 RuntimeContext 时直接切换当前投影，不停止原 Session 或其他后台 Runtime。
+3. 停止状态的历史 Session 先校验 canonical `sessionFile`、普通文件、可读性和 `sessionId`；浏览不启动 Runtime，首次 prompt 或 command 才按需恢复。
+4. 新 Session 先进入可输入的空白工作区，后台启动 Runtime；首次提交复用同一启动任务。
+5. 失败时保留目标页面并显式展示错误，不把旧 Conversation 标成新目标，也不静默新建 Session。
+6. 只有归档目标 Session、应用退出或用户对目标 Runtime 的显式停止才收口对应 Runtime。
 
-## 7. S8 不实现
+## 7. S8 当时不实现（历史）
+
+以下条目记录 S8 完成时的真实范围；其中单 Runtime 限制已由 D-017 替代，不是当前产品约束。
 
 - 多 Project 或多 Session 的真实持久化与切换。
 - 多 Runtime 并行、后台运行或自动切换。
@@ -164,9 +167,9 @@ S9 只加入多 Project 实际需要的 `projects[]` 与 `activeProjectKey`。S1
 - 最终 icon 资产、完整动效、主题系统或像素级视觉验收。
 - SQLite、插件 registry、通用 transport 或 renderer 侧事实库。
 
-## 8. S8 验收
+## 8. S8 当时验收（历史）
 
-S8 完成前必须满足：
+以下是 S8 当时的完成门槛；“保持单活动 Runtime”只描述历史验收，不适用于当前多 Runtime 实现。
 
 1. 当前 P1 截图和实现已映射到新的 Navigator、Header、Timeline、Composer 四区结构。
 2. Project、Session 和活动 Runtime 的 identity、事实源与持久化边界明确。
@@ -174,7 +177,7 @@ S8 完成前必须满足：
 4. slash command 入口位置与来源分类明确，但产品代码中没有假命令或空插件系统。
 5. 低保真结构经实际界面复核并获得用户确认；未确认前 S8 保持 `In Progress`。
 
-## 9. 当前验证记录
+## 9. S8 验证记录（历史）
 
 - `pnpm typecheck` 通过。
 - `pnpm build` 通过。

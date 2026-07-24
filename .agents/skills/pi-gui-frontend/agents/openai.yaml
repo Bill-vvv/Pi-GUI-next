@@ -1,0 +1,7 @@
+interface:
+  display_name: "Pi GUI Frontend"
+  short_description: "依据项目规范实现、审查并验证 Pi GUI Renderer 前端改动"
+  default_prompt: "Use $pi-gui-frontend to implement and verify this Pi GUI frontend change."
+
+policy:
+  allow_implicit_invocation: true
