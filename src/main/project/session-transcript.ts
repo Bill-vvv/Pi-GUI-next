@@ -2,14 +2,14 @@ import { readFile } from 'node:fs/promises'
 
 import type { SessionPointer } from './session-pointer.ts'
 
-type SessionEntry = {
+export type SessionTranscriptEntry = Record<string, unknown> & {
   type?: unknown
   id: string
   parentId: string | null
   message?: unknown
 }
 
-export async function readSessionMessages(pointer: SessionPointer): Promise<unknown[]> {
+export async function readSessionTranscript(pointer: SessionPointer): Promise<SessionTranscriptEntry[]> {
   const text = await readFile(pointer.sessionFile, 'utf8')
   const lines = text.split('\n')
   if (lines.at(-1) === '') lines.pop()
@@ -23,8 +23,8 @@ export async function readSessionMessages(pointer: SessionPointer): Promise<unkn
     throw new Error('Pi session transcript ID does not match the session pointer.')
   }
 
-  const entries: SessionEntry[] = []
-  const entriesById = new Map<string, SessionEntry>()
+  const entries: SessionTranscriptEntry[] = []
+  const entriesById = new Map<string, SessionTranscriptEntry>()
   for (let index = 1; index < lines.length; index += 1) {
     const value = parseLine(lines[index], index + 1)
     if (
@@ -38,21 +38,26 @@ export async function readSessionMessages(pointer: SessionPointer): Promise<unkn
     if (entriesById.has(value.id)) {
       throw new Error(`Duplicate Pi session transcript entry ID at line ${index + 1}.`)
     }
-    const entry: SessionEntry = {
-      type: value.type,
+    const entry: SessionTranscriptEntry = {
+      ...value,
       id: value.id,
-      parentId: value.parentId,
-      message: value.message
+      parentId: value.parentId
     }
     entries.push(entry)
     entriesById.set(entry.id, entry)
   }
 
   validateParentGraph(entries, entriesById)
+  return entries
+}
+
+export async function readSessionMessages(pointer: SessionPointer): Promise<unknown[]> {
+  const entries = await readSessionTranscript(pointer)
   if (entries.length === 0) return []
 
-  const branch: SessionEntry[] = []
-  let entry: SessionEntry | undefined = entries.at(-1)
+  const entriesById = new Map(entries.map((entry) => [entry.id, entry]))
+  const branch: SessionTranscriptEntry[] = []
+  let entry: SessionTranscriptEntry | undefined = entries.at(-1)
   while (entry !== undefined) {
     branch.push(entry)
     entry = entry.parentId === null ? undefined : entriesById.get(entry.parentId)
@@ -72,7 +77,10 @@ function parseLine(line: string, lineNumber: number): unknown {
   }
 }
 
-function validateParentGraph(entries: SessionEntry[], entriesById: Map<string, SessionEntry>): void {
+function validateParentGraph(
+  entries: SessionTranscriptEntry[],
+  entriesById: Map<string, SessionTranscriptEntry>
+): void {
   for (const entry of entries) {
     if (entry.parentId !== null && !entriesById.has(entry.parentId)) {
       throw new Error('Pi session transcript entry references a missing parent.')
@@ -83,7 +91,7 @@ function validateParentGraph(entries: SessionEntry[], entriesById: Map<string, S
   for (const entry of entries) {
     if (visited.has(entry.id)) continue
     const path = new Set<string>()
-    let current: SessionEntry | undefined = entry
+    let current: SessionTranscriptEntry | undefined = entry
     while (current !== undefined && !visited.has(current.id)) {
       if (path.has(current.id)) throw new Error('Pi session transcript contains a parent cycle.')
       path.add(current.id)

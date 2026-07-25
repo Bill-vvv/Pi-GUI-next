@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto'
-import { chmod, mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 import { lock } from 'proper-lockfile'
 
 import {
   KERNEL_PROVIDER_APIS,
+  type KernelModelPricing,
+  type KernelModelPricingTier,
   type KernelProviderApi,
   type KernelProviderCatalogModel,
   type KernelProviderConfig,
@@ -14,11 +15,14 @@ import {
   type KernelProviderModelConfig
 } from '../../shared/kernel-contract.ts'
 import { resolvePiAgentDir } from '../extension/pi-extension-store.ts'
-import { resolvePiExecutable, SUPPORTED_PI_VERSION } from '../runtime/pi-executable.ts'
+import { SUPPORTED_PI_VERSION } from '../runtime/pi-executable.ts'
+import { importVerifiedPiPackageRoot } from '../runtime/pi-package-root.ts'
 
 type JsonObject = Record<string, unknown>
-type PiBuiltinCatalog = {
-  getBuiltinModel: (providerId: string, modelId: string) => unknown
+type PiModelRuntime = {
+  getModel: (providerId: string, modelId: string) => unknown
+  getAuth: (providerId: string) => Promise<unknown>
+  getProviderAuthStatus: (providerId: string) => { configured: boolean }
 }
 
 const PROVIDER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u
@@ -26,25 +30,24 @@ const RESERVED_PROPERTY_NAMES = new Set(['__proto__', 'constructor', 'prototype'
 const CATALOG_TIMEOUT_MS = 10_000
 
 export class PiProviderStore {
+  private readonly agentDir: string
   private readonly modelsPath: string
-  private readonly authPath: string
   private readonly explicitPiExecutable: string | undefined
-  private builtinCatalog: Promise<PiBuiltinCatalog | null> | null = null
 
   constructor(agentDir = resolvePiAgentDir(), explicitPiExecutable = process.env.PI_GUI_PI_EXECUTABLE) {
+    this.agentDir = agentDir
     this.modelsPath = join(agentDir, 'models.json')
-    this.authPath = join(agentDir, 'auth.json')
     this.explicitPiExecutable = explicitPiExecutable
   }
 
   async list(): Promise<KernelProviderConfig[]> {
     const providers = await this.withModelsLock((root) => Promise.resolve(describeProviders(readProviders(root))))
-    return hydrateProviderCatalogs(providers, this.authPath, await this.loadBuiltinCatalog())
+    return hydrateProviderCatalogs(providers, await this.loadModelRuntime())
   }
 
   async synchronize(): Promise<KernelProviderConfig[]> {
     const providers = await this.withModelsLock((root) => Promise.resolve(describeProviders(readProviders(root))))
-    const hydrated = await hydrateProviderCatalogs(providers, this.authPath, await this.loadBuiltinCatalog())
+    const hydrated = await hydrateProviderCatalogs(providers, await this.loadModelRuntime())
     const catalogByProvider = new Map(hydrated.map((provider) => [provider.id, provider.catalogModels]))
 
     return this.withModelsLock(async (root) => {
@@ -115,12 +118,11 @@ export class PiProviderStore {
       await writeModelsFile(this.modelsPath, root)
       return describeProviders(nextProviders)
     })
-    return hydrateProviderCatalogs(providers, this.authPath, await this.loadBuiltinCatalog())
+    return hydrateProviderCatalogs(providers, await this.loadModelRuntime())
   }
 
-  private loadBuiltinCatalog(): Promise<PiBuiltinCatalog | null> {
-    this.builtinCatalog ??= loadPiBuiltinCatalog(this.explicitPiExecutable)
-    return this.builtinCatalog
+  private loadModelRuntime(): Promise<PiModelRuntime | null> {
+    return loadPiModelRuntime(this.explicitPiExecutable, this.agentDir)
   }
 
   private async withModelsLock<T>(operation: (root: JsonObject) => Promise<T>): Promise<T> {
@@ -223,7 +225,8 @@ function validateModelInput(value: unknown): KernelProviderModelConfig {
   const maxTokens = value.maxTokens === null
     ? null
     : validatePositiveInteger(value.maxTokens, 'maxTokens', id)
-  return { id, name: value.name, reasoning: value.reasoning, input, contextWindow, maxTokens }
+  const cost = value.cost === null ? null : validateModelCost(value.cost, id)
+  return { id, name: value.name, reasoning: value.reasoning, input, contextWindow, maxTokens, cost }
 }
 
 function validateModelId(value: unknown): string {
@@ -258,6 +261,46 @@ function validatePositiveInteger(value: unknown, field: string, modelId: string)
   return value
 }
 
+function validateModelCost(value: unknown, modelId: string): KernelModelPricing {
+  if (!isRecord(value)) throw new Error(`模型 ${modelId} 的 cost 无效。`)
+  const pricing: KernelModelPricing = {
+    input: validatePrice(value.input, 'input', modelId),
+    output: validatePrice(value.output, 'output', modelId),
+    cacheRead: validatePrice(value.cacheRead, 'cacheRead', modelId),
+    cacheWrite: validatePrice(value.cacheWrite, 'cacheWrite', modelId)
+  }
+  if (value.tiers !== undefined) {
+    if (!Array.isArray(value.tiers)) throw new Error(`模型 ${modelId} 的 cost.tiers 必须是数组。`)
+    pricing.tiers = value.tiers.map((tier) => validateModelCostTier(tier, modelId))
+  }
+  return pricing
+}
+
+function validateModelCostTier(value: unknown, modelId: string): KernelModelPricingTier {
+  if (!isRecord(value)) throw new Error(`模型 ${modelId} 的 cost tier 无效。`)
+  if (
+    typeof value.inputTokensAbove !== 'number' ||
+    !Number.isSafeInteger(value.inputTokensAbove) ||
+    value.inputTokensAbove < 0
+  ) {
+    throw new Error(`模型 ${modelId} 的 cost tier threshold 必须是非负安全整数。`)
+  }
+  return {
+    inputTokensAbove: value.inputTokensAbove,
+    input: validatePrice(value.input, 'tiers.input', modelId),
+    output: validatePrice(value.output, 'tiers.output', modelId),
+    cacheRead: validatePrice(value.cacheRead, 'tiers.cacheRead', modelId),
+    cacheWrite: validatePrice(value.cacheWrite, 'tiers.cacheWrite', modelId)
+  }
+}
+
+function validatePrice(value: unknown, field: string, modelId: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error(`模型 ${modelId} 的 cost.${field} 必须是非负有限数值。`)
+  }
+  return value
+}
+
 function assertUniqueModelIds(models: readonly KernelProviderModelConfig[]): void {
   const ids = new Set<string>()
   for (const model of models) {
@@ -281,8 +324,19 @@ function mergeModels(existingValue: unknown, models: readonly KernelProviderMode
     setOptionalModelProperty(nextModel, 'input', model.input === null ? null : [...model.input])
     setOptionalModelProperty(nextModel, 'contextWindow', model.contextWindow)
     setOptionalModelProperty(nextModel, 'maxTokens', model.maxTokens)
+    setOptionalModelProperty(nextModel, 'cost', model.cost === null ? null : cloneModelCost(model.cost))
     return nextModel
   })
+}
+
+function cloneModelCost(cost: KernelModelPricing): KernelModelPricing {
+  return {
+    input: cost.input,
+    output: cost.output,
+    cacheRead: cost.cacheRead,
+    cacheWrite: cost.cacheWrite,
+    ...(cost.tiers === undefined ? {} : { tiers: cost.tiers.map((tier) => ({ ...tier })) })
+  }
 }
 
 function setOptionalModelProperty(model: JsonObject, property: string, value: unknown): void {
@@ -381,50 +435,28 @@ function isCompleteCatalogModel(model: KernelProviderCatalogModel): model is Ker
 
 async function hydrateProviderCatalogs(
   providers: readonly KernelProviderConfig[],
-  authPath: string,
-  builtinCatalog: PiBuiltinCatalog | null
+  modelRuntime: PiModelRuntime | null
 ): Promise<KernelProviderConfig[]> {
-  const credentials = await readProviderCredentials(authPath)
   return Promise.all(providers.map(async (provider) => {
-    const credential = credentials.get(provider.id)
     return {
       ...provider,
-      apiKeyConfigured: provider.apiKeyConfigured || credential !== undefined,
-      catalogModels: await fetchProviderCatalog(provider, credential, builtinCatalog)
+      apiKeyConfigured: provider.apiKeyConfigured ||
+        modelRuntime?.getProviderAuthStatus(provider.id).configured === true,
+      catalogModels: await fetchProviderCatalog(provider, modelRuntime)
     }
   }))
 }
 
-async function readProviderCredentials(path: string): Promise<Map<string, string>> {
-  try {
-    const parsed: unknown = JSON.parse(await readFile(path, 'utf8'))
-    if (!isRecord(parsed)) return new Map()
-    const credentials = new Map<string, string>()
-    for (const [providerId, value] of Object.entries(parsed)) {
-      if (
-        isRecord(value) &&
-        value.type === 'api_key' &&
-        typeof value.key === 'string' &&
-        value.key.length > 0
-      ) {
-        credentials.set(providerId, value.key)
-      }
-    }
-    return credentials
-  } catch {
-    return new Map()
-  }
-}
-
 async function fetchProviderCatalog(
   provider: KernelProviderConfig,
-  credential: string | undefined,
-  builtinCatalog: PiBuiltinCatalog | null
+  modelRuntime: PiModelRuntime | null
 ): Promise<KernelProviderCatalogModel[]> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), CATALOG_TIMEOUT_MS)
   try {
-    const headers = credential === undefined ? undefined : { Authorization: `Bearer ${credential}` }
+    const headers = modelRuntime === null
+      ? undefined
+      : catalogAuthHeaders(await modelRuntime.getAuth(provider.id))
     const baseUrl = provider.baseUrl.replace(/\/+$/u, '')
     const [standardValue, extendedValue] = await Promise.all([
       fetchCatalogJson(`${baseUrl}/models`, headers, controller.signal),
@@ -445,9 +477,9 @@ async function fetchProviderCatalog(
 
     return provider.models.flatMap((model) => {
       const owner = owners.get(model.id)
-      const builtinValue = owner === undefined || builtinCatalog === null
+      const builtinValue = owner === undefined || modelRuntime === null
         ? undefined
-        : builtinCatalog.getBuiltinModel(owner, model.id)
+        : modelRuntime.getModel(owner, model.id)
       const extendedModel = extendedById.get(model.id)
       if (builtinValue === undefined) return extendedModel === undefined ? [] : [extendedModel]
       return [parsePiBuiltinModel(builtinValue, extendedModel)]
@@ -530,32 +562,76 @@ function parsePiBuiltinModel(
   return { id, name, reasoning, input, contextWindow, maxTokens }
 }
 
-async function loadPiBuiltinCatalog(explicitPiExecutable: string | undefined): Promise<PiBuiltinCatalog | null> {
+async function loadPiModelRuntime(
+  explicitPiExecutable: string | undefined,
+  agentDir: string
+): Promise<PiModelRuntime | null> {
   try {
-    const executable = resolvePiExecutable({ explicitPath: explicitPiExecutable })
-    const cliPath = await realpath(executable)
-    const packageRoot = dirname(dirname(cliPath))
-    const catalogPath = join(
-      packageRoot,
-      'node_modules',
-      '@earendil-works',
-      'pi-ai',
-      'dist',
-      'providers',
-      'all.js'
-    )
-    const loaded: unknown = await import(/* @vite-ignore */ pathToFileURL(catalogPath).href)
-    if (!isRecord(loaded)) {
-      throw new Error('Pi built-in provider catalog is unavailable.')
+    const loaded = await importVerifiedPiPackageRoot(process.cwd(), {
+      explicitExecutable: explicitPiExecutable
+    })
+    const modelRuntime = loaded.ModelRuntime
+    if (
+      (typeof modelRuntime !== 'function' && !isRecord(modelRuntime)) ||
+      typeof (modelRuntime as { create?: unknown }).create !== 'function'
+    ) throw new Error('Pi ModelRuntime is unavailable.')
+    const runtime: unknown = await (
+      modelRuntime as unknown as {
+        create: (options: {
+          authPath: string
+          modelsPath: string
+          modelsStorePath: string
+          allowModelNetwork: false
+        }) => Promise<unknown>
+      }
+    ).create({
+      authPath: join(agentDir, 'auth.json'),
+      modelsPath: join(agentDir, 'models.json'),
+      modelsStorePath: join(agentDir, 'models-cache.json'),
+      allowModelNetwork: false
+    })
+    if (
+      !isRecord(runtime) ||
+      typeof runtime.getModel !== 'function' ||
+      typeof runtime.getAuth !== 'function' ||
+      typeof runtime.getProviderAuthStatus !== 'function'
+    ) throw new Error('Pi ModelRuntime is unavailable.')
+    const verifiedRuntime = runtime as unknown as {
+      getModel: (providerId: string, modelId: string) => unknown
+      getAuth: (providerId: string) => Promise<unknown>
+      getProviderAuthStatus: (providerId: string) => unknown
     }
-    const getBuiltinModel = loaded.getBuiltinModel
-    if (typeof getBuiltinModel !== 'function') throw new Error('Pi built-in provider catalog is unavailable.')
     return {
-      getBuiltinModel: (providerId, modelId) => getBuiltinModel(providerId, modelId)
+      getModel: (providerId, modelId) => verifiedRuntime.getModel(providerId, modelId),
+      getAuth: (providerId) => verifiedRuntime.getAuth(providerId),
+      getProviderAuthStatus: (providerId) => {
+        const status = verifiedRuntime.getProviderAuthStatus(providerId)
+        return {
+          configured: isRecord(status) && status.configured === true
+        }
+      }
     }
   } catch {
     return null
   }
+}
+
+function catalogAuthHeaders(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value) || !isRecord(value.auth)) return undefined
+  const headers: Record<string, string> = {}
+  if (isRecord(value.auth.headers)) {
+    for (const [name, headerValue] of Object.entries(value.auth.headers)) {
+      if (typeof headerValue === 'string') headers[name] = headerValue
+    }
+  }
+  if (
+    typeof value.auth.apiKey === 'string' &&
+    value.auth.apiKey.length > 0 &&
+    !Object.keys(headers).some((name) => name.toLowerCase() === 'authorization')
+  ) {
+    headers.Authorization = `Bearer ${value.auth.apiKey}`
+  }
+  return Object.keys(headers).length === 0 ? undefined : headers
 }
 
 function catalogNonEmptyString(value: unknown): string {
@@ -618,7 +694,16 @@ function describeModel(value: unknown, providerId: string): KernelProviderModelC
   const maxTokens = value.maxTokens === undefined
     ? null
     : validatePositiveInteger(value.maxTokens, 'maxTokens', id)
-  return { id, name, reasoning, input: input === null ? null : [...input], contextWindow, maxTokens }
+  const cost = value.cost === undefined ? null : validateModelCost(value.cost, id)
+  return {
+    id,
+    name,
+    reasoning,
+    input: input === null ? null : [...input],
+    contextWindow,
+    maxTokens,
+    cost
+  }
 }
 
 function readProviders(root: JsonObject): JsonObject {

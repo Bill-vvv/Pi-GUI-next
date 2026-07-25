@@ -169,3 +169,67 @@
 - 决策：S15 的 Provider login/logout 由 Electron Main 动态加载当前已通过精确版本校验的 Pi 安装所公开的认证 SDK；只调用 Provider 发现、登录、退出和凭证状态接口，不创建进程内 `AgentSession`，不替换外部 Pi RPC Runtime，也不把完整 Pi Coding Agent 或 Provider SDK 复制进 AppImage。无法从当前 Pi 安装加载公开接口时明确报告认证能力不可用，不使用私有 deep import 或直接改写 `auth.json`。
 - 原因：不同 Provider 的 OAuth、设备码、授权码和 API Key 流程由 Pi 统一实现，GUI 自行复制会产生第二套认证逻辑和凭据风险；把完整 SDK 依赖闭包打入 Electron 又会显著增加产物并可能与系统 Pi 版本漂移。认证控制操作不需要改变现有 Session Runtime 拓扑。
 - 影响：token、refresh token 和 API Key 原文始终由 Pi 管理，不进入 Renderer、Kernel state、日志或 GUI config。Renderer 只显示 Provider、认证来源、设备码/授权说明和成功失败状态。认证变化后刷新凭证与模型目录，但不静默切换模型或重启 Session；受影响的 Session 需要用户显式 reload 后才使用新凭证。
+
+## D-022 — S15 外部 Pi 状态只走公开接口并隔离验证
+
+- 日期：2026-07-24
+- 状态：Accepted；澄清 D-016、D-020 和 D-021 的 credential、trust 与验证边界
+- 决策：S15 只使用固定 Pi 0.80.10 包根公开导出、外部 RPC 和明确 CLI 参数。Trust 首期通过包根导出的资源检测与 `ProjectTrustStore` 提供当前 Project 的持久信任/不信任，并通过 `--approve` / `--no-approve` 提供仅本次信任/不信任；识别继承的父目录决定，但不复制未公开的 TUI option helper，也不提供写入父目录的快捷项。认证只展示包根 `ModelRuntime` 实际声明且 GUI 已实现完整交互的类型；已有 credential 原文绝不回读 Renderer。用户本次主动键入的 API Key 可以在受控输入中瞬时经过 Renderer 和窄 typed IPC，但不得进入 Kernel state、事件、日志、错误或 GUI config。
+- 原因：Pi 的 package exports 只保证包根和 `rpc-entry`，私有 deep import 会使打包与版本边界不可复现；同时 D-016 已允许用户本次输入自定义 Provider API Key，D-021 的“API Key 原文不进入 Renderer”必须解释为不回读已有值、不进入状态或持久化，而不是否定受控输入本身。Trust、认证和真实 login/logout 会修改 Pi agent 目录，沿用默认用户目录会污染真实外部状态。
+- 影响：缺少公开接口时对应入口明确不可用，不复制 Pi 内部实现作为 fallback。所有 trust、credential 和发布验证使用临时 Project、隔离 XDG 与隔离 `PI_CODING_AGENT_DIR`；真实认证只使用明确选择的 QA/provider 账户，不读写默认用户 `auth.json` 或 `trust.json`。认证变化继续不静默切模或重启 Session，只有用户显式 reload 后才进入目标 Runtime。
+
+## D-023 — Session Fork 迁移现有 Runtime，归档补救不恢复 Runtime
+
+- 日期：2026-07-24
+- 状态：Accepted；扩展 D-004 与 D-017 的 Session identity 和 Runtime context 边界
+- 决策：Fork 候选只从 Pi `get_entries` 的 `leafId` 沿 `parentId` 得到的当前活动路径产生，并只使用其中不含 `ImageContent` 的用户消息真实 entry ID。Pi 在同一 RPC 进程完成 fork 后，Kernel 校验全新的 canonical `sessionFile` / `sessionId`、完整刷新投影并保存新 pointer，再把原 Runtime context 从旧 Session key 原子迁移到新 key；原 pointer 和文件不变。归档撤销由 Main 的单次、目标绑定、单调过期凭证驱动，只恢复导航索引；临时查看消费同一类凭证并读取保持归档的静态事实，两者都不启动 Runtime。
+- 原因：按正文或 Timeline 下标猜 entry 会误选废弃分支；fork 后继续把同一进程挂在旧 key 会让事件和 Conversation identity 错配。归档后的短时后悔操作若自动恢复 Runtime，会把轻量导航补救变成有副作用的后台进程操作。
+- 影响：带图片的历史消息首期不提供 Fork；fork 后投影或持久化失败时停止已重绑定的 Runtime，不能把旧历史标成新 Session。撤销凭证不持久化，过期、重复、目标不匹配或应用重启后 Fail Fast；完整 Session tree、Clone、归档中心、永久删除和批量操作继续不进入 S15。
+
+## D-024 — Session 导出与统计留在 Main 的 Pi 事实边界
+
+- 日期：2026-07-24
+- 状态：Accepted；扩展 D-003 与 D-004 的 IPC、Conversation 和 Session 事实边界
+- 决策：离线 HTML 由 Main 读取并校验当前活动 Session 的最终 leaf 分支后自行安全序列化，只输出用户消息、Assistant 最终回答、安全 CommonMark/GFM、代码和合法 Pi `ImageContent`；Renderer 只触发系统保存框，不接收原始 Pi 消息、JSONL 或保存路径。停机 Session 的 tooltip 统计由 Main 扫描已校验 JSONL 的全部 message entry，活动 Session 则读取 Pi `get_session_stats`；两者使用 Pi 全生命周期口径且不持久化副本。
+- 原因：Renderer 若取得 JSONL 或原始导出正文，会扩大任意会话读取与隐藏过程数据泄漏面；直接采用 Pi 通用 HTML 导出又会包含超出本阶段分享边界的内容。停机 Session 为统计启动 Runtime 会把只读导航元数据变成昂贵且有副作用的进程操作。
+- 影响：导出明确排除废弃分支、thinking/commentary、工具参数与输出、diff、system prompt、工具定义、完整项目路径、cost 统计和隐藏 JSON；raw HTML、脚本与远程资源不可执行或加载，远程 Markdown 图片只成为安全链接或占位。Session 行可显示文件、ID、消息、Token 与累计成本，但统计失败只暴露固定诊断，不回显 transcript 内容；复制按钮直接复制每条已完成最终回答在 Kernel projection 中保留的原始 Markdown。
+
+## D-025 — Project 路径搜索只返回固定目录句柄内的相对名称
+
+- 日期：2026-07-24
+- 状态：Accepted；扩展 D-003 与 D-019 的 Renderer 文件访问和路径引用边界
+- 决策：Composer 的 `@` 搜索通过窄 typed IPC 请求当前 canonical Project。Main 使用 `O_DIRECTORY` / `O_NOFOLLOW` 打开并固定目录句柄，再从该句柄枚举相对文件和目录名；排除 `.git`，按层读取 `.gitignore` 与 `.ignore`，跳过 symlink 和不可安全引用的控制字符路径，最多返回 100 项。Renderer 只按 Project、query、输入、光标和请求 revision 接受当前结果，并用共享路径引用格式插入文本。`/fork`、`/export`、`/copy` 复用 Renderer 已有 GUI 动作，Kernel 对这些 GUI-only command 的直接调用 Fail Fast。
+- 原因：把任意路径读取或普通文件正文交给 Renderer 会扩大文件访问面；先校验路径再按路径名遍历仍存在目录被替换为外部 symlink 的竞态。GUI 动作若退化成 Pi prompt 文本，也会绕过已有的选择器、保存框、Clipboard 和状态门禁。
+- 影响：搜索只读取目录项和 ignore 文件，不读取普通文件正文，也不把绝对 Project 路径作为结果返回；目录句柄实现属于当前 Linux 产品边界。`@` 菜单内可用 Arrow、Enter 或 Tab 选择候选，但普通文本不获得 shell 风格路径 Tab 补全；不增加 `!` / `!!` Shell、外部编辑器或通用文件 API。
+
+## D-026 — Provider 认证事件脱敏，凭证变化只建立内存 reload 标记
+
+- 日期：2026-07-24
+- 状态：Accepted；扩展 D-017、D-021 与 D-022 的多 Runtime、secret 和公开 Pi 能力边界
+- 决策：Provider 认证只从已验证固定 Pi 包根的公开 `ModelRuntime` 获取方法、状态并执行 login/logout；GUI 只接收经过清洗的 prompt、notice 与 credential metadata，用户回答经窄 typed IPC 回传，已有 key、token、refresh token 和 SDK 原始错误不进入 Kernel state、事件、日志或 GUI config。认证变化后刷新凭证与模型目录，并为所有 live Runtime context 中实际使用对应 Provider 的 Session 建立非持久化 `requiresReload` 标记；不停止、切换或重启 Session。标记只在用户显式 reload 且完整投影成功后清除，失败时保留，Fork 时迁移，归档时删除。
+- 原因：复制 Provider SDK 流程、私有 deep import 或直接读写 `auth.json` 都会建立第二套认证事实与脆弱版本边界；认证变化后自动重启会打断正在生成的回复，而全局 reload 标记又会误导使用其他 Provider 的 Session。
+- 影响：凭证页只显示 SDK 实际声明且 GUI 已完整支持的方法，不支持的动作不出现。应用重启后内存标记自然消失，同时原 Runtime 进程也已结束；重新启动 Session 会读取最新凭证。真实验证必须使用隔离 `PI_CODING_AGENT_DIR` 与明确的 QA/provider 输入，不读取默认用户认证文件，也不将任何 secret 输出到测试结果。
+
+## D-027 — 快捷键是有限 GUI 配置，压缩是独立 Runtime 生命周期
+
+- 日期：2026-07-24
+- 状态：Accepted；扩展 D-003、D-017 与 D-019 的 typed IPC、多 Runtime 和桌面交互边界
+- 决策：GUI 快捷键只覆盖计划固定的 11 个应用动作，以严格完整 binding map 写入 XDG config v9，`null` 表示未绑定；shared 校验同时拒绝重复、文本编辑和已知 Electron/系统保留组合。Renderer 只在窗口聚焦且没有模态框、菜单、认证交互、快捷键录入或 IME composing 时分发，不注册 Electron `globalShortcut`，文本控件中只允许固定默认表内已确认不改变编辑语义的组合。Pi `compaction_start` / `compaction_end` 由 Kernel 按事件所属 Runtime context 归一化为独立 start/end lifecycle；保留 reason、outcome 与 `willRetry`，不转发 summary 或原始错误。成功后核对 Session identity 并一次提交 Conversation、usage 和生命周期 statistics；失败、取消、协议异常或 context teardown 保留旧投影并显式结束等待，不产生伪 `agent_settled`。
+- 原因：直接复用 TUI `keybindings.json` 会混合两套动作和焦点语义，系统级快捷键又会越出当前窗口范围；仅监听 compact 命令响应无法覆盖 threshold/overflow 自动压缩，也无法在并行 Runtime 中保证事件归属和投影原子性。
+- 影响：恢复默认、清除和重启后的结果都由同一 XDG 配置事实决定，未绑定动作没有隐藏组合；破坏性归档默认保持未绑定。压缩继续使用 Pi 默认模型、提示词与参数，GUI 只展示“正在整理上下文”和固定失败/取消提示；高保真压缩、独立压缩模型、二次审查与测评工具继续不进入 S15。
+
+## D-028 — Session 统一按运行状态与最近活动排序
+
+- 日期：2026-07-25
+- 状态：Accepted；替代 S14-04、S14-12 与 S14-39 中 Session 手动拖拽和持久化手动顺序的部分，Project 手动排序不变
+- 决策：每个 Project 的 Session 由 Workbench Kernel 统一排序：`running` 项优先，其余按 JSONL `lastActivityAt` 倒序，无时间项置后，同状态同时间保持稳定。Session 不再提供拖拽排序，也不保存第二套手动顺序。
+- 原因：原实现把首次拖拽隐式变成不可见且不可恢复的永久模式；后续新 Session 又追加到指针数组末尾，导致最近活动排序在单个 Project 内永久失效，并让完成运行的 Session 从临时置顶位置跳回历史数组位置。
+- 影响：XDG session state 升级为 v6 并删除 `manuallyOrderedProjectPaths`；读取 v5 时校验旧字段后丢弃该标记。Renderer、preload 与 Kernel 删除 Session reorder command 和拖拽交互；Project 拖拽、Session identity、Runtime ownership、归档与活动时间事实来源不变。
+
+## D-029 — 自定义模型单价保存于 Pi 配置并按需从 LiteLLM 拉取
+
+- 日期：2026-07-25
+- 状态：Accepted；扩展 D-016 的自定义 Model 配置边界
+- 决策：自定义模型的输入、输出、缓存读取与缓存写入单价使用 Pi 原生 `models.json` `cost` 字段，单位为 USD/百万 token。用户可手动编辑，或显式通过 Electron Main 从 LiteLLM 公开价格目录拉取；Main 按模型 ID、Provider/模型 ID 和稳定的 Provider 优先后缀规则匹配，只把匹配键和经校验的四项单价经窄 typed IPC 返回。Renderer 不直接联网。
+- 原因：缺少 `cost` 会让 Pi 已记录的 token 无法形成正确费用；复制公开目录的单价比要求用户逐项查找可靠，同时仍需展示匹配键并允许手动修正，避免同名代理模型被静默误价。
+- 影响：拉价不读取 Provider 凭据，不建立 GUI 价格数据库、后台自动刷新或第二套 usage 事实源。公开目录缺失缓存价格时按 0 写入；未命中或返回非法价格时 Fail Fast。保存后的价格只影响 Pi 后续生成的费用记录，不追溯改写既有 Session cost。

@@ -51,11 +51,11 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 #### 3.1.1 导航排序与行命中要求
 
 - Project 保留手动拖拽排序；Project 行不得常驻原生 `draggable`，只有主行内容收到鼠标主键按下后才临时武装，并在 `pointerup`、`pointercancel` 或 `dragend` 任一路径立即解除。
-- Session 默认由 Kernel 按 `lastActivityAt` 倒序输出，最新活动在前；无可用活动时间的项放在末尾，同时间项保持稳定顺序。用户拖拽后，该 Project 切换为持久化手动顺序，手动顺序优先于后续活动时间变化并在重启后继续生效。
-- 新建、归档等 action slot 不得武装行拖拽；行内按钮必须拥有独立点击边界，阻止其手势进入祖先拖拽流程。
+- 每个 Project 的 Session 都由 Kernel 独立排序，并将 `running` 项无条件置顶。运行中组和非运行组内部始终按 `lastActivityAt` 倒序输出；最新活动在前，无可用活动时间的项放在末尾，同状态、同时间项保持稳定顺序。Session 不提供手动拖拽或第二套持久化顺序。
+- 新建等 Project action slot 不得武装行拖拽；Project 与 Session 行内按钮都必须拥有独立点击边界。
 - action slot 内叠放时间文字、运行指示和操作按钮时，操作按钮必须位于最上层并独占可见区域的指针命中；被隐藏或替换的文字、图标及状态层必须使用 `pointer-events: none`，文字层同时禁止文本选择。
 - `opacity: 0` 只改变绘制结果，不代表元素已经退出 hit testing。任何悬浮切换实现都必须分别核对视觉层、pointer events、文本选择和 stacking order，不能只验证图标是否显示。
-- Project / Session 排序、单击选择和行内操作必须分别可用：未按下时悬浮只改变操作可见性；从主行按下并移动时才开始排序；从行内按钮按下时始终执行按钮动作。
+- Project 排序、Project / Session 单击选择和行内操作必须分别可用：未按下时悬浮只改变操作可见性；只有从 Project 主行按下并移动时才开始排序；从行内按钮按下时始终执行按钮动作。
 
 ### 3.2 Session Header
 
@@ -69,7 +69,8 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 - 以一次 user turn 和随后一个 agent run 形成可辨识的 turn group。
 - 活动 run 线性展示 thinking 与 tool；settled 后的工作过程摘要与最终回答保持在同一 turn group 内，不作为脱离回答的独立大卡片。
 - 保留按 `toolCallId` 原地更新、最近 60 轮渐进挂载、用户离开底部后停止自动跟随等现有行为。
-- 当某轮原始用户 prompt 已滚出顶部、该轮回答仍处于顶部阅读位置时，在 Session Header 下粘着该 prompt；下一轮进入顶部阅读位置时自动切换，长内容可展开，附件摘要同步保留，粘着区域高度计入 Timeline 顶部安全区。
+- 当某轮原始用户 prompt 已滚出顶部、该轮回答仍处于顶部阅读位置时，在 Session Header 下粘着该 prompt；下一轮进入顶部阅读位置时自动切换，长内容可展开，附件摘要同步保留，粘着区域高度计入 Timeline 顶部安全区。Navigator 完全展开时，Timeline 左缘显示与真实用户轮次对应的 Prompt 导航短标记；悬浮或键盘聚焦可预览内容，点击定位对应轮次，折叠与窄窗口下隐藏。
+- 复制最后回答、导出 HTML 和分叉对话属于当前 Conversation 操作，以图标组放在时间线末尾，不占用 Session Header。
 - Project 或 Session 选择变化时，Timeline identity 随活动二元组变化，不复用上一 Session 的滚动、粘着 prompt 和 disclosure 状态。
 
 ### 3.4 Composer 与命令入口
@@ -143,17 +144,18 @@ S9 先加入 `projects[]` 与 `activeProjectKey`，S10 再加入 Session 集合�
 1. 校验目标 `projectKey` 已登记且仍对应 canonical、可读、可执行的目录，并加载该 Project 的 Session 注册表。
 2. 当前 Project 存在运行中的 Session 时仍允许切换；切换不停止或取消其他 Project 的 Runtime。
 3. 持久化 `activeProjectKey` 后发布目标 Project 的 Session 摘要和当前投影；不得把上一 Project 的 Conversation 标成目标 Project。
-4. 目标 Session 已有受管 RuntimeContext 时直接载入该 context；停止状态的历史 Session 可先预览，并在首次实际操作时按需恢复。
+4. 目标 Session 已有受管 RuntimeContext 时直接载入该 context；停止状态的历史 Session 在用户点击时无感激活 Runtime，可先异步投影历史。
 5. 持久化或加载失败时保留明确错误，不创建 ghost Session，也不静默停止后台 Runtime。
 
 ### 6.2 Session 切换
 
 1. Renderer 先切换可见目标，再异步加载目标 Session；快速连续切换只接受最后一次读取结果。
 2. 目标 Session 已有受管 RuntimeContext 时直接切换当前投影，不停止原 Session 或其他后台 Runtime。
-3. 停止状态的历史 Session 先校验 canonical `sessionFile`、普通文件、可读性和 `sessionId`；浏览不启动 Runtime，首次 prompt 或 command 才按需恢复。
-4. 新 Session 先进入可输入的空白工作区，后台启动 Runtime；首次提交复用同一启动任务。
-5. 失败时保留目标页面并显式展示错误，不把旧 Conversation 标成新目标，也不静默新建 Session。
-6. 只有归档目标 Session、应用退出或用户对目标 Runtime 的显式停止才收口对应 Runtime。
+3. 停止状态的历史 Session 在点击时立即切换可见目标，并后台激活 Runtime；先校验 canonical `sessionFile`、普通文件、可读性和 `sessionId`，再启动或恢复。可先异步投影历史，不要求用户再点“启动 Pi”。
+4. 后台启动不得阻塞导航：不把 `activate-session` / `start-session` 做成全局 exclusive busy；侧栏在启动过程中仍可继续点击。快速连点历史 Session 时以短 settle（约 120ms）合并启动意图，只真正启动最后停留的目标；已有受管 Runtime 的目标立即切换，无 settle。Kernel 侧 launch 仍单飞，Renderer 用串行 ensure 泵对齐。
+5. 新 Session 先进入可输入的空白工作区，后台启动 Runtime；首次提交复用同一启动任务。
+6. 失败时保留目标页面并显式展示错误，不把旧 Conversation 标成新目标，也不静默新建 Session。
+7. 只有归档目标 Session、应用退出或用户对目标 Runtime 的显式停止才收口对应 Runtime。
 
 ## 7. S8 当时不实现（历史）
 

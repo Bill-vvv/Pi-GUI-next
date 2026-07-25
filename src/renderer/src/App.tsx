@@ -1,16 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
-import type {
-  AppearanceSettings,
-  GeneralSettings,
-  KernelPromptAttachment,
-  KernelSessionPreview,
-  KernelStatePatch,
-  KernelState,
-  SessionNamingSettings,
-  ThinkingLevel
+import {
+  COPY_LAST_ANSWER_COMMAND_ID,
+  EXPORT_SESSION_COMMAND_ID,
+  FORK_SESSION_COMMAND_ID,
+  type AppearanceSettings,
+  type GeneralSettings,
+  type KernelArchiveReceipt,
+  type KernelForkCandidate,
+  type KernelProjectTrustChoice,
+  type KernelPromptAttachment,
+  type KernelSessionPreview,
+  type KernelStatePatch,
+  type KernelState,
+  type SessionNamingSettings,
+  type ShortcutSettings,
+  type ThinkingLevel
 } from '../../shared/kernel-contract'
 import { Workbench } from './composition/Workbench'
+import type { ComposerDraftRequest } from './features/composer/Composer'
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -29,12 +38,48 @@ type SessionViewTarget =
       sawProvisional: boolean
     }
 
+type RuntimeEnsureTarget =
+  | { kind: 'session'; sessionKey: string }
+  | { kind: 'new' }
+
+type RuntimeEnsureWaiter = {
+  target: RuntimeEnsureTarget
+  resolve: () => void
+  reject: (error: unknown) => void
+}
+
+/** Dwell before starting a stopped historical Session after the last click. */
+const SESSION_RUNTIME_SETTLE_MS = 120
+
+type ArchiveNotification = {
+  receipt: KernelArchiveReceipt
+  expiresAt: number
+  pending: 'undo' | 'preview' | null
+}
+
+type ArchivedSessionPreview = {
+  preview: KernelSessionPreview
+  expiresAt: number
+}
+
 export function App(): React.JSX.Element {
   const [kernelState, setKernelState] = useState<KernelState | null>(null)
   const [ipcError, setIpcError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<string | null>(null)
   const [sessionPreview, setSessionPreview] = useState<KernelSessionPreview | null>(null)
+  const [archivedSessionPreview, setArchivedSessionPreview] =
+    useState<ArchivedSessionPreview | null>(null)
+  const [archiveNotifications, setArchiveNotifications] =
+    useState<ArchiveNotification[]>([])
+  const [forkDialogOpen, setForkDialogOpen] = useState(false)
+  const [forkCandidates, setForkCandidates] = useState<KernelForkCandidate[]>([])
+  const [forkCandidatesLoading, setForkCandidatesLoading] = useState(false)
+  const [forkError, setForkError] = useState<string | null>(null)
+  const [forkSubmitting, setForkSubmitting] = useState(false)
+  const [composerDraftRequest, setComposerDraftRequest] =
+    useState<ComposerDraftRequest | null>(null)
+  const [compactionNotice, setCompactionNotice] = useState<'cancelled' | 'failed' | null>(null)
   const [sessionViewTarget, setSessionViewTarget] = useState<SessionViewTarget | null>(null)
   const [previewPendingKey, setPreviewPendingKey] = useState<string | null>(null)
   const [systemFonts, setSystemFonts] = useState<string[] | null>(null)
@@ -48,10 +93,17 @@ export function App(): React.JSX.Element {
   const pendingActionRef = useRef<string | null>(null)
   const sessionViewTargetRef = useRef<SessionViewTarget | null>(null)
   const previewRequestRevision = useRef(0)
-  const sessionStartPromiseRef = useRef<Promise<void> | null>(null)
   const coldStartHandledRef = useRef(false)
   const eventRevision = useRef(0)
   const actionPresentationRevision = useRef(0)
+  const forkRequestRevision = useRef(0)
+  const composerDraftRevision = useRef(0)
+  const desiredRuntimeEnsureRef = useRef<RuntimeEnsureTarget | null>(null)
+  const executingRuntimeEnsureRef = useRef<RuntimeEnsureTarget | null>(null)
+  const runtimeEnsureGenerationRef = useRef(0)
+  const runtimeEnsureTimerRef = useRef<number | null>(null)
+  const runtimeEnsurePumpRef = useRef<Promise<void> | null>(null)
+  const runtimeEnsureWaitersRef = useRef<RuntimeEnsureWaiter[]>([])
 
   useEffect(() => {
     let active = true
@@ -70,6 +122,26 @@ export function App(): React.JSX.Element {
       active = false
     }
   }, [])
+
+  useEffect(() => {
+    if (archiveNotifications.length === 0) return
+    const nextExpiry = Math.min(...archiveNotifications.map(({ expiresAt }) => expiresAt))
+    const timeout = window.setTimeout(() => {
+      const now = Date.now()
+      setArchiveNotifications((current) =>
+        current.filter(({ expiresAt }) => expiresAt > now)
+      )
+    }, Math.max(0, nextExpiry - Date.now()))
+    return () => window.clearTimeout(timeout)
+  }, [archiveNotifications])
+
+  useEffect(() => {
+    if (archivedSessionPreview === null) return
+    const timeout = window.setTimeout(() => {
+      setArchivedSessionPreview(null)
+    }, Math.max(0, archivedSessionPreview.expiresAt - Date.now()))
+    return () => window.clearTimeout(timeout)
+  }, [archivedSessionPreview])
 
   useEffect(() => {
     const rootStyle = document.documentElement.style
@@ -150,14 +222,27 @@ export function App(): React.JSX.Element {
     try {
       unsubscribe = window.piGui.subscribe((event) => {
         if (!active) return
-        eventRevision.current += 1
         if (event.type === 'kernel.state-changed') {
+          eventRevision.current += 1
           pendingPatches = []
           commitImmediately(event.state)
-        } else {
+        } else if (event.type === 'kernel.state-patched') {
+          eventRevision.current += 1
           const state = kernelStateRef.current
           if (state === null) pendingPatches.push(event.patch)
           else schedulePatch(event.patch)
+        } else if (
+          event.type === 'kernel.compaction-ended' &&
+          event.outcome !== 'retrying'
+        ) {
+          const state = kernelStateRef.current
+          if (
+            state?.activeProjectKey === event.projectKey &&
+            state.activeSessionKey === event.sessionKey &&
+            (event.outcome === 'failed' || event.outcome === 'cancelled')
+          ) {
+            setCompactionNotice(event.outcome)
+          }
         }
         setIpcError(null)
       })
@@ -218,6 +303,10 @@ export function App(): React.JSX.Element {
       if (eventRevision.current === revisionBeforeAction) {
         kernelStateRef.current = state
         setKernelState(state)
+        const nextTarget = keepValidSessionViewTarget(sessionViewTargetRef.current, state)
+        sessionViewTargetRef.current = nextTarget
+        setSessionViewTarget(nextTarget)
+        setSessionPreview((preview) => keepValidPreview(preview, state))
       }
       succeeded = true
     } catch (error) {
@@ -237,6 +326,7 @@ export function App(): React.JSX.Element {
   }
 
   async function previewSession(sessionKey: string): Promise<void> {
+    setArchivedSessionPreview(null)
     const state = kernelStateRef.current
     if (state?.activeProjectKey === null || state?.activeProjectKey === undefined) {
       throw new Error('No active project is available.')
@@ -275,12 +365,240 @@ export function App(): React.JSX.Element {
     sessionViewTargetRef.current = null
     setSessionViewTarget(null)
     setSessionPreview(null)
+    setArchivedSessionPreview(null)
     setPreviewPendingKey(null)
     setActionError(null)
   }
 
+  function runtimeEnsureTargetsEqual(
+    left: RuntimeEnsureTarget | null,
+    right: RuntimeEnsureTarget | null
+  ): boolean {
+    if (left === null || right === null) return left === right
+    if (left.kind === 'new' || right.kind === 'new') {
+      return left.kind === 'new' && right.kind === 'new'
+    }
+    return left.sessionKey === right.sessionKey
+  }
+
+  function settleRuntimeEnsureWaiters(
+    predicate: (target: RuntimeEnsureTarget) => boolean,
+    error?: unknown
+  ): void {
+    const remaining: RuntimeEnsureWaiter[] = []
+    for (const waiter of runtimeEnsureWaitersRef.current) {
+      if (!predicate(waiter.target)) {
+        remaining.push(waiter)
+        continue
+      }
+      if (error === undefined) waiter.resolve()
+      else waiter.reject(error)
+    }
+    runtimeEnsureWaitersRef.current = remaining
+  }
+
+  function supersedeRuntimeEnsureWaiters(next: RuntimeEnsureTarget | null): void {
+    const remaining: RuntimeEnsureWaiter[] = []
+    for (const waiter of runtimeEnsureWaitersRef.current) {
+      if (runtimeEnsureTargetsEqual(waiter.target, next)) {
+        remaining.push(waiter)
+        continue
+      }
+      if (
+        executingRuntimeEnsureRef.current !== null &&
+        runtimeEnsureTargetsEqual(waiter.target, executingRuntimeEnsureRef.current)
+      ) {
+        remaining.push(waiter)
+        continue
+      }
+      waiter.reject(new Error('Session activation superseded.'))
+    }
+    runtimeEnsureWaitersRef.current = remaining
+  }
+
+  function sessionRuntimeAlreadyUsable(sessionKey: string): boolean {
+    const state = kernelStateRef.current
+    if (state === null || state.activeSessionKey !== sessionKey) return false
+    const summary = state.sessions.find((session) => session.key === sessionKey)
+    const status = summary?.runtimeStatus ?? state.runtime.status
+    return (
+      status === 'ready' ||
+      status === 'running' ||
+      status === 'starting' ||
+      status === 'stopping'
+    )
+  }
+
+  async function performStartSession(): Promise<void> {
+    const presentationRevision = actionPresentationRevision.current + 1
+    actionPresentationRevision.current = presentationRevision
+    setActionError(null)
+    const revisionBeforeAction = eventRevision.current
+    try {
+      const state = await window.piGui.startSession()
+      applyReturnedState(state, revisionBeforeAction)
+      const target = sessionViewTargetRef.current
+      if (target?.kind === 'new') {
+        const preparedTarget = { ...target, prepared: true }
+        const nextTarget = kernelStateRef.current === null
+          ? preparedTarget
+          : keepValidSessionViewTarget(preparedTarget, kernelStateRef.current)
+        sessionViewTargetRef.current = nextTarget
+        setSessionViewTarget(nextTarget)
+      }
+      if (actionPresentationRevision.current === presentationRevision) {
+        setCompletedAction({ action: 'start-session', succeeded: true })
+      }
+    } catch (error) {
+      if (actionPresentationRevision.current === presentationRevision) {
+        setActionError(errorMessage(error))
+        setCompletedAction({ action: 'start-session', succeeded: false })
+      }
+      throw error
+    }
+  }
+
+  async function performActivateSession(sessionKey: string): Promise<void> {
+    setArchivedSessionPreview(null)
+    const presentationRevision = actionPresentationRevision.current + 1
+    actionPresentationRevision.current = presentationRevision
+    const revisionBeforeAction = eventRevision.current
+    try {
+      const state = await window.piGui.activateSession(sessionKey)
+      applyReturnedState(state, revisionBeforeAction)
+      if (actionPresentationRevision.current === presentationRevision) {
+        setCompletedAction({ action: 'activate-session', succeeded: true })
+      }
+    } catch (error) {
+      if (
+        actionPresentationRevision.current === presentationRevision &&
+        sessionViewTargetRef.current?.kind === 'session' &&
+        sessionViewTargetRef.current.sessionKey === sessionKey
+      ) {
+        setActionError(errorMessage(error))
+        setCompletedAction({ action: 'activate-session', succeeded: false })
+      }
+      throw error
+    }
+  }
+
+  async function pumpRuntimeEnsure(generation: number): Promise<void> {
+    if (runtimeEnsurePumpRef.current !== null) {
+      await runtimeEnsurePumpRef.current.catch(() => undefined)
+      if (runtimeEnsureGenerationRef.current !== generation) return
+    }
+
+    const pump = (async () => {
+      let activeGeneration = generation
+      while (desiredRuntimeEnsureRef.current !== null) {
+        if (
+          runtimeEnsureGenerationRef.current !== activeGeneration &&
+          runtimeEnsureTimerRef.current !== null
+        ) {
+          return
+        }
+
+        const target = desiredRuntimeEnsureRef.current
+        const workGeneration = runtimeEnsureGenerationRef.current
+        executingRuntimeEnsureRef.current = target
+        try {
+          if (target.kind === 'new') {
+            await performStartSession()
+          } else if (sessionRuntimeAlreadyUsable(target.sessionKey)) {
+            // Already the live foreground target; drop any stale preview shell.
+            if (
+              sessionViewTargetRef.current?.kind === 'session' &&
+              sessionViewTargetRef.current.sessionKey === target.sessionKey
+            ) {
+              clearSessionView()
+            }
+          } else {
+            await performActivateSession(target.sessionKey)
+          }
+          settleRuntimeEnsureWaiters((waiterTarget) =>
+            runtimeEnsureTargetsEqual(waiterTarget, target)
+          )
+          if (
+            runtimeEnsureTargetsEqual(desiredRuntimeEnsureRef.current, target) &&
+            runtimeEnsureGenerationRef.current === workGeneration
+          ) {
+            desiredRuntimeEnsureRef.current = null
+          }
+        } catch (error) {
+          settleRuntimeEnsureWaiters(
+            (waiterTarget) => runtimeEnsureTargetsEqual(waiterTarget, target),
+            error
+          )
+          if (runtimeEnsureTargetsEqual(desiredRuntimeEnsureRef.current, target)) {
+            desiredRuntimeEnsureRef.current = null
+          }
+        } finally {
+          executingRuntimeEnsureRef.current = null
+        }
+
+        if (runtimeEnsureTimerRef.current !== null) return
+        activeGeneration = runtimeEnsureGenerationRef.current
+      }
+    })()
+
+    runtimeEnsurePumpRef.current = pump
+    try {
+      await pump
+    } finally {
+      if (runtimeEnsurePumpRef.current === pump) runtimeEnsurePumpRef.current = null
+    }
+  }
+
+  function enqueueRuntimeEnsure(
+    target: RuntimeEnsureTarget,
+    mode: 'immediate' | 'settled'
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      runtimeEnsureWaitersRef.current.push({ target, resolve, reject })
+      desiredRuntimeEnsureRef.current = target
+      supersedeRuntimeEnsureWaiters(target)
+      runtimeEnsureGenerationRef.current += 1
+      const generation = runtimeEnsureGenerationRef.current
+
+      if (runtimeEnsureTimerRef.current !== null) {
+        window.clearTimeout(runtimeEnsureTimerRef.current)
+        runtimeEnsureTimerRef.current = null
+      }
+
+      if (mode === 'immediate') {
+        void pumpRuntimeEnsure(generation)
+        return
+      }
+
+      runtimeEnsureTimerRef.current = window.setTimeout(() => {
+        runtimeEnsureTimerRef.current = null
+        void pumpRuntimeEnsure(generation)
+      }, SESSION_RUNTIME_SETTLE_MS)
+    })
+  }
+
+  async function waitForRuntimeEnsureIdle(): Promise<void> {
+    if (runtimeEnsureTimerRef.current !== null) {
+      window.clearTimeout(runtimeEnsureTimerRef.current)
+      runtimeEnsureTimerRef.current = null
+    }
+    desiredRuntimeEnsureRef.current = null
+    runtimeEnsureGenerationRef.current += 1
+    supersedeRuntimeEnsureWaiters(executingRuntimeEnsureRef.current)
+    if (runtimeEnsurePumpRef.current !== null) {
+      await runtimeEnsurePumpRef.current.catch(() => undefined)
+    }
+  }
+
+  function ensureSessionRuntime(
+    sessionKey: string,
+    mode: 'immediate' | 'settled' = 'immediate'
+  ): Promise<void> {
+    return enqueueRuntimeEnsure({ kind: 'session', sessionKey }, mode)
+  }
+
   function startSession(): Promise<void> {
-    if (sessionStartPromiseRef.current !== null) return sessionStartPromiseRef.current
+    setArchivedSessionPreview(null)
     const projectKey = kernelStateRef.current?.activeProjectKey
     if (projectKey !== null && projectKey !== undefined) {
       previewRequestRevision.current += 1
@@ -296,30 +614,301 @@ export function App(): React.JSX.Element {
       setPreviewPendingKey(null)
       setActionError(null)
     }
-
-    const operation = runAction('start-session', () => window.piGui.startSession()).then(() => {
-      const target = sessionViewTargetRef.current
-      if (target?.kind === 'new') {
-        const preparedTarget = { ...target, prepared: true }
-        sessionViewTargetRef.current = preparedTarget
-        setSessionViewTarget(preparedTarget)
-      }
-    })
-    sessionStartPromiseRef.current = operation
-    void operation.then(
-      () => {
-        if (sessionStartPromiseRef.current === operation) sessionStartPromiseRef.current = null
-      },
-      () => {
-        if (sessionStartPromiseRef.current === operation) sessionStartPromiseRef.current = null
-      }
-    )
-    return operation
+    return enqueueRuntimeEnsure({ kind: 'new' }, 'immediate')
   }
 
   async function waitForSessionStart(): Promise<void> {
-    const operation = sessionStartPromiseRef.current
-    if (operation !== null) await operation
+    const target = sessionViewTargetRef.current
+    if (target?.kind === 'new' && !target.prepared) {
+      await enqueueRuntimeEnsure({ kind: 'new' }, 'immediate')
+    }
+  }
+
+  function applyReturnedState(state: KernelState, revisionBeforeAction: number): void {
+    if (eventRevision.current !== revisionBeforeAction) return
+    kernelStateRef.current = state
+    setKernelState(state)
+    const nextTarget = keepValidSessionViewTarget(sessionViewTargetRef.current, state)
+    sessionViewTargetRef.current = nextTarget
+    setSessionViewTarget(nextTarget)
+    setSessionPreview((preview) => keepValidPreview(preview, state))
+  }
+
+  function closeForkDialog(): void {
+    forkRequestRevision.current += 1
+    setForkDialogOpen(false)
+    setForkCandidates([])
+    setForkCandidatesLoading(false)
+    setForkError(null)
+    setForkSubmitting(false)
+  }
+
+  async function loadForkCandidates(): Promise<void> {
+    const requestRevision = forkRequestRevision.current + 1
+    forkRequestRevision.current = requestRevision
+    setForkCandidatesLoading(true)
+    setForkError(null)
+    try {
+      const candidates = await window.piGui.listForkCandidates()
+      if (forkRequestRevision.current !== requestRevision) return
+      setForkCandidates(candidates)
+    } catch (error) {
+      if (forkRequestRevision.current !== requestRevision) return
+      setForkCandidates([])
+      setForkError(errorMessage(error))
+    } finally {
+      if (forkRequestRevision.current === requestRevision) setForkCandidatesLoading(false)
+    }
+  }
+
+  function openForkDialog(): void {
+    const state = kernelStateRef.current
+    if (
+      state === null ||
+      state.activeSessionKey === null ||
+      state.runtime.status !== 'ready' ||
+      !state.session.settled ||
+      sessionViewTargetRef.current !== null
+    ) {
+      setActionError('当前对话暂时不能分叉。')
+      return
+    }
+    setForkDialogOpen(true)
+    setForkCandidates([])
+    void loadForkCandidates()
+  }
+
+  async function forkSession(entryId: string): Promise<void> {
+    if (forkSubmitting || !forkCandidates.some((candidate) => candidate.entryId === entryId)) return
+    if (pendingActionRef.current !== null) throw new Error('Another action is already running.')
+    pendingActionRef.current = 'fork-session'
+    setPendingAction('fork-session')
+    setForkSubmitting(true)
+    setForkError(null)
+    setActionError(null)
+    const revisionBeforeAction = eventRevision.current
+    try {
+      const result = await window.piGui.forkSession(entryId)
+      if (result.cancelled) {
+        closeForkDialog()
+        return
+      }
+      applyReturnedState(result.state, revisionBeforeAction)
+      previewRequestRevision.current += 1
+      sessionViewTargetRef.current = null
+      setSessionViewTarget(null)
+      setSessionPreview(null)
+      setArchivedSessionPreview(null)
+      setPreviewPendingKey(null)
+      composerDraftRevision.current += 1
+      setComposerDraftRequest({
+        id: composerDraftRevision.current,
+        text: result.draft
+      })
+      closeForkDialog()
+      setCompletedAction({ action: 'fork-session', succeeded: true })
+    } catch (error) {
+      setForkError(errorMessage(error))
+      setCompletedAction({ action: 'fork-session', succeeded: false })
+      throw error
+    } finally {
+      pendingActionRef.current = null
+      setPendingAction(null)
+      setForkSubmitting(false)
+    }
+  }
+
+  async function exportSession(): Promise<void> {
+    if (pendingActionRef.current !== null) throw new Error('Another action is already running.')
+    pendingActionRef.current = 'export-session'
+    setPendingAction('export-session')
+    setActionError(null)
+    try {
+      const result = await window.piGui.exportSession()
+      if (result.saved) {
+        setCompletedAction({ action: 'export-session', succeeded: true })
+      }
+    } catch (error) {
+      setActionError(errorMessage(error))
+      setCompletedAction({ action: 'export-session', succeeded: false })
+    } finally {
+      pendingActionRef.current = null
+      setPendingAction(null)
+    }
+  }
+
+  async function copyLastAnswer(): Promise<void> {
+    if (pendingActionRef.current !== null) throw new Error('Another action is already running.')
+    const state = kernelStateRef.current
+    if (
+      state === null ||
+      state.activeSessionKey === null ||
+      state.runtime.status !== 'ready' ||
+      !state.session.settled ||
+      sessionViewTargetRef.current !== null
+    ) {
+      throw new Error('当前对话暂时没有可复制的最终回答。')
+    }
+    const answer = lastAssistantFinalAnswer(state)
+    if (answer === null) throw new Error('当前对话暂时没有可复制的最终回答。')
+
+    pendingActionRef.current = 'copy-last-answer'
+    setPendingAction('copy-last-answer')
+    setActionError(null)
+    try {
+      await navigator.clipboard.writeText(answer)
+      setCompletedAction({ action: 'copy-last-answer', succeeded: true })
+    } catch (error) {
+      setActionError(errorMessage(error))
+      setCompletedAction({ action: 'copy-last-answer', succeeded: false })
+      throw error
+    } finally {
+      pendingActionRef.current = null
+      setPendingAction(null)
+    }
+  }
+
+  async function invokeCommand(commandId: string, argument: string): Promise<void> {
+    if (
+      commandId === FORK_SESSION_COMMAND_ID ||
+      commandId === EXPORT_SESSION_COMMAND_ID ||
+      commandId === COPY_LAST_ANSWER_COMMAND_ID
+    ) {
+      if (argument.trim().length > 0) {
+        const commandName = commandId === FORK_SESSION_COMMAND_ID
+          ? 'fork'
+          : commandId === EXPORT_SESSION_COMMAND_ID ? 'export' : 'copy'
+        throw new Error(`/${commandName} 不接受参数。`)
+      }
+      if (commandId === FORK_SESSION_COMMAND_ID) {
+        openForkDialog()
+        return
+      }
+      if (commandId === EXPORT_SESSION_COMMAND_ID) {
+        await exportSession()
+        return
+      }
+      await copyLastAnswer()
+      return
+    }
+
+    await runAction('invoke-command', () => window.piGui.invokeCommand(commandId, argument))
+  }
+
+  async function archiveSession(sessionKey: string): Promise<void> {
+    if (pendingActionRef.current !== null) throw new Error('Another action is already running.')
+    pendingActionRef.current = 'archive-session'
+    setPendingAction('archive-session')
+    setActionError(null)
+    setArchivedSessionPreview(null)
+    const revisionBeforeAction = eventRevision.current
+    let succeeded = false
+    try {
+      const result = await window.piGui.archiveSession(sessionKey)
+      applyReturnedState(result.state, revisionBeforeAction)
+      const expiresAt = Date.now() + result.receipt.durationMs
+      setArchiveNotifications((current) => [
+        ...current.filter(({ receipt }) => receipt.token !== result.receipt.token),
+        { receipt: result.receipt, expiresAt, pending: null }
+      ])
+      if (
+        sessionViewTargetRef.current?.kind === 'session' &&
+        sessionViewTargetRef.current.sessionKey === sessionKey
+      ) clearSessionView()
+      setSessionPreview((preview) =>
+        preview?.sessionKey === sessionKey ? null : preview
+      )
+      succeeded = true
+    } catch (error) {
+      setActionError(errorMessage(error))
+      throw error
+    } finally {
+      setCompletedAction({ action: 'archive-session', succeeded })
+      pendingActionRef.current = null
+      setPendingAction(null)
+    }
+  }
+
+  function setArchiveNotificationPending(
+    token: string,
+    pending: ArchiveNotification['pending']
+  ): void {
+    setArchiveNotifications((current) => current.map((notification) =>
+      notification.receipt.token === token
+        ? { ...notification, pending }
+        : notification
+    ))
+  }
+
+  function removeArchiveNotification(token: string): void {
+    setArchiveNotifications((current) =>
+      current.filter(({ receipt }) => receipt.token !== token)
+    )
+  }
+
+  async function undoArchive(notification: ArchiveNotification): Promise<void> {
+    const { token } = notification.receipt
+    if (notification.expiresAt <= Date.now() || notification.pending !== null) {
+      removeArchiveNotification(token)
+      return
+    }
+    setArchiveNotificationPending(token, 'undo')
+    setActionError(null)
+    const revisionBeforeAction = eventRevision.current
+    try {
+      const state = await window.piGui.undoArchiveSession(token)
+      applyReturnedState(state, revisionBeforeAction)
+      removeArchiveNotification(token)
+      setCompletedAction({ action: 'undo-archive-session', succeeded: true })
+    } catch (error) {
+      removeArchiveNotification(token)
+      setActionError(errorMessage(error))
+      setCompletedAction({ action: 'undo-archive-session', succeeded: false })
+    }
+  }
+
+  async function previewArchivedSession(notification: ArchiveNotification): Promise<void> {
+    const { token } = notification.receipt
+    if (notification.expiresAt <= Date.now() || notification.pending !== null) {
+      removeArchiveNotification(token)
+      return
+    }
+    setArchiveNotificationPending(token, 'preview')
+    setActionError(null)
+    try {
+      const preview = await window.piGui.previewArchivedSession(token)
+      removeArchiveNotification(token)
+      clearSessionView()
+      if (notification.expiresAt > Date.now()) {
+        setArchivedSessionPreview({
+          preview,
+          expiresAt: notification.expiresAt
+        })
+      }
+      setCompletedAction({ action: 'preview-archived-session', succeeded: true })
+    } catch (error) {
+      removeArchiveNotification(token)
+      setActionError(errorMessage(error))
+      setCompletedAction({ action: 'preview-archived-session', succeeded: false })
+    }
+  }
+
+  async function resolveProjectTrust(
+    requestId: string,
+    choice: KernelProjectTrustChoice
+  ): Promise<void> {
+    const revisionBeforeAction = eventRevision.current
+    const state = await window.piGui.resolveProjectTrust(requestId, choice)
+    if (eventRevision.current === revisionBeforeAction) {
+      kernelStateRef.current = state
+      setKernelState(state)
+    }
+  }
+
+  async function setShortcuts(settings: ShortcutSettings): Promise<void> {
+    const revisionBeforeAction = eventRevision.current
+    const state = await window.piGui.setShortcuts(settings)
+    applyReturnedState(state, revisionBeforeAction)
   }
 
   if (kernelState === null) {
@@ -349,9 +938,12 @@ export function App(): React.JSX.Element {
   }
 
   return (
-    <Workbench
+    <>
+      <Workbench
       state={kernelState}
       sessionPreview={sessionPreview}
+      archivedSessionPreview={archivedSessionPreview?.preview ?? null}
+      composerDraftRequest={composerDraftRequest}
       viewedSessionKey={
         sessionViewTarget?.kind === 'session' ? sessionViewTarget.sessionKey : null
       }
@@ -368,34 +960,40 @@ export function App(): React.JSX.Element {
       actionError={actionError ?? ipcError}
       systemFonts={systemFonts}
       systemFontsError={systemFontsError}
-      onAddProject={() => runAction('add-project', () => window.piGui.addProject())}
+      forkDialogOpen={forkDialogOpen}
+      forkCandidates={forkCandidates}
+      forkCandidatesLoading={forkCandidatesLoading}
+      forkError={forkError}
+      forkSubmitting={forkSubmitting}
+      onAddProject={() => {
+        setArchivedSessionPreview(null)
+        return runAction('add-project', () => window.piGui.addProject())
+      }}
       onActivateProject={async (projectKey) => {
+        setArchivedSessionPreview(null)
+        await waitForRuntimeEnsureIdle()
         await runAction('activate-project', () => window.piGui.activateProject(projectKey))
         clearSessionView()
       }}
       onStartSession={startSession}
+      onReloadSession={() =>
+        runAction('reload-session', () => window.piGui.reloadSession())}
       onWaitForSessionStart={waitForSessionStart}
-      onActivateSession={async (sessionKey) => {
-        await runAction('activate-session', () => window.piGui.activateSession(sessionKey))
-        clearSessionView()
-      }}
+      onResolveProjectTrust={resolveProjectTrust}
+      onActivateSession={(sessionKey) => ensureSessionRuntime(sessionKey, 'immediate')}
+      onEnsureSessionRuntime={ensureSessionRuntime}
       onPreviewSession={previewSession}
       onClearSessionPreview={clearSessionView}
-      onArchiveSession={async (sessionKey) => {
-        await runAction('archive-session', () => window.piGui.archiveSession(sessionKey))
-        if (
-          sessionViewTargetRef.current?.kind === 'session' &&
-          sessionViewTargetRef.current.sessionKey === sessionKey
-        ) clearSessionView()
-        setSessionPreview((preview) =>
-          preview?.sessionKey === sessionKey ? null : preview
-        )
-      }}
+      onClearArchivedSessionPreview={() => setArchivedSessionPreview(null)}
+      onOpenForkDialog={openForkDialog}
+      onCloseForkDialog={closeForkDialog}
+      onRetryForkCandidates={() => void loadForkCandidates()}
+      onForkSession={forkSession}
+      onExportSession={exportSession}
+      onCopyLastAnswer={copyLastAnswer}
+      onArchiveSession={archiveSession}
       onReorderProjects={(projectKeys) =>
         runAction('reorder-projects', () => window.piGui.reorderProjects(projectKeys))
-      }
-      onReorderSessions={(sessionKeys) =>
-        runAction('reorder-sessions', () => window.piGui.reorderSessions(sessionKeys))
       }
       onInstallExtension={(kind) =>
         runAction('install-extension', () => window.piGui.installExtension(kind))
@@ -423,17 +1021,23 @@ export function App(): React.JSX.Element {
       onSaveProvider={window.piGui.saveProvider}
       onRemoveProvider={window.piGui.removeProvider}
       onTestProvider={window.piGui.testProvider}
+      onFetchModelPricing={window.piGui.fetchModelPricing}
+      onListProviderCredentials={window.piGui.listProviderCredentials}
+      onLoginProvider={window.piGui.loginProvider}
+      onSubmitProviderAuthPrompt={window.piGui.submitProviderAuthPrompt}
+      onCancelProviderLogin={window.piGui.cancelProviderLogin}
+      onLogoutProvider={window.piGui.logoutProvider}
+      onSubscribeProviderAuth={window.piGui.subscribeProviderAuth}
       onSelectPromptAttachments={() => window.piGui.selectPromptAttachments()}
+      onSearchProjectPaths={(query) => window.piGui.searchProjectPaths(query)}
       onPrompt={(message, attachments?: KernelPromptAttachment[]) =>
         runAction('prompt', () => window.piGui.prompt(message, attachments), false)}
       onSteer={(message, attachments?: KernelPromptAttachment[]) =>
         runAction('steer', () => window.piGui.steer(message, attachments), false)}
       onFollowUp={(message, attachments?: KernelPromptAttachment[]) =>
         runAction('follow-up', () => window.piGui.followUp(message, attachments), false)}
-      onInvokeCommand={(commandId, argument) =>
-        runAction('invoke-command', () => window.piGui.invokeCommand(commandId, argument))
-      }
-      onAbort={() => runAction('abort', () => window.piGui.abort())}
+      onInvokeCommand={invokeCommand}
+      onAbort={() => runAction('abort', () => window.piGui.abort(), false)}
       onSetModel={(provider, modelId) =>
         runAction('set-model', () => window.piGui.setModel(provider, modelId))
       }
@@ -449,8 +1053,82 @@ export function App(): React.JSX.Element {
       onSetAppearance={(settings: AppearanceSettings) =>
         runAction('set-appearance', () => window.piGui.setAppearance(settings))
       }
-    />
+      onSetShortcuts={setShortcuts}
+      />
+      {archiveNotifications.length === 0 && compactionNotice === null ? null : createPortal(
+        <section
+          className="archive-notification-region"
+          aria-label="操作通知"
+          aria-live="polite"
+          aria-relevant="additions removals"
+        >
+          {archiveNotifications.map((notification) => (
+            <article
+              className="archive-notification"
+              key={notification.receipt.token}
+              aria-busy={notification.pending !== null}
+            >
+              <div className="archive-notification-copy">
+                <strong>
+                  {notification.receipt.sessionName?.trim() ||
+                    `对话 ${notification.receipt.sessionKey.split(/[\\/]/).at(-1) ?? ''}`}
+                </strong>
+                <span>已归档，可在短时间内撤销或临时查看</span>
+              </div>
+              <div className="archive-notification-actions">
+                <button
+                  type="button"
+                  disabled={notification.pending !== null}
+                  onClick={() => void undoArchive(notification)}
+                >
+                  {notification.pending === 'undo' ? '撤销中…' : '撤销'}
+                </button>
+                <button
+                  type="button"
+                  disabled={notification.pending !== null}
+                  onClick={() => void previewArchivedSession(notification)}
+                >
+                  {notification.pending === 'preview' ? '读取中…' : '临时查看'}
+                </button>
+              </div>
+            </article>
+          ))}
+          {compactionNotice === null ? null : (
+            <article className="archive-notification">
+              <div className="archive-notification-copy">
+                <strong>上下文整理未完成</strong>
+                <span>
+                  {compactionNotice === 'cancelled'
+                    ? '上下文整理已取消，对话内容保持不变。'
+                    : '上下文整理失败，对话内容保持不变。'}
+                </span>
+              </div>
+              <div className="archive-notification-actions">
+                <button type="button" onClick={() => setCompactionNotice(null)}>关闭</button>
+              </div>
+            </article>
+          )}
+        </section>,
+        document.body
+      )}
+    </>
   )
+}
+
+function lastAssistantFinalAnswer(state: KernelState): string | null {
+  for (let index = state.conversation.entries.length - 1; index >= 0; index -= 1) {
+    const entry = state.conversation.entries[index]
+    if (
+      entry.kind === 'message' &&
+      entry.role === 'assistant' &&
+      !entry.streaming &&
+      (entry.phase === 'final_answer' || entry.phase == null) &&
+      entry.text.trim().length > 0
+    ) {
+      return entry.text
+    }
+  }
+  return null
 }
 
 function applySelectedFont(
@@ -489,7 +1167,11 @@ function keepValidSessionViewTarget(
   if (state.activeSessionKey === null) {
     return target.sawProvisional ? target : { ...target, sawProvisional: true }
   }
-  return target.sawProvisional ? null : target
+  // Provisional new sessions clear activeSessionKey first. Once a real session is
+  // registered, leave the synthetic "new" view even if the null phase was missed
+  // (IPC ordering) or the session was registered without a provisional phase.
+  if (target.sawProvisional || target.prepared) return null
+  return target
 }
 
 function applyStatePatches(state: KernelState, patches: KernelStatePatch[]): KernelState {
@@ -501,6 +1183,10 @@ function applyStatePatches(state: KernelState, patches: KernelStatePatch[]): Ker
   let entriesCopied = false
 
   for (const patch of patches) {
+    if (
+      patch.projectKey !== state.activeProjectKey ||
+      patch.sessionKey !== state.activeSessionKey
+    ) continue
     if (patch.runtime !== undefined) runtime = patch.runtime
     if (patch.session !== undefined) session = patch.session
     if (patch.conversation === undefined) continue

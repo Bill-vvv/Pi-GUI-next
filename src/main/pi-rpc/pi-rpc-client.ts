@@ -33,6 +33,22 @@ export type PiRpcModel = {
   [key: string]: unknown
 }
 
+export type PiRpcModelCostTier = {
+  inputTokensAbove: number
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
+export type PiRpcModelCost = {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  tiers?: PiRpcModelCostTier[]
+}
+
 export type PiRpcAvailableModel = {
   id: string
   provider: string
@@ -40,6 +56,7 @@ export type PiRpcAvailableModel = {
   reasoning?: boolean
   thinkingLevelMap?: ThinkingLevelMap
   contextWindow?: number
+  cost?: PiRpcModelCost
 }
 
 export type PiRpcSessionStats = {
@@ -79,6 +96,30 @@ export type PiRpcSessionState = {
   [key: string]: unknown
 }
 
+export type PiRpcSessionEntry = {
+  id: string
+  parentId: string | null
+  type: string
+  timestamp: string
+  message?: {
+    role: string
+    content?: {
+      text: string
+      hasImage: boolean
+    }
+  }
+}
+
+export type PiRpcEntriesResult = {
+  entries: PiRpcSessionEntry[]
+  leafId: string | null
+}
+
+export type PiRpcForkResult = {
+  text: string
+  cancelled: boolean
+}
+
 export type PiRpcSlashCommand = {
   name: string
   description?: string
@@ -104,6 +145,8 @@ type PiRpcCommandName =
   | 'get_state'
   | 'get_session_stats'
   | 'get_messages'
+  | 'get_entries'
+  | 'fork'
   | 'prompt'
   | 'steer'
   | 'follow_up'
@@ -203,6 +246,33 @@ export class PiRpcClient {
     return data.messages
   }
 
+  async getEntries(timeoutMs = this.requestTimeoutMs): Promise<PiRpcEntriesResult> {
+    const data = await this.request({ type: 'get_entries' }, true, timeoutMs)
+    if (
+      !isRecord(data) ||
+      !Array.isArray(data.entries) ||
+      !(data.leafId === null || isNonEmptyString(data.leafId))
+    ) {
+      throw new Error('Invalid Pi RPC get_entries response')
+    }
+
+    return {
+      entries: data.entries.map(normalizePiRpcSessionEntry),
+      leafId: data.leafId
+    }
+  }
+
+  async fork(entryId: string, timeoutMs = this.requestTimeoutMs): Promise<PiRpcForkResult> {
+    if (entryId.trim().length === 0) {
+      throw new Error('Pi RPC fork entry ID must not be empty')
+    }
+    const data = await this.request({ type: 'fork', entryId }, true, timeoutMs)
+    if (!isRecord(data) || typeof data.text !== 'string' || typeof data.cancelled !== 'boolean') {
+      throw new Error('Invalid Pi RPC fork response')
+    }
+    return { text: data.text, cancelled: data.cancelled }
+  }
+
   async prompt(
     message: string,
     images?: readonly KernelPromptImage[],
@@ -294,7 +364,8 @@ export class PiRpcClient {
         ...(model.thinkingLevelMap === undefined
           ? {}
           : { thinkingLevelMap: projectThinkingLevelMap(model.thinkingLevelMap) }),
-        ...(typeof model.contextWindow === 'number' ? { contextWindow: model.contextWindow } : {})
+        ...(typeof model.contextWindow === 'number' ? { contextWindow: model.contextWindow } : {}),
+        ...(model.cost === undefined ? {} : { cost: projectPiRpcModelCost(model.cost) })
       }
     })
   }
@@ -459,6 +530,77 @@ function isPiRpcModel(value: unknown): value is PiRpcModel {
   )
 }
 
+function normalizePiRpcSessionEntry(value: unknown): PiRpcSessionEntry {
+  if (
+    !isRecord(value) ||
+    !isNonEmptyString(value.id) ||
+    !(value.parentId === null || typeof value.parentId === 'string') ||
+    !isNonEmptyString(value.type) ||
+    !isNonEmptyString(value.timestamp)
+  ) {
+    throw new Error('Invalid Pi RPC get_entries response')
+  }
+
+  const entry = {
+    id: value.id,
+    parentId: value.parentId,
+    type: value.type,
+    timestamp: value.timestamp
+  }
+  if (value.type !== 'message') {
+    return entry
+  }
+  if (!isRecord(value.message) || !isNonEmptyString(value.message.role)) {
+    throw new Error('Invalid Pi RPC get_entries response')
+  }
+  if (value.message.role !== 'user') {
+    return { ...entry, message: { role: value.message.role } }
+  }
+
+  return {
+    ...entry,
+    message: {
+      role: value.message.role,
+      content: normalizeUserContent(value.message.content)
+    }
+  }
+}
+
+function normalizeUserContent(content: unknown): { text: string; hasImage: boolean } {
+  if (typeof content === 'string') {
+    return { text: content, hasImage: false }
+  }
+  if (!Array.isArray(content)) {
+    throw new Error('Invalid Pi RPC get_entries response')
+  }
+
+  const text: string[] = []
+  let hasImage = false
+  for (const block of content) {
+    if (!isRecord(block) || !isNonEmptyString(block.type)) {
+      throw new Error('Invalid Pi RPC get_entries response')
+    }
+    if (block.type === 'text') {
+      if (typeof block.text !== 'string') {
+        throw new Error('Invalid Pi RPC get_entries response')
+      }
+      text.push(block.text)
+    } else if (block.type === 'image') {
+      if (!isNonEmptyString(block.mimeType) || !isNonEmptyString(block.data)) {
+        throw new Error('Invalid Pi RPC get_entries response')
+      }
+      hasImage = true
+    } else {
+      throw new Error('Invalid Pi RPC get_entries response')
+    }
+  }
+  return { text: text.join(''), hasImage }
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
 function isPiRpcAvailableModel(value: unknown): value is PiRpcAvailableModel {
   return (
     isRecord(value) &&
@@ -469,8 +611,54 @@ function isPiRpcAvailableModel(value: unknown): value is PiRpcAvailableModel {
     (!('name' in value) || typeof value.name === 'string') &&
     (!('reasoning' in value) || typeof value.reasoning === 'boolean') &&
     isOptionalThinkingLevelMap(value.thinkingLevelMap) &&
-    (!('contextWindow' in value) || typeof value.contextWindow === 'number')
+    (!('contextWindow' in value) || typeof value.contextWindow === 'number') &&
+    (!('cost' in value) || isPiRpcModelCost(value.cost))
   )
+}
+
+function isPiRpcModelCost(value: unknown): value is PiRpcModelCost {
+  return (
+    isRecord(value) &&
+    isNonNegativeNumber(value.input) &&
+    isNonNegativeNumber(value.output) &&
+    isNonNegativeNumber(value.cacheRead) &&
+    isNonNegativeNumber(value.cacheWrite) &&
+    (
+      value.tiers === undefined ||
+      (
+        Array.isArray(value.tiers) &&
+        value.tiers.every((tier) =>
+          isRecord(tier) &&
+          Number.isSafeInteger(tier.inputTokensAbove) &&
+          isNonNegativeNumber(tier.inputTokensAbove) &&
+          isNonNegativeNumber(tier.input) &&
+          isNonNegativeNumber(tier.output) &&
+          isNonNegativeNumber(tier.cacheRead) &&
+          isNonNegativeNumber(tier.cacheWrite)
+        )
+      )
+    )
+  )
+}
+
+function projectPiRpcModelCost(cost: PiRpcModelCost): PiRpcModelCost {
+  return {
+    input: cost.input,
+    output: cost.output,
+    cacheRead: cost.cacheRead,
+    cacheWrite: cost.cacheWrite,
+    ...(cost.tiers === undefined
+      ? {}
+      : {
+          tiers: cost.tiers.map((tier) => ({
+            inputTokensAbove: tier.inputTokensAbove,
+            input: tier.input,
+            output: tier.output,
+            cacheRead: tier.cacheRead,
+            cacheWrite: tier.cacheWrite
+          }))
+        })
+  }
 }
 
 function isPiRpcSessionStats(value: unknown): value is PiRpcSessionStats {
@@ -546,7 +734,6 @@ function isPiRpcSlashCommand(value: unknown): value is PiRpcSlashCommand {
     typeof value.name === 'string' &&
     value.name.length > 0 &&
     !value.name.startsWith('/') &&
-    !/\s/u.test(value.name) &&
     (!('description' in value) || typeof value.description === 'string') &&
     (value.source === 'extension' || value.source === 'prompt' || value.source === 'skill')
   )

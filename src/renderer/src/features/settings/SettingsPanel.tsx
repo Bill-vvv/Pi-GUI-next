@@ -6,18 +6,24 @@ import type {
   KernelCommandDescriptor,
   KernelExtensionSelectionKind,
   KernelInstalledPackage,
+  KernelModelPricingFetchResult,
   KernelPiDevCatalog,
+  KernelProviderAuthEvent,
+  KernelProviderAuthType,
   KernelProviderConfig,
+  KernelProviderCredential,
   KernelProviderInput,
   KernelProviderTestResult,
   KernelState,
-  SessionNamingSettings
+  SessionNamingSettings,
+  ShortcutSettings
 } from '../../../../shared/kernel-contract'
 import { FontSelect } from '../../components/FontSelect'
 import { Select, type SelectOptionGroup } from '../../components/Select'
 import { InstalledPackages } from './InstalledPackages'
 import { PiDevCatalog } from './PiDevCatalog'
-import { ProviderSettings } from './ProviderSettings'
+import { CredentialsPanel } from './CredentialsPanel'
+import { ShortcutSettingsPanel } from './ShortcutSettingsPanel'
 import {
   TOOL_DISPLAY_DENSITIES,
   type ToolDisplayDensity
@@ -26,6 +32,8 @@ import {
 export type SettingsSection =
   | 'general'
   | 'models'
+  | 'credentials'
+  | 'shortcuts'
   | 'appearance'
   | 'packages'
   | 'extensions'
@@ -56,10 +64,31 @@ type SettingsPanelProps = {
   onSaveProvider: (provider: KernelProviderInput) => Promise<KernelProviderConfig[]>
   onRemoveProvider: (providerId: string) => Promise<KernelProviderConfig[]>
   onTestProvider: (providerId: string, modelId: string) => Promise<KernelProviderTestResult>
+  onFetchModelPricing: (
+    providerId: string,
+    modelId: string
+  ) => Promise<KernelModelPricingFetchResult>
+  onListProviderCredentials: () => Promise<KernelProviderCredential[]>
+  onLoginProvider: (
+    providerId: string,
+    authType: KernelProviderAuthType
+  ) => Promise<KernelProviderCredential[]>
+  onSubmitProviderAuthPrompt: (
+    operationId: string,
+    promptId: string,
+    value: string
+  ) => Promise<void>
+  onCancelProviderLogin: (operationId: string) => Promise<void>
+  onLogoutProvider: (providerId: string) => Promise<KernelProviderCredential[]>
+  onSubscribeProviderAuth: (
+    listener: (event: KernelProviderAuthEvent) => void
+  ) => () => void
   onSetModel: (provider: string, modelId: string) => Promise<void>
   onSetSessionNaming: (settings: SessionNamingSettings) => Promise<void>
   onSetGeneral: (settings: GeneralSettings) => Promise<void>
   onSetAppearance: (settings: AppearanceSettings) => Promise<void>
+  onSetShortcuts: (settings: ShortcutSettings) => Promise<void>
+  onShortcutRecordingChange: (recording: boolean) => void
   toolDisplayDensity: ToolDisplayDensity
   onSetToolDisplayDensity: (density: ToolDisplayDensity) => void
 }
@@ -88,10 +117,19 @@ export function SettingsPanel({
   onSaveProvider,
   onRemoveProvider,
   onTestProvider,
+  onFetchModelPricing,
+  onListProviderCredentials,
+  onLoginProvider,
+  onSubmitProviderAuthPrompt,
+  onCancelProviderLogin,
+  onLogoutProvider,
+  onSubscribeProviderAuth,
   onSetModel,
   onSetSessionNaming,
   onSetGeneral,
   onSetAppearance,
+  onSetShortcuts,
+  onShortcutRecordingChange,
   toolDisplayDensity,
   onSetToolDisplayDensity
 }: SettingsPanelProps): React.JSX.Element {
@@ -801,14 +839,38 @@ export function SettingsPanel({
               </div>
             </section>
 
-            <ProviderSettings
+          </>
+        ) : null}
+
+        {section === 'credentials' ? (
+          <>
+            <div className="settings-section-heading">
+              <h2>凭证</h2>
+            </div>
+            <CredentialsPanel
               busy={busy}
+              onListProviderCredentials={onListProviderCredentials}
+              onLoginProvider={onLoginProvider}
+              onSubmitProviderAuthPrompt={onSubmitProviderAuthPrompt}
+              onCancelProviderLogin={onCancelProviderLogin}
+              onLogoutProvider={onLogoutProvider}
+              onSubscribeProviderAuth={onSubscribeProviderAuth}
+              onOpenExternal={onOpenExternal}
               onListProviders={onListProviders}
               onSaveProvider={onSaveProvider}
               onRemoveProvider={onRemoveProvider}
               onTestProvider={onTestProvider}
+              onFetchModelPricing={onFetchModelPricing}
             />
           </>
+        ) : null}
+
+        {section === 'shortcuts' ? (
+          <ShortcutSettingsPanel
+            settings={state.shortcuts}
+            onSave={onSetShortcuts}
+            onRecordingChange={onShortcutRecordingChange}
+          />
         ) : null}
 
         {section === 'preferences' ? (

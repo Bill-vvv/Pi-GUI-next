@@ -1,7 +1,13 @@
-import type { KernelCommandDescriptor } from '../../shared/kernel-contract.ts'
+import {
+  COPY_LAST_ANSWER_COMMAND_ID,
+  EXPORT_SESSION_COMMAND_ID,
+  FORK_SESSION_COMMAND_ID,
+  type KernelCommandDescriptor
+} from '../../shared/kernel-contract.ts'
 import type { PiRpcSlashCommand } from '../pi-rpc/pi-rpc-client.ts'
 
 export const NEW_SESSION_COMMAND_ID = 'gui.new-session'
+export const RELOAD_SESSION_COMMAND_ID = 'gui.reload'
 export const SET_MODEL_COMMAND_ID = 'pi-rpc.set-model'
 export const SET_THINKING_COMMAND_ID = 'pi-rpc.set-thinking-level'
 export const COMPACT_COMMAND_ID = 'pi-rpc.compact'
@@ -12,6 +18,27 @@ const BUILTIN_COMMANDS: readonly KernelCommandDescriptor[] = [
     id: NEW_SESSION_COMMAND_ID,
     name: 'new',
     description: '在当前项目中新建对话',
+    source: 'gui',
+    argumentHint: null
+  },
+  {
+    id: FORK_SESSION_COMMAND_ID,
+    name: 'fork',
+    description: '从当前活动路径的用户消息分叉会话',
+    source: 'gui',
+    argumentHint: null
+  },
+  {
+    id: EXPORT_SESSION_COMMAND_ID,
+    name: 'export',
+    description: '将当前活动分支导出为离线 HTML',
+    source: 'gui',
+    argumentHint: null
+  },
+  {
+    id: COPY_LAST_ANSWER_COMMAND_ID,
+    name: 'copy',
+    description: '复制最后一条 Assistant 最终回答',
     source: 'gui',
     argumentHint: null
   },
@@ -45,10 +72,20 @@ const BUILTIN_COMMANDS: readonly KernelCommandDescriptor[] = [
   }
 ]
 
+const RELOAD_SESSION_COMMAND: KernelCommandDescriptor = {
+  id: RELOAD_SESSION_COMMAND_ID,
+  name: 'reload',
+  description: '重新加载当前已持久化 Session',
+  source: 'gui',
+  argumentHint: null
+}
+
 export function createCommandCatalog(
-  piCommands: readonly PiRpcSlashCommand[] = []
+  piCommands: readonly PiRpcSlashCommand[] = [],
+  reloadAvailable = false
 ): KernelCommandDescriptor[] {
   const catalog = BUILTIN_COMMANDS.map((command) => ({ ...command }))
+  if (reloadAvailable) catalog.push({ ...RELOAD_SESSION_COMMAND })
   const knownNames = new Set(catalog.map(({ name }) => name.toLocaleLowerCase()))
 
   for (const command of piCommands) {

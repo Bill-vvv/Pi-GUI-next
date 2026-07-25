@@ -4,6 +4,7 @@ import {
   KERNEL_COMMAND_CHANNEL,
   KERNEL_EVENT_CHANNEL,
   OPEN_EXTERNAL_CHANNEL,
+  PROVIDER_AUTH_EVENT_CHANNEL,
   WINDOW_FULLSCREEN_CHANGED_CHANNEL,
   WINDOW_IS_FULLSCREEN_CHANNEL,
   WINDOW_IS_MAXIMIZED_CHANNEL,
@@ -11,13 +12,21 @@ import {
   WINDOW_TOGGLE_FULLSCREEN_CHANNEL,
   WINDOW_TOGGLE_MAXIMIZE_CHANNEL,
   type KernelApi,
+  type KernelArchiveResult,
   type KernelCommand,
   type KernelEvent,
   type KernelInstalledPackage,
+  type KernelModelPricingFetchResult,
+  type KernelForkCandidate,
+  type KernelForkResult,
   type KernelPiDevCatalog,
   type KernelPromptAttachment,
+  type KernelProjectPathSearchResult,
   type KernelProviderConfig,
+  type KernelProviderCredential,
+  type KernelProviderAuthEvent,
   type KernelProviderTestResult,
+  type KernelSessionExportResult,
   type KernelSessionPreview,
   type KernelState
 } from '../shared/kernel-contract'
@@ -49,6 +58,16 @@ const kernelApi: KernelApi = {
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
   },
+  reloadSession: () => {
+    const command: KernelCommand = { type: 'kernel.reload-session' }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+  },
+  resolveProjectTrust: (requestId, choice) => {
+    const command: KernelCommand = { type: 'kernel.resolve-project-trust', requestId, choice }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+  },
   activateSession: (sessionKey) => {
     const command: KernelCommand = { type: 'kernel.activate-session', sessionKey }
 
@@ -57,6 +76,11 @@ const kernelApi: KernelApi = {
   archiveSession: (sessionKey) => {
     const command: KernelCommand = { type: 'kernel.archive-session', sessionKey }
 
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelArchiveResult>
+  },
+  undoArchiveSession: (token) => {
+    const command: KernelCommand = { type: 'kernel.undo-archive-session', token }
+
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
   },
   previewSession: (sessionKey) => {
@@ -64,13 +88,33 @@ const kernelApi: KernelApi = {
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelSessionPreview>
   },
+  previewArchivedSession: (token) => {
+    const command: KernelCommand = { type: 'kernel.preview-archived-session', token }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelSessionPreview>
+  },
+  listForkCandidates: () => {
+    const command: KernelCommand = { type: 'kernel.list-fork-candidates' }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelForkCandidate[]>
+  },
+  forkSession: (entryId) => {
+    const command: KernelCommand = { type: 'kernel.fork-session', entryId }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelForkResult>
+  },
+  exportSession: () => {
+    const command: KernelCommand = { type: 'kernel.export-session' }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelSessionExportResult>
+  },
+  searchProjectPaths: (query) => {
+    const command: KernelCommand = { type: 'kernel.search-project-paths', query }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelProjectPathSearchResult>
+  },
   reorderProjects: (projectKeys) => {
     const command: KernelCommand = { type: 'kernel.reorder-projects', projectKeys }
-
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
-  },
-  reorderSessions: (sessionKeys) => {
-    const command: KernelCommand = { type: 'kernel.reorder-sessions', sessionKeys }
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
   },
@@ -139,6 +183,41 @@ const kernelApi: KernelApi = {
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelProviderTestResult>
   },
+  fetchModelPricing: (providerId, modelId) => {
+    const command: KernelCommand = { type: 'kernel.fetch-model-pricing', providerId, modelId }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelModelPricingFetchResult>
+  },
+  listProviderCredentials: () => {
+    const command: KernelCommand = { type: 'kernel.list-provider-credentials' }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelProviderCredential[]>
+  },
+  loginProvider: (providerId, authType) => {
+    const command: KernelCommand = { type: 'kernel.login-provider', providerId, authType }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelProviderCredential[]>
+  },
+  submitProviderAuthPrompt: (operationId, promptId, value) => {
+    const command: KernelCommand = {
+      type: 'kernel.submit-provider-auth-prompt',
+      operationId,
+      promptId,
+      value
+    }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<void>
+  },
+  cancelProviderLogin: (operationId) => {
+    const command: KernelCommand = { type: 'kernel.cancel-provider-login', operationId }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<void>
+  },
+  logoutProvider: (providerId) => {
+    const command: KernelCommand = { type: 'kernel.logout-provider', providerId }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelProviderCredential[]>
+  },
   selectPromptAttachments: () => {
     const command: KernelCommand = { type: 'kernel.select-prompt-attachments' }
 
@@ -201,6 +280,11 @@ const kernelApi: KernelApi = {
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
   },
+  setShortcuts: (settings) => {
+    const command: KernelCommand = { type: 'kernel.set-shortcuts', settings }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+  },
   invokeCommand: (commandId, argument) => {
     const command: KernelCommand = { type: 'kernel.invoke-command', commandId, argument }
 
@@ -231,6 +315,20 @@ const kernelApi: KernelApi = {
 
     return () => {
       ipcRenderer.removeListener(WINDOW_MAXIMIZED_CHANGED_CHANNEL, handleMaximizedChange)
+    }
+  },
+  subscribeProviderAuth: (listener) => {
+    const handleProviderAuthEvent = (
+      _event: IpcRendererEvent,
+      event: KernelProviderAuthEvent
+    ): void => {
+      listener(event)
+    }
+
+    ipcRenderer.on(PROVIDER_AUTH_EVENT_CHANNEL, handleProviderAuthEvent)
+
+    return () => {
+      ipcRenderer.removeListener(PROVIDER_AUTH_EVENT_CHANNEL, handleProviderAuthEvent)
     }
   },
   subscribe: (listener) => {

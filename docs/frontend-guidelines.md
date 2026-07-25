@@ -78,7 +78,7 @@ App / composition
 | `Select` | 已知有限选项的共享 listbox；支持分组、禁用、选中态、外点关闭以及 Arrow/Home/End/Enter/Space/Escape/Tab。模型级联菜单、slash 命令菜单等不同语义不得强塞进它。 |
 | `FontSelect` | 系统字体专用的可搜索 listbox，支持 UI/code 预览、不可用当前值和键盘选择；不是通用 searchable select。 |
 | `TooltipProvider` | 顶层统一 tooltip：读取 `data-tooltip`，hover 延迟、focus 立即显示，自动视口避让，Escape/滚动/缩放关闭，通过 portal 渲染并维护 `aria-describedby`。tooltip 只放补充说明，不能承载完成任务所必需的信息或操作。 |
-| `useViewportPopoverPosition` | 为 portal popover 计算 fixed 定位、视口边距、上下翻转或左右级联、限宽限高，并监听 resize/scroll；它只解决定位，不替调用方实现焦点、外点、Escape、ARIA 或选择语义。 |
+| `useViewportPopoverPosition` | 为 portal popover 计算 fixed 定位、视口边距、上下翻转或左右级联、限宽限高，并监听 viewport resize、scroll 和触发器尺寸变化；它只解决定位，不替调用方实现焦点、外点、Escape、ARIA 或选择语义。 |
 
 新代码优先复用上述真实边界；语义不相同时保留在 feature 内，避免为了表面样式相似制造万能组件。
 
@@ -89,7 +89,7 @@ App / composition
 当前 Workbench 使用四区：`Navigator / Header / Timeline / Composer`。
 
 - Navigator 展示 Project 与所属 Session、选择态、真实运行摘要和已接通的行内操作。Project 行负责 Project 选择；Session 行打开对应 Conversation。Header 展示当前 Project、Session、Runtime 和进入正常布局流的诊断。
-- Timeline 是可滚动正文区；Header 和 Composer 不得以未计入布局的浮层遮住消息。活动 run 与 settled 工作过程保持同一 turn group。长对话滚动时，Timeline 可在 Header 下粘着当前顶部阅读轮次的用户 prompt；原 prompt 仍可见时不重复展示，切换轮次时自动更新，长内容可展开，实际高度必须计入顶部安全区而不能覆盖正文。
+- Timeline 是可滚动正文区；Header 和 Composer 不得以未计入布局的浮层遮住消息。活动 run 与 settled 工作过程保持同一 turn group。长对话滚动时，Timeline 可在 Header 下粘着当前顶部阅读轮次的用户 prompt；原 prompt 仍可见时不重复展示，切换轮次时自动更新，长内容可展开，实际高度必须计入顶部安全区而不能覆盖正文。Navigator 完全展开时，Timeline 左缘可显示 Prompt 导航轨：短标记与真实用户轮次一一对应，支持预览与定位，首次悬浮延迟后同轨切换立即响应；窄窗口和折叠 Navigator 下不显示。
 - Composer 是底部输入与命令面，支持普通 prompt、运行中 follow-up/steer、slash、附件和 abort 的现有语义。
 - Composer、队列面板和其他底部层的实际高度必须参与动态 clearance；通过测量后的 reserved space/offset 让 Timeline 末尾始终可见，不能依赖固定输入框高度猜测。
 - 窄窗口优先保持主任务可用：Navigator 可按现有入口折叠；主区不得横向溢出；popover 依据 viewport 翻转并限宽限高；长标题、路径和选择值使用可控换行或 ellipsis。
@@ -100,7 +100,7 @@ App / composition
 - 每个交互控件都必须定义 hover、键盘 focus-visible、selected/expanded 和 disabled 状态；这些状态使用语义 token，并保证深浅主题可辨识。disabled 同时禁止动作，不能只降低透明度。
 - 原生 button/input 优先。自定义 listbox/combobox/menu 必须提供匹配的 role、`aria-expanded`、`aria-controls`、选择/活动语义和完整键盘路径；打开后焦点进入有效目标，Escape 关闭并按语义恢复触发器焦点，Tab 不形成焦点陷阱。
 - 只有 mouse hover 才出现的操作，也必须能在行内键盘聚焦时发现并执行；触控/键盘不能依赖 tooltip 才理解主要动作。
-- 导航拖拽必须遵守 hit testing：Project / Session 只在主行主键按下后临时武装，`pointerup`、`pointercancel`、`dragend` 均解除；action slot 不得武装拖拽。隐藏层除 `opacity: 0` 外还要正确设置 `pointer-events: none`、禁止文本选择并核对 stacking order。排序只改变持久化顺序，不得改变活动身份或 Runtime ownership。
+- Project 导航拖拽必须遵守 hit testing：只在 Project 主行主键按下后临时武装，`pointerup`、`pointercancel`、`dragend` 均解除；action slot 不得武装拖拽。隐藏层除 `opacity: 0` 外还要正确设置 `pointer-events: none`、禁止文本选择并核对 stacking order。Project 排序只改变持久化顺序，不得改变活动身份或 Runtime ownership。Session 不提供手动拖拽，统一消费 Kernel 的运行状态与最近活动时间排序。
 - portal 内容必须纳入外点判断、Escape 层级、焦点管理和视口变化处理；不能因为 DOM 脱离触发器就提前关闭或泄漏点击。
 - reduced motion 偏好下，Session/thinking 等状态仍要通过形状、文字或静态颜色可理解，不能只靠旋转、呼吸或闪烁表达。
 - tooltip 支持 hover 与 focus、使用 `role="tooltip"`/`aria-describedby`，并可用 Escape 关闭；按钮的 `aria-label` 不能由 tooltip 代替。

@@ -1,0 +1,15 @@
+.session-item {
+  gap: 8px;
+}
+
+.session-reload-required {
+  flex: 0 0 auto;
+  border: 1px solid var(--color-status-warning);
+  border-radius: var(--radius-pill);
+  padding: 1px 6px;
+  color: var(--color-status-warning);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+  line-height: var(--line-caption);
+  white-space: nowrap;
+}

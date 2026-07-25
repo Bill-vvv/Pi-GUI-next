@@ -12,6 +12,12 @@ import {
   type GeneralSettings,
   type SessionNamingSettings
 } from '../../shared/kernel-contract.ts'
+import {
+  copyShortcutSettings,
+  DEFAULT_SHORTCUT_SETTINGS,
+  isShortcutSettings,
+  type ShortcutSettings
+} from '../../shared/shortcut-settings.ts'
 import { isRecord } from '../utils/guards.ts'
 import {
   upsertSessionPointer,
@@ -88,13 +94,23 @@ type ProjectConfigFileV7 = {
   general: GeneralSettings
 }
 
-type ProjectConfigFile = {
+type ProjectConfigFileV8 = {
   version: 8
   projects: Array<{ path: string }>
   activeProjectKey: string | null
   sessionNaming: SessionNamingSettings
   appearance: AppearanceSettings
   general: GeneralSettings
+}
+
+type ProjectConfigFile = {
+  version: 9
+  projects: Array<{ path: string }>
+  activeProjectKey: string | null
+  sessionNaming: SessionNamingSettings
+  appearance: AppearanceSettings
+  general: GeneralSettings
+  shortcuts: ShortcutSettings
 }
 
 export type ProjectRegistry = {
@@ -106,6 +122,7 @@ type ProjectConfiguration = ProjectRegistry & {
   sessionNaming: SessionNamingSettings
   appearance: AppearanceSettings
   general: GeneralSettings
+  shortcuts: ShortcutSettings
 }
 
 type ProjectStateFileV1 = {
@@ -136,12 +153,19 @@ type ProjectStateFileV4 = {
   archivedSessionKeys: ActiveSessionSelection[]
 }
 
-type ProjectStateFile = {
+type ProjectStateFileV5 = {
   version: 5
   sessions: SessionPointer[]
   activeSessionKeys: ActiveSessionSelection[]
   archivedSessionKeys: ActiveSessionSelection[]
   manuallyOrderedProjectPaths: string[]
+}
+
+type ProjectStateFile = {
+  version: 6
+  sessions: SessionPointer[]
+  activeSessionKeys: ActiveSessionSelection[]
+  archivedSessionKeys: ActiveSessionSelection[]
 }
 
 export type ProjectStoreOptions = {
@@ -177,6 +201,10 @@ export class ProjectStore {
     return copyGeneral((await this.readConfiguration()).general)
   }
 
+  async loadShortcuts(): Promise<ShortcutSettings> {
+    return copyShortcutSettings((await this.readConfiguration()).shortcuts)
+  }
+
   addProject(project: { path: string }): Promise<ProjectRegistry> {
     assertProject(project)
     return this.enqueueSave(async () => {
@@ -189,17 +217,17 @@ export class ProjectStore {
         activeProjectKey: configuration.activeProjectKey,
         sessionNaming: configuration.sessionNaming,
         appearance: configuration.appearance,
-        general: configuration.general
+        general: configuration.general,
+        shortcuts: configuration.shortcuts
       }
       await writeJson(this.configFile, toProjectConfigFile(next))
       await ensureJson(
         this.stateFile,
         {
-          version: 5,
+          version: 6,
           sessions: [],
           activeSessionKeys: [],
-          archivedSessionKeys: [],
-          manuallyOrderedProjectPaths: []
+          archivedSessionKeys: []
         } satisfies ProjectStateFile
       )
       return copyRegistry(next)
@@ -265,6 +293,18 @@ export class ProjectStore {
     })
   }
 
+  saveShortcuts(settings: ShortcutSettings): Promise<void> {
+    assertShortcuts(settings)
+    const nextSettings = copyShortcutSettings(settings)
+    return this.enqueueSave(async () => {
+      const configuration = await this.readConfiguration()
+      await writeJson(this.configFile, toProjectConfigFile({
+        ...configuration,
+        shortcuts: nextSettings
+      }))
+    })
+  }
+
   private async readConfiguration(): Promise<ProjectConfiguration> {
     let text: string
     try {
@@ -276,7 +316,8 @@ export class ProjectStore {
           activeProjectKey: null,
           sessionNaming: { ...DEFAULT_SESSION_NAMING_SETTINGS },
           appearance: { ...DEFAULT_APPEARANCE_SETTINGS },
-          general: { ...DEFAULT_GENERAL_SETTINGS }
+          general: { ...DEFAULT_GENERAL_SETTINGS },
+          shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS)
         }
       }
       throw error
@@ -286,12 +327,22 @@ export class ProjectStore {
     if (isProjectConfigFile(value)) {
       return copyConfiguration(value)
     }
+    if (isProjectConfigFileV8(value)) {
+      return {
+        ...copyRegistry(value),
+        sessionNaming: copySessionNaming(value.sessionNaming),
+        appearance: copyAppearance(value.appearance),
+        general: requireGeneral(value.general),
+        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS)
+      }
+    }
     if (isProjectConfigFileV7(value)) {
       return {
         ...copyRegistry(value),
         sessionNaming: copySessionNaming(value.sessionNaming),
         appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
-        general: requireGeneral(value.general)
+        general: requireGeneral(value.general),
+        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS)
       }
     }
     if (isProjectConfigFileV6(value)) {
@@ -299,7 +350,8 @@ export class ProjectStore {
         ...copyRegistry(value),
         sessionNaming: copySessionNaming(value.sessionNaming),
         appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
-        general: requireGeneral(value.general)
+        general: requireGeneral(value.general),
+        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS)
       }
     }
     if (isProjectConfigFileV5(value)) {
@@ -307,7 +359,8 @@ export class ProjectStore {
         ...copyRegistry(value),
         sessionNaming: copySessionNaming(value.sessionNaming),
         appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
-        general: { ...DEFAULT_GENERAL_SETTINGS }
+        general: { ...DEFAULT_GENERAL_SETTINGS },
+        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS)
       }
     }
     if (isProjectConfigFileV4(value)) {
@@ -315,7 +368,8 @@ export class ProjectStore {
         ...copyRegistry(value),
         sessionNaming: copySessionNaming(value.sessionNaming),
         appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
-        general: { ...DEFAULT_GENERAL_SETTINGS }
+        general: { ...DEFAULT_GENERAL_SETTINGS },
+        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS)
       }
     }
     if (isProjectConfigFileV3(value)) {
@@ -323,7 +377,8 @@ export class ProjectStore {
         ...copyRegistry(value),
         sessionNaming: copySessionNaming(value.sessionNaming),
         appearance: { ...DEFAULT_APPEARANCE_SETTINGS },
-        general: { ...DEFAULT_GENERAL_SETTINGS }
+        general: { ...DEFAULT_GENERAL_SETTINGS },
+        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS)
       }
     }
     if (isProjectConfigFileV2(value)) {
@@ -331,7 +386,8 @@ export class ProjectStore {
         ...copyRegistry(value),
         sessionNaming: { ...DEFAULT_SESSION_NAMING_SETTINGS },
         appearance: { ...DEFAULT_APPEARANCE_SETTINGS },
-        general: { ...DEFAULT_GENERAL_SETTINGS }
+        general: { ...DEFAULT_GENERAL_SETTINGS },
+        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS)
       }
     }
     if (isProjectConfigFileV1(value)) {
@@ -340,7 +396,8 @@ export class ProjectStore {
         activeProjectKey: value.project.path,
         sessionNaming: { ...DEFAULT_SESSION_NAMING_SETTINGS },
         appearance: { ...DEFAULT_APPEARANCE_SETTINGS },
-        general: { ...DEFAULT_GENERAL_SETTINGS }
+        general: { ...DEFAULT_GENERAL_SETTINGS },
+        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS)
       }
     }
     throw new Error(`Invalid Pi GUI project config: ${this.configFile}`)
@@ -370,11 +427,9 @@ export class ProjectStore {
       .map((pointer) => ({ ...pointer }))
     const activeSessionKey = state.activeSessionKeys
       .find((selection) => selection.projectPath === projectPath)?.sessionKey ?? null
-    const manualOrder = state.manuallyOrderedProjectPaths.includes(projectPath)
     return {
       sessions,
-      activeSessionKey,
-      ...(manualOrder ? { manualOrder: true } : {})
+      activeSessionKey
     }
   }
 
@@ -431,46 +486,10 @@ export class ProjectStore {
         sessionKey: canonicalPointer.sessionFile
       })
       await writeJson(this.stateFile, {
-        version: 5,
+        version: 6,
         sessions,
         activeSessionKeys,
-        archivedSessionKeys: state.archivedSessionKeys,
-        manuallyOrderedProjectPaths: state.manuallyOrderedProjectPaths
-      } satisfies ProjectStateFile)
-    })
-  }
-
-  reorderSessions(projectPath: string, sessionKeys: string[]): Promise<void> {
-    assertAbsolute(projectPath, 'Project path')
-    return this.enqueueSave(async () => {
-      const state = await this.readSessionState()
-      const archivedSessionKeys = new Set(
-        state.archivedSessionKeys
-          .filter((selection) => selection.projectPath === projectPath)
-          .map((selection) => selection.sessionKey)
-      )
-      const projectSessions = state.sessions.filter((pointer) =>
-        pointer.projectPath === projectPath && !archivedSessionKeys.has(pointer.sessionFile)
-      )
-      const pointersBySessionFile = new Map(
-        projectSessions.map((pointer) => [pointer.sessionFile, pointer])
-      )
-      assertStrictPermutation(sessionKeys, [...pointersBySessionFile.keys()], 'Session keys')
-      const reorderedPointers = sessionKeys.map((sessionKey) => pointersBySessionFile.get(sessionKey)!)
-      let projectSessionIndex = 0
-      const sessions = state.sessions.map((pointer) =>
-        pointer.projectPath === projectPath && !archivedSessionKeys.has(pointer.sessionFile)
-          ? reorderedPointers[projectSessionIndex++]!
-          : pointer
-      )
-      await writeJson(this.stateFile, {
-        version: 5,
-        sessions,
-        activeSessionKeys: state.activeSessionKeys,
-        archivedSessionKeys: state.archivedSessionKeys,
-        manuallyOrderedProjectPaths: state.manuallyOrderedProjectPaths.includes(projectPath)
-          ? state.manuallyOrderedProjectPaths
-          : [...state.manuallyOrderedProjectPaths, projectPath]
+        archivedSessionKeys: state.archivedSessionKeys
       } satisfies ProjectStateFile)
     })
   }
@@ -489,7 +508,7 @@ export class ProjectStore {
         selection.projectPath === projectPath && selection.sessionKey === sessionKey
       )) return
       await writeJson(this.stateFile, {
-        version: 5,
+        version: 6,
         sessions: state.sessions,
         activeSessionKeys: state.activeSessionKeys.filter((selection) =>
           selection.projectPath !== projectPath || selection.sessionKey !== sessionKey
@@ -497,9 +516,38 @@ export class ProjectStore {
         archivedSessionKeys: [
           ...state.archivedSessionKeys,
           { projectPath, sessionKey }
-        ],
-        manuallyOrderedProjectPaths: state.manuallyOrderedProjectPaths
+        ]
       } satisfies ProjectStateFile)
+    })
+  }
+
+  restoreArchivedSession(
+    projectPath: string,
+    sessionKey: string
+  ): Promise<ProjectSessionRegistry> {
+    assertAbsolute(projectPath, 'Project path')
+    assertAbsolute(sessionKey, 'Session key')
+    return this.enqueueSave(async () => {
+      const state = await this.readSessionState()
+      if (!state.sessions.some((pointer) =>
+        pointer.projectPath === projectPath && pointer.sessionFile === sessionKey
+      )) {
+        throw new Error(`Session is not registered for the project: ${sessionKey}`)
+      }
+      if (!state.archivedSessionKeys.some((selection) =>
+        selection.projectPath === projectPath && selection.sessionKey === sessionKey
+      )) {
+        throw new Error(`Session is not archived for the project: ${sessionKey}`)
+      }
+      await writeJson(this.stateFile, {
+        version: 6,
+        sessions: state.sessions,
+        activeSessionKeys: state.activeSessionKeys,
+        archivedSessionKeys: state.archivedSessionKeys.filter((selection) =>
+          selection.projectPath !== projectPath || selection.sessionKey !== sessionKey
+        )
+      } satisfies ProjectStateFile)
+      return this.loadSessionRegistry(projectPath)
     })
   }
 
@@ -510,11 +558,10 @@ export class ProjectStore {
     } catch (error) {
       if (isNodeError(error) && error.code === 'ENOENT') {
         return {
-          version: 5,
+          version: 6,
           sessions: [],
           activeSessionKeys: [],
-          archivedSessionKeys: [],
-          manuallyOrderedProjectPaths: []
+          archivedSessionKeys: []
         }
       }
       throw error
@@ -522,6 +569,7 @@ export class ProjectStore {
 
     const value: unknown = JSON.parse(text)
     if (isProjectStateFile(value)) return copyProjectState(value)
+    if (isProjectStateFileV5(value)) return migrateProjectStateV5(value)
     if (isProjectStateFileV4(value)) return migrateProjectStateV4(value)
     if (isProjectStateFileV3(value)) return migrateProjectStateV3(value)
     if (isProjectStateFileV2(value)) return migrateSessionPointers(value.recentSessions)
@@ -642,7 +690,7 @@ function isProjectConfigFileV5(value: unknown): value is ProjectConfigFileV5 {
   return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
 }
 
-function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
+function isProjectConfigFileV8(value: unknown): value is ProjectConfigFileV8 {
   if (
     !isRecord(value) ||
     Object.keys(value).length !== 6 ||
@@ -654,6 +702,25 @@ function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
     !isSessionNaming(value.sessionNaming) ||
     !isAppearance(value.appearance) ||
     !acceptsGeneral(value.general)
+  ) {
+    return false
+  }
+  return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
+}
+
+function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 7 ||
+    value.version !== 9 ||
+    !Array.isArray(value.projects) ||
+    !value.projects.every(isProject) ||
+    new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
+    (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
+    !isSessionNaming(value.sessionNaming) ||
+    !isAppearance(value.appearance) ||
+    !acceptsGeneral(value.general) ||
+    !isShortcutSettings(value.shortcuts)
   ) {
     return false
   }
@@ -715,12 +782,13 @@ function isProjectConfigFileV4(value: unknown): value is ProjectConfigFileV4 {
 
 function toProjectConfigFile(configuration: ProjectConfiguration): ProjectConfigFile {
   return {
-    version: 8,
+    version: 9,
     projects: configuration.projects.map((project) => ({ ...project })),
     activeProjectKey: configuration.activeProjectKey,
     sessionNaming: copySessionNaming(configuration.sessionNaming),
     appearance: copyAppearance(configuration.appearance),
-    general: copyGeneral(configuration.general)
+    general: copyGeneral(configuration.general),
+    shortcuts: copyShortcutSettings(configuration.shortcuts)
   }
 }
 
@@ -736,7 +804,8 @@ function copyConfiguration(configuration: ProjectConfiguration): ProjectConfigur
     ...copyRegistry(configuration),
     sessionNaming: copySessionNaming(configuration.sessionNaming),
     appearance: copyAppearance(configuration.appearance),
-    general: requireGeneral(configuration.general)
+    general: requireGeneral(configuration.general),
+    shortcuts: copyShortcutSettings(configuration.shortcuts)
   }
 }
 
@@ -762,6 +831,10 @@ function copyGeneral(settings: GeneralSettings): GeneralSettings {
     startupWorkspaceRestore: settings.startupWorkspaceRestore,
     doubleClickBorderMaximize: settings.doubleClickBorderMaximize
   }
+}
+
+function assertShortcuts(value: ShortcutSettings): void {
+  if (!isShortcutSettings(value)) throw new Error('Invalid Pi GUI shortcut settings.')
 }
 
 function assertGeneral(value: GeneralSettings): void {
@@ -923,6 +996,22 @@ function isProject(value: unknown): value is { path: string } {
 function isProjectStateFile(value: unknown): value is ProjectStateFile {
   if (
     !isRecord(value) ||
+    Object.keys(value).length !== 4 ||
+    value.version !== 6 ||
+    !Array.isArray(value.sessions) ||
+    !Array.isArray(value.activeSessionKeys) ||
+    !Array.isArray(value.archivedSessionKeys)
+  ) return false
+  return isProjectStateCollectionsValid(
+    value.sessions,
+    value.activeSessionKeys,
+    value.archivedSessionKeys
+  )
+}
+
+function isProjectStateFileV5(value: unknown): value is ProjectStateFileV5 {
+  if (
+    !isRecord(value) ||
     Object.keys(value).length !== 5 ||
     value.version !== 5 ||
     !Array.isArray(value.sessions) ||
@@ -1074,44 +1163,49 @@ function isSessionPointer(value: unknown): value is SessionPointer {
 
 function migrateSessionPointers(pointers: SessionPointer[]): ProjectStateFile {
   return {
-    version: 5,
+    version: 6,
     sessions: pointers.map((pointer) => ({ ...pointer })),
     activeSessionKeys: pointers.map((pointer) => ({
       projectPath: pointer.projectPath,
       sessionKey: pointer.sessionFile
     })),
-    archivedSessionKeys: [],
-    manuallyOrderedProjectPaths: []
+    archivedSessionKeys: []
   }
 }
 
 function migrateProjectStateV3(state: ProjectStateFileV3): ProjectStateFile {
   return {
-    version: 5,
+    version: 6,
     sessions: state.sessions.map((pointer) => ({ ...pointer })),
     activeSessionKeys: state.activeSessionKeys.map((selection) => ({ ...selection })),
-    archivedSessionKeys: [],
-    manuallyOrderedProjectPaths: []
+    archivedSessionKeys: []
   }
 }
 
 function migrateProjectStateV4(state: ProjectStateFileV4): ProjectStateFile {
   return {
-    version: 5,
+    version: 6,
     sessions: state.sessions.map((pointer) => ({ ...pointer })),
     activeSessionKeys: state.activeSessionKeys.map((selection) => ({ ...selection })),
-    archivedSessionKeys: state.archivedSessionKeys.map((selection) => ({ ...selection })),
-    manuallyOrderedProjectPaths: []
+    archivedSessionKeys: state.archivedSessionKeys.map((selection) => ({ ...selection }))
+  }
+}
+
+function migrateProjectStateV5(state: ProjectStateFileV5): ProjectStateFile {
+  return {
+    version: 6,
+    sessions: state.sessions.map((pointer) => ({ ...pointer })),
+    activeSessionKeys: state.activeSessionKeys.map((selection) => ({ ...selection })),
+    archivedSessionKeys: state.archivedSessionKeys.map((selection) => ({ ...selection }))
   }
 }
 
 function copyProjectState(state: ProjectStateFile): ProjectStateFile {
   return {
-    version: 5,
+    version: 6,
     sessions: state.sessions.map((pointer) => ({ ...pointer })),
     activeSessionKeys: state.activeSessionKeys.map((selection) => ({ ...selection })),
-    archivedSessionKeys: state.archivedSessionKeys.map((selection) => ({ ...selection })),
-    manuallyOrderedProjectPaths: [...state.manuallyOrderedProjectPaths]
+    archivedSessionKeys: state.archivedSessionKeys.map((selection) => ({ ...selection }))
   }
 }
 

@@ -9,6 +9,7 @@ import {
   type OpenDialogOptions
 } from 'electron'
 import { execFile } from 'node:child_process'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import {
@@ -16,6 +17,7 @@ import {
   KERNEL_EVENT_CHANNEL,
   KERNEL_PROVIDER_APIS,
   OPEN_EXTERNAL_CHANNEL,
+  PROVIDER_AUTH_EVENT_CHANNEL,
   WINDOW_FULLSCREEN_CHANGED_CHANNEL,
   WINDOW_IS_FULLSCREEN_CHANNEL,
   WINDOW_IS_MAXIMIZED_CHANNEL,
@@ -26,24 +28,33 @@ import {
   type GeneralSettings,
   type KernelCommand,
   type KernelEvent,
+  type KernelProviderAuthEvent,
   type KernelPromptAttachment,
+  type KernelProjectTrustChoice,
   type KernelProviderInput,
   type SessionNamingSettings,
   type ThinkingLevel
 } from '../shared/kernel-contract.ts'
+import { isShortcutSettings } from '../shared/shortcut-settings.ts'
 import { normalizeExternalUrl } from '../shared/external-url.ts'
 import { PiExtensionStore } from './extension/pi-extension-store.ts'
 import { PiDevPackageService } from './extension/pi-dev-package-service.ts'
+import { createSessionExportHtml } from './export/session-export-html.ts'
 import { WorkbenchKernel } from './kernel/workbench-kernel.ts'
 import { readPromptAttachments } from './prompt/prompt-attachment-selection.ts'
 import { PiProviderStore } from './provider/pi-provider-store.ts'
+import { PiProviderAuth } from './provider/pi-provider-auth.ts'
+import { fetchLiteLlmModelPricing } from './provider/litellm-model-pricing.ts'
 import { testProviderConnection } from './provider/provider-connection-test.ts'
 import { ProjectStore } from './project/project-store.ts'
+import { searchProjectPaths } from './project/project-path-search.ts'
+import { readSessionStatistics } from './project/session-statistics.ts'
 import { readSessionMessages } from './project/session-transcript.ts'
 import { LinuxLocalRuntime, probePiRpc } from './runtime/linux-local-runtime.ts'
 import { generateSessionNameWithPi } from './runtime/session-name-generator.ts'
 import { errorMessage } from './utils/errors.ts'
 import { isRecord } from './utils/guards.ts'
+import { PiProjectTrust } from './security/pi-project-trust.ts'
 import {
   isAllowedRendererUrl,
   resolveRendererTarget,
@@ -52,6 +63,7 @@ import {
 
 let mainWindow: BrowserWindow | null = null
 let kernel: WorkbenchKernel | null = null
+let providerAuth: PiProviderAuth | null = null
 let shutdownPromise: Promise<void> | null = null
 let allowQuit = false
 const MAX_PROMPT_IMAGE_BASE64_CHARS = 4.5 * 1024 * 1024
@@ -140,12 +152,20 @@ async function startApplication(): Promise<void> {
   const storedProjects = await projectStore.loadProjects()
   const sessionNaming = await projectStore.loadSessionNaming()
   const appearance = await projectStore.loadAppearance()
+  const shortcuts = await projectStore.loadShortcuts()
   const extensionStore = new PiExtensionStore()
   const providerStore = new PiProviderStore()
   await providerStore.synchronize()
+  providerAuth = new PiProviderAuth({
+    explicitExecutable: process.env.PI_GUI_PI_EXECUTABLE
+  })
+  providerAuth.subscribe(forwardProviderAuthEvent)
   const piDevPackageService = new PiDevPackageService({
     piExecutablePath: process.env.PI_GUI_PI_EXECUTABLE,
     fetch: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init)
+  })
+  const projectTrust = new PiProjectTrust({
+    explicitExecutable: process.env.PI_GUI_PI_EXECUTABLE
   })
   const extensions = await extensionStore.list()
   const sessionRegistries = new Map(await Promise.all(
@@ -170,11 +190,13 @@ async function startApplication(): Promise<void> {
       new LinuxLocalRuntime({
         cwd: project.path,
         explicitExecutable: process.env.PI_GUI_PI_EXECUTABLE,
-        sessionFile: launchOptions.sessionFile
+        sessionFile: launchOptions.sessionFile,
+        projectTrust: launchOptions.projectTrust
       }),
     projectRegistry,
     {
       sessionRegistry,
+      sessionRegistriesByProject: sessionRegistries,
       extensions,
       persistProject: async (project) => {
         await projectStore.addProject(project)
@@ -185,19 +207,23 @@ async function startApplication(): Promise<void> {
       persistSession: (pointer) => projectStore.saveSession(pointer),
       persistArchivedSession: (projectPath, sessionKey) =>
         projectStore.archiveSession(projectPath, sessionKey),
+      restoreArchivedSession: (projectPath, sessionKey) =>
+        projectStore.restoreArchivedSession(projectPath, sessionKey),
       validateSession: (pointer) => projectStore.validateSession(pointer),
       readSessionActivityAt: (pointer) => projectStore.sessionActivityAt(pointer.sessionFile),
+      readSessionStatistics,
       readSessionMessages,
       persistProjectOrder: (projectKeys) => projectStore.reorderProjects(projectKeys),
-      persistSessionOrder: (projectPath, sessionKeys) =>
-        projectStore.reorderSessions(projectPath, sessionKeys),
       sessionNaming,
       persistSessionNaming: (settings) => projectStore.saveSessionNaming(settings),
       appearance,
       persistAppearance: (settings) => projectStore.saveAppearance(settings),
       general,
       persistGeneral: (settings) => projectStore.saveGeneral(settings),
-      generateSessionName: generateSessionNameWithPi
+      shortcuts,
+      persistShortcuts: (settings) => projectStore.saveShortcuts(settings),
+      generateSessionName: generateSessionNameWithPi,
+      projectTrust
     }
   )
   await kernel.refreshSessionActivities()
@@ -242,6 +268,12 @@ async function startApplication(): Promise<void> {
         await kernel.start()
         return kernel.getState()
       }
+      case 'kernel.reload-session':
+        await kernel.reloadSession()
+        return kernel.getState()
+      case 'kernel.resolve-project-trust':
+        await kernel.resolveProjectTrust(command.requestId, command.choice)
+        return kernel.getState()
       case 'kernel.activate-session': {
         const project = configuredProject(kernel.getState())
         const canonicalPath = await projectStore.validateProjectPath(project.path)
@@ -251,16 +283,66 @@ async function startApplication(): Promise<void> {
         await kernel.activateSession(command.sessionKey)
         return kernel.getState()
       }
-      case 'kernel.archive-session':
-        await kernel.archiveSession(command.sessionKey)
+      case 'kernel.archive-session': {
+        const receipt = await kernel.archiveSession(command.sessionKey)
+        return { state: kernel.getState(), receipt }
+      }
+      case 'kernel.undo-archive-session':
+        await kernel.undoArchiveSession(command.token)
         return kernel.getState()
       case 'kernel.preview-session':
         return kernel.previewSession(command.sessionKey)
+      case 'kernel.preview-archived-session':
+        return kernel.previewArchivedSession(command.token)
+      case 'kernel.list-fork-candidates':
+        return kernel.listForkCandidates()
+      case 'kernel.fork-session': {
+        const result = await kernel.forkSession(command.entryId)
+        return { state: kernel.getState(), ...result }
+      }
+      case 'kernel.export-session': {
+        const preparation = await kernel.prepareSessionExport()
+        const options = {
+          title: '导出会话为 HTML',
+          defaultPath: sessionExportFileName(preparation.title),
+          filters: [{ name: 'HTML', extensions: ['html'] }]
+        }
+        const selection = mainWindow === null
+          ? await dialog.showSaveDialog(options)
+          : await dialog.showSaveDialog(mainWindow, options)
+        if (selection.canceled || selection.filePath === undefined) return { saved: false }
+        const confirmed = await kernel.prepareSessionExport()
+        if (!sameSessionExportIdentity(preparation, confirmed)) {
+          throw new Error('Session export cancelled because the active session changed.')
+        }
+        await writeFile(
+          selection.filePath,
+          createSessionExportHtml({ title: confirmed.title, messages: confirmed.messages }),
+          'utf8'
+        )
+        return { saved: true }
+      }
+      case 'kernel.search-project-paths': {
+        const project = configuredProject(kernel.getState())
+        const canonicalPath = await projectStore.validateProjectPath(project.path)
+        if (canonicalPath !== project.path) {
+          throw new Error(`Active project path no longer resolves canonically: ${project.path}`)
+        }
+        const matches = await searchProjectPaths({
+          projectPath: canonicalPath,
+          query: command.query
+        })
+        const confirmedPath = await projectStore.validateProjectPath(project.path)
+        if (confirmedPath !== project.path) {
+          throw new Error(`Active project path no longer resolves canonically: ${project.path}`)
+        }
+        if (kernel.getState().activeProjectKey !== project.path) {
+          throw new Error('Project path search cancelled because the active project changed.')
+        }
+        return { projectKey: project.path, query: command.query, matches }
+      }
       case 'kernel.reorder-projects':
         await kernel.reorderProjects(command.projectKeys)
-        return kernel.getState()
-      case 'kernel.reorder-sessions':
-        await kernel.reorderSessions(command.sessionKeys)
         return kernel.getState()
       case 'kernel.install-extension': {
         const options: OpenDialogOptions = command.kind === 'file'
@@ -321,6 +403,47 @@ async function startApplication(): Promise<void> {
           modelId: command.modelId,
           cwd: app.getPath('userData')
         })
+      case 'kernel.fetch-model-pricing':
+        return fetchLiteLlmModelPricing(
+          command.providerId,
+          command.modelId,
+          (input, init) => net.fetch(input, init)
+        )
+      case 'kernel.list-provider-credentials':
+        return requireProviderAuth().list()
+      case 'kernel.login-provider': {
+        const credentials = await requireProviderAuth().login(
+          command.providerId,
+          command.authType
+        )
+        kernel.markProviderSessionsForReload(command.providerId)
+        try {
+          await providerStore.synchronize()
+        } catch {
+          throw new Error('Provider login succeeded, but model catalog refresh failed.')
+        }
+        return credentials
+      }
+      case 'kernel.submit-provider-auth-prompt':
+        await requireProviderAuth().submitPrompt(
+          command.operationId,
+          command.promptId,
+          command.value
+        )
+        return
+      case 'kernel.cancel-provider-login':
+        await requireProviderAuth().cancel(command.operationId)
+        return
+      case 'kernel.logout-provider': {
+        const credentials = await requireProviderAuth().logout(command.providerId)
+        kernel.markProviderSessionsForReload(command.providerId)
+        try {
+          await providerStore.synchronize()
+        } catch {
+          throw new Error('Provider logout succeeded, but model catalog refresh failed.')
+        }
+        return credentials
+      }
       case 'kernel.select-prompt-attachments': {
         const options: OpenDialogOptions = {
           title: '选择附件',
@@ -358,6 +481,9 @@ async function startApplication(): Promise<void> {
         return kernel.getState()
       case 'kernel.set-general':
         await kernel.setGeneral(command.settings)
+        return kernel.getState()
+      case 'kernel.set-shortcuts':
+        await kernel.setShortcuts(command.settings)
         return kernel.getState()
       case 'kernel.invoke-command':
         await kernel.invokeCommand(command.commandId, command.argument)
@@ -465,6 +591,11 @@ function forwardKernelEvent(event: KernelEvent): void {
   mainWindow.webContents.send(KERNEL_EVENT_CHANNEL, event)
 }
 
+function forwardProviderAuthEvent(event: KernelProviderAuthEvent): void {
+  if (mainWindow === null || mainWindow.isDestroyed()) return
+  mainWindow.webContents.send(PROVIDER_AUTH_EVENT_CHANNEL, event)
+}
+
 function isKernelCommand(value: unknown): value is KernelCommand {
   if (!isRecord(value) || typeof value.type !== 'string') return false
   if (
@@ -472,9 +603,13 @@ function isKernelCommand(value: unknown): value is KernelCommand {
     value.type === 'kernel.list-system-fonts' ||
     value.type === 'kernel.add-project' ||
     value.type === 'kernel.start-session' ||
+    value.type === 'kernel.reload-session' ||
+    value.type === 'kernel.list-fork-candidates' ||
+    value.type === 'kernel.export-session' ||
     value.type === 'kernel.select-prompt-attachments' ||
     value.type === 'kernel.abort' ||
     value.type === 'kernel.list-providers' ||
+    value.type === 'kernel.list-provider-credentials' ||
     value.type === 'kernel.list-pi-packages' ||
     value.type === 'kernel.update-pi-packages'
   ) {
@@ -483,6 +618,11 @@ function isKernelCommand(value: unknown): value is KernelCommand {
   if (value.type === 'kernel.activate-project') {
     return typeof value.projectKey === 'string' && Object.keys(value).length === 2
   }
+  if (value.type === 'kernel.resolve-project-trust') {
+    return typeof value.requestId === 'string' &&
+      isProjectTrustChoice(value.choice) &&
+      Object.keys(value).length === 3
+  }
   if (
     value.type === 'kernel.activate-session' ||
     value.type === 'kernel.archive-session' ||
@@ -490,11 +630,20 @@ function isKernelCommand(value: unknown): value is KernelCommand {
   ) {
     return typeof value.sessionKey === 'string' && Object.keys(value).length === 2
   }
+  if (
+    value.type === 'kernel.undo-archive-session' ||
+    value.type === 'kernel.preview-archived-session'
+  ) {
+    return typeof value.token === 'string' && Object.keys(value).length === 2
+  }
+  if (value.type === 'kernel.fork-session') {
+    return typeof value.entryId === 'string' && Object.keys(value).length === 2
+  }
+  if (value.type === 'kernel.search-project-paths') {
+    return isProjectPathQuery(value.query) && Object.keys(value).length === 2
+  }
   if (value.type === 'kernel.reorder-projects') {
     return isStringArray(value.projectKeys) && Object.keys(value).length === 2
-  }
-  if (value.type === 'kernel.reorder-sessions') {
-    return isStringArray(value.sessionKeys) && Object.keys(value).length === 2
   }
   if (value.type === 'kernel.install-extension') {
     return (value.kind === 'file' || value.kind === 'directory') && Object.keys(value).length === 2
@@ -526,6 +675,32 @@ function isKernelCommand(value: unknown): value is KernelCommand {
       typeof value.modelId === 'string' &&
       Object.keys(value).length === 3
     )
+  }
+  if (value.type === 'kernel.fetch-model-pricing') {
+    return (
+      isProviderId(value.providerId) &&
+      isProviderModelId(value.modelId) &&
+      Object.keys(value).length === 3
+    )
+  }
+  if (value.type === 'kernel.login-provider') {
+    return isProviderId(value.providerId) &&
+      (value.authType === 'api_key' || value.authType === 'oauth') &&
+      Object.keys(value).length === 3
+  }
+  if (value.type === 'kernel.submit-provider-auth-prompt') {
+    return isProviderAuthId(value.operationId) &&
+      isProviderAuthId(value.promptId) &&
+      typeof value.value === 'string' &&
+      value.value.length <= 65_536 &&
+      !value.value.includes('\0') &&
+      Object.keys(value).length === 4
+  }
+  if (value.type === 'kernel.cancel-provider-login') {
+    return isProviderAuthId(value.operationId) && Object.keys(value).length === 2
+  }
+  if (value.type === 'kernel.logout-provider') {
+    return isProviderId(value.providerId) && Object.keys(value).length === 2
   }
   if (
     value.type === 'kernel.prompt' ||
@@ -566,11 +741,20 @@ function isKernelCommand(value: unknown): value is KernelCommand {
   if (value.type === 'kernel.set-general') {
     return isGeneralSettings(value.settings) && Object.keys(value).length === 2
   }
+  if (value.type === 'kernel.set-shortcuts') {
+    return isShortcutSettings(value.settings) && Object.keys(value).length === 2
+  }
   return (
     value.type === 'kernel.set-thinking-level' &&
     isThinkingLevel(value.level) &&
     Object.keys(value).length === 2
   )
+}
+
+function isProjectPathQuery(value: unknown): value is string {
+  return typeof value === 'string' &&
+    Array.from(value).length <= 256 &&
+    !/[\u0000-\u001f\u007f-\u009f]/u.test(value)
 }
 
 function isPromptAttachment(value: unknown): value is KernelPromptAttachment {
@@ -645,16 +829,54 @@ function isProviderInput(value: unknown): value is KernelProviderInput {
 
 function isProviderModelInput(value: unknown): boolean {
   return isRecord(value) &&
-    Object.keys(value).length === 6 &&
-    typeof value.id === 'string' &&
-    typeof value.name === 'string' && value.name.trim().length > 0 &&
-    typeof value.reasoning === 'boolean' &&
-    Array.isArray(value.input) &&
-    (value.input.length === 1 || value.input.length === 2) &&
-    value.input[0] === 'text' &&
-    (value.input.length === 1 || value.input[1] === 'image') &&
-    isPositiveSafeInteger(value.contextWindow) &&
-    isPositiveSafeInteger(value.maxTokens)
+    Object.keys(value).length === 7 &&
+    isProviderModelId(value.id) &&
+    (value.name === null || (typeof value.name === 'string' && value.name.trim().length > 0)) &&
+    (value.reasoning === null || typeof value.reasoning === 'boolean') &&
+    (
+      value.input === null ||
+      (
+        Array.isArray(value.input) &&
+        (value.input.length === 1 || value.input.length === 2) &&
+        value.input[0] === 'text' &&
+        (value.input.length === 1 || value.input[1] === 'image')
+      )
+    ) &&
+    (value.contextWindow === null || isPositiveSafeInteger(value.contextWindow)) &&
+    (value.maxTokens === null || isPositiveSafeInteger(value.maxTokens)) &&
+    (value.cost === null || isModelPricing(value.cost))
+}
+
+function isModelPricing(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  const keys = Object.keys(value)
+  return (keys.length === 4 || (keys.length === 5 && Array.isArray(value.tiers))) &&
+    isNonNegativeFiniteNumber(value.input) &&
+    isNonNegativeFiniteNumber(value.output) &&
+    isNonNegativeFiniteNumber(value.cacheRead) &&
+    isNonNegativeFiniteNumber(value.cacheWrite) &&
+    (
+      value.tiers === undefined ||
+      (
+        Array.isArray(value.tiers) &&
+        value.tiers.every((tier) => (
+          isRecord(tier) &&
+          Object.keys(tier).length === 5 &&
+          isNonNegativeSafeInteger(tier.inputTokensAbove) &&
+          isNonNegativeFiniteNumber(tier.input) &&
+          isNonNegativeFiniteNumber(tier.output) &&
+          isNonNegativeFiniteNumber(tier.cacheRead) &&
+          isNonNegativeFiniteNumber(tier.cacheWrite)
+        ))
+      )
+    )
+}
+
+function isProviderModelId(value: unknown): value is string {
+  return typeof value === 'string' &&
+    value.length > 0 &&
+    value.trim() === value &&
+    !/[\0\r\n]/u.test(value)
 }
 
 function isProviderId(value: unknown): value is string {
@@ -663,6 +885,11 @@ function isProviderId(value: unknown): value is string {
     value !== '__proto__' &&
     value !== 'constructor' &&
     value !== 'prototype'
+}
+
+function isProviderAuthId(value: unknown): value is string {
+  return typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value)
 }
 
 function isHttpUrl(value: unknown): value is string {
@@ -677,6 +904,14 @@ function isHttpUrl(value: unknown): value is string {
 
 function isPositiveSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
 
 function isGeneralSettings(value: unknown): value is GeneralSettings {
@@ -739,6 +974,14 @@ function isThinkingLevel(value: unknown): value is ThinkingLevel {
   )
 }
 
+function isProjectTrustChoice(value: unknown): value is KernelProjectTrustChoice {
+  return value === 'persist-trusted' ||
+    value === 'persist-untrusted' ||
+    value === 'once-trusted' ||
+    value === 'once-untrusted' ||
+    value === 'cancel'
+}
+
 async function listSystemFonts(): Promise<string[]> {
   if (process.platform !== 'linux') {
     throw new Error('System font discovery is only available on Linux.')
@@ -772,10 +1015,13 @@ async function listSystemFonts(): Promise<string[]> {
 }
 
 async function stopKernel(): Promise<void> {
-  if (kernel === null) {
-    return
-  }
-  await kernel.stop()
+  await providerAuth?.shutdown()
+  await kernel?.stop()
+}
+
+function requireProviderAuth(): PiProviderAuth {
+  if (providerAuth === null) throw new Error('Provider authentication is unavailable.')
+  return providerAuth
 }
 
 function configuredProject(state: {
@@ -786,6 +1032,25 @@ function configuredProject(state: {
   const project = state.projects.find(({ path }) => path === state.activeProjectKey)
   if (project === undefined) throw new Error('Active project is not registered.')
   return project
+}
+
+function sessionExportFileName(title: string | null): string {
+  const base = (title ?? '')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[. ]+$/g, '')
+    .slice(0, 80)
+  return `${base.length === 0 ? 'pi-session' : base}.html`
+}
+
+function sameSessionExportIdentity(
+  first: { projectKey: string, sessionKey: string, sessionId: string },
+  second: { projectKey: string, sessionKey: string, sessionId: string }
+): boolean {
+  return first.projectKey === second.projectKey &&
+    first.sessionKey === second.sessionKey &&
+    first.sessionId === second.sessionId
 }
 
 function assertTrustedIpcSender(event: IpcMainInvokeEvent, rendererTarget: RendererTarget): void {

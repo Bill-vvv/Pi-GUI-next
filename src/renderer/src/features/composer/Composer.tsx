@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom'
 
 import type {
   KernelCommandDescriptor,
+  KernelProjectPathMatch,
+  KernelProjectPathSearchResult,
   KernelPromptAttachment,
   KernelSessionPreview,
   KernelSessionUsage,
@@ -17,6 +19,10 @@ import {
   parseSlashCommandToken,
   resolveSlashCommand
 } from './slash-command-input'
+import {
+  parseActiveProjectPathToken,
+  replaceProjectPathToken
+} from './project-path-input'
 import { readDroppedPromptAttachments } from './prompt-attachments'
 
 type PendingAttachment = {
@@ -24,9 +30,28 @@ type PendingAttachment = {
   attachment: KernelPromptAttachment
 }
 
+type ProjectPathSearchState = {
+  key: string
+  status: 'loading' | 'ready' | 'error'
+  matches: KernelProjectPathMatch[]
+  error: string | null
+}
+
+export type ComposerDraftRequest = {
+  id: number
+  text: string
+}
+
+export type ComposerControlRequest = {
+  id: number
+  action: 'focus' | 'open-model-picker'
+}
+
 type ComposerProps = {
   state: KernelState
   sessionPreview: KernelSessionPreview | null
+  draftRequest: ComposerDraftRequest | null
+  controlRequest: ComposerControlRequest | null
   viewedSessionKey: string | null
   viewingInactiveSession: boolean
   viewingNewSession: boolean
@@ -35,6 +60,7 @@ type ComposerProps = {
   pendingAction: string | null
   completedAction: { action: string; succeeded: boolean } | null
   onSelectPromptAttachments: () => Promise<KernelPromptAttachment[]>
+  onSearchProjectPaths: (query: string) => Promise<KernelProjectPathSearchResult>
   onStartSession: () => Promise<void>
   onActivateSession: (sessionKey: string) => Promise<void>
   onPrompt: (message: string, attachments?: KernelPromptAttachment[]) => Promise<void>
@@ -59,6 +85,8 @@ const THINKING_LEVELS: ThinkingLevel[] = [
 export function Composer({
   state,
   sessionPreview,
+  draftRequest,
+  controlRequest,
   viewedSessionKey,
   viewingInactiveSession,
   viewingNewSession,
@@ -67,6 +95,7 @@ export function Composer({
   pendingAction,
   completedAction,
   onSelectPromptAttachments,
+  onSearchProjectPaths,
   onStartSession,
   onActivateSession,
   onPrompt,
@@ -84,6 +113,10 @@ export function Composer({
   const [submitting, setSubmitting] = useState(false)
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null)
   const [dismissedMenuPrompt, setDismissedMenuPrompt] = useState<string | null>(null)
+  const [cursorPosition, setCursorPosition] = useState(0)
+  const [projectPathSearch, setProjectPathSearch] = useState<ProjectPathSearchState | null>(null)
+  const [selectedProjectPath, setSelectedProjectPath] = useState<string | null>(null)
+  const [dismissedProjectPathKey, setDismissedProjectPathKey] = useState<string | null>(null)
   const [commandError, setCommandError] = useState<string | null>(null)
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
@@ -93,10 +126,14 @@ export function Composer({
   const modelPickerRef = useRef<HTMLDetailsElement>(null)
   const modelMenuTriggerRef = useRef<HTMLButtonElement>(null)
   const selectedCommandOptionRef = useRef<HTMLButtonElement>(null)
+  const selectedProjectPathOptionRef = useRef<HTMLButtonElement>(null)
   const restoreFocusRef = useRef(false)
   const attachmentDragDepthRef = useRef(0)
   const attachmentProcessingRef = useRef(false)
   const previousCompletedActionRef = useRef(completedAction)
+  const appliedDraftRequestIdRef = useRef<number | null>(null)
+  const appliedControlRequestIdRef = useRef<number | null>(null)
+  const projectPathSearchRevisionRef = useRef(0)
   const { popoverRef: modelPickerPopoverRef, position: modelPickerPosition } =
     useViewportPopoverPosition(modelPickerOpen, modelPickerRef, 420, {
       preferredWidth: 380,
@@ -116,8 +153,13 @@ export function Composer({
   ].join(':')
   const displayedContextKeyRef = useRef(displayedContextKey)
   displayedContextKeyRef.current = displayedContextKey
-  const preparingNewSession =
-    viewingNewSession && !newSessionPrepared && pendingAction === 'start-session'
+  const promptRef = useRef(prompt)
+  promptRef.current = prompt
+  const cursorPositionRef = useRef(cursorPosition)
+  cursorPositionRef.current = cursorPosition
+  const activeProjectKeyRef = useRef(activeProjectKey)
+  activeProjectKeyRef.current = activeProjectKey
+  const preparingNewSession = viewingNewSession && !newSessionPrepared
   const submissionBusy = busy && !preparingNewSession
   const commands = preparingNewSession ? [] : state.commands ?? []
   const availableModels = state.availableModels ?? []
@@ -131,15 +173,60 @@ export function Composer({
     : viewingNewSession && !newSessionPrepared
       ? preparingNewSession
       : runtime.status === 'ready'
-  const editable =
-    (ready || running) && !submissionBusy && !submitting && !attachmentProcessing
-  const slashQuery = parseSlashCommandToken(prompt)
+  const draftEditable = activeProjectKey !== null && !submitting
+  const runtimeContextBusy =
+    !preparingNewSession &&
+    pendingAction !== null &&
+    isRuntimeContextAction(pendingAction)
+  const attachmentInputAvailable =
+    draftEditable &&
+    !attachmentProcessing &&
+    !runtimeContextBusy
+  const canSubmit =
+    (ready || running) &&
+    !submissionBusy &&
+    !submitting &&
+    !attachmentProcessing
+  const slashQuery = parseSlashCommandToken(prompt, commands)
   const matchingCommands = slashQuery === null
     ? []
     : filterSlashCommands(commands, slashQuery)
   const showSlashCommandSurface =
     !preparingNewSession &&
-    ready && editable && slashQuery !== null && dismissedMenuPrompt !== prompt
+    ready && draftEditable && slashQuery !== null && dismissedMenuPrompt !== prompt
+  const activeProjectPathToken = parseActiveProjectPathToken(prompt, cursorPosition)
+  const projectPathRequestKey = activeProjectPathToken === null
+    ? null
+    : JSON.stringify([
+        displayedContextKey,
+        prompt,
+        cursorPosition,
+        activeProjectPathToken.start,
+        activeProjectPathToken.end,
+        activeProjectPathToken.query
+      ])
+  const projectPathSearchEnabled =
+    draftEditable &&
+    activeProjectKey !== null &&
+    slashQuery === null &&
+    activeProjectPathToken !== null &&
+    projectPathRequestKey !== dismissedProjectPathKey
+  const showProjectPathSurface = projectPathSearchEnabled && !showSlashCommandSurface
+  const { popoverRef: projectPathSurfaceRef, position: projectPathSurfacePosition } =
+    useViewportPopoverPosition(showProjectPathSurface, textareaRef, 300)
+  const visibleProjectPathSearch =
+    projectPathSearch?.key === projectPathRequestKey ? projectPathSearch : null
+  const projectPathMatches = visibleProjectPathSearch?.matches ?? []
+  const selectedProjectPathMatch =
+    projectPathMatches.find((match) => projectPathMatchKey(match) === selectedProjectPath) ??
+    projectPathMatches[0] ??
+    null
+  const activeProjectPathOptionKey = selectedProjectPathMatch === null
+    ? null
+    : projectPathMatchKey(selectedProjectPathMatch)
+  const selectedProjectPathIndex = projectPathMatches.findIndex(
+    (match) => projectPathMatchKey(match) === activeProjectPathOptionKey
+  )
   const selectedCommand =
     matchingCommands.find((command) => command.id === selectedCommandId) ??
     matchingCommands[0] ??
@@ -199,6 +286,7 @@ export function Composer({
     if (!running) return
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
+      if (event.isComposing || event.keyCode === 229) return
       event.preventDefault()
       void onAbort().catch(() => undefined)
     }
@@ -214,10 +302,71 @@ export function Composer({
   useEffect(() => {
     setSelectedCommandId(null)
     setDismissedMenuPrompt(null)
+    setProjectPathSearch(null)
+    setSelectedProjectPath(null)
+    setDismissedProjectPathKey(null)
+    projectPathSearchRevisionRef.current += 1
     setCommandError(null)
     setModelPickerOpen(false)
     setModelMenuOpen(false)
   }, [activeProjectKey, activeSessionKey, sessionPreview?.sessionKey, viewingNewSession])
+
+  useEffect(() => {
+    if (
+      draftRequest === null ||
+      appliedDraftRequestIdRef.current === draftRequest.id
+    ) return
+    appliedDraftRequestIdRef.current = draftRequest.id
+    setPrompt(draftRequest.text)
+    setCursorPosition(draftRequest.text.length)
+    setPendingAttachments([])
+    setSelectedCommandId(null)
+    setDismissedMenuPrompt(null)
+    setProjectPathSearch(null)
+    setSelectedProjectPath(null)
+    setDismissedProjectPathKey(null)
+    setCommandError(null)
+    restoreFocusRef.current = true
+    const focusFrame = requestAnimationFrame(() => {
+      const textarea = textareaRef.current
+      if (textarea === null || textarea.disabled) return
+      textarea.style.height = 'auto'
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`
+      textarea.focus()
+    })
+    return () => cancelAnimationFrame(focusFrame)
+  }, [draftRequest])
+
+  useEffect(() => {
+    if (
+      controlRequest === null ||
+      appliedControlRequestIdRef.current === controlRequest.id
+    ) return
+    appliedControlRequestIdRef.current = controlRequest.id
+    if (controlRequest.action === 'focus') {
+      setModelPickerOpen(false)
+      setModelMenuOpen(false)
+      requestAnimationFrame(() => {
+        const textarea = textareaRef.current
+        if (textarea === null || textarea.disabled) return
+        textarea.focus()
+      })
+      return
+    }
+    if (
+      runtime.status !== 'ready' ||
+      viewingInactiveSession ||
+      (viewingNewSession && !newSessionPrepared)
+    ) return
+    setModelMenuOpen(false)
+    setModelPickerOpen(true)
+  }, [
+    controlRequest,
+    runtime.status,
+    viewingInactiveSession,
+    viewingNewSession,
+    newSessionPrepared
+  ])
 
   useEffect(() => {
     if (previousCompletedActionRef.current === completedAction) return
@@ -232,7 +381,7 @@ export function Composer({
   }, [completedAction])
 
   useEffect(() => {
-    if (!editable || !restoreFocusRef.current) return
+    if (!draftEditable || !restoreFocusRef.current) return
     const focusFrame = requestAnimationFrame(() => {
       const textarea = textareaRef.current
       if (textarea === null || textarea.disabled) return
@@ -240,12 +389,97 @@ export function Composer({
       textarea.focus()
     })
     return () => cancelAnimationFrame(focusFrame)
-  }, [editable])
+  }, [attachmentProcessing, completedAction, draftEditable])
 
   useLayoutEffect(() => {
     if (!showSlashCommandSurface || selectedCommand === null) return
     selectedCommandOptionRef.current?.scrollIntoView({ block: 'nearest' })
   }, [activeCommandId, selectedCommandIndex, showSlashCommandSurface])
+
+  useLayoutEffect(() => {
+    if (!showProjectPathSurface || selectedProjectPathMatch === null) return
+    selectedProjectPathOptionRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [activeProjectPathOptionKey, selectedProjectPathIndex, showProjectPathSurface])
+
+  useEffect(() => {
+    const revision = projectPathSearchRevisionRef.current + 1
+    projectPathSearchRevisionRef.current = revision
+
+    if (
+      !projectPathSearchEnabled ||
+      projectPathRequestKey === null ||
+      activeProjectPathToken === null ||
+      activeProjectKey === null
+    ) {
+      setProjectPathSearch(null)
+      setSelectedProjectPath(null)
+      return
+    }
+
+    const requestKey = projectPathRequestKey
+    const requestContextKey = displayedContextKey
+    const requestProjectKey = activeProjectKey
+    const requestPrompt = prompt
+    const requestCursor = cursorPosition
+    const requestQuery = activeProjectPathToken.query
+    setProjectPathSearch({
+      key: requestKey,
+      status: 'loading',
+      matches: [],
+      error: null
+    })
+    setSelectedProjectPath(null)
+
+    const debounceTimer = window.setTimeout(() => {
+      void onSearchProjectPaths(requestQuery).then(
+        (result) => {
+          if (
+            projectPathSearchRevisionRef.current !== revision ||
+            displayedContextKeyRef.current !== requestContextKey ||
+            activeProjectKeyRef.current !== requestProjectKey ||
+            promptRef.current !== requestPrompt ||
+            cursorPositionRef.current !== requestCursor ||
+            result.projectKey !== activeProjectKeyRef.current ||
+            result.query !== requestQuery
+          ) return
+          setProjectPathSearch({
+            key: requestKey,
+            status: 'ready',
+            matches: result.matches.slice(0, 100),
+            error: null
+          })
+        },
+        (error) => {
+          if (
+            projectPathSearchRevisionRef.current !== revision ||
+            displayedContextKeyRef.current !== requestContextKey ||
+            activeProjectKeyRef.current !== requestProjectKey ||
+            promptRef.current !== requestPrompt ||
+            cursorPositionRef.current !== requestCursor
+          ) return
+          setProjectPathSearch({
+            key: requestKey,
+            status: 'error',
+            matches: [],
+            error: errorMessage(error)
+          })
+        }
+      )
+    }, 100)
+
+    return () => window.clearTimeout(debounceTimer)
+  }, [
+    activeProjectKey,
+    activeProjectPathToken?.end,
+    activeProjectPathToken?.query,
+    activeProjectPathToken?.start,
+    cursorPosition,
+    displayedContextKey,
+    onSearchProjectPaths,
+    projectPathRequestKey,
+    projectPathSearchEnabled,
+    prompt
+  ])
 
   useEffect(() => {
     if (!showSlashCommandSurface) return
@@ -260,14 +494,28 @@ export function Composer({
   }, [prompt, showSlashCommandSurface])
 
   useEffect(() => {
-    if (!modelPickerOpen) return
+    if (!showProjectPathSurface || projectPathRequestKey === null) return
     const handlePointerDown = (event: PointerEvent): void => {
       const target = event.target
       if (!(target instanceof Node)) return
       if (
-        modelPickerRef.current?.contains(target) ||
-        modelPickerPopoverRef.current?.contains(target) ||
-        modelMenuPopoverRef.current?.contains(target)
+        projectPathSurfaceRef.current?.contains(target) ||
+        textareaRef.current?.contains(target)
+      ) return
+      setDismissedProjectPathKey(projectPathRequestKey)
+    }
+    document.addEventListener('pointerdown', handlePointerDown, true)
+    return () => document.removeEventListener('pointerdown', handlePointerDown, true)
+  }, [projectPathRequestKey, showProjectPathSurface])
+
+  useEffect(() => {
+    if (!modelPickerOpen) return
+    const handlePointerDown = (event: PointerEvent): void => {
+      const path = event.composedPath()
+      if (
+        (modelPickerRef.current !== null && path.includes(modelPickerRef.current)) ||
+        (modelPickerPopoverRef.current !== null && path.includes(modelPickerPopoverRef.current)) ||
+        (modelMenuPopoverRef.current !== null && path.includes(modelMenuPopoverRef.current))
       ) return
       setModelPickerOpen(false)
       setModelMenuOpen(false)
@@ -338,6 +586,7 @@ export function Composer({
     try {
       await onInvokeCommand(command.id, argument)
       setPrompt('')
+      setCursorPosition(0)
       if (textareaRef.current) textareaRef.current.style.height = ''
     } catch (error) {
       setCommandError(errorMessage(error))
@@ -359,7 +608,7 @@ export function Composer({
   }
 
   async function selectAttachments(): Promise<void> {
-    if (!editable || attachmentProcessingRef.current) return
+    if (!attachmentInputAvailable || attachmentProcessingRef.current) return
     const attachmentContextKey = displayedContextKeyRef.current
     attachmentProcessingRef.current = true
     setAttachmentProcessing(true)
@@ -383,7 +632,7 @@ export function Composer({
   }
 
   async function addDroppedAttachments(files: readonly File[]): Promise<void> {
-    if (!editable || attachmentProcessingRef.current || files.length === 0) return
+    if (!attachmentInputAvailable || attachmentProcessingRef.current || files.length === 0) return
     const attachmentContextKey = displayedContextKeyRef.current
     attachmentProcessingRef.current = true
     setAttachmentProcessing(true)
@@ -412,13 +661,42 @@ export function Composer({
   function completeCommand(command: KernelCommandDescriptor): void {
     const completedPrompt = `/${command.name}${command.argumentHint !== null ? ' ' : ''}`
     setPrompt(completedPrompt)
+    setCursorPosition(completedPrompt.length)
     setDismissedMenuPrompt(command.argumentHint === null ? completedPrompt : null)
     setCommandError(null)
     requestAnimationFrame(() => textareaRef.current?.focus())
   }
 
+  function completeProjectPath(match: KernelProjectPathMatch): void {
+    const textarea = textareaRef.current
+    const currentPrompt = promptRef.current
+    const currentCursor = textarea?.selectionStart ?? cursorPositionRef.current
+    const token = parseActiveProjectPathToken(currentPrompt, currentCursor)
+    if (token === null) return
+
+    try {
+      const replacement = replaceProjectPathToken(currentPrompt, token, match.path)
+      setPrompt(replacement.value)
+      setCursorPosition(replacement.cursor)
+      setProjectPathSearch(null)
+      setSelectedProjectPath(null)
+      setDismissedProjectPathKey(null)
+      setCommandError(null)
+      projectPathSearchRevisionRef.current += 1
+      requestAnimationFrame(() => {
+        const currentTextarea = textareaRef.current
+        if (currentTextarea === null) return
+        currentTextarea.focus()
+        currentTextarea.setSelectionRange(replacement.cursor, replacement.cursor)
+      })
+    } catch (error) {
+      setCommandError(errorMessage(error))
+    }
+  }
+
   function clearSubmittedDraft(): void {
     setPrompt('')
+    setCursorPosition(0)
     setPendingAttachments([])
     if (textareaRef.current) textareaRef.current.style.height = ''
     requestAnimationFrame(() => textareaRef.current?.focus())
@@ -515,6 +793,7 @@ export function Composer({
     if (displayedContextKeyRef.current !== submittedContextKey) return
     setCommandError(errorMessage(error))
     setPrompt(submittedPrompt)
+    setCursorPosition(submittedPrompt.length)
     setPendingAttachments(submittedAttachments)
     requestAnimationFrame(() => {
       const textarea = textareaRef.current
@@ -531,13 +810,13 @@ export function Composer({
       className={`composer${dragOver ? ' drag-over' : ''}`}
       aria-busy={attachmentProcessing || submitting ? true : undefined}
       onDragEnter={(event) => {
-        if (!hasDraggedFiles(event.dataTransfer) || !editable) return
+        if (!hasDraggedFiles(event.dataTransfer) || !attachmentInputAvailable) return
         event.preventDefault()
         attachmentDragDepthRef.current += 1
         setDragOver(true)
       }}
       onDragOver={(event) => {
-        if (!hasDraggedFiles(event.dataTransfer) || !editable) return
+        if (!hasDraggedFiles(event.dataTransfer) || !attachmentInputAvailable) return
         event.preventDefault()
         event.dataTransfer.dropEffect = 'copy'
       }}
@@ -563,11 +842,13 @@ export function Composer({
           <ol className="composer-queue-list">
             {session.pendingSteeringMessages.map((message, index) => (
               <li className="composer-queue-item" key={`steer-${index}`}>
+                <span className="composer-queue-kind">引导</span>
                 <p className="composer-queue-message">{message}</p>
               </li>
             ))}
             {session.pendingFollowUpMessages.map((message, index) => (
               <li className="composer-queue-item" key={`follow-up-${index}`}>
+                <span className="composer-queue-kind">排队</span>
                 <p className="composer-queue-message">{message}</p>
               </li>
             ))}
@@ -608,11 +889,73 @@ export function Composer({
         </section>
       ) : null}
 
+      {showProjectPathSurface && projectPathSurfacePosition !== null
+        ? createPortal(
+            <div
+              ref={projectPathSurfaceRef}
+              className="project-path-surface"
+              data-placement={projectPathSurfacePosition.placement}
+              style={projectPathSurfacePosition.style}
+            >
+              <div
+                id="project-path-listbox"
+                className="project-path-list"
+                role="listbox"
+                aria-label="项目路径"
+              >
+                {visibleProjectPathSearch === null ||
+                visibleProjectPathSearch.status === 'loading' ? (
+                  <p className="project-path-state" role="status" aria-live="polite">
+                    正在搜索项目路径…
+                  </p>
+                ) : visibleProjectPathSearch.status === 'error' ? (
+                  <p className="project-path-state error" role="alert">
+                    项目路径搜索失败，请重试。
+                  </p>
+                ) : projectPathMatches.length === 0 ? (
+                  <p className="project-path-state" role="status">没有匹配的项目路径</p>
+                ) : (
+                  projectPathMatches.map((match, index) => {
+                    const matchKey = projectPathMatchKey(match)
+                    const selected = matchKey === activeProjectPathOptionKey
+                    return (
+                      <button
+                        ref={selected ? selectedProjectPathOptionRef : undefined}
+                        id={`project-path-option-${index}`}
+                        className={`project-path-option${selected ? ' selected' : ''}`}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        key={`${matchKey}:${index}`}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => completeProjectPath(match)}
+                      >
+                        <span className="project-path-kind">
+                          {match.kind === 'directory' ? '目录' : '文件'}
+                        </span>
+                        <span className="project-path-value">{match.path}</span>
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+
       {commandError !== null ? (
         <p className="composer-command-error" role="alert">{commandError}</p>
       ) : null}
 
-      <div className="composer-input-row">
+      <div
+        className="composer-input-row"
+        onClick={(event) => {
+          const target = event.target
+          if (!(target instanceof Element) || target.closest('button, textarea') !== null) return
+          textareaRef.current?.focus()
+        }}
+      >
         <div className="composer-editor-column">
           {pendingAttachments.length > 0 ? (
             <ul className="composer-attachment-list" aria-label="待发送附件">
@@ -652,21 +995,25 @@ export function Composer({
             ref={textareaRef}
             value={prompt}
             rows={1}
-            disabled={!editable}
+            disabled={!draftEditable}
             role="combobox"
             aria-label="发送给 Pi 的任务"
             aria-autocomplete="list"
-            aria-expanded={showSlashCommandSurface}
+            aria-expanded={showSlashCommandSurface || showProjectPathSurface}
             aria-haspopup="listbox"
             aria-controls={
               showSlashCommandSurface
                 ? 'slash-command-listbox'
-                : undefined
+                : showProjectPathSurface
+                  ? 'project-path-listbox'
+                  : undefined
             }
             aria-activedescendant={
               showSlashCommandSurface && selectedCommand !== null
                 ? `slash-command-${selectedCommand.id}`
-                : undefined
+                : showProjectPathSurface && selectedProjectPathIndex !== -1
+                  ? `project-path-option-${selectedProjectPathIndex}`
+                  : undefined
             }
             placeholder={composerPlaceholder(
               state,
@@ -687,11 +1034,16 @@ export function Composer({
             }}
             onChange={(event) => {
               setPrompt(event.target.value)
+              setCursorPosition(event.target.selectionStart)
               setSelectedCommandId(null)
               setDismissedMenuPrompt(null)
+              setDismissedProjectPathKey(null)
               setCommandError(null)
               event.currentTarget.style.height = 'auto'
               event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 180)}px`
+            }}
+            onSelect={(event) => {
+              setCursorPosition(event.currentTarget.selectionStart)
             }}
             onKeyDown={(event) => {
               const completesAsciiSlashCommand =
@@ -699,6 +1051,7 @@ export function Composer({
                 showSlashCommandSurface &&
                 selectedCommand !== null &&
                 /^\/[a-z0-9-]*$/i.test(prompt)
+              if (event.nativeEvent.keyCode === 229) return
               if (event.nativeEvent.isComposing && !completesAsciiSlashCommand) return
               if (showSlashCommandSurface && event.key === 'Escape') {
                 event.preventDefault()
@@ -730,6 +1083,37 @@ export function Composer({
                   return
                 }
               }
+              if (showProjectPathSurface && event.key === 'Escape') {
+                event.preventDefault()
+                event.stopPropagation()
+                if (projectPathRequestKey !== null) {
+                  setDismissedProjectPathKey(projectPathRequestKey)
+                }
+                return
+              }
+              if (showProjectPathSurface && projectPathMatches.length > 0) {
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                  event.preventDefault()
+                  const direction = event.key === 'ArrowDown' ? 1 : -1
+                  const nextIndex = selectedProjectPathIndex === -1
+                    ? direction === 1 ? 0 : projectPathMatches.length - 1
+                    : (
+                        selectedProjectPathIndex +
+                        direction +
+                        projectPathMatches.length
+                      ) % projectPathMatches.length
+                  setSelectedProjectPath(projectPathMatchKey(projectPathMatches[nextIndex]))
+                  return
+                }
+                if (
+                  (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) &&
+                  selectedProjectPathMatch !== null
+                ) {
+                  event.preventDefault()
+                  completeProjectPath(selectedProjectPathMatch)
+                  return
+                }
+              }
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault()
                 void submitPrompt(running && event.altKey ? 'steer' : running ? 'follow-up' : 'prompt')
@@ -744,7 +1128,7 @@ export function Composer({
             icon="attach"
             label="添加图片或引用文件"
             type="button"
-            disabled={!editable}
+            disabled={!attachmentInputAvailable}
             aria-busy={attachmentProcessing ? true : undefined}
             onClick={() => void selectAttachments()}
           />
@@ -755,7 +1139,6 @@ export function Composer({
                 icon="stop"
                 label="中止本轮输出"
                 type="button"
-                disabled={busy}
                 onClick={() => void onAbort().catch(() => undefined)}
               />
             ) : (
@@ -765,10 +1148,7 @@ export function Composer({
                 label="发送"
                 type="submit"
                 disabled={
-                  !ready ||
-                  submissionBusy ||
-                  submitting ||
-                  attachmentProcessing ||
+                  !canSubmit ||
                   (prompt.trim().length === 0 && pendingAttachments.length === 0)
                 }
               />
@@ -825,11 +1205,6 @@ export function Composer({
               ref={modelPickerRef}
               className="composer-model-controls"
               open={modelPickerOpen}
-              onToggle={(event) => {
-                const open = event.currentTarget.open
-                setModelPickerOpen(open)
-                if (!open) setModelMenuOpen(false)
-              }}
             >
               <summary
                 className="model-picker-button"
@@ -837,6 +1212,15 @@ export function Composer({
                 aria-haspopup="dialog"
                 aria-expanded={modelPickerOpen}
                 aria-controls={modelPickerOpen ? 'model-picker-popover' : undefined}
+                onClick={(event) => {
+                  // Fully control open state in React. Native <details> toggle races with
+                  // portaled menus and can drop model selection clicks.
+                  event.preventDefault()
+                  setModelPickerOpen((open) => {
+                    if (open) setModelMenuOpen(false)
+                    return !open
+                  })
+                }}
               >
                 <span className="model-summary-label">
                   {session.model?.name ?? session.model?.id ?? '选择模型'}
@@ -1021,14 +1405,14 @@ function ContextIndicator({ usage }: { usage: KernelSessionUsage | null }): Reac
     >
       <span className="context-ring" aria-hidden="true" />
       <div id={tooltipId} className="context-tooltip" role="tooltip">
-        <strong>上下文使用情况</strong>
+        <strong>本对话用量与费用</strong>
         {usage === null ? (
           <span>当前未提供 token 使用量</span>
         ) : (
           <>
             <span className="context-tooltip-context">{contextUsageLabel(usage)}</span>
             <dl className="context-tooltip-stats">
-              <dt>输入（总量）</dt>
+              <dt>总输入（含缓存）</dt>
               <dd>{formatTokenCount(promptTokens)}</dd>
               <dt>缓存读取</dt>
               <dd>{formatTokenCount(usage.cacheReadTokens)}</dd>
@@ -1038,9 +1422,14 @@ function ContextIndicator({ usage }: { usage: KernelSessionUsage | null }): Reac
               <dd>{formatTokenCount(usage.outputTokens)}</dd>
               <dt>缓存率</dt>
               <dd>{formatPercent(cacheRate)}</dd>
+              <dt>本对话累计（USD）</dt>
+              <dd>{formatUsd(usage.cost)}</dd>
             </dl>
           </>
         )}
+        <span className="context-tooltip-note">
+          由 Pi 按各轮实际用量累计，不是模型单价。
+        </span>
       </div>
     </div>
   )
@@ -1065,6 +1454,10 @@ function formatPercent(value: number | null): string {
   return value === null ? '—' : `${value.toFixed(1)}%`
 }
 
+function formatUsd(value: number): string {
+  return `$${value.toFixed(value > 0 && value < 0.01 ? 4 : 2)}`
+}
+
 function clampPercent(value: number): number {
   return Math.min(100, Math.max(0, value))
 }
@@ -1079,8 +1472,8 @@ function composerPlaceholder(
   if (viewingNewSession && state.runtime.status === 'crashed') return '新对话启动失败'
   if (viewingNewSession) return ''
   if (viewingInactiveSession && canChangeRuntimeContext(viewedSessionRuntimeStatus)) return ''
-  if (viewedSessionRuntimeStatus === 'stopped') return '启动 Pi 后开始对话'
   if (viewedSessionRuntimeStatus === 'starting') return '正在启动 Pi…'
+  if (viewedSessionRuntimeStatus === 'stopped') return '选择对话即可自动启动'
   if (viewedSessionRuntimeStatus === 'running') return 'Enter 排队，Alt+Enter 引导'
   if (viewedSessionRuntimeStatus === 'crashed') return 'Pi Runtime 已退出'
   return ''
@@ -1128,6 +1521,10 @@ function commandSourceLabel(source: KernelCommandDescriptor['source']): string {
     prompt: 'Prompt',
     skill: 'Skill'
   }[source]
+}
+
+function projectPathMatchKey(match: KernelProjectPathMatch): string {
+  return `${match.kind}:${match.path}`
 }
 
 function errorMessage(error: unknown): string {

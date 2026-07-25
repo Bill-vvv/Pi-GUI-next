@@ -4,10 +4,13 @@ export type IconName =
   | 'arrow-right'
   | 'attach'
   | 'chevron-down'
+  | 'copy'
   | 'enter'
+  | 'export'
   | 'extensions'
   | 'folder'
   | 'folder-open'
+  | 'fork'
   | 'left-sidebar-close'
   | 'left-sidebar-open'
   | 'logs'
@@ -78,11 +81,25 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
           <path d="m6.5 9.5 5.5 5 5.5-5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       )
+    case 'copy':
+      return (
+        <svg {...common}>
+          <rect x="8" y="8" width="11" height="11" rx="2.25" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M16 8V6.25A2.25 2.25 0 0 0 13.75 4h-7.5A2.25 2.25 0 0 0 4 6.25v7.5A2.25 2.25 0 0 0 6.25 16H8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      )
     case 'enter':
       return (
         <svg {...common}>
           <path d="M6.75 5.25v5.5a3 3 0 0 0 3 3h7.5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
           <path d="m13.25 9.75 4 4-4 4" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'export':
+      return (
+        <svg {...common}>
+          <path d="M12 4v10M8 10l4 4 4-4" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M5 14.5v3A2.5 2.5 0 0 0 7.5 20h9a2.5 2.5 0 0 0 2.5-2.5v-3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
         </svg>
       )
     case 'extensions':
@@ -104,6 +121,15 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
         <svg {...common}>
           <path d="M3.75 9V7.75A2.75 2.75 0 0 1 6.5 5h3.2c.72 0 1.39.34 1.82.92l.78 1.05c.24.32.61.51 1.01.51h4.94A2.75 2.75 0 0 1 21 10.23V11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
           <path d="M5.2 9.75h14.86a1.5 1.5 0 0 1 1.44 1.92l-1.65 5.58A2.5 2.5 0 0 1 17.45 19H6.1a2.5 2.5 0 0 1-2.4-1.8l-1.14-3.92A2.75 2.75 0 0 1 5.2 9.75Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'fork':
+      return (
+        <svg {...common}>
+          <circle cx="7" cy="5" r="2" stroke="currentColor" strokeWidth="1.8" />
+          <circle cx="17" cy="7" r="2" stroke="currentColor" strokeWidth="1.8" />
+          <circle cx="12" cy="19" r="2" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M7 7v2.5A3.5 3.5 0 0 0 10.5 13H12m5-4v.5A3.5 3.5 0 0 1 13.5 13H12v4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       )
     case 'left-sidebar-close':

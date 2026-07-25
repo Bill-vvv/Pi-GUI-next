@@ -36,6 +36,10 @@ export function useViewportPopoverPosition(
       return
     }
 
+    const commitPosition = (next: PopoverPosition): void => {
+      setPosition((current) => (samePopoverPosition(current, next) ? current : next))
+    }
+
     const updatePosition = (): void => {
       const trigger = triggerRef.current
       if (trigger === null) return
@@ -47,32 +51,36 @@ export function useViewportPopoverPosition(
         const spaceLeft = Math.max(0, rect.left - TRIGGER_GAP - VIEWPORT_MARGIN)
         const spaceRight = Math.max(0, viewportWidth - rect.right - TRIGGER_GAP - VIEWPORT_MARGIN)
         const desiredWidth = preferredWidth ?? rect.width
-        const rightIsUsable = spaceRight >= Math.min(desiredWidth, MIN_SIDE_POPOVER_WIDTH)
-        const placement = rightIsUsable || spaceRight >= spaceLeft ? 'right' : 'left'
-        const availableWidth = placement === 'right' ? spaceRight : spaceLeft
-        const width = Math.min(desiredWidth, availableWidth)
-        const maxHeight = Math.min(
-          maximumHeight,
-          Math.max(0, viewportHeight - VIEWPORT_MARGIN * 2)
-        )
-        const top = Math.min(
-          Math.max(VIEWPORT_MARGIN, rect.top),
-          Math.max(VIEWPORT_MARGIN, viewportHeight - VIEWPORT_MARGIN - maxHeight)
-        )
+        const minimumUsableWidth = Math.min(desiredWidth, MIN_SIDE_POPOVER_WIDTH)
 
-        setPosition({
-          placement,
-          style: {
-            position: 'fixed',
-            top,
-            width,
-            maxHeight,
-            ...(placement === 'right'
-              ? { left: rect.right + TRIGGER_GAP }
-              : { right: viewportWidth - rect.left + TRIGGER_GAP })
-          }
-        })
-        return
+        if (Math.max(spaceLeft, spaceRight) >= minimumUsableWidth) {
+          const rightIsUsable = spaceRight >= minimumUsableWidth
+          const placement = rightIsUsable || spaceRight >= spaceLeft ? 'right' : 'left'
+          const availableWidth = placement === 'right' ? spaceRight : spaceLeft
+          const width = Math.min(desiredWidth, availableWidth)
+          const maxHeight = Math.min(
+            maximumHeight,
+            Math.max(0, viewportHeight - VIEWPORT_MARGIN * 2)
+          )
+          const top = Math.min(
+            Math.max(VIEWPORT_MARGIN, rect.top),
+            Math.max(VIEWPORT_MARGIN, viewportHeight - VIEWPORT_MARGIN - maxHeight)
+          )
+
+          commitPosition({
+            placement,
+            style: {
+              position: 'fixed',
+              top,
+              width,
+              maxHeight,
+              ...(placement === 'right'
+                ? { left: rect.right + TRIGGER_GAP }
+                : { right: viewportWidth - rect.left + TRIGGER_GAP })
+            }
+          })
+          return
+        }
       }
 
       const spaceAbove = Math.max(0, rect.top - TRIGGER_GAP - VIEWPORT_MARGIN)
@@ -93,7 +101,7 @@ export function useViewportPopoverPosition(
         Math.max(VIEWPORT_MARGIN, viewportWidth - VIEWPORT_MARGIN - width)
       )
 
-      setPosition({
+      commitPosition({
         placement,
         style: {
           position: 'fixed',
@@ -107,15 +115,49 @@ export function useViewportPopoverPosition(
       })
     }
 
+    const handleScroll = (event: Event): void => {
+      // Internal popover scrolling should not reflow the fixed menu.
+      if (event.target instanceof Node && popoverRef.current?.contains(event.target)) return
+      updatePosition()
+    }
+
     updatePosition()
+    const trigger = triggerRef.current
+    const resizeObserver = new ResizeObserver(updatePosition)
+    if (trigger !== null) resizeObserver.observe(trigger)
     window.addEventListener('resize', updatePosition)
-    window.addEventListener('scroll', updatePosition, true)
+    window.addEventListener('scroll', handleScroll, true)
 
     return () => {
+      resizeObserver.disconnect()
       window.removeEventListener('resize', updatePosition)
-      window.removeEventListener('scroll', updatePosition, true)
+      window.removeEventListener('scroll', handleScroll, true)
     }
   }, [align, axis, maximumHeight, open, preferredWidth, triggerRef])
 
   return { popoverRef, position }
+}
+
+function samePopoverPosition(
+  current: PopoverPosition | null,
+  next: PopoverPosition
+): boolean {
+  if (current === null || current.placement !== next.placement) return false
+  return sameStyleValue(current.style, next.style, [
+    'position',
+    'top',
+    'right',
+    'bottom',
+    'left',
+    'width',
+    'maxHeight'
+  ])
+}
+
+function sameStyleValue(
+  current: CSSProperties,
+  next: CSSProperties,
+  keys: readonly (keyof CSSProperties)[]
+): boolean {
+  return keys.every((key) => current[key] === next[key])
 }

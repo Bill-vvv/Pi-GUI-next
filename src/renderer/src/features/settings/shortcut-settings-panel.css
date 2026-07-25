@@ -1,0 +1,123 @@
+.shortcut-restore-defaults,
+.shortcut-settings-actions button {
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-control);
+  color: var(--color-text-primary);
+  background: var(--color-surface-input);
+  font-size: var(--text-control);
+  line-height: var(--line-control);
+  cursor: pointer;
+}
+
+.shortcut-restore-defaults {
+  padding: 8px 12px;
+}
+
+.shortcut-settings-list {
+  overflow: hidden;
+}
+
+.shortcut-settings-row {
+  min-height: 76px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 0 18px;
+  padding: 14px 0;
+}
+
+.shortcut-settings-row + .shortcut-settings-row {
+  border-top: 1px solid var(--color-border-divider);
+}
+
+.shortcut-settings-copy {
+  min-width: 0;
+}
+
+.shortcut-settings-copy h4 {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
+}
+
+.shortcut-settings-copy span {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-text-muted);
+  font-family: var(--font-code);
+  font-size: var(--text-caption);
+  line-height: var(--line-caption);
+}
+
+.shortcut-settings-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.shortcut-settings-actions button {
+  min-width: 112px;
+  padding: 7px 10px;
+}
+
+.shortcut-settings-actions .recording {
+  border-color: var(--color-border-focus);
+  box-shadow: 0 0 0 3px var(--color-focus-ring);
+}
+
+.shortcut-settings-actions .shortcut-clear {
+  min-width: 0;
+  color: var(--color-text-soft);
+  background: transparent;
+}
+
+.shortcut-restore-defaults:hover:not(:disabled),
+.shortcut-settings-actions button:hover:not(:disabled) {
+  border-color: var(--color-border-hover);
+  background: var(--color-surface-hover);
+}
+
+.shortcut-restore-defaults:focus-visible,
+.shortcut-settings-actions button:focus-visible {
+  border-color: var(--color-border-focus);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--color-focus-ring);
+}
+
+.shortcut-restore-defaults:disabled,
+.shortcut-settings-actions button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.shortcut-recording-help,
+.shortcut-settings-message {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-body-sm);
+  line-height: var(--line-body-sm);
+}
+
+.shortcut-settings-message.error {
+  color: var(--color-status-error);
+}
+
+@media (max-width: 620px) {
+  .shortcut-settings-row {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .shortcut-settings-actions {
+    width: 100%;
+  }
+
+  .shortcut-settings-actions button:first-child {
+    min-width: 0;
+    flex: 1;
+  }
+}

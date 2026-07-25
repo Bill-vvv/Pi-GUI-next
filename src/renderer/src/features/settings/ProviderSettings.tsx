@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 
 import {
   KERNEL_PROVIDER_APIS,
+  type KernelModelPricing,
+  type KernelModelPricingFetchResult,
   type KernelProviderApi,
   type KernelProviderConfig,
   type KernelProviderInput,
@@ -17,6 +19,10 @@ type ProviderSettingsProps = {
   onSaveProvider: (provider: KernelProviderInput) => Promise<KernelProviderConfig[]>
   onRemoveProvider: (providerId: string) => Promise<KernelProviderConfig[]>
   onTestProvider: (providerId: string, modelId: string) => Promise<KernelProviderTestResult>
+  onFetchModelPricing: (
+    providerId: string,
+    modelId: string
+  ) => Promise<KernelModelPricingFetchResult>
 }
 
 type ProviderDraft = {
@@ -36,6 +42,11 @@ type ModelDraft = {
   name: string
   contextWindow: string
   maxTokens: string
+  input: string
+  output: string
+  cacheRead: string
+  cacheWrite: string
+  pricingTiers: KernelModelPricing['tiers']
   reasoning: ModelCapabilityDraft
   imageInput: ModelCapabilityDraft
 }
@@ -61,7 +72,8 @@ export function ProviderSettings({
   onListProviders,
   onSaveProvider,
   onRemoveProvider,
-  onTestProvider
+  onTestProvider,
+  onFetchModelPricing
 }: ProviderSettingsProps): React.JSX.Element {
   const [providers, setProviders] = useState<KernelProviderConfig[]>([])
   const [draft, setDraft] = useState<ProviderDraft | null>(null)
@@ -169,6 +181,48 @@ export function ProviderSettings({
       .finally(() => setAction(null))
   }
 
+  function handleFetchModelPricing(index: number): void {
+    const model = draft?.models[index]
+    if (
+      draft === null ||
+      model === undefined ||
+      model.id.trim().length === 0 ||
+      !PROVIDER_ID_PATTERN.test(draft.id) ||
+      RESERVED_PROVIDER_IDS.has(draft.id) ||
+      controlsDisabled
+    ) {
+      return
+    }
+    setAction(`pricing:${index}`)
+    setError(null)
+    setMessage(`正在从 LiteLLM 拉取 ${model.id} 的价格…`)
+    void onFetchModelPricing(draft.id, model.id)
+      .then((result) => {
+        setDraft((current) => {
+          if (current === null || current.models[index] === undefined) return current
+          return {
+            ...current,
+            models: current.models.map((candidate, modelIndex) => modelIndex === index
+              ? {
+                  ...candidate,
+                  input: String(result.pricing.input),
+                  output: String(result.pricing.output),
+                  cacheRead: String(result.pricing.cacheRead),
+                  cacheWrite: String(result.pricing.cacheWrite),
+                  pricingTiers: undefined
+                }
+              : candidate)
+          }
+        })
+        setMessage(`已从 LiteLLM 匹配 ${result.modelKey} 并更新价格。`)
+      })
+      .catch((reason: unknown) => {
+        setError(errorMessage(reason, `无法从 LiteLLM 拉取 ${model.id} 的价格。`))
+        setMessage(null)
+      })
+      .finally(() => setAction(null))
+  }
+
   return (
     <section className="provider-settings" aria-label="Provider 管理">
       <div className="provider-settings-heading">
@@ -193,11 +247,15 @@ export function ProviderSettings({
           draft={draft}
           disabled={controlsDisabled}
           mode={draft.originalId === null ? 'create' : 'edit'}
+          fetchingModelIndex={
+            action?.startsWith('pricing:') ? Number(action.slice('pricing:'.length)) : null
+          }
           onChange={setDraft}
           onCancel={() => {
             setDraft(null)
             setError(null)
           }}
+          onFetchModelPricing={handleFetchModelPricing}
           onSubmit={handleSubmit}
         />
       )}
@@ -303,6 +361,22 @@ export function ProviderSettings({
                                 <dt>输入</dt>
                                 <dd>{displayedModel.input === null ? '未提供' : displayedModel.input.includes('image') ? '文本、图片' : '文本'}</dd>
                               </div>
+                              <div>
+                                <dt>输入价格</dt>
+                                <dd>{formatModelPrice(model.cost?.input ?? null)}</dd>
+                              </div>
+                              <div>
+                                <dt>输出价格</dt>
+                                <dd>{formatModelPrice(model.cost?.output ?? null)}</dd>
+                              </div>
+                              <div>
+                                <dt>缓存读取价格</dt>
+                                <dd>{formatModelPrice(model.cost?.cacheRead ?? null)}</dd>
+                              </div>
+                              <div>
+                                <dt>缓存写入价格</dt>
+                                <dd>{formatModelPrice(model.cost?.cacheWrite ?? null)}</dd>
+                              </div>
                             </dl>
                           </div>
                         ) : null}
@@ -323,15 +397,19 @@ function ProviderForm({
   draft,
   disabled,
   mode,
+  fetchingModelIndex,
   onChange,
   onCancel,
+  onFetchModelPricing,
   onSubmit
 }: {
   draft: ProviderDraft
   disabled: boolean
   mode: 'create' | 'edit'
+  fetchingModelIndex: number | null
   onChange: (draft: ProviderDraft) => void
   onCancel: () => void
+  onFetchModelPricing: (index: number) => void
   onSubmit: (mode: FormSubmitMode) => void
 }): React.JSX.Element {
   function updateModel(index: number, patch: Partial<ModelDraft>): void {
@@ -344,6 +422,7 @@ function ProviderForm({
   return (
     <form
       className="settings-card settings-card-stacked provider-form"
+      aria-busy={fetchingModelIndex !== null}
       onSubmit={(event) => {
         event.preventDefault()
         onSubmit('save')
@@ -440,13 +519,32 @@ function ProviderForm({
           <fieldset className="provider-model-editor" disabled={disabled} key={index}>
             <div className="provider-model-editor-title">
               <legend>模型 {index + 1}</legend>
-              <button
-                type="button"
-                disabled={disabled || draft.models.length === 1}
-                onClick={() => onChange({ ...draft, models: draft.models.filter((_, modelIndex) => modelIndex !== index) })}
-              >
-                删除模型
-              </button>
+              <div className="provider-model-editor-actions">
+                <button
+                  type="button"
+                  disabled={
+                    disabled ||
+                    model.id.trim().length === 0 ||
+                    !PROVIDER_ID_PATTERN.test(draft.id) ||
+                    RESERVED_PROVIDER_IDS.has(draft.id)
+                  }
+                  data-tooltip={
+                    PROVIDER_ID_PATTERN.test(draft.id) && !RESERVED_PROVIDER_IDS.has(draft.id)
+                      ? '从 LiteLLM 公开价格目录匹配此模型。'
+                      : '请先填写有效的 Provider ID。'
+                  }
+                  onClick={() => onFetchModelPricing(index)}
+                >
+                  {fetchingModelIndex === index ? '正在从 LiteLLM 拉取…' : '从 LiteLLM 拉取'}
+                </button>
+                <button
+                  type="button"
+                  disabled={disabled || draft.models.length === 1}
+                  onClick={() => onChange({ ...draft, models: draft.models.filter((_, modelIndex) => modelIndex !== index) })}
+                >
+                  删除模型
+                </button>
+              </div>
             </div>
             <div className="provider-form-grid provider-model-fields">
               <label>
@@ -475,6 +573,48 @@ function ProviderForm({
                   step="1"
                   value={model.maxTokens}
                   onChange={(event) => updateModel(index, { maxTokens: event.currentTarget.value })}
+                />
+              </label>
+            </div>
+            <div className="provider-form-grid provider-model-pricing-fields">
+              <label>
+                <span>输入价格（USD / 1M tokens）</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={model.input}
+                  onChange={(event) => updateModel(index, { input: event.currentTarget.value })}
+                />
+              </label>
+              <label>
+                <span>输出价格（USD / 1M tokens）</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={model.output}
+                  onChange={(event) => updateModel(index, { output: event.currentTarget.value })}
+                />
+              </label>
+              <label>
+                <span>缓存读取价格（USD / 1M tokens）</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={model.cacheRead}
+                  onChange={(event) => updateModel(index, { cacheRead: event.currentTarget.value })}
+                />
+              </label>
+              <label>
+                <span>缓存写入价格（USD / 1M tokens）</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={model.cacheWrite}
+                  onChange={(event) => updateModel(index, { cacheWrite: event.currentTarget.value })}
                 />
               </label>
             </div>
@@ -539,6 +679,11 @@ function emptyModelDraft(): ModelDraft {
     name: '',
     contextWindow: '',
     maxTokens: '',
+    input: '',
+    output: '',
+    cacheRead: '',
+    cacheWrite: '',
+    pricingTiers: undefined,
     reasoning: 'unset',
     imageInput: 'unset'
   }
@@ -559,6 +704,11 @@ function providerDraft(provider: KernelProviderConfig): ProviderDraft {
       name: model.name ?? '',
       contextWindow: model.contextWindow === null ? '' : String(model.contextWindow),
       maxTokens: model.maxTokens === null ? '' : String(model.maxTokens),
+      input: model.cost === null ? '' : String(model.cost.input),
+      output: model.cost === null ? '' : String(model.cost.output),
+      cacheRead: model.cost === null ? '' : String(model.cost.cacheRead),
+      cacheWrite: model.cost === null ? '' : String(model.cost.cacheWrite),
+      pricingTiers: model.cost?.tiers,
       reasoning: model.reasoning === null ? 'unset' : model.reasoning ? 'supported' : 'unsupported',
       imageInput: model.input === null ? 'unset' : model.input.includes('image') ? 'supported' : 'unsupported'
     }))
@@ -583,6 +733,7 @@ function providerInput(draft: ProviderDraft): KernelProviderInput {
     ids.add(model.id)
     const contextWindow = optionalPositiveInteger(model.contextWindow, 'Context Window', model.id)
     const maxTokens = optionalPositiveInteger(model.maxTokens, 'Max Tokens', model.id)
+    const cost = modelPricing(model, index)
     return {
       id: model.id,
       name: model.name.trim().length === 0 ? null : model.name,
@@ -593,7 +744,8 @@ function providerInput(draft: ProviderDraft): KernelProviderInput {
           ? ['text', 'image']
           : ['text'],
       contextWindow,
-      maxTokens
+      maxTokens,
+      cost
     }
   })
 
@@ -616,6 +768,30 @@ function optionalPositiveInteger(value: string, label: string, modelId: string):
     throw new Error(`模型 ${modelId} 的 ${label} 必须是正整数。`)
   }
   return number
+}
+
+function modelPricing(model: ModelDraft, index: number): KernelModelPricing | null {
+  const values = [
+    model.input,
+    model.output,
+    model.cacheRead,
+    model.cacheWrite
+  ]
+  if (values.every((value) => value.trim().length === 0)) return null
+  if (values.some((value) => value.trim().length === 0)) {
+    throw new Error(`模型 ${index + 1} 的四项价格必须全部填写或全部留空。`)
+  }
+  const [input, output, cacheRead, cacheWrite] = values.map(Number)
+  if ([input, output, cacheRead, cacheWrite].some((value) => !Number.isFinite(value) || value < 0)) {
+    throw new Error(`模型 ${index + 1} 的价格必须是非负有限数。`)
+  }
+  return {
+    input: input!,
+    output: output!,
+    cacheRead: cacheRead!,
+    cacheWrite: cacheWrite!,
+    ...(model.pricingTiers === undefined ? {} : { tiers: model.pricingTiers })
+  }
 }
 
 function capabilityBoolean(value: ModelCapabilityDraft): boolean | null {
@@ -648,4 +824,8 @@ function errorMessage(reason: unknown, fallback: string): string {
 function testSuccessMessage(result: KernelProviderTestResult, afterSave: boolean): string {
   const prefix = afterSave ? 'Provider 已保存，连接测试成功' : '连接测试成功'
   return `${prefix}：${result.provider}/${result.modelId}（${result.durationMs} ms）。`
+}
+
+function formatModelPrice(value: number | null): string {
+  return value === null ? '未配置' : `${value} USD / 1M tokens`
 }

@@ -1,5 +1,6 @@
 export const KERNEL_COMMAND_CHANNEL = 'pi-gui:kernel-command'
 export const KERNEL_EVENT_CHANNEL = 'pi-gui:kernel-event'
+export const PROVIDER_AUTH_EVENT_CHANNEL = 'pi-gui:provider-auth-event'
 export const OPEN_EXTERNAL_CHANNEL = 'pi-gui:open-external'
 export const WINDOW_TOGGLE_FULLSCREEN_CHANNEL = 'pi-gui:window.toggle-fullscreen'
 export const WINDOW_IS_FULLSCREEN_CHANNEL = 'pi-gui:window.is-fullscreen'
@@ -7,6 +8,9 @@ export const WINDOW_FULLSCREEN_CHANGED_CHANNEL = 'pi-gui:window.fullscreen-chang
 export const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = 'pi-gui:window.toggle-maximize'
 export const WINDOW_IS_MAXIMIZED_CHANNEL = 'pi-gui:window.is-maximized'
 export const WINDOW_MAXIMIZED_CHANGED_CHANNEL = 'pi-gui:window.maximized-changed'
+
+import type { ShortcutSettings } from './shortcut-settings'
+export type { ShortcutActionId, ShortcutBinding, ShortcutSettings } from './shortcut-settings'
 
 export type RuntimeStatus =
   | 'stopped'
@@ -43,6 +47,20 @@ export type KernelProjectState = {
   sessionCount?: number
   unreadCount?: number
   busySessionCount?: number
+  /** Navigator 摘要；每个 Project 自己的 Session 列表，供多 Project 同时展开。 */
+  sessions?: KernelSessionSummary[]
+}
+
+export type KernelProjectTrustChoice =
+  | 'persist-trusted'
+  | 'persist-untrusted'
+  | 'once-trusted'
+  | 'once-untrusted'
+  | 'cancel'
+
+export type KernelProjectTrustRequest = {
+  id: string
+  projectPath: string
 }
 
 export type KernelSessionSummary = {
@@ -51,6 +69,8 @@ export type KernelSessionSummary = {
   name: string | null
   lastActivityAt: number | null
   runtimeStatus: RuntimeStatus
+  requiresReload?: boolean
+  statistics: KernelSessionStatistics | null
 }
 
 export type KernelCommandSource = 'gui' | 'pi-rpc' | 'extension' | 'prompt' | 'skill'
@@ -88,6 +108,24 @@ export type KernelInstalledPackage = {
   filtered: boolean
 }
 
+export type KernelModelPricingTier = {
+  /** This tier applies when the model input exceeds this token count. */
+  inputTokensAbove: number
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
+export type KernelModelPricing = {
+  /** Rates are USD per one million tokens. */
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  tiers?: KernelModelPricingTier[]
+}
+
 export type KernelModelState = {
   provider: string
   id: string
@@ -95,6 +133,7 @@ export type KernelModelState = {
   reasoning: boolean
   thinkingLevelMap: ThinkingLevelMap
   contextWindow: number | null
+  pricing?: KernelModelPricing
 }
 
 export type KernelSessionUsage = {
@@ -106,7 +145,30 @@ export type KernelSessionUsage = {
   contextTokens: number | null
   contextWindow: number | null
   contextPercent: number | null
+  cost: number
 }
+
+export type KernelSessionStatistics = {
+  userMessages: number
+  assistantMessages: number
+  toolCalls: number
+  toolResults: number
+  totalMessages: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  totalTokens: number
+  cost: number
+}
+
+export type KernelCompactionReason = 'manual' | 'threshold' | 'overflow'
+
+export type KernelCompactionState = {
+  reason: KernelCompactionReason
+}
+
+export type KernelCompactionOutcome = 'completed' | 'retrying' | 'cancelled' | 'failed'
 
 export const KERNEL_PROVIDER_APIS = [
   'openai-completions',
@@ -124,6 +186,7 @@ export type KernelProviderModelConfig = {
   input: Array<'text' | 'image'> | null
   contextWindow: number | null
   maxTokens: number | null
+  cost: KernelModelPricing | null
 }
 
 export type KernelProviderCatalogModel = {
@@ -161,6 +224,97 @@ export type KernelProviderTestResult = {
   modelId: string
   durationMs: number
 }
+
+export type KernelModelPricingFetchResult = {
+  source: 'litellm'
+  modelKey: string
+  pricing: KernelModelPricing
+}
+
+export type KernelProviderAuthType = 'api_key' | 'oauth'
+
+export type KernelProviderAuthSource =
+  | 'stored'
+  | 'runtime'
+  | 'environment'
+  | 'fallback'
+  | 'models_json_key'
+  | 'models_json_command'
+
+export type KernelProviderAuthMethod = {
+  type: KernelProviderAuthType
+  name: string
+  label: string | null
+}
+
+export type KernelProviderCredential = {
+  providerId: string
+  providerName: string
+  configured: boolean
+  source: KernelProviderAuthSource | null
+  storedCredentialType: KernelProviderAuthType | null
+  methods: KernelProviderAuthMethod[]
+}
+
+export type KernelProviderAuthPrompt =
+  | {
+      type: 'text' | 'secret' | 'manual_code'
+      message: string
+      placeholder: string | null
+    }
+  | {
+      type: 'select'
+      message: string
+      options: Array<{
+        id: string
+        label: string
+        description: string | null
+      }>
+    }
+
+export type KernelProviderAuthNotice =
+  | {
+      type: 'info'
+      message: string
+      links: Array<{ url: string, label: string | null }>
+    }
+  | {
+      type: 'auth_url'
+      url: string
+      instructions: string | null
+    }
+  | {
+      type: 'device_code'
+      userCode: string
+      verificationUri: string
+      intervalSeconds: number | null
+      expiresInSeconds: number | null
+    }
+  | {
+      type: 'progress'
+      message: string
+    }
+
+export type KernelProviderAuthEvent =
+  | {
+      type: 'provider-auth.started'
+      operationId: string
+      providerId: string
+      authType: KernelProviderAuthType
+    }
+  | {
+      type: 'provider-auth.prompt'
+      operationId: string
+      promptId: string
+      providerId: string
+      prompt: KernelProviderAuthPrompt
+    }
+  | {
+      type: 'provider-auth.notice'
+      operationId: string
+      providerId: string
+      notice: KernelProviderAuthNotice
+    }
 
 export type SessionNamingSettings =
   | { mode: 'auto' }
@@ -209,6 +363,7 @@ export type KernelSessionState = {
   pendingMessageCount: number
   pendingSteeringMessages: string[]
   pendingFollowUpMessages: string[]
+  compaction: KernelCompactionState | null
   settled: boolean
 }
 
@@ -311,17 +466,63 @@ export type KernelSessionPreview = {
   conversation: KernelConversationState
 }
 
+export type KernelForkCandidate = {
+  entryId: string
+  text: string
+  timestamp: string
+}
+
+export type KernelForkResult = {
+  state: KernelState
+  draft: string
+  cancelled: boolean
+}
+
+export type KernelArchiveReceipt = {
+  token: string
+  projectKey: string
+  sessionKey: string
+  sessionName: string | null
+  durationMs: number
+}
+
+export type KernelArchiveResult = {
+  state: KernelState
+  receipt: KernelArchiveReceipt
+}
+
+export type KernelSessionExportResult = {
+  saved: boolean
+}
+
+export type KernelProjectPathMatch = {
+  path: string
+  kind: 'file' | 'directory'
+}
+
+export type KernelProjectPathSearchResult = {
+  projectKey: string
+  query: string
+  matches: KernelProjectPathMatch[]
+}
+
+export const FORK_SESSION_COMMAND_ID = 'builtin:fork'
+export const EXPORT_SESSION_COMMAND_ID = 'builtin:export'
+export const COPY_LAST_ANSWER_COMMAND_ID = 'builtin:copy'
+
 export type KernelState = {
   projects: KernelProjectState[]
   activeProjectKey: string | null
   sessions: KernelSessionSummary[]
   activeSessionKey: string | null
+  projectTrustRequest: KernelProjectTrustRequest | null
   commands: KernelCommandDescriptor[]
   extensions: KernelExtensionDescriptor[]
   availableModels: KernelModelState[]
   sessionNaming: SessionNamingSettings
   appearance: AppearanceSettings
   general: GeneralSettings
+  shortcuts: ShortcutSettings
   runtime: KernelRuntimeState
   session: KernelSessionState
   conversation: KernelConversationState
@@ -362,6 +563,8 @@ export type KernelConversationPatch = {
 }
 
 export type KernelStatePatch = {
+  projectKey: string | null
+  sessionKey: string | null
   runtime?: KernelRuntimeState
   session?: KernelSessionState
   conversation?: KernelConversationPatch
@@ -373,11 +576,22 @@ export type KernelCommand =
   | { type: 'kernel.add-project' }
   | { type: 'kernel.activate-project'; projectKey: string }
   | { type: 'kernel.start-session' }
+  | { type: 'kernel.reload-session' }
+  | {
+      type: 'kernel.resolve-project-trust'
+      requestId: string
+      choice: KernelProjectTrustChoice
+    }
   | { type: 'kernel.activate-session'; sessionKey: string }
   | { type: 'kernel.archive-session'; sessionKey: string }
+  | { type: 'kernel.undo-archive-session'; token: string }
   | { type: 'kernel.preview-session'; sessionKey: string }
+  | { type: 'kernel.preview-archived-session'; token: string }
+  | { type: 'kernel.list-fork-candidates' }
+  | { type: 'kernel.fork-session'; entryId: string }
+  | { type: 'kernel.export-session' }
+  | { type: 'kernel.search-project-paths'; query: string }
   | { type: 'kernel.reorder-projects'; projectKeys: string[] }
-  | { type: 'kernel.reorder-sessions'; sessionKeys: string[] }
   | { type: 'kernel.install-extension'; kind: KernelExtensionSelectionKind }
   | { type: 'kernel.remove-extension'; path: string }
   | { type: 'kernel.search-pi-dev-extensions'; query: string }
@@ -391,6 +605,21 @@ export type KernelCommand =
   | { type: 'kernel.save-provider'; provider: KernelProviderInput }
   | { type: 'kernel.remove-provider'; providerId: string }
   | { type: 'kernel.test-provider'; providerId: string; modelId: string }
+  | { type: 'kernel.fetch-model-pricing'; providerId: string; modelId: string }
+  | { type: 'kernel.list-provider-credentials' }
+  | {
+      type: 'kernel.login-provider'
+      providerId: string
+      authType: KernelProviderAuthType
+    }
+  | {
+      type: 'kernel.submit-provider-auth-prompt'
+      operationId: string
+      promptId: string
+      value: string
+    }
+  | { type: 'kernel.cancel-provider-login'; operationId: string }
+  | { type: 'kernel.logout-provider'; providerId: string }
   | { type: 'kernel.select-prompt-attachments' }
   | { type: 'kernel.prompt'; message: string; attachments?: KernelPromptAttachment[] }
   | { type: 'kernel.steer'; message: string; attachments?: KernelPromptAttachment[] }
@@ -401,6 +630,7 @@ export type KernelCommand =
   | { type: 'kernel.set-session-naming'; settings: SessionNamingSettings }
   | { type: 'kernel.set-appearance'; settings: AppearanceSettings }
   | { type: 'kernel.set-general'; settings: GeneralSettings }
+  | { type: 'kernel.set-shortcuts'; settings: ShortcutSettings }
   | { type: 'kernel.invoke-command'; commandId: string; argument: string }
 
 export type KernelEvent =
@@ -412,6 +642,20 @@ export type KernelEvent =
       type: 'kernel.state-patched'
       patch: KernelStatePatch
     }
+  | {
+      type: 'kernel.compaction-started'
+      projectKey: string
+      sessionKey: string
+      reason: KernelCompactionReason
+    }
+  | {
+      type: 'kernel.compaction-ended'
+      projectKey: string
+      sessionKey: string
+      reason: KernelCompactionReason
+      outcome: KernelCompactionOutcome
+      willRetry: boolean
+    }
 
 export type KernelApi = {
   getPathForFile: (file: File) => string
@@ -420,11 +664,21 @@ export type KernelApi = {
   addProject: () => Promise<KernelState>
   activateProject: (projectKey: string) => Promise<KernelState>
   startSession: () => Promise<KernelState>
+  reloadSession: () => Promise<KernelState>
+  resolveProjectTrust: (
+    requestId: string,
+    choice: KernelProjectTrustChoice
+  ) => Promise<KernelState>
   activateSession: (sessionKey: string) => Promise<KernelState>
-  archiveSession: (sessionKey: string) => Promise<KernelState>
+  archiveSession: (sessionKey: string) => Promise<KernelArchiveResult>
+  undoArchiveSession: (token: string) => Promise<KernelState>
   previewSession: (sessionKey: string) => Promise<KernelSessionPreview>
+  previewArchivedSession: (token: string) => Promise<KernelSessionPreview>
+  listForkCandidates: () => Promise<KernelForkCandidate[]>
+  forkSession: (entryId: string) => Promise<KernelForkResult>
+  exportSession: () => Promise<KernelSessionExportResult>
+  searchProjectPaths: (query: string) => Promise<KernelProjectPathSearchResult>
   reorderProjects: (projectKeys: string[]) => Promise<KernelState>
-  reorderSessions: (sessionKeys: string[]) => Promise<KernelState>
   installExtension: (kind: KernelExtensionSelectionKind) => Promise<KernelState>
   removeExtension: (path: string) => Promise<KernelState>
   searchPiDevExtensions: (query: string) => Promise<KernelPiDevCatalog>
@@ -438,6 +692,22 @@ export type KernelApi = {
   saveProvider: (provider: KernelProviderInput) => Promise<KernelProviderConfig[]>
   removeProvider: (providerId: string) => Promise<KernelProviderConfig[]>
   testProvider: (providerId: string, modelId: string) => Promise<KernelProviderTestResult>
+  fetchModelPricing: (
+    providerId: string,
+    modelId: string
+  ) => Promise<KernelModelPricingFetchResult>
+  listProviderCredentials: () => Promise<KernelProviderCredential[]>
+  loginProvider: (
+    providerId: string,
+    authType: KernelProviderAuthType
+  ) => Promise<KernelProviderCredential[]>
+  submitProviderAuthPrompt: (
+    operationId: string,
+    promptId: string,
+    value: string
+  ) => Promise<void>
+  cancelProviderLogin: (operationId: string) => Promise<void>
+  logoutProvider: (providerId: string) => Promise<KernelProviderCredential[]>
   selectPromptAttachments: () => Promise<KernelPromptAttachment[]>
   prompt: (message: string, attachments?: KernelPromptAttachment[]) => Promise<KernelState>
   steer: (message: string, attachments?: KernelPromptAttachment[]) => Promise<KernelState>
@@ -448,6 +718,7 @@ export type KernelApi = {
   setSessionNaming: (settings: SessionNamingSettings) => Promise<KernelState>
   setAppearance: (settings: AppearanceSettings) => Promise<KernelState>
   setGeneral: (settings: GeneralSettings) => Promise<KernelState>
+  setShortcuts: (settings: ShortcutSettings) => Promise<KernelState>
   invokeCommand: (commandId: string, argument: string) => Promise<KernelState>
   openExternal: (url: string) => Promise<void>
   toggleFullscreen: () => Promise<boolean>
@@ -456,5 +727,6 @@ export type KernelApi = {
   toggleMaximize: () => Promise<boolean>
   isMaximized: () => Promise<boolean>
   subscribeMaximized: (listener: (maximized: boolean) => void) => () => void
+  subscribeProviderAuth: (listener: (event: KernelProviderAuthEvent) => void) => () => void
   subscribe: (listener: (event: KernelEvent) => void) => () => void
 }

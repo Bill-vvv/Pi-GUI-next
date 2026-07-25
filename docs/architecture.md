@@ -47,12 +47,17 @@ subscribe
 | --- | --- | --- |
 | Conversation 内容 | Pi session 文件 | 由 Pi 管理 |
 | Pi credential/provider auth | Pi | GUI 不回读凭据；认证与刷新由 Pi 管理 |
-| 自定义 Provider/Model 配置 | Pi `models.json` | GUI 只编辑官方配置；密钥只写不回读 |
-| Project 设置 | Workbench Kernel | XDG config |
+| 自定义 Provider/Model 配置与模型单价 | Pi `models.json` | GUI 只编辑官方配置；密钥只写不回读；显式拉价后保存 USD/百万 token 单价 |
+| Project、外观、通用与有限应用快捷键设置 | Workbench Kernel | XDG config |
 | 最近 session 指针与非敏感启动证据 | Workbench Kernel | XDG state |
 | Runtime 瞬时状态 | Workbench Kernel | 仅内存 |
 
 GUI 不建立 Conversation 数据库，也不把 renderer 投影当作对话事实来源。
+
+自定义模型的 `cost` 仍由 Pi 官方 `models.json` 持久化。用户显式点击拉取价格时，
+Electron Main 从 LiteLLM 公开价格目录匹配模型并通过窄 typed IPC 返回匹配键与四项单价；
+Renderer 不直接联网，也不建立价格数据库或后台自动刷新。保存后的单价供 Pi 计算后续请求费用，
+不改写既有 Session 中已经记录的历史 cost。
 
 ## Conversation 展示投影
 
@@ -64,7 +69,7 @@ Composer 附件沿 Pi 0.80.10 的交互式 TUI 与 RPC 边界处理：普通文�
 
 Pi session 仍保存完整用户消息和 image content block。Kernel 对 Renderer 只投影文件名、路径和类型摘要，不把附件正文或图片 base64 放入 `KernelState`；恢复历史和实时事件使用同一投影。附件变化不能走纯文本 append patch，必须回退全量状态以避免静默丢失附件。
 
-高频 Pi message、thinking 和 tool update 不重复发送完整 `KernelState`。Kernel 发送 `kernel.state-patched`：新 entry 按 index 插入，append-only 文本和工具输出只发送起始长度与新增后缀；非前缀改写或无法安全增量化时立即退回 `kernel.state-changed` 全量快照。Renderer 按顺序应用 patch，并最多每动画帧提交一次 React state。
+高频 Pi message、thinking 和 tool update 不重复发送完整 `KernelState`。Kernel 发送 `kernel.state-patched`：新 entry 按 index 插入，append-only 文本和工具输出只发送起始长度与新增后缀；非前缀改写或无法安全增量化时立即退回 `kernel.state-changed` 全量快照。Renderer 按顺序应用 patch，并最多每动画帧提交一次 React state。Pi compaction 不进入 Conversation entry：Kernel 以独立 lifecycle 标记所属 Runtime context，成功后核对 identity 并一次替换 Conversation、usage 与生命周期 statistics，失败或取消保留旧投影。
 
 Timeline 默认只挂载最近 60 个 settled turn，用户可按 60 轮继续向前展开且保持当前滚动锚点；折叠的工作过程只保留摘要，展开时才挂载 thinking、工具参数与输出正文。长对话滚动时，Renderer 只从当前已投影的用户 message 计算顶部阅读轮次，并在原 prompt 离开视口后将其粘着于 Session Header 下；这只是展示投影，不复制或持久化 Conversation 事实。
 
@@ -75,7 +80,7 @@ stopped -> starting -> ready -> running -> ready -> stopping -> stopped
 任何运行状态 -> crashed -> 用户显式 restart -> starting -> resume session
 ```
 
-状态变化只有 Workbench Kernel 一个 owner。每个 Session context 独立执行同一状态机，后台事件不得改写当前 Session 投影。Pi 非正常退出必须只让所属 context 进入 `crashed`；不自动无限重启。完整一轮以 `agent_settled` 为稳定点，不把中间的 retry、compaction 或 continuation 误判为结束。
+状态变化只有 Workbench Kernel 一个 owner。每个 Session context 独立执行同一状态机，后台事件不得改写当前 Session 投影。Pi 非正常退出必须只让所属 context 进入 `crashed`；不自动无限重启。完整一轮以 `agent_settled` 为稳定点，不把中间的 retry、compaction 或 continuation 误判为结束；`compaction_start` / `compaction_end` 保留 manual、threshold、overflow 与 `willRetry` 语义并单独收口。
 
 ## 安全边界
 

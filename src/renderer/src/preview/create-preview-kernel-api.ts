@@ -1,13 +1,22 @@
 import type {
   KernelApi,
   KernelEvent,
+  KernelProviderCredential,
   KernelProviderConfig,
   KernelSessionUsage,
   KernelState,
   ThinkingLevel
 } from '../../../shared/kernel-contract'
+import { DEFAULT_SHORTCUT_SETTINGS } from '../../../shared/shortcut-settings'
 
 const timestamp = Date.UTC(2026, 6, 21, 6, 30)
+const previewProjectPaths = [
+  { path: 'src', kind: 'directory' as const },
+  { path: 'src/main/index.ts', kind: 'file' as const },
+  { path: 'src/renderer/src/App.tsx', kind: 'file' as const },
+  { path: 'docs/development-plan.md', kind: 'file' as const },
+  { path: 'package.json', kind: 'file' as const }
+]
 
 type PreviewSessionFixture = {
   summary: KernelState['sessions'][number]
@@ -39,7 +48,22 @@ const defaultModel: NonNullable<KernelState['session']['model']> = {
     xhigh: 'xhigh',
     max: 'max'
   },
-  contextWindow: 200_000
+  contextWindow: 200_000,
+  pricing: {
+    input: 1.25,
+    output: 10,
+    cacheRead: 0.125,
+    cacheWrite: 1.25,
+    tiers: [
+      {
+        inputTokensAbove: 128_000,
+        input: 2.5,
+        output: 15,
+        cacheRead: 0.25,
+        cacheWrite: 2.5
+      }
+    ]
+  }
 }
 
 const previewUsage: KernelSessionUsage = {
@@ -50,7 +74,22 @@ const previewUsage: KernelSessionUsage = {
   totalTokens: 65_600,
   contextTokens: 56_000,
   contextWindow: 200_000,
-  contextPercent: 28
+  contextPercent: 28,
+  cost: 0.1842
+}
+
+const previewStatistics: NonNullable<KernelState['sessions'][number]['statistics']> = {
+  userMessages: 6,
+  assistantMessages: 6,
+  toolCalls: 4,
+  toolResults: 4,
+  totalMessages: 20,
+  inputTokens: previewUsage.inputTokens,
+  outputTokens: previewUsage.outputTokens,
+  cacheReadTokens: previewUsage.cacheReadTokens,
+  cacheWriteTokens: previewUsage.cacheWriteTokens,
+  totalTokens: previewUsage.totalTokens,
+  cost: previewUsage.cost
 }
 
 const availableModels: KernelState['availableModels'] = [
@@ -61,7 +100,13 @@ const availableModels: KernelState['availableModels'] = [
     name: 'Claude Sonnet 4.5',
     reasoning: true,
     thinkingLevelMap: {},
-    contextWindow: 200_000
+    contextWindow: 200_000,
+    pricing: {
+      input: 3,
+      output: 15,
+      cacheRead: 0.3,
+      cacheWrite: 3.75
+    }
   },
   {
     provider: 'google',
@@ -97,9 +142,29 @@ let previewProviders: KernelProviderConfig[] = [
         reasoning: false,
         input: ['text'],
         contextWindow: 128_000,
-        maxTokens: 16_384
+        maxTokens: 16_384,
+        cost: null
       }
     ]
+  }
+]
+
+let previewCredentials: KernelProviderCredential[] = [
+  {
+    providerId: 'openai',
+    providerName: 'OpenAI',
+    configured: true,
+    source: 'environment',
+    storedCredentialType: null,
+    methods: [{ type: 'api_key', name: 'OpenAI API key', label: null }]
+  },
+  {
+    providerId: 'openai-codex',
+    providerName: 'OpenAI Codex',
+    configured: false,
+    source: null,
+    storedCredentialType: null,
+    methods: [{ type: 'oauth', name: 'OpenAI Codex', label: '使用 ChatGPT 登录' }]
   }
 ]
 
@@ -113,7 +178,8 @@ const previewProjects = {
           id: 'preview-s12',
           name: 'S12 UI 视觉收敛',
           lastActivityAt: timestamp + 3_000,
-          runtimeStatus: 'ready'
+          runtimeStatus: 'ready',
+          statistics: previewStatistics
         },
         display: {
           id: 'preview-s12',
@@ -126,6 +192,7 @@ const previewProjects = {
           pendingMessageCount: 0,
           pendingSteeringMessages: [],
           pendingFollowUpMessages: [],
+          compaction: null,
           settled: true
         },
         conversation: {
@@ -181,7 +248,8 @@ const previewProjects = {
           id: 'preview-s11',
           name: 'Slash Command',
           lastActivityAt: timestamp - 28 * 60_000,
-          runtimeStatus: 'stopped'
+          runtimeStatus: 'stopped',
+          statistics: previewStatistics
         },
         display: {
           id: 'preview-s11',
@@ -194,6 +262,7 @@ const previewProjects = {
           pendingMessageCount: 0,
           pendingSteeringMessages: [],
           pendingFollowUpMessages: [],
+          compaction: null,
           settled: true
         },
         conversation: emptyConversation
@@ -204,7 +273,8 @@ const previewProjects = {
           id: 'preview-release',
           name: 'P1 发布复核',
           lastActivityAt: timestamp - 3 * 60 * 60_000,
-          runtimeStatus: 'stopped'
+          runtimeStatus: 'stopped',
+          statistics: previewStatistics
         },
         display: {
           id: 'preview-release',
@@ -217,6 +287,7 @@ const previewProjects = {
           pendingMessageCount: 0,
           pendingSteeringMessages: [],
           pendingFollowUpMessages: [],
+          compaction: null,
           settled: true
         },
         conversation: emptyConversation
@@ -232,7 +303,8 @@ const previewProjects = {
           id: 'preview-reader-layout',
           name: '阅读器布局',
           lastActivityAt: timestamp - 16 * 60_000,
-          runtimeStatus: 'stopped'
+          runtimeStatus: 'stopped',
+          statistics: previewStatistics
         },
         display: {
           id: 'preview-reader-layout',
@@ -245,6 +317,7 @@ const previewProjects = {
           pendingMessageCount: 0,
           pendingSteeringMessages: [],
           pendingFollowUpMessages: [],
+          compaction: null,
           settled: true
         },
         conversation: emptyConversation
@@ -255,7 +328,8 @@ const previewProjects = {
           id: 'preview-reader-import',
           name: '文档导入',
           lastActivityAt: timestamp - 2 * 60 * 60_000,
-          runtimeStatus: 'stopped'
+          runtimeStatus: 'stopped',
+          statistics: previewStatistics
         },
         display: {
           id: 'preview-reader-import',
@@ -268,6 +342,7 @@ const previewProjects = {
           pendingMessageCount: 0,
           pendingSteeringMessages: [],
           pendingFollowUpMessages: [],
+          compaction: null,
           settled: true
         },
         conversation: emptyConversation
@@ -283,7 +358,8 @@ const previewProjects = {
           id: 'preview-legal-retrieval',
           name: '检索质量复核',
           lastActivityAt: timestamp - 44 * 60_000,
-          runtimeStatus: 'stopped'
+          runtimeStatus: 'stopped',
+          statistics: previewStatistics
         },
         display: {
           id: 'preview-legal-retrieval',
@@ -296,6 +372,7 @@ const previewProjects = {
           pendingMessageCount: 0,
           pendingSteeringMessages: [],
           pendingFollowUpMessages: [],
+          compaction: null,
           settled: true
         },
         conversation: emptyConversation
@@ -329,16 +406,19 @@ const initialProjectKey: PreviewProjectKey = '/home/vvv/Projects/pi-gui-next'
 const initialSelection = projectSelection(initialProjectKey)
 
 const initialState: KernelState = {
-  projects: [
-    { path: '/home/vvv/Projects/pi-gui-next', sessionCount: 3, unreadCount: 0 },
-    { path: '/home/vvv/Projects/reader-next', sessionCount: 2, unreadCount: 0 },
-    { path: '/home/vvv/Projects/legal-rag', sessionCount: 1, unreadCount: 0 }
-  ],
+  projects: (Object.keys(previewProjects) as PreviewProjectKey[]).map((path) => ({
+    path,
+    sessionCount: previewProjects[path].sessions.length,
+    unreadCount: 0,
+    sessions: previewProjects[path].sessions.map(({ summary }) => summary)
+  })),
   activeProjectKey: initialProjectKey,
   ...initialSelection,
+  projectTrustRequest: null,
   availableModels,
   sessionNaming: { mode: 'auto' },
   general: { startupWorkspaceRestore: 'restore', doubleClickBorderMaximize: true },
+  shortcuts: { ...DEFAULT_SHORTCUT_SETTINGS },
   appearance: {
     theme: 'system',
     textSize: 'default',
@@ -418,6 +498,18 @@ export function createPreviewKernelApi(): KernelApi {
     }
   }
   const listeners = new Set<(event: KernelEvent) => void>()
+  const archivedSessions = new Map<string, {
+    summary: KernelState['sessions'][number]
+    index: number
+    preview: {
+      projectKey: string
+      sessionKey: string
+      sessionId: string
+      sessionName: string | null
+      conversation: KernelState['conversation']
+    }
+  }>()
+  let previewOperationRevision = 0
 
   const commit = (next: KernelState): Promise<KernelState> => {
     state = next
@@ -431,7 +523,18 @@ export function createPreviewKernelApi(): KernelApi {
   const activateSelection = (projectKey: PreviewProjectKey, sessionKey?: string) => {
     const selection = structuredClone(projectSelection(projectKey, sessionKey))
     if (runningVariant) selection.session.settled = false
-    return commit({ ...state, activeProjectKey: projectKey, ...selection })
+    return commit({
+      ...state,
+      activeProjectKey: projectKey,
+      ...selection,
+      projects: state.projects.map((project) => project.path === projectKey
+        ? {
+            ...project,
+            sessionCount: selection.sessions.length,
+            sessions: selection.sessions
+          }
+        : project)
+    })
   }
 
   return {
@@ -443,6 +546,12 @@ export function createPreviewKernelApi(): KernelApi {
     activateProject: (projectKey) =>
       projectKey in previewProjects ? activateSelection(projectKey as PreviewProjectKey) : current(),
     startSession: current,
+    reloadSession: async () => {
+      throw new Error('Session reload is unavailable in browser preview.')
+    },
+    resolveProjectTrust: async () => {
+      throw new Error('Project trust decisions are unavailable in browser preview.')
+    },
     activateSession: (sessionKey) => {
       const projectKey = state.activeProjectKey
       if (!(projectKey && projectKey in previewProjects)) return current()
@@ -451,32 +560,84 @@ export function createPreviewKernelApi(): KernelApi {
         ? activateSelection(projectKey as PreviewProjectKey, sessionKey)
         : current()
     },
-    archiveSession: (sessionKey) => {
-      if (!state.sessions.some(({ key }) => key === sessionKey)) return current()
+    archiveSession: async (sessionKey) => {
+      const summary = state.sessions.find(({ key }) => key === sessionKey)
+      if (summary === undefined || state.activeProjectKey === null) {
+        throw new Error('Preview session is unavailable.')
+      }
+      const sessionIndex = state.sessions.findIndex(({ key }) => key === sessionKey)
+      const project = state.activeProjectKey in previewProjects
+        ? previewProjects[state.activeProjectKey as PreviewProjectKey]
+        : null
+      const fixture = project?.sessions.find(({ summary: candidate }) => candidate.key === sessionKey)
+      const preview = {
+        projectKey: state.activeProjectKey,
+        sessionKey,
+        sessionId: summary.id,
+        sessionName: summary.name,
+        conversation: structuredClone(
+          state.activeSessionKey === sessionKey
+            ? state.conversation
+            : fixture?.conversation ?? emptyConversation
+        )
+      }
       const sessions = state.sessions.filter(({ key }) => key !== sessionKey)
-      if (state.activeSessionKey !== sessionKey) return commit({ ...state, sessions })
-      return commit({
-        ...state,
-        sessions,
-        activeSessionKey: null,
-        commands: [],
-        availableModels: [],
-        runtime: { ...state.runtime, status: 'stopped' },
-        session: {
-          id: null,
-          name: null,
-          resumeAvailable: false,
-          model: null,
-          usage: null,
-          thinkingLevel: null,
-          messageCount: 0,
-          pendingMessageCount: 0,
-          pendingSteeringMessages: [],
-          pendingFollowUpMessages: [],
-          settled: true
-        },
-        conversation: structuredClone(emptyConversation)
+      const projects = state.projects.map((candidate) => candidate.path === state.activeProjectKey
+        ? { ...candidate, sessionCount: sessions.length, sessions }
+        : candidate)
+      const nextState = state.activeSessionKey !== sessionKey
+        ? { ...state, sessions, projects }
+        : {
+            ...state,
+            sessions,
+            projects,
+            activeSessionKey: null,
+            commands: [],
+            availableModels: [],
+            runtime: { ...state.runtime, status: 'stopped' as const },
+            session: {
+              id: null,
+              name: null,
+              resumeAvailable: false,
+              model: null,
+              usage: null,
+              thinkingLevel: null,
+              messageCount: 0,
+              pendingMessageCount: 0,
+              pendingSteeringMessages: [],
+              pendingFollowUpMessages: [],
+              compaction: null,
+              settled: true
+            },
+            conversation: structuredClone(emptyConversation)
+          }
+      const committedState = await commit(nextState)
+      previewOperationRevision += 1
+      const token = `preview-archive-${previewOperationRevision}`
+      archivedSessions.set(token, {
+        summary: structuredClone(summary),
+        index: sessionIndex,
+        preview
       })
+      return {
+        state: committedState,
+        receipt: {
+          token,
+          projectKey: preview.projectKey,
+          sessionKey,
+          sessionName: summary.name,
+          durationMs: 5_000
+        }
+      }
+    },
+    undoArchiveSession: async (token) => {
+      const archived = archivedSessions.get(token)
+      if (archived === undefined) throw new Error('Archive receipt is unavailable.')
+      archivedSessions.delete(token)
+      if (state.sessions.some(({ key }) => key === archived.summary.key)) return current()
+      const sessions = [...state.sessions]
+      sessions.splice(Math.min(archived.index, sessions.length), 0, structuredClone(archived.summary))
+      return commit({ ...state, sessions })
     },
     previewSession: async (sessionKey) => {
       const projectKey = state.activeProjectKey
@@ -495,19 +656,79 @@ export function createPreviewKernelApi(): KernelApi {
         conversation: fixture.conversation
       })
     },
+    previewArchivedSession: async (token) => {
+      const archived = archivedSessions.get(token)
+      if (archived === undefined) throw new Error('Archive receipt is unavailable.')
+      archivedSessions.delete(token)
+      return structuredClone(archived.preview)
+    },
+    listForkCandidates: async () => {
+      if (
+        state.activeSessionKey === null ||
+        state.runtime.status !== 'ready' ||
+        !state.session.settled
+      ) return []
+      return [{
+        entryId: 'preview-fork-entry-1',
+        text: '我们先逐项调整工作台的视觉层级。',
+        timestamp: new Date(timestamp).toISOString()
+      }]
+    },
+    forkSession: async (entryId) => {
+      if (entryId !== 'preview-fork-entry-1') {
+        throw new Error('Preview fork candidate is unavailable.')
+      }
+      previewOperationRevision += 1
+      const sessionKey = `/preview/fork-${previewOperationRevision}.jsonl`
+      const sessionId = `preview-fork-${previewOperationRevision}`
+      const nextState = await commit({
+        ...state,
+        sessions: [
+          {
+            key: sessionKey,
+            id: sessionId,
+            name: '分叉预览',
+            lastActivityAt: Date.now(),
+            runtimeStatus: 'ready',
+            statistics: previewStatistics
+          },
+          ...state.sessions
+        ],
+        activeSessionKey: sessionKey,
+        session: {
+          ...state.session,
+          id: sessionId,
+          name: '分叉预览',
+          messageCount: 0,
+          pendingMessageCount: 0,
+          settled: true
+        },
+        conversation: structuredClone(emptyConversation)
+      })
+      return {
+        state: nextState,
+        draft: '我们先逐项调整工作台的视觉层级。',
+        cancelled: false
+      }
+    },
+    exportSession: async () => ({ saved: false }),
+    searchProjectPaths: async (query) => {
+      if (state.activeProjectKey === null) throw new Error('Preview project is unavailable.')
+      const normalizedQuery = query.toLocaleLowerCase('en-US')
+      return {
+        projectKey: state.activeProjectKey,
+        query,
+        matches: previewProjectPaths.filter(({ path }) =>
+          isFuzzySubsequence(path.toLocaleLowerCase('en-US'), normalizedQuery)
+        )
+      }
+    },
     reorderProjects: (projectKeys) => {
       const projectsByKey = new Map(state.projects.map((project) => [project.path, project]))
       if (projectKeys.length !== state.projects.length || projectKeys.some((key) => !projectsByKey.has(key))) {
         return current()
       }
       return commit({ ...state, projects: projectKeys.map((key) => projectsByKey.get(key)!) })
-    },
-    reorderSessions: (sessionKeys) => {
-      const sessionsByKey = new Map(state.sessions.map((session) => [session.key, session]))
-      if (sessionKeys.length !== state.sessions.length || sessionKeys.some((key) => !sessionsByKey.has(key))) {
-        return current()
-      }
-      return commit({ ...state, sessions: sessionKeys.map((key) => sessionsByKey.get(key)!) })
     },
     installExtension: (kind) => {
       const path = kind === 'file'
@@ -592,6 +813,38 @@ export function createPreviewKernelApi(): KernelApi {
       return structuredClone(previewProviders)
     },
     testProvider: async (providerId, modelId) => ({ provider: providerId, modelId, durationMs: 842 }),
+    fetchModelPricing: async () => {
+      throw new Error('LiteLLM pricing lookup is unavailable in browser preview.')
+    },
+    listProviderCredentials: async () => structuredClone(previewCredentials),
+    loginProvider: async (providerId, authType) => {
+      previewCredentials = previewCredentials.map((credential) => (
+        credential.providerId === providerId
+          ? {
+              ...credential,
+              configured: true,
+              source: 'stored',
+              storedCredentialType: authType
+            }
+          : credential
+      ))
+      return structuredClone(previewCredentials)
+    },
+    submitProviderAuthPrompt: async () => undefined,
+    cancelProviderLogin: async () => undefined,
+    logoutProvider: async (providerId) => {
+      previewCredentials = previewCredentials.map((credential) => (
+        credential.providerId === providerId
+          ? {
+              ...credential,
+              configured: false,
+              source: null,
+              storedCredentialType: null
+            }
+          : credential
+      ))
+      return structuredClone(previewCredentials)
+    },
     selectPromptAttachments: async () => [],
     getPathForFile: (file) => `/preview/${file.name}`,
     prompt: current,
@@ -610,6 +863,7 @@ export function createPreviewKernelApi(): KernelApi {
       commit({ ...state, session: { ...state.session, thinkingLevel } }),
     setSessionNaming: (sessionNaming) => commit({ ...state, sessionNaming }),
     setGeneral: (general) => commit({ ...state, general }),
+    setShortcuts: (shortcuts) => commit({ ...state, shortcuts }),
     setAppearance: (appearance) => commit({ ...state, appearance }),
     invokeCommand: current,
     openExternal: async (url) => {
@@ -621,9 +875,20 @@ export function createPreviewKernelApi(): KernelApi {
     toggleMaximize: async () => false,
     isMaximized: async () => false,
     subscribeMaximized: () => () => undefined,
+    subscribeProviderAuth: () => () => undefined,
     subscribe: (listener) => {
       listeners.add(listener)
       return () => listeners.delete(listener)
     }
   }
+}
+
+function isFuzzySubsequence(candidate: string, query: string): boolean {
+  let queryIndex = 0
+  for (const character of candidate) {
+    if (character !== query[queryIndex]) continue
+    queryIndex += 1
+    if (queryIndex === query.length) return true
+  }
+  return query.length === 0
 }

@@ -3,6 +3,7 @@ import type {
   KernelPromptAttachment,
   KernelPromptImage
 } from '../../shared/kernel-contract.ts'
+import { formatPathReference } from '../../shared/path-reference.ts'
 
 export type MaterializedPrompt = {
   message: string
@@ -22,7 +23,7 @@ export function materializePrompt(
   const images: KernelPromptImage[] = []
   for (const attachment of attachments) {
     if (attachment.type === 'file') {
-      attachmentText += `${formatFileReference(attachment.path)}\n`
+      attachmentText += `${formatPathReference(attachment.path)}\n`
       continue
     }
     const hints = attachment.hints.join('\n')
@@ -88,7 +89,7 @@ export function stripPromptFileBlocks(message: string): string {
   const parsed = parseLeadingAttachments(message)
   if (parsed.attachments.length === 0) return parsed.text
   const references = parsed.attachments
-    .map((attachment) => formatFileReference(fileName(attachment.path)))
+    .map((attachment) => formatPathReference(fileName(attachment.path)))
     .join(' ')
   return parsed.text.trim().length === 0
     ? references
@@ -190,12 +191,6 @@ function selectImageBlocks(blocks: ParsedFileBlock[], imageCount: number): Parse
     }
   }
   return result
-}
-
-function formatFileReference(path: string): string {
-  return /\s/u.test(path)
-    ? `@"${path.replace(/\\/gu, '\\\\').replace(/"/gu, '\\"')}"`
-    : `@${path}`
 }
 
 function unescapeQuotedPath(path: string): string {

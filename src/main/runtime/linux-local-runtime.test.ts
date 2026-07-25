@@ -17,6 +17,13 @@ test('runtime leaves project resource trust to Pi defaults', () => {
   assert.equal(arguments_.includes('--no-approve'), false)
 })
 
+test('runtime forwards all three project trust states as argv entries', () => {
+  assert.equal(buildPiRpcArguments(undefined, false, undefined).includes('--approve'), false)
+  assert.equal(buildPiRpcArguments(undefined, false, undefined).includes('--no-approve'), false)
+  assert.equal(buildPiRpcArguments(undefined, false, true).at(-1), '--approve')
+  assert.equal(buildPiRpcArguments(undefined, false, false).at(-1), '--no-approve')
+})
+
 test('runtime resumes an absolute session file', () => {
   const sessionFile = '/tmp/pi-session.jsonl'
 
@@ -106,6 +113,167 @@ process.stdin.on('data', (chunk) => {
     { type: 'steer', message: 'Steer', images: [image] },
     { type: 'follow_up', message: 'Follow up', images: [image] }
   ])
+})
+
+test('runtime forwards get_entries and fork through the Pi RPC client', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-runtime-fork-'))
+  t.after(async () => rm(directory, { recursive: true, force: true }))
+  const executable = join(directory, 'pi')
+  const requestLog = join(directory, 'requests.jsonl')
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs')
+if (process.argv[2] === '--version') {
+  process.stdout.write('0.80.10\\n')
+  process.exit(0)
+}
+let input = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  input += chunk
+  let newline
+  while ((newline = input.indexOf('\\n')) >= 0) {
+    const request = JSON.parse(input.slice(0, newline))
+    input = input.slice(newline + 1)
+    appendFileSync(${JSON.stringify(requestLog)}, JSON.stringify(request) + '\\n')
+    const data = request.type === 'get_state'
+      ? {}
+      : request.type === 'get_entries'
+        ? {
+            entries: [{
+              id: 'entry-1',
+              parentId: null,
+              type: 'message',
+              timestamp: '2026-07-24T01:00:00.000Z',
+              message: { role: 'user', content: 'Original prompt' }
+            }],
+            leafId: 'entry-1'
+          }
+        : request.type === 'fork'
+          ? { text: 'Original prompt', cancelled: false }
+          : undefined
+    process.stdout.write(JSON.stringify({
+      type: 'response',
+      id: request.id,
+      success: true,
+      ...(data === undefined ? {} : { data })
+    }) + '\\n')
+  }
+})
+`,
+    { mode: 0o755 }
+  )
+  const runtime = new LinuxLocalRuntime({ cwd: directory, explicitExecutable: executable })
+
+  await runtime.start()
+  const entries = await runtime.send({ type: 'get_entries' })
+  const fork = await runtime.send({ type: 'fork', entryId: 'entry-1' })
+  await runtime.stop()
+
+  assert.deepEqual(entries, {
+    type: 'entries',
+    entries: [{
+      id: 'entry-1',
+      parentId: null,
+      type: 'message',
+      timestamp: '2026-07-24T01:00:00.000Z',
+      message: {
+        role: 'user',
+        content: { text: 'Original prompt', hasImage: false }
+      }
+    }],
+    leafId: 'entry-1'
+  })
+  assert.deepEqual(fork, { type: 'forked', text: 'Original prompt', cancelled: false })
+
+  const requests = (await readFile(requestLog, 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .map(({ id: _id, ...request }) => request)
+  assert.deepEqual(requests.slice(-2), [
+    { type: 'get_entries' },
+    { type: 'fork', entryId: 'entry-1' }
+  ])
+})
+
+test('runtime forwards get_session_stats through the Pi RPC client', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-runtime-stats-'))
+  t.after(async () => rm(directory, { recursive: true, force: true }))
+  const executable = join(directory, 'pi')
+  const requestLog = join(directory, 'requests.jsonl')
+  const statistics = {
+    sessionFile: '/tmp/session.jsonl',
+    sessionId: 'session-1',
+    userMessages: 2,
+    assistantMessages: 1,
+    toolCalls: 3,
+    toolResults: 3,
+    totalMessages: 6,
+    tokens: {
+      input: 100,
+      output: 50,
+      cacheRead: 25,
+      cacheWrite: 10,
+      total: 185
+    },
+    cost: 0.0125,
+    contextUsage: {
+      tokens: 185,
+      contextWindow: 200_000,
+      percent: 0.0925
+    }
+  }
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs')
+if (process.argv[2] === '--version') {
+  process.stdout.write('0.80.10\\n')
+  process.exit(0)
+}
+let input = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  input += chunk
+  let newline
+  while ((newline = input.indexOf('\\n')) >= 0) {
+    const request = JSON.parse(input.slice(0, newline))
+    input = input.slice(newline + 1)
+    appendFileSync(${JSON.stringify(requestLog)}, JSON.stringify(request) + '\\n')
+    const data = request.type === 'get_state'
+      ? {}
+      : request.type === 'get_session_stats'
+        ? ${JSON.stringify(statistics)}
+        : undefined
+    process.stdout.write(JSON.stringify({
+      type: 'response',
+      id: request.id,
+      success: true,
+      ...(data === undefined ? {} : { data })
+    }) + '\\n')
+  }
+})
+`,
+    { mode: 0o755 }
+  )
+  const runtime = new LinuxLocalRuntime({ cwd: directory, explicitExecutable: executable })
+
+  await runtime.start()
+  const result = await runtime.send({ type: 'get_session_stats' })
+  await runtime.stop()
+
+  assert.deepEqual(result, {
+    type: 'session-statistics',
+    statistics
+  })
+  const requests = (await readFile(requestLog, 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .map(({ id: _id, ...request }) => request)
+  assert.deepEqual(requests.at(-1), { type: 'get_session_stats' })
 })
 
 test('stale get_state snapshots cannot revive a settled activity', async (t) => {

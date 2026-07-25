@@ -14,6 +14,7 @@
   line-height: var(--line-caption);
   overflow-wrap: anywhere;
   padding: 0.48rem 0.58rem;
+  white-space: pre-line;
   opacity: 0;
   pointer-events: none;
   visibility: hidden;

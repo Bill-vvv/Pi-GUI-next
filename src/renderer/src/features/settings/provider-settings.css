@@ -323,8 +323,19 @@
   margin-bottom: 13px;
 }
 
+.provider-model-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .provider-model-editor-title button {
   padding: 5px 8px;
+}
+
+.provider-model-pricing-fields {
+  margin-top: 14px;
 }
 
 .provider-model-flags {
@@ -377,5 +388,9 @@
   .provider-form-actions {
     align-items: stretch;
     flex-direction: column-reverse;
+  }
+
+  .provider-model-editor-title {
+    align-items: flex-start;
   }
 }

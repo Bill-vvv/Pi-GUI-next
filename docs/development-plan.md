@@ -1,10 +1,10 @@
 # Pi GUI 开发计划
 
 > 当前阶段：P2 — Workbench Foundation
-> 计划版本：5.6
+> 计划版本：6.3
 > 最后更新：2026-07-24
 > 总体状态：In Progress
-> 当前 Slice：S14 — 优化（In Progress）
+> 当前 Slice：S15 — TUI 日常能力补齐（Complete）
 
 ## 1. 计划用途
 
@@ -457,8 +457,8 @@ P2 先用一个短 Slice 固定结构，再实现基础功能，随后在真实�
 | S12 | UI 视觉收敛 | `Complete` | 真实构建版通过隔离 XDG 的 ProjectStore/WorkbenchKernel 载入 2 个 Project、3 个 Session，切换后只显示目标 Project 的 Session；真实 Pi 0.80.10 启动到 ready 并展示 `/new`、`/model`、`/thinking`、`/compact`、`/name` catalog；slash menu 位于 Composer 上方且无溢出，Header/流内诊断不覆盖 Timeline；109 项 core tests、`pnpm typecheck`、生产 build、diff check 通过 |
 | S12.5 | 重复职责解耦 | `Complete` | 审计当前实现后只收敛跨模块高重复且存在语义漂移风险的纯逻辑：Main 通用 record guard、错误文本归一化、Project Session pointer 类型与 upsert，以及 Renderer Runtime 状态判定；不按文件大小拆分，不为单次逻辑增加函数、类或中间层；109 项 core tests、`pnpm typecheck`、生产 build 和 diff check 通过 |
 | S13 | 交互优化与 P2 发布证据 | `Complete` | 完成低成本可配置的 Session 语义命名、Tab/Arrow slash 补全与 combobox 语义、Runtime context action 成功后的 Composer 焦点恢复、Project/Session 切换反馈、Kernel 连接重试以及空对话与无详情 crash 状态；候选 `fe1e559` 的 AppImage 通过 17 步 P1 回归与 P2 双 Project、双 Session、slash command、单 Runtime 和交互链路，schema v2 脱敏报告与六张截图位于 `release/evidence/2026-07-22T03-37-46-614Z-fe1e559bca43/` |
-| S14 | 优化 | `In Progress` | 不预先拆分具体计划；按实际使用中发现的零散交互问题逐项优化；四十项已实现并通过定向验证，另有一项协议适配待后续处理 |
-| S15 | TUI 日常能力补齐 | `Pending` | 按逐项确认的产品边界补齐 Session Fork、归档即时补救、精简 HTML 导出、回复复制、`@` 文件搜索、项目资源信任、当前 Session reload、凭证登录/退出、GUI 快捷键、Session 统计和自动压缩状态；不照搬 Tree、Clone、CLI/headless、工具控制或完整生态管理 |
+| S14 | 优化 | `Complete` | 按实际使用中发现的问题完成四十二项交互、并行 Runtime、输入、设置和职责边界优化；队列修改因 Pi 0.80.10 缺少 typed mutation RPC 明确延期，不以 Renderer 伪实现阻塞收口 |
+| S15 | TUI 日常能力补齐 | `Complete` | 六个阶段均已完成：Project 资源 trust / reload、Session Fork / 归档即时补救、安全导出 / 回复复制 / 生命周期统计、Project 路径搜索 / GUI typed 命令、公开 SDK 凭证交互 / Provider 定向 reload 标记，以及窗口内快捷键 / Pi 压缩生命周期；未照搬 Tree、Clone、CLI/headless、工具控制或完整生态管理 |
 
 P2 最初把“多 Project、多 Session”限定为可保存、发现和切换。2026-07-23 用户确认并行是旧版已有且当前必须恢复的核心能力后，D-017 替代该限制：Workbench Kernel 现在按 Session 管理独立 Runtime context，允许多个 Pi Runtime 并行，同时保持 Electron Main 单一 control plane。
 
@@ -470,8 +470,8 @@ P2 最初把“多 Project、多 Session”限定为可保存、发现和切换�
 | --- | --- | --- | --- |
 | S14-01 | 交互缺陷 | 当前已识别的模型选择器与 slash command 菜单支持点击外部收起；内容型 disclosure 不改变 | 已完成（首批） |
 | S14-02 | 设置界面 | 新建独立设置界面，以左侧栏导航各设置分类；删除常驻的无用介绍，必要说明移入对应控件 tooltip；拓展页展示 Extension 本体，不以命令目录代替 | 已完成（首期） |
-| S14-03 | Session 切换 | Session 单击无感切换并显示历史，不停止或启动 Runtime，也不暴露特殊查看模式；首次发送消息或执行命令时后台自动激活目标 Session 后继续操作 | 已完成 |
-| S14-04 | 导航排序 | Project 与当前 Project 下的 Session 支持拖拽排序；严格校验全排列并持久化，活动身份和 Runtime ownership 不变 | 已完成 |
+| S14-03 | Session 切换 | Session 单击无感切换：立即显示目标历史，并后台激活/启动该 Session 的 Runtime；不暴露特殊查看模式，也不再要求先点“启动 Pi”或等到首次发送 | 已完成 |
+| S14-04 | 导航排序 | Project 与当前 Project 下的 Session 支持拖拽排序；严格校验全排列并持久化，活动身份和 Runtime ownership 不变 | Project 部分保留；Session 部分由 S14-42 替代 |
 | S14-05 | 运行中输入 | 当前任务执行时 Composer 不应锁定；接入 Pi 0.80.10 原生 `steer` / `follow_up` 与 `queue_update`，运行中支持 Enter 转向、Alt+Enter 跟进，并保留显式中止 | 已完成 |
 | S14-06 | 对话归档 | Session 行右侧在悬浮或键盘聚焦时显示归档入口；归档只在 XDG 索引标记并从普通列表隐藏，不删除 Pi session 文件；活动 Session 先受控停止 Runtime 再清空投影 | 已完成 |
 | S14-07 | 拓展管理 | 设置页直接展示 Pi 用户设置 `extensions` 中的 Extension 路径；可选择 `.ts` / `.js` 文件或目录写入配置，并从配置中卸载，源码文件始终保留；权限和生效时机仅放在 tooltip，不接入 Package、npm、Git、命令目录或内嵌市场 | 已完成 |
@@ -479,12 +479,12 @@ P2 最初把“多 Project、多 Session”限定为可保存、发现和切换�
 | S14-09 | 运行中输入语义 | Pi 运行时普通输入默认作为 `follow_up`，`steer` 只通过 Alt+Enter 特别提交；右侧不再并列展示 Follow up / Steer 按钮，保留显式中止 | 已完成 |
 | S14-10 | 运行中队列可见性 | 保留 Pi `queue_update` 的 steering / followUp 正文并显示在 Composer 上方，但界面只展示排队内容、不展示类型；两类原生处理时序保持不变；面板限高滚动且参与 Composer clearance | 已完成 |
 | S14-11 | 工具过程密度 | 工具过程提供紧凑汇总、标准步骤和详细卡片三档；默认标准档弱化徽标、时间线和详情容器，偏好仅保存在 Renderer 本机；thinking 展示与 Kernel/RPC contract 不变 | 已完成 |
-| S14-12 | 导航拖拽命中 | Project / Session 排序只在主行按下后临时启用拖拽，松开或取消后立即关闭；Session 归档按钮不触发拖拽，并固定在时间文字之上独占指针命中；长期约束见 [`p2-workbench-structure.md`](p2-workbench-structure.md#311-导航行命中与拖拽要求) 3.1.1 | 已完成 |
-| S14-13 | 队列管理适配 | 后续支持排队内容拖拽排序、follow-up 转 steer、单条删除及对应移动/移除动效；Pi 0.80.10 RPC 当前没有删除、重排、转换或替换队列命令，等待评估上游 typed RPC 与能力探测方案 | 待适配 |
+| S14-12 | 导航拖拽命中 | Project / Session 排序只在主行按下后临时启用拖拽，松开或取消后立即关闭；Session 归档按钮不触发拖拽，并固定在时间文字之上独占指针命中；长期约束见 [`p2-workbench-structure.md`](p2-workbench-structure.md#311-导航行命中与拖拽要求) 3.1.1 | Project 部分保留；Session 拖拽由 S14-42 移除 |
+| S14-13 | 队列管理适配 | 后续支持排队内容拖拽排序、follow-up 转 steer、单条删除及对应移动/移除动效；Pi 0.80.10 RPC 当前没有删除、重排、转换或替换队列命令，等待评估上游 typed RPC 与能力探测方案 | 已延期（缺少上游 typed RPC，不阻塞 S14 收口） |
 | S14-14 | 对话导航感知 | Session 点击当帧先切换 Renderer 视图，再异步读取历史；旧响应使用请求序号丢弃。新建对话先进入空白工作区并允许输入，再后台启动 Runtime；首次提交复用同一启动任务。失败保留目标页并显式展示错误 | 已完成 |
 | S14-15 | 对话过程层级 | 完成态工作过程默认收起为“已处理 + 可观测真实耗时”的极简 disclosure，移除卡片、状态点和统计串；展开后 thinking 使用独立“思考了 + 可观测耗时”折叠与低强调正文，工具继续保持原始时序和三档密度，最终回答始终位于过程之外；历史无可靠耗时时不伪造 | 已完成 |
 | S14-16 | 外观设置布局 | 外观页按主题、Agent 对话、字体分组；组内使用连续设置行与右侧紧凑控件，窄窗口改为上下布局；只重排已有主题状态、工具密度和字体设置，不增加未接通的外观能力 | 已完成 |
-| S14-17 | 冷启动对话 | 已有活动 Project 时冷启动直接进入空白新对话并后台启动 Runtime，不再默认选中最近 Session 或要求选择恢复；历史 Session 仍可在侧栏查看并在首次操作时恢复，Project 切换与崩溃恢复语义不变 | 已完成 |
+| S14-17 | 冷启动对话 | 已有活动 Project 时冷启动直接进入空白新对话并后台启动 Runtime，不再默认选中最近 Session 或要求选择恢复；历史 Session 在侧栏点击时无感启动，Project 切换与崩溃恢复语义不变 | 已完成 |
 | S14-18 | 主题与密度说明 | 外观主题提供跟随系统、深色、浅色三项共享下拉；跟随系统监听系统明暗变化，浅色使用完整 token 覆盖，选择经 Kernel 与 XDG config 持久化；核查工具密度三档真实分支，并在滑杆下用极简图示展示聚合摘要、逐条操作与展开详情的差异 | 已完成 |
 | S14-19 | pi.dev 拓展目录 | 拓展页接入 pi.dev 的 Extension 类型筛选目录、搜索、详情和对应 Package 安装状态；保留 50 项结果并使用最多约 3 行高的滚动列表，品牌头使用完整的单一 `pi.dev` SVG；安装与卸载明确作用于承载 Extension 的整个 Package，并严格调用固定 Pi 版本的用户级 `pi install/remove npm:<name> --no-approve`；本地路径 Extension 入口继续独立保留 | 已完成 |
 | S14-20 | 新建技能 | 技能页增加新建入口，收集合法技能名称、用途和用户级/当前项目范围后，将受约束的创建请求发送给当前 Pi 会话；Pi 必须先检查目标、展示完整拟写内容并等待用户确认，不新增旁路文件写入 API | 已完成 |
@@ -506,9 +506,10 @@ P2 最初把“多 Project、多 Session”限定为可保存、发现和切换�
 | S14-36 | 图片与文件输入 | Composer 支持系统多选、文件拖放和剪贴板图片/文件；普通文件按 Pi 交互式 TUI 的 `@路径` 语义引用，由 Agent 使用原生 `read` 按需分段读取，不把全文塞进首条 prompt；图片按 Pi 0.80.10 原生 `ImageContent` 进入 prompt、steer 与 follow-up；大图遵循 2000×2000 和 4.5 MiB 边界，历史投影只展示附件摘要 | 已完成 |
 | S14-37 | 运行状态归属 | Session 行只显示自身 Runtime context 的 starting/running/stopping 状态；启动目标 Session 时不再把顶层 Runtime 状态误挂到上一个 Session，启动失败清理临时归属；Project 后台任务汇总语义不变 | 已完成 |
 | S14-38 | 发送后交互锁定 | prompt、steer 与 follow-up 只等待各自 Pi RPC 响应，不再占用 Renderer 的全局导航互斥；Composer 派发后立即清空已提交草稿并保持可编辑，失败时仅在仍停留原对话且没有新草稿时恢复；其他 Project/Session 生命周期动作继续串行 | 已完成 |
-| S14-39 | Session 时间与手动排序优先级 | Session 默认按 JSONL 最近活动时间倒序，最新活动在前、未知时间置后且同时间稳定；保留 Session 拖拽，首次拖拽后该 Project 的持久化手动顺序优先于时间排序，XDG session state v5 记录手动排序标记并从 v1–v4 安全迁移；Project 手动排序保持不变 | 已完成 |
+| S14-39 | Session 时间与手动排序优先级 | Session 默认按 JSONL 最近活动时间倒序，最新活动在前、未知时间置后且同时间稳定；保留 Session 拖拽，首次拖拽后该 Project 的持久化手动顺序优先于时间排序，XDG session state v5 记录手动排序标记并从 v1–v4 安全迁移；Project 手动排序保持不变 | 已由 S14-42 替代 |
 | S14-40 | 对话流时序与可读性 | 默认标准档保留 commentary / 非摘要 thinking 主阅读线，将摘要 thinking 与工具按原始顺序收进同一个轮换状态并支持展开；工具隐藏无价值的成功耗时，过程样式移除默认时间线节点和紧凑汇总卡片感，最终回答继续位于完成过程之外 | 已完成 |
 | S14-41 | 职责边界审计 | 将跨 feature 装配的 Workbench 移回 Renderer composition 层；工作过程密度定义收敛为三个真实调用点共享的纯工具；单消费者 Runtime 状态判定回收到 Composer；同步区分多 Runtime 当前边界与 S8–S13 单 Runtime 历史证据，不拆分仍内聚的大文件或引入通用中间层 | 已完成 |
+| S14-42 | Session 排序收口 | 删除无模式提示、无恢复入口的 Session 持久化手动顺序与拖拽入口；每个 Project 始终由 Kernel 按 `running` 优先、其余 `lastActivityAt` 倒序输出。XDG session state v6 删除手动排序标记，并从 v5 迁移时丢弃旧标记；Project 手动拖拽排序保持不变 | 已完成 |
 
 #### S15 — TUI 日常能力补齐
 
@@ -518,38 +519,62 @@ P2 最初把“多 Project、多 Session”限定为可保存、发现和切换�
 - 继续使用 Pi Session、RPC、配置和认证作为事实源；Renderer 不模拟 Pi 内部状态。
 - 每项能力只实现已经逐项确认的最小 GUI 语义，不把 CLI、TUI 组件或后续生态平台整体搬入桌面端。
 
+启动前置条件（已满足）：
+
+- S14 已完成收口；S15 六个阶段均已完成。
+- 对固定 Pi 0.80.10 重新验证公开能力面：RPC 的 `get_entries`、`fork`、`get_session_stats`、`get_state`、`get_messages` 与 `compaction_start` / `compaction_end`，包根导出的 `ModelRuntime`、`ProjectTrustStore`、`hasTrustRequiringProjectResources`，以及仅本次 trust 的 `--approve` / `--no-approve` 启动参数。
+- S15 只使用包根公开导出、现有外部 Pi RPC 和明确 CLI 参数；不通过私有 deep import 取得 TUI 组件或内部 helper。公开能力缺失时对应入口保持不可用并明确报错，不复制 Pi 内部实现作为 fallback。
+- 每个阶段必须完成本阶段的 typed contract、失败语义、定向验证和 diff 复核后再进入下一阶段；命令只有在对应执行链路真实可用后才进入 normalized catalog。
+
 实施顺序：
 
-| 阶段 | 范围 | 明确边界 |
-| --- | --- | --- |
-| S15-1 Session 操作 | 历史用户消息支持 Fork；新 Session 自动登记并切换，选中的原消息回填 Composer。归档后显示约 5 秒提示，提供“撤销”和保持归档的临时只读“查看” | 不实现 Clone、完整 `/tree`、同文件 leaf 切换、branch summary、归档中心、永久删除或批量管理；临时归档预览不启动 Runtime，离开后不可再次进入 |
-| S15-2 阅读与导出 | 导出当前活动分支的离线可阅读 HTML，只含用户消息、Assistant 最终回答、Markdown、代码块和图片；逐条复制 Assistant 最终回答的原始 Markdown；Session 行 tooltip 显示可用的文件路径、ID、消息数、Token 和累计成本；上下文 tooltip 增加 Pi 记录费用 | 导出不含其他分支、JSONL、thinking/commentary、工具参数/输出/diff、system prompt、工具定义、完整项目路径或费用统计；不实现导入、外部分享和完整 Session 档案导出 |
-| S15-3 Composer 与命令 | Composer 输入 `@` 时模糊搜索当前 Project 的文件和目录，只插入 `@relative/path`，不读取或内嵌文件；内建目录增加 typed `/fork`、`/reload`、`/export`、`/copy` | 不增加普通路径 Tab 补全、`!`/`!!` Shell 输入、外部编辑器；`/export` 始终使用系统保存对话框，Slash 文本不直接传给 Pi |
-| S15-4 项目资源与 Runtime | 在首个 Runtime 启动前承载 Pi 原生 Project trust 提示，决定继续由 Pi `trust.json` 或本次 Runtime 参数管理；`/reload` 只受控重启并恢复当前 settled Session，重新获取命令、模型和资源目录 | trust 不是工具权限，不建立 GUI trust schema 或常驻徽标；资源变化不静默 reload，不监听文件变化，不中断其他后台 Session |
-| S15-5 凭证 | 设置新增独立“凭证”页：按 Provider 展示 OAuth/API Key 状态并由 Pi 公开 SDK 驱动登录、退出；现有自定义 Provider 配置迁入同页独立分区。认证变化后刷新凭证与模型目录，并标记受影响 Session 需要 reload | OAuth 是 Provider 的认证方式，不是独立 Provider；token、refresh token 和 API Key 原文不进入 Renderer；不静默切换模型或重启 Session；只动态复用已通过版本校验的 Pi 安装公开 SDK，不把完整 Pi/Provider SDK 打进产物，不使用私有 deep import |
-| S15-6 桌面效率与生命周期 | 设置新增 GUI 原生快捷键页，支持有限应用级动作、冲突检测、清除和恢复默认值；自动压缩开始时显示“正在整理上下文”，结束后刷新 Conversation 与使用量，失败或取消给出提示 | 文本编辑、输入法、Tab、Enter/Shift+Enter、Escape、复制粘贴等基础按键不可重映射；不兼容 TUI `keybindings.json`；压缩继续使用 Pi 默认模型、提示词和参数，不增加高保真压缩、独立压缩模型、二次审查或测评工具 |
+| 阶段 | 状态 | 范围 | 明确边界 |
+| --- | --- | --- | --- |
+| S15-1 项目资源与 Runtime | `Complete` | 在首个 Runtime 启动前承载项目资源 trust 提示；持久决定只通过 Pi `ProjectTrustStore` 写入 `trust.json`，仅本次决定只进入目标 Runtime 的 `--approve` / `--no-approve` 参数。实现当前 settled Session 的 typed reload，并在成功后重新获取 `get_state`、`get_messages`、`get_commands` 和 `get_available_models` | 首期只提供“持久信任当前 Project”“持久不信任当前 Project”“仅本次信任”“仅本次不信任”四项；识别继承的父目录决定但不提供写入父目录的快捷项。trust 不是工具权限，不建立 GUI trust schema 或常驻徽标；`/reload` 只在完整执行链路落地后进入 catalog，不监听资源文件或静默 reload |
+| S15-2 Session 操作 | `Complete` | 从 Pi `get_entries` 的真实 entry ID 与 leaf 计算当前活动路径，只给其中 settled、无 `ImageContent` 的用户消息提供 Fork；成功后将原消息文本回填 Composer。Fork 在同一 Pi 进程切换 Session 后，Kernel 必须校验新 `sessionFile` / `sessionId`、持久化新指针并原子迁移 Runtime context。归档后由 Main 建立约 5 秒的内存撤销凭据，并提供撤销与保持归档的临时只读查看 | 不按消息正文或历史下标猜 ID，不使用返回全部历史用户消息的列表代替活动路径；原 Session 指针和文件保持不变，新 Session 不继承 GUI 归档或排序私有状态。带图片消息首期不显示 Fork；不实现 Clone、完整 `/tree` UI、同文件 leaf 切换、branch summary、归档中心、永久删除或批量管理。撤销不自动重启 Runtime；临时预览不启动 Runtime，离开、超时或重启后不可再次进入 |
+| S15-3 阅读、导出与统计 | `Complete` | Main 从当前活动分支的 Pi 消息事实生成离线 HTML；只保留用户消息、Assistant 最终回答、Markdown、代码块和 Pi `ImageContent`。逐条复制 Assistant 最终回答的原始 Markdown。Session 行 tooltip 显示可用的文件路径、ID、消息数、Token 和累计成本；上下文 tooltip 增加 Pi 记录费用 | 导出复用现有 CommonMark/GFM 安全语义，禁用 raw HTML、脚本和远程资源，写入严格 CSP；Pi 图片以内联 data URL 保存，远程 Markdown 图片只保留安全链接或占位。导出不含其他分支、JSONL、thinking/commentary、工具参数/输出/diff、system prompt、工具定义、完整项目路径、费用统计或隐藏 JSON。统计口径固定为 Pi Session 全生命周期，包含已压缩和废弃分支；不为 tooltip 启动 Runtime，不持久化第二份统计事实 |
+| S15-4 Composer 与命令 | `Complete` | Composer 输入 `@` 时经 Main 的窄 typed 查询模糊搜索当前 canonical Project 的文件和目录；排除 `.git`，遵守 `.gitignore` 与 `.ignore`，不遍历越出 Project 的目录 symlink，单次最多返回 100 项并丢弃过期响应。选择后复用现有路径引用转义，只插入相对 `@path` 或 `@"path with spaces"`。内建目录增加 typed `/fork`、`/export`、`/copy`；`/reload` 复用 S15-1 已完成链路 | `/fork` 无参数时打开当前活动路径的可 Fork 消息选择；`/export` 无参数时始终打开系统保存对话框；`/copy` 无参数时复制最后一条 Assistant 最终回答。Slash 文本不传给 Pi；不增加普通路径 Tab 补全、`!`/`!!` Shell 输入或外部编辑器。Renderer 不获得任意路径读取能力，搜索与选择前后均不读取普通文件正文 |
+| S15-5 凭证 | `Complete` | 设置新增独立“凭证”页：按 Provider 与 SDK 实际声明的认证类型展示 OAuth/API Key 状态，并由已验证 Pi 安装的包根 `ModelRuntime` 驱动 login/logout；不支持的认证动作不显示。现有自定义 Provider/Model 配置迁入同页独立分区。认证变化后刷新凭证与模型目录，并只把使用对应 Provider 的 Session 标记为需要用户显式 reload | OAuth 是 Provider 的认证方式，不是独立 Provider；已有 token、refresh token 和 API Key 绝不回读 Renderer。用户本次主动键入的 API Key 可在受控输入中瞬时经过 Renderer 和窄 typed IPC，但不得进入 Kernel state、事件、日志、错误或 GUI config。认证变化不静默切换模型、不中断正在生成的回复、不重启 Session；不把 Pi/Provider SDK 打进产物，不使用私有 deep import 或直接修改 `auth.json` |
+| S15-6 桌面效率与生命周期 | `Complete` | 设置新增 GUI 原生快捷键页，支持有限应用级动作、冲突检测、清除和恢复默认值；自动压缩开始时显示“正在整理上下文”，结束后刷新 Conversation 与使用量，失败或取消给出提示 | 文本编辑、输入法、Tab、Enter/Shift+Enter、Escape、复制粘贴等基础按键不可重映射；不兼容 TUI `keybindings.json`；压缩继续使用 Pi 默认模型、提示词和参数，不增加高保真压缩、独立压缩模型、二次审查或测评工具 |
 
-快捷键首期只覆盖新建对话、聚焦 Composer、打开设置、打开模型选择器、reload 当前 Session、前后 Project、前后 Session、归档当前 Session 和复制最后一条 Assistant 回答。破坏性操作默认不绑定；其余默认组合必须避开操作系统、Electron 和文本编辑保留键，并在实现时作为一张固定表接受复核。
+快捷键只在 Pi GUI 窗口聚焦时生效，不注册系统级 `globalShortcut`。首期固定默认表如下；“未绑定”仍可由用户配置：
+
+| 动作 | 默认组合 |
+| --- | --- |
+| 新建对话 | `Ctrl+N` |
+| 聚焦 Composer | `Ctrl+L` |
+| 打开设置 | `Ctrl+,` |
+| 打开模型选择器 | 未绑定 |
+| reload 当前 Session | 未绑定 |
+| 上一个 / 下一个 Project | 未绑定 |
+| 上一个 / 下一个 Session | `Ctrl+PageUp` / `Ctrl+PageDown` |
+| 归档当前 Session | 未绑定 |
+| 复制最后一条 Assistant 最终回答 | 未绑定 |
+
+菜单、模态弹窗、认证交互、组合输入和输入法 composing 状态优先于应用快捷键；文本输入获得焦点时只允许不改变编辑语义的已确认组合。冲突检测同时覆盖默认值、用户绑定和 Electron/系统保留组合；破坏性归档始终默认不绑定。
 
 验收：
 
-1. Fork 只接受当前活动分支中的真实用户消息 ID；原 Session 不变，新 Session 使用 Pi 生成的独立文件与身份，且不继承 GUI 归档或排序私有状态。
-2. 归档提示、撤销和临时只读查看在多 Runtime 下只影响目标 Session；提示自动消失、离开预览和应用重启都不会把归档 Session 暗中恢复。
-3. HTML 导出与复制结果符合精简内容边界，不包含 thinking、工具过程、废弃分支或隐藏元数据；写入只发生在用户通过系统对话框选择的路径。
-4. `@` 搜索只遍历当前 Project，遵守忽略规则并排除 `.git`；选择后只插入相对路径，发送前后均不读取普通文件正文。
-5. 未保存 trust 决定且存在项目资源时必须提示；持久和仅本次决定都与 Pi TUI 语义一致。取消不启动 Runtime，修改决定不静默重启已有 Runtime。
-6. reload 保持同一 Project、Session、Conversation 和 Composer 草稿，只重启目标 Runtime；失败保留可恢复的 Session，并明确进入 error/crashed 状态。
-7. 至少一条 Pi 公开认证流程可在 GUI 完成 login/logout；Renderer、Kernel state、日志和错误中均不出现 credential 原文。认证变化不会影响正在生成的回复，也不会静默切换模型。
-8. 快捷键冲突不能保存，菜单、弹窗和输入法优先于应用级快捷键；清除和恢复默认值经 XDG config 持久化。
-9. 手动与自动压缩事件不会被误判为 `agent_settled`；压缩完成后 Timeline、上下文占用和累计统计一致，失败时保留压缩前投影。
-10. 定向 core tests、`pnpm typecheck`、生产 build、真实 Pi 0.80.10 smoke 和最终 AppImage 核心链路通过；发布报告继续脱敏，不记录 prompt、工具输出、导出正文或 credential。
+1. Trust 检测只使用 Pi 公开资源检测与 `ProjectTrustStore`；已有当前或父目录决定时不重复提示。取消不启动 Runtime，修改决定不静默重启已有 Runtime；持久与仅本次四种当前 Project 动作分别通过隔离验证。
+2. Reload 只接受当前持久化、settled、`ready` Session，保持同一 Project、Session、旧 Conversation 和 Composer 草稿，只停止并重启目标 Runtime；新投影全部读取成功后才替换旧投影。失败保留可恢复 Session，并明确进入 error/crashed 状态；其他后台 Runtime 不受影响。
+3. Fork 只接受当前活动路径中的真实用户 entry ID；无图片消息的原文与 `@` 引用可回填 Composer。Pi 切换、新文件 canonical 校验、`sessionId` 核对、XDG 指针持久化和 Runtime context 迁移全部成功后才发布新 Session；任一步失败不得产生 ghost Session，也不得把旧 Conversation 标成新目标。
+4. 归档撤销凭据由 Main 绑定目标 Session 与单调截止时间，多次归档各自独立；过期、重复或不匹配的撤销 Fail Fast。撤销只恢复导航索引而不启动 Runtime；临时只读查看始终保持 archived，提示过期、离开预览和应用重启都会失效。
+5. HTML 导出与复制结果符合精简内容边界；导出文件没有脚本、远程请求、隐藏元数据或完整项目路径，图片离线可读，写入只发生在用户本次通过系统对话框选择的路径。复制只取得目标最终回答的原始 Markdown，不复制渲染 HTML。
+6. Session 统计与 Pi `get_session_stats` 对同一 fixture 的全生命周期消息数、Token 和成本一致；有 Runtime 的 Session 使用 RPC，stopped Session 可由 Main 对固定 0.80.10 Session entries 只读聚合但不得为 tooltip 启动 Pi。未知字段明确省略，tooltip 可由 hover 和键盘 focus 触发并在窄窗口内避让。
+7. `@` 搜索只遍历当前 canonical Project，遵守固定忽略与 symlink 边界并排除 `.git`；过期请求不能覆盖新结果，带空格路径按既有引用语义转义，选择、发送和历史投影均不读取普通文件正文。菜单具备 combobox/listbox 的 ARIA、键盘、Escape、焦点恢复、portal 和窄窗口语义。
+8. 只展示 `ModelRuntime` 实际声明且 GUI 已实现完整交互的认证动作；每一种已展示的 login/logout 路径都有定向验证，且至少一条真实公开认证流程使用专用 QA/provider 账户完成闭环。已有凭据绝不回读；用户本次输入也不得出现在 state、事件、日志、错误或报告中。
+9. 认证变化只刷新凭证与模型目录，并按 Provider 标记受影响 Session；正在生成的回复继续完成，不静默切换模型或重启 Runtime。显式 reload 成功后才清除对应 Session 标记。
+10. 快捷键冲突不能保存；菜单、弹窗、认证交互、输入法和文本编辑优先于应用快捷键。清除和恢复上述固定默认表经 XDG config 持久化，重启后保持一致；未绑定动作不产生隐藏快捷键。
+11. `compaction_start` / `compaction_end` 成为独立 normalized lifecycle：`reason` 区分 manual、threshold、overflow；`willRetry=true` 的中间失败不显示终态错误。压缩不产生伪 `agent_settled`；成功后原子刷新 Timeline、上下文占用和累计统计，失败或取消保留压缩前投影。
+12. 定向 core tests、`pnpm typecheck`、生产 build、真实 Pi 0.80.10 smoke 和最终 AppImage 核心链路通过。所有 trust、credential、Session 和导出验证使用临时 Project、隔离 XDG 与隔离 `PI_CODING_AGENT_DIR`；真实认证只使用明确选择的 QA/provider 账户，不接触默认用户 `auth.json` / `trust.json`。发布报告继续脱敏，不记录 prompt、工具输出、导出正文、设备码或 credential。
 
 明确延后或不做：
 
-- 完整 `/tree`、Clone、branch summary、归档中心、永久删除、JSONL 导入/导出和外部分享。
+- 完整 `/tree`、Clone、branch summary、带 `ImageContent` 的历史消息 Fork 回填、归档中心、永久删除、JSONL 导入/导出和外部分享。
 - 普通路径补全、Shell 快捷输入、外部编辑器、scoped models、模型循环和任意工具 allowlist/exclude。
 - 队列取回、删除、编辑、转换和排序继续等待 Pi typed queue mutation RPC，不在 Renderer 伪实现。
 - Skill、Prompt Template、Package 逐资源管理和 Extension UI 继续由 P3 或专门 Slice 规划；纯净模式不加载第三方 Extension，增强模式的官方 Extension UI RPC 适配不进入 S15。
+- Trust 父目录写入快捷项、常驻 trust 状态、文件/工具权限管理和私有 TUI trust selector 不进入 S15；已有父目录决定仍按 Pi `ProjectTrustStore` 继承。
 - CLI/headless、print/json、管道输入、无持久化 Session、自定义 Session 目录和启动参数表单不是 GUI 产品目标。
 - 高保真压缩与压缩测评后续单独优化；S15 只完成 Pi 默认压缩的状态和投影适配。
 
@@ -702,6 +727,16 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-24 | S14 职责边界审计 | 按实际依赖图复核 Main、Runtime、Renderer 与文档边界；修正 Workbench composition ownership、跨 feature 密度定义和单消费者 Runtime 状态工具，并将 D-017 多 Runtime 当前规则与 S8–S13 历史证据分开。Kernel context 镜像和 Pi-specific RuntimeHost 经异步生命周期与调用面审计后保持现状，不为形式纯度扩大重构。`pnpm typecheck`、生产 build 与 `git diff --check` 通过 | S14 保持 In Progress；下一次候选发布时从真实 AppImage 重跑完整 gate |
 | 2026-07-24 | S14 模型参数生效纠正 | 复核确认 CPA 的 Codex-client 目录把 Luna/Sol/Terra 报为 372K，但固定 Pi 0.80.10 的原生 OpenAI Provider 定义为 272K；Provider Store 改用标准 `/models` 的 `owned_by` 定位 Pi 原生模型定义，并把完整 Pi-compatible 参数同步进 `models.json`。详情收为一套参数；真实 `pi --list-models vvqq-cpa` 已显示 5.6 三模型 272K / 128K / 图片输入 | S14 保持 In Progress；运行中的旧 Pi 进程不热加载配置，新建 Runtime 使用同步后的模型参数 |
 | 2026-07-24 | S15 Planning | 完成当前 GUI 与 Pi TUI 差距的逐项讨论；将确认纳入的 Session、输入、资源信任、认证、快捷键、统计和压缩状态能力收敛为六个有序阶段，并明确 Tree/Clone、CLI、工具控制、队列修改、Extension UI 和高保真压缩等非目标 | S14 仍为当前 Slice；完成 S14 收口后将 S15 改为 Ready，并按 S15-1 至 S15-6 实施 |
+| 2026-07-24 | S15 Plan Audit | 复核固定 Pi 0.80.10 的公开 RPC、包根 SDK 与当前 Kernel/Renderer 边界；补齐 Fork 真实 entry/活动路径与 Runtime 迁移、归档撤销凭据、离线导出安全、搜索边界、trust 公开接口、credential 瞬时输入、统计口径、快捷键默认表、压缩 lifecycle 和验证隔离 | S15 保持 Pending；先完成 S14，再按调整后的 S15-1 至 S15-6 阶段出口实施，任何入口都不得早于真实 typed 执行链路出现 |
+| 2026-07-24 | S14 Complete / S15 Start | S14 已实现的四十项优化通过当前 207 项 core tests、typecheck、生产 build 与 diff check；S14-13 因 Pi 0.80.10 缺少 typed queue mutation RPC 明确延期，Renderer 不伪造队列修改 | S14 完成；S15 进入 In Progress，先实施项目资源 trust 与当前 Session reload |
+| 2026-07-24 | S15-1 Complete | Main 只从已验证 Pi 0.80.10 的 package root public export 使用 `ProjectTrustStore` 与资源检测；四种决定、取消、继承决定、并发 resolve、shutdown、一次性 argv 和隔离持久写入均有定向覆盖。当前 settled persisted Session 可原子 reload 目标 Runtime，失败保留旧 Conversation 与 pointer；`/reload` 只在链路可用时进入 catalog。Renderer 使用 feature-owned 可访问模态框承载决定，不建立 trust schema | 207 项 core tests、`pnpm typecheck`、生产 build、diff check 通过；真实包根只读探针确认 0.80.10 public exports 与 `--approve` / `--no-approve` 解析。S15-2 Ready |
+| 2026-07-24 | S15-2 Complete | Fork 候选只来自 Pi `get_entries` 的 leaf-to-parent 活动路径和真实 entry ID，并排除带图片的用户消息；同一 Runtime 完成 fork 后校验全新 Session 身份、投影与 canonical pointer，再原子迁移 context，失败停止已重绑定 Runtime 并保留原会话事实。归档建立多个独立、单次、单调截止的 5 秒凭证，支持仅恢复导航的撤销与不启动 Runtime 的临时只读预览；Renderer 提供可访问选择器、Composer 草稿回填和多条 portal 通知 | Pi RPC、ProjectStore 与 Kernel 定向测试通过；独立 backend / Renderer 审计修正提交边界和 browser preview 多凭证合并问题。S15-3 Ready |
+| 2026-07-24 | S15-3 Complete | Main 读取已校验 Session JSONL 的最终 leaf 活动分支并生成带严格 CSP 的离线 HTML，只序列化用户消息、Assistant 最终回答、安全 CommonMark/GFM、代码和合法 Pi 图片；系统保存路径不返回 Renderer。Assistant 每条已完成最终回答可复制原始 Markdown。Session tooltip 的生命周期统计由停机 JSONL 全 entry 扫描或活动 Pi `get_session_stats` 提供，上下文 tooltip 同步显示 Pi cost | HTML 安全、transcript/statistics、Runtime 转发和 Kernel 集成定向测试通过；统计不启动额外 Runtime、不保存第二份事实，导出不包含其他分支、过程消息、工具内容、项目路径或成本。S15-4 Ready |
+| 2026-07-24 | S15-4 Complete | Main 通过窄 typed IPC 搜索当前 canonical Project 的相对文件/目录名，使用无跟随且固定的目录句柄消除外部 symlink 遍历窗口，排除 `.git` 并遵守分层 `.gitignore` / `.ignore`；Composer 以 100ms debounce 搜索、核对 Project/query/input/cursor 身份并丢弃过期响应，只插入安全路径引用。`/fork`、`/export`、`/copy` 由 Renderer 执行既有 GUI 链路，Kernel 对直调明确拒绝且不向 Pi 发送 slash 文本 | 233 项 core tests、5 项 HTML 导出测试、`pnpm typecheck`、生产 build 与 diff check 通过；三路只读终审覆盖路径安全、Composer 交互和 GUI 命令隔离，并据此修复目录校验与遍历间的 symlink 竞态。S15-5 Ready |
+| 2026-07-24 | S15-5 Complete | 设置新增独立凭证页，只展示固定 Pi 包根 `ModelRuntime` 实际声明的认证方法与脱敏元数据；认证 prompt 通过窄 typed 事件交互，已有 secret 不回读 Renderer。登录或退出后刷新凭证与模型目录，只为正在使用对应 Provider 的 Session 建立内存“需重载”标记；当前生成不中断，标记只在用户显式 reload 完整成功后清除 | 241 项 core tests、`pnpm typecheck`、生产 build 与 diff check 通过；三路只读终审覆盖 SDK 边界、secret 脱敏、取消竞态、Renderer 可访问性和多 Runtime 标记。隔离临时 agent 目录使用一次性随机 QA 值验证公开 SDK 的 API-key 存取、元数据与退出闭环，未读取默认 `auth.json`、未请求外部 Provider API。S15-6 Ready |
+| 2026-07-24 | S15-6 Complete / S15 Complete | 设置新增固定 11 个应用动作的快捷键页；完整 binding map 以 XDG config v9 持久化，`null` 明确表示未绑定，录入、冲突/保留组合拒绝、清除和恢复默认均复用同一 shared 校验。快捷键只在窗口聚焦且没有模态框、菜单、认证交互或 IME 组合输入时执行，文本控件只接受固定默认表中的已确认安全组合，不注册 `globalShortcut`。Pi `compaction_start` / `compaction_end` 按 Runtime context 归一化 reason、outcome 与 `willRetry`；成功后原子刷新 Timeline、usage 和生命周期 statistics，失败、取消、异常事件或 teardown 保留旧投影并显式收口等待 promise，不伪造 `agent_settled` | 254 项 core tests、`pnpm typecheck`、生产 build 与 diff check 通过；三路终审修复 nullable wire result、overflow `willRetry`、active-run 边界、通知叠放、异常/teardown promise 悬挂和 IME 229。隔离 XDG 与 `PI_CODING_AGENT_DIR` 的真实 Pi 0.80.10 Electron probe 通过；当前源码打入临时 AppImage 后再次通过同一隔离 probe，临时产物已清理且未覆盖仓库既有 release。S15 Complete |
+| 2026-07-25 | Session 无感启动 | 纠正 S14-03 的“只读浏览、首次发送才激活”语义：侧栏单击历史 Session 立即投影历史并 `activate-session` 启动/恢复 Runtime；活动 stopped/crashed Session 再次点击也会恢复。发送时自动激活与 Composer 恢复按钮保留为失败回退 | 文档与实现同步；`pnpm typecheck`、生产 build 与 diff check 验证 |
+| 2026-07-25 | Session 后台启动丝滑化 | 纠正“点击即启动”被做成全局 exclusive 等待的误解：点击当帧切换可见目标与历史预览；`activate-session`/`start-session` 走非阻塞 ensure 泵，不再锁死侧栏；历史 Session 以 120ms settle 合并快速连点，只启动最后停留目标；已有受管 Runtime 立即切换；提交/命令仍可 await 同一 ensure | Renderer 协调层改动；Kernel launch 单飞不变；见 `p2-workbench-structure.md` §6.2 |
 
 ## 17. 计划变更记录
 
@@ -763,3 +798,12 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-24 | 5.4 | 明确当前多 Runtime 与 Renderer composition 所有权 | 复审发现 P2 当前完成门槛和结构文档仍混用已被 D-017 替代的单 Runtime 约束，Workbench 装配也仍位于 Chat feature 内 | 保留 S8–S13 的历史验收记录；当前规则改为按 Session 隔离 Runtime、Renderer 单前台投影；只移动真实 composition owner 和共享纯定义，不改变 IPC/RPC contract、持久化 schema、视觉或交互 |
 | 2026-07-24 | 5.5 | 自定义 Provider 模型改用 Pi-compatible 原生元数据并同步实际配置 | CPA 的 Codex-client 目录 `context_window` 与 Pi custom model 的 `contextWindow` 语义不一致，导致 GUI 展示 372K、Pi 实际退回 128K | 标准 `/models` 只负责模型身份与所有者；固定 Pi 版本的原生 Provider 定义负责 Pi 模型参数，完整值在 Runtime 启动前写入 `models.json`；运行中进程不伪装为已热更新 |
 | 2026-07-24 | 5.6 | 增加 S15“TUI 日常能力补齐”并固定已逐项确认的范围与非目标 | GUI 已覆盖主体工作流，但仍缺 Session 派生、项目资源确认、认证和若干桌面效率能力；直接照搬全部 TUI/CLI 会混淆产品边界 | S15 以六个有序阶段补齐确认项；Pi Session、配置、trust 和 credential 继续作为事实源；Tree/Clone、CLI/headless、工具控制、Extension UI 与高保真压缩不进入本 Slice |
+| 2026-07-24 | 5.7 | 按计划审计收紧 S15 的公开能力、状态机、安全和验收边界 | 原计划没有固定 Fork 活动路径 ID、Runtime 原子迁移、导出数据源、credential 瞬时输入、trust 公共 API、搜索 symlink、统计口径、快捷键默认值和外部状态隔离，且把 `/reload` 目录放在实现阶段之前 | Trust/reload 前移为第一阶段；六阶段各自先完成真实 typed 链路再暴露 UI；真实验证隔离 XDG 与 `PI_CODING_AGENT_DIR`，S15 仍待 S14 收口后才能 Ready |
+| 2026-07-24 | 5.8 | 完成 S14 收口并实施 S15-1 项目资源 trust 与当前 Session reload | 用户要求以多 Agent 推进 S15；固定 Pi 的 package root public trust 能力与一次性启动参数已复核，现有多 Runtime Kernel 具备定向重启目标 context 的边界 | S15 进入 In Progress；S15-1 Complete、S15-2 Ready。持久决定只写 Pi `trust.json`，一次性决定只进入目标 argv；reload 不影响其他后台 Runtime |
+| 2026-07-24 | 5.9 | 完成 S15-2 Session Fork 与归档即时补救 | Pi 0.80.10 已提供真实 entry/leaf 与同进程 fork，但 GUI 必须避免正文猜 ID、旧历史错标和归档撤销启动 Runtime；多个 5 秒动作也不能互相覆盖 | S15-2 Complete、S15-3 Ready。Fork 只认活动路径真实 ID并原子迁移 Runtime context；归档凭证按目标独立、单次、单调过期，撤销只恢复导航，临时预览保持归档且只读 |
+| 2026-07-24 | 6.0 | 完成 S15-3 安全离线导出、最终回答复制和 Pi 生命周期统计 | 导出必须严格区别活动分支可分享内容与 JSONL 私有过程事实；停机 Session 又不能为 tooltip 启动 Runtime 或依赖第二份持久化统计 | S15-3 Complete、S15-4 Ready。Main 自行安全序列化活动分支并使用系统保存框；逐回答复制原始 Markdown；停机 JSONL 全 entry 扫描与活动 `get_session_stats` 使用同一 Pi 口径 |
+| 2026-07-24 | 6.1 | 完成 S15-4 canonical Project `@` 路径搜索与 GUI typed 命令 | Composer 需要 TUI 同语义的路径引用入口，但 Renderer 不应获得任意文件读取；Fork、导出和最后回答复制又必须复用既有 GUI 动作而不是把 slash 文本送入 Pi | S15-4 Complete、S15-5 Ready。Main 只返回受 ignore/symlink/数量边界约束的相对名称，Composer 丢弃过期响应；`/fork`、`/export`、`/copy` 在 Renderer 截获，Kernel 直调 Fail Fast |
+| 2026-07-24 | 6.2 | 完成 S15-5 公开 SDK 凭证交互与 Provider 定向 reload 标记 | OAuth、API Key 与设备码流程必须由固定 Pi 的公开 `ModelRuntime` 驱动，同时避免已有 secret 回流 Renderer、错误回显和认证变化静默打断正在运行的 Session | S15-5 Complete、S15-6 Ready。凭证页只消费脱敏元数据和受控 prompt；认证变化刷新 catalog，并只给使用对应 Provider 的 live Session 建立非持久化标记，显式 reload 完整成功后才清除 |
+| 2026-07-24 | 6.3 | 完成 S15-6 窗口内快捷键与 Pi 压缩生命周期，并收口 S15 | 桌面快捷键需要有限、可持久化且不破坏文本/IME/模态交互；自动压缩又必须与 agent settled 分离，并在多 Runtime 下只刷新事件所属 Session | S15 Complete。快捷键使用严格 XDG config v9 完整表且不注册系统级热键；压缩事件按 context 归一化，成功原子刷新 Conversation/usage/statistics，失败、取消、异常和 teardown 保留旧投影并结束等待 |
+| 2026-07-25 | 6.4 | Session 点击改为无感启动 Runtime | 用户要求点击 Session 即启动，而不是先只读预览再手动“启动 Pi”或等到首次发送 | Renderer 在选中历史 Session 时立即投影历史并调用 activate-session；保留发送时自动激活与 Composer 恢复按钮作失败回退；不改变 Kernel ownership 或 Session 事实源 |
+| 2026-07-25 | 6.5 | 点击启动改为后台 settle/合并，不再锁导航 | 用户指出“点击即启动”不等于每次点击都阻塞等待 Runtime 完成 | 视图切换与历史预览当帧完成；activate/start 走非阻塞 ensure 泵；历史 Session 120ms settle 合并连点；已有 Runtime 立即切换；提交仍可 await 同一任务 |

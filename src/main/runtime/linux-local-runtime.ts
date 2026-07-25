@@ -35,9 +35,14 @@ export type LinuxLocalRuntimeOptions = {
   rpcTimeoutMs?: number
   sessionFile?: string
   noSession?: boolean
+  projectTrust?: boolean
 }
 
-export function buildPiRpcArguments(sessionFile?: string, noSession = false): string[] {
+export function buildPiRpcArguments(
+  sessionFile?: string,
+  noSession = false,
+  projectTrust?: boolean
+): string[] {
   if (sessionFile !== undefined && noSession) {
     throw new Error('Session file and no-session mode cannot be used together.')
   }
@@ -56,6 +61,8 @@ export function buildPiRpcArguments(sessionFile?: string, noSession = false): st
   } else if (noSession) {
     arguments_.push('--no-session')
   }
+  if (projectTrust === true) arguments_.push('--approve')
+  else if (projectTrust === false) arguments_.push('--no-approve')
   return arguments_
 }
 
@@ -141,7 +148,11 @@ export class LinuxLocalRuntime implements RuntimeHost {
 
     const child = spawn(
       executable,
-      buildPiRpcArguments(this.options.sessionFile, this.options.noSession),
+      buildPiRpcArguments(
+        this.options.sessionFile,
+        this.options.noSession,
+        this.options.projectTrust
+      ),
       {
         cwd: this.options.cwd,
         shell: false,
@@ -220,8 +231,20 @@ export class LinuxLocalRuntime implements RuntimeHost {
         return { type: 'state', state }
       }
     }
+    if (command.type === 'get_session_stats') {
+      return {
+        type: 'session-statistics',
+        statistics: await this.client.getSessionStats()
+      }
+    }
     if (command.type === 'get_messages') {
       return { type: 'messages', messages: await this.client.getMessages() }
+    }
+    if (command.type === 'get_entries') {
+      return { type: 'entries', ...await this.client.getEntries() }
+    }
+    if (command.type === 'fork') {
+      return { type: 'forked', ...await this.client.fork(command.entryId) }
     }
     if (command.type === 'prompt') {
       await this.client.prompt(command.message, command.images)

@@ -41,18 +41,29 @@
 }
 
 .composer-queue-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.42rem;
+  align-items: start;
   border-radius: var(--radius-control);
   background: var(--color-composer-input-bg);
-  padding: 0.48rem 0.58rem;
+  padding: 0.34rem 0.48rem;
+}
+
+.composer-queue-kind {
+  color: var(--color-text-muted);
+  font-size: var(--text-caption);
+  line-height: var(--line-caption);
+  padding-top: 0.05rem;
 }
 
 .composer-queue-message {
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
-  color: var(--color-text-primary);
-  font-size: var(--text-control);
-  line-height: var(--line-body);
+  color: var(--color-text-soft);
+  font-size: var(--text-meta);
+  line-height: var(--line-meta);
   white-space: pre-wrap;
 }
 
@@ -123,6 +134,77 @@
   color: var(--color-text-muted);
 }
 
+.project-path-surface {
+  z-index: 20;
+  max-height: min(300px, 40dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-popover);
+  box-shadow: var(--shadow-popover);
+  color: var(--color-text-muted);
+  padding: 0.5rem;
+}
+
+.project-path-list {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.project-path-state {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-caption);
+  line-height: var(--line-caption);
+  padding: 0.62rem;
+}
+
+.project-path-state.error {
+  color: var(--color-error-text, var(--color-text-primary));
+}
+
+.project-path-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.58rem;
+  align-items: baseline;
+  border-color: transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--color-text-soft);
+  padding: 0.46rem 0.55rem;
+  text-align: left;
+}
+
+.project-path-option:hover,
+.project-path-option.selected {
+  background: var(--color-hover-subtle);
+  color: var(--color-text-primary);
+}
+
+.project-path-option:focus-visible {
+  border-color: var(--color-border-focus);
+  outline: none;
+}
+
+.project-path-kind {
+  color: var(--color-text-muted);
+  font-size: var(--text-caption);
+  line-height: var(--line-caption);
+}
+
+.project-path-value {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-family: var(--font-code);
+  font-size: var(--text-list-item);
+  line-height: var(--line-control);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer-command-error {
   margin: 0;
   color: var(--color-error-text, var(--color-text-primary));
@@ -138,6 +220,7 @@
   border-radius: 15px;
   background: color-mix(in srgb, var(--color-composer-input-bg) 96%, transparent);
   box-shadow: var(--shadow-composer);
+  cursor: text;
   padding: 0.08rem;
   transition: border-color var(--motion-duration-control) var(--motion-easing-standard), background var(--motion-duration-control) var(--motion-easing-standard), box-shadow var(--motion-duration-control) var(--motion-easing-standard);
 }
@@ -410,7 +493,8 @@
 .model-picker-popover {
   --composer-menu-font-size: var(--text-control);
   --composer-menu-line-height: var(--line-control);
-  z-index: 20;
+  /* Above window-edge hit strips (z-index 40) so left/bottom cascade items stay clickable. */
+  z-index: 60;
   overflow-y: auto;
   overscroll-behavior: contain;
   border: 1px solid var(--color-border-panel);
@@ -534,10 +618,22 @@
   transform: rotate(180deg);
 }
 
+.model-picker-model-button[data-placement='above'] svg {
+  transform: rotate(-90deg);
+}
+
+.model-picker-model-button[data-placement='below'] svg {
+  transform: rotate(90deg);
+}
+
 .model-picker-model-popover {
   --composer-menu-font-size: var(--text-control);
   --composer-menu-line-height: var(--line-control);
-  z-index: 21;
+  /* Keep the cascade above the main picker and window-edge hit strips. */
+  z-index: 61;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
   overflow: hidden;
   overscroll-behavior: contain;
   border: 1px solid var(--color-border-panel);
@@ -547,8 +643,13 @@
   padding: 0.28rem;
 }
 
+.model-picker-model-popover .model-picker-empty {
+  flex: 0 0 auto;
+}
+
 .model-picker-model-list {
-  max-height: inherit;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
 }
 
@@ -677,6 +778,12 @@
   color: var(--color-text-primary);
   font-family: var(--font-code);
   text-align: right;
+}
+
+.context-tooltip-note {
+  border-top: 1px solid var(--color-border-divider);
+  color: var(--color-text-muted);
+  padding-top: 0.34rem;
 }
 
 .context-indicator:hover .context-tooltip,

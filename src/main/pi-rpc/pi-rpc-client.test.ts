@@ -278,7 +278,13 @@ test('maps the S11 command set with exact payloads and strips command sourceInfo
                   source: 'extension',
                   sourceInfo: { path: '/private/extension.ts' }
                 },
-                { name: 'summarize', source: 'skill' }
+                { name: 'summarize', source: 'skill' },
+                {
+                  name: 'skill:CTF•AI/ML 攻防',
+                  description: 'AI/ML challenge skill',
+                  source: 'skill',
+                  sourceInfo: { path: '/private/skill/SKILL.md' }
+                }
               ]
             }
           }
@@ -288,7 +294,12 @@ test('maps the S11 command set with exact payloads and strips command sourceInfo
 
   assert.deepEqual(await commands, [
     { name: 'review', description: 'Review changes', source: 'extension' },
-    { name: 'summarize', source: 'skill' }
+    { name: 'summarize', source: 'skill' },
+    {
+      name: 'skill:CTF•AI/ML 攻防',
+      description: 'AI/ML challenge skill',
+      source: 'skill'
+    }
   ])
   await Promise.all([compact, compactWithoutInstructions, setSessionName])
 })
@@ -300,7 +311,6 @@ test('rejects malformed get_commands responses', async () => {
     { commands: [null] },
     { commands: [{ name: '', source: 'prompt' }] },
     { commands: [{ name: '/review', source: 'prompt' }] },
-    { commands: [{ name: 'code review', source: 'prompt' }] },
     { commands: [{ name: 'review', description: 1, source: 'prompt' }] },
     { commands: [{ name: 'review', source: 'builtin' }] }
   ]
@@ -351,7 +361,21 @@ test('gets available models and strips provider internals', async () => {
         contextWindow: 128000,
         baseUrl: 'https://private.example',
         api: 'responses',
-        cost: { input: 1 },
+        cost: {
+          input: 1,
+          output: 4,
+          cacheRead: 0.1,
+          cacheWrite: 1.25,
+          tiers: [{
+            inputTokensAbove: 200000,
+            input: 2,
+            output: 8,
+            cacheRead: 0.2,
+            cacheWrite: 2.5,
+            credential: 'tier-secret'
+          }],
+          currency: 'USD'
+        },
         credential: 'secret'
       }]
     }
@@ -371,7 +395,20 @@ test('gets available models and strips provider internals', async () => {
       xhigh: null,
       max: null
     },
-    contextWindow: 128000
+    contextWindow: 128000,
+    cost: {
+      input: 1,
+      output: 4,
+      cacheRead: 0.1,
+      cacheWrite: 1.25,
+      tiers: [{
+        inputTokensAbove: 200000,
+        input: 2,
+        output: 8,
+        cacheRead: 0.2,
+        cacheWrite: 2.5
+      }]
+    }
   }])
 })
 
@@ -444,7 +481,60 @@ test('rejects malformed get_available_models responses', async () => {
     { models: [{ id: ' ', provider: 'openai' }] },
     { models: [{ id: 'gpt-test', provider: ' ' }] },
     { models: [{ id: 'gpt-test', provider: 'openai', reasoning: 'yes' }] },
-    { models: [{ id: 'gpt-test', provider: 'openai', thinkingLevelMap: { low: 1 } }] }
+    { models: [{ id: 'gpt-test', provider: 'openai', thinkingLevelMap: { low: 1 } }] },
+    { models: [{ id: 'gpt-test', provider: 'openai', cost: { input: 1 } }] },
+    {
+      models: [{
+        id: 'gpt-test',
+        provider: 'openai',
+        cost: { input: -1, output: 1, cacheRead: 0, cacheWrite: 0 }
+      }]
+    },
+    {
+      models: [{
+        id: 'gpt-test',
+        provider: 'openai',
+        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, tiers: {} }
+      }]
+    },
+    {
+      models: [{
+        id: 'gpt-test',
+        provider: 'openai',
+        cost: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          tiers: [{
+            inputTokensAbove: 1.5,
+            input: 1,
+            output: 1,
+            cacheRead: 0,
+            cacheWrite: 0
+          }]
+        }
+      }]
+    },
+    {
+      models: [{
+        id: 'gpt-test',
+        provider: 'openai',
+        cost: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          tiers: [{
+            inputTokensAbove: 1,
+            input: 1,
+            output: Number.POSITIVE_INFINITY,
+            cacheRead: 0,
+            cacheWrite: 0
+          }]
+        }
+      }]
+    }
   ]
 
   for (const data of invalidData) {
@@ -456,4 +546,157 @@ test('rejects malformed get_available_models responses', async () => {
 
     await assert.rejects(models, /Invalid Pi RPC get_available_models response/)
   }
+})
+
+test('gets normalized entries without retaining image or non-user payloads', async () => {
+  const fake = createFakeProcess()
+  const client = new PiRpcClient(fake.child, { createRequestId: () => 'request-entries' })
+  const entries = client.getEntries()
+
+  assert.equal(
+    fake.stdin.read()?.toString('utf8'),
+    '{"id":"request-entries","type":"get_entries"}\n'
+  )
+  fake.stdout.write(`${JSON.stringify({
+    type: 'response',
+    id: 'request-entries',
+    success: true,
+    data: {
+      leafId: 'assistant-1',
+      entries: [
+        {
+          id: 'user-1',
+          parentId: null,
+          type: 'message',
+          timestamp: '2026-07-24T01:00:00.000Z',
+          message: {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Inspect ' },
+              { type: 'image', mimeType: 'image/png', data: 'large-private-payload' },
+              { type: 'text', text: 'this' }
+            ]
+          }
+        },
+        {
+          id: 'assistant-1',
+          parentId: 'user-1',
+          type: 'message',
+          timestamp: '2026-07-24T01:00:01.000Z',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'private response' }] }
+        },
+        {
+          id: 'branch-1',
+          parentId: 'assistant-1',
+          type: 'branch',
+          timestamp: '2026-07-24T01:00:02.000Z',
+          summary: 'private branch payload'
+        }
+      ]
+    }
+  })}\n`)
+
+  assert.deepEqual(await entries, {
+    leafId: 'assistant-1',
+    entries: [
+      {
+        id: 'user-1',
+        parentId: null,
+        type: 'message',
+        timestamp: '2026-07-24T01:00:00.000Z',
+        message: {
+          role: 'user',
+          content: { text: 'Inspect this', hasImage: true }
+        }
+      },
+      {
+        id: 'assistant-1',
+        parentId: 'user-1',
+        type: 'message',
+        timestamp: '2026-07-24T01:00:01.000Z',
+        message: { role: 'assistant' }
+      },
+      {
+        id: 'branch-1',
+        parentId: 'assistant-1',
+        type: 'branch',
+        timestamp: '2026-07-24T01:00:02.000Z'
+      }
+    ]
+  })
+  assert.equal(JSON.stringify(await Promise.resolve(entries)).includes('large-private-payload'), false)
+})
+
+test('rejects malformed get_entries responses and unknown user content blocks', async () => {
+  const invalidData = [
+    { entries: [], leafId: 1 },
+    {
+      entries: [{ id: '', parentId: null, type: 'message', timestamp: 'now', message: { role: 'user', content: '' } }],
+      leafId: null
+    },
+    {
+      entries: [{ id: 'entry-1', parentId: null, type: 'message', timestamp: 'now', message: {} }],
+      leafId: null
+    },
+    {
+      entries: [{
+        id: 'entry-1',
+        parentId: null,
+        type: 'message',
+        timestamp: 'now',
+        message: { role: 'user', content: [{ type: 'audio', data: 'payload' }] }
+      }],
+      leafId: null
+    },
+    {
+      entries: [{
+        id: 'entry-1',
+        parentId: null,
+        type: 'message',
+        timestamp: 'now',
+        message: { role: 'user', content: [{ type: 'image', mimeType: 'image/png' }] }
+      }],
+      leafId: null
+    }
+  ]
+
+  for (const data of invalidData) {
+    const fake = createFakeProcess()
+    const client = new PiRpcClient(fake.child)
+    const entries = client.getEntries()
+    const [request] = readRequests(fake.stdin)
+    fake.stdout.write(`${JSON.stringify({ type: 'response', id: request?.id, success: true, data })}\n`)
+
+    await assert.rejects(entries, /Invalid Pi RPC get_entries response/)
+  }
+})
+
+test('forks an exact entry ID and validates the fork response', async () => {
+  const fake = createFakeProcess()
+  const client = new PiRpcClient(fake.child, { createRequestId: () => 'request-fork' })
+  const fork = client.fork('entry-1')
+
+  assert.equal(
+    fake.stdin.read()?.toString('utf8'),
+    '{"id":"request-fork","type":"fork","entryId":"entry-1"}\n'
+  )
+  fake.stdout.write(`${JSON.stringify({
+    type: 'response',
+    id: 'request-fork',
+    success: true,
+    data: { text: 'Original prompt', cancelled: false }
+  })}\n`)
+  assert.deepEqual(await fork, { text: 'Original prompt', cancelled: false })
+
+  await assert.rejects(client.fork('  '), /entry ID must not be empty/)
+
+  const malformed = client.fork('entry-2')
+  const [request] = readRequests(fake.stdin)
+  fake.stdout.write(`${JSON.stringify({
+    type: 'response',
+    id: request?.id,
+    success: true,
+    data: { text: 'Original prompt', cancelled: 'no' }
+  })}\n`)
+  await assert.rejects(malformed, /Invalid Pi RPC fork response/)
 })
