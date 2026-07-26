@@ -7,6 +7,7 @@ import {
   type KernelProjectTrustChoice,
   type KernelProviderInput,
   type SessionNamingSettings,
+  type SubagentSettings,
   type ThinkingLevel
 } from '../../shared/kernel-contract.ts'
 import { isShortcutSettings } from '../../shared/shortcut-settings.ts'
@@ -80,6 +81,9 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
   }
   if (value.type === 'kernel.remove-pi-package' || value.type === 'kernel.update-pi-package') {
     return typeof value.source === 'string' && Object.keys(value).length === 2
+  }
+  if (value.type === 'kernel.set-subagent-enabled') {
+    return typeof value.enabled === 'boolean' && Object.keys(value).length === 2
   }
   if (value.type === 'kernel.save-provider') {
     return isProviderInput(value.provider) && Object.keys(value).length === 2
@@ -162,6 +166,9 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
   }
   if (value.type === 'kernel.set-general') {
     return isGeneralSettings(value.settings) && Object.keys(value).length === 2
+  }
+  if (value.type === 'kernel.set-subagent') {
+    return isSubagentSettings(value.settings) && Object.keys(value).length === 2
   }
   if (value.type === 'kernel.set-shortcuts') {
     return isShortcutSettings(value.settings) && Object.keys(value).length === 2
@@ -341,6 +348,13 @@ function isGeneralSettings(value: unknown): value is GeneralSettings {
     Object.keys(value).length === 2 &&
     (value.startupWorkspaceRestore === 'restore' || value.startupWorkspaceRestore === 'none') &&
     typeof value.doubleClickBorderMaximize === 'boolean'
+}
+
+function isSubagentSettings(value: unknown): value is SubagentSettings {
+  return isRecord(value) &&
+    Object.keys(value).length === 2 &&
+    (value.maxDepth === 1 || value.maxDepth === 2 || value.maxDepth === 3) &&
+    typeof value.preventCycles === 'boolean'
 }
 
 function isAppearanceTheme(value: unknown): value is AppearanceSettings['theme'] {

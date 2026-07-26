@@ -15,6 +15,7 @@ import {
   type KernelStatePatch,
   type KernelState,
   type SessionNamingSettings,
+  type SubagentSettings,
   type ShortcutSettings,
   type ThinkingLevel
 } from '../../shared/kernel-contract'
@@ -1049,6 +1050,18 @@ export function App(): React.JSX.Element {
       }
       onSetGeneral={(settings: GeneralSettings) =>
         runAction('set-general', () => window.piGui.setGeneral(settings))
+      }
+      onSetSubagentEnabled={(enabled) =>
+        runAction('set-subagent-enabled', async () => {
+          await window.piGui.setSubagentEnabled(enabled)
+          return window.piGui.getState()
+        })
+      }
+      onSetSubagent={(settings: SubagentSettings) =>
+        runAction('set-subagent', async () => {
+          await window.piGui.setSubagent(settings)
+          return window.piGui.getState()
+        })
       }
       onSetAppearance={(settings: AppearanceSettings) =>
         runAction('set-appearance', () => window.piGui.setAppearance(settings))

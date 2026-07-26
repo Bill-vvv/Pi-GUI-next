@@ -25,6 +25,7 @@ import type {
   RuntimeStatus,
   SessionNamingSettings,
   ShortcutSettings,
+  SubagentSettings,
   ThinkingLevel
 } from '../../shared/kernel-contract.ts'
 import {
@@ -32,6 +33,7 @@ import {
   DEFAULT_APPEARANCE_SETTINGS,
   DEFAULT_GENERAL_SETTINGS,
   DEFAULT_SESSION_NAMING_SETTINGS,
+  DEFAULT_SUBAGENT_SETTINGS,
   EXPORT_SESSION_COMMAND_ID,
   FORK_SESSION_COMMAND_ID
 } from '../../shared/kernel-contract.ts'
@@ -108,7 +110,11 @@ const ARCHIVE_UNDO_DURATION_MS = 5_000
 
 export type RuntimeFactory = (
   project: { path: string },
-  launchOptions: { sessionFile?: string, projectTrust?: boolean }
+  launchOptions: {
+    sessionFile?: string
+    projectTrust?: boolean
+    subagent: SubagentSettings
+  }
 ) => RuntimeHost
 
 export type ProjectTrustController = {
@@ -143,6 +149,8 @@ export type WorkbenchKernelOptions = {
   persistAppearance?: (settings: AppearanceSettings) => Promise<void>
   general?: GeneralSettings
   persistGeneral?: (settings: GeneralSettings) => Promise<void>
+  subagent?: SubagentSettings
+  persistSubagent?: (settings: SubagentSettings) => Promise<void>
   shortcuts?: ShortcutSettings
   persistShortcuts?: (settings: ShortcutSettings) => Promise<void>
   generateSessionName?: SessionNameGenerator
@@ -287,6 +295,7 @@ export class WorkbenchKernel {
     this.persistSessionNaming = options.persistSessionNaming ?? (async () => {})
     this.persistAppearance = options.persistAppearance ?? (async () => {})
     this.persistGeneral = options.persistGeneral ?? (async () => {})
+    this.persistSubagent = options.persistSubagent ?? (async () => {})
     this.persistShortcuts = options.persistShortcuts ?? (async () => {})
     this.generateSessionName = options.generateSessionName
     this.projectTrust = options.projectTrust ?? {
@@ -302,6 +311,7 @@ export class WorkbenchKernel {
       options.sessionNaming ?? DEFAULT_SESSION_NAMING_SETTINGS,
       options.appearance ?? DEFAULT_APPEARANCE_SETTINGS,
       options.general ?? DEFAULT_GENERAL_SETTINGS,
+      options.subagent ?? DEFAULT_SUBAGENT_SETTINGS,
       options.shortcuts ?? DEFAULT_SHORTCUT_SETTINGS,
       options.extensions ?? []
     )
@@ -324,6 +334,7 @@ export class WorkbenchKernel {
   private readonly persistSessionNaming: (settings: SessionNamingSettings) => Promise<void>
   private readonly persistAppearance: (settings: AppearanceSettings) => Promise<void>
   private readonly persistGeneral: (settings: GeneralSettings) => Promise<void>
+  private readonly persistSubagent: (settings: SubagentSettings) => Promise<void>
   private readonly persistShortcuts: (settings: ShortcutSettings) => Promise<void>
   private readonly generateSessionName: SessionNameGenerator | undefined
   private readonly projectTrust: ProjectTrustController
@@ -488,7 +499,7 @@ export class WorkbenchKernel {
     this.state = initialKernelState({
       projects: this.state.projects,
       activeProjectKey: path
-    }, matchingRegistry, this.sessionActivityAtByKey, this.sessionStatisticsByKey, this.state.sessionNaming, this.state.appearance, this.state.general, this.state.shortcuts, this.state.extensions)
+    }, matchingRegistry, this.sessionActivityAtByKey, this.sessionStatisticsByKey, this.state.sessionNaming, this.state.appearance, this.state.general, this.state.subagent, this.state.shortcuts, this.state.extensions)
     const managed = matchingRegistry.activeSessionKey === null
       ? null
       : this.contextBySessionKey.get(contextKey(path, matchingRegistry.activeSessionKey)) ?? null
@@ -1175,7 +1186,10 @@ export class WorkbenchKernel {
     const previousContext = this.activeContext
     const previousState = copyState(this.state)
     this.captureActiveContext()
-    const runtime = this.createRuntime(project, resolvedLaunchOptions)
+    const runtime = this.createRuntime(project, {
+      ...resolvedLaunchOptions,
+      subagent: copySubagentSettings(this.state.subagent)
+    })
     this.runtime = runtime
     const context: RuntimeContext = {
       projectPath: project.path,
@@ -1544,6 +1558,15 @@ export class WorkbenchKernel {
     const nextSettings = copyGeneralSettings(settings)
     await this.persistGeneral(nextSettings)
     this.state = { ...this.state, general: nextSettings }
+    this.emitState()
+  }
+
+  async setSubagent(settings: SubagentSettings): Promise<void> {
+    assertSubagentSettings(settings)
+    if (sameSubagentSettings(this.state.subagent, settings)) return
+    const nextSettings = copySubagentSettings(settings)
+    await this.persistSubagent(nextSettings)
+    this.state = { ...this.state, subagent: nextSettings }
     this.emitState()
   }
 
@@ -2915,6 +2938,7 @@ export class WorkbenchKernel {
       sessionNaming: shared.sessionNaming,
       appearance: shared.appearance,
       general: shared.general,
+      subagent: shared.subagent,
       shortcuts: shared.shortcuts,
       extensions: shared.extensions
     }
@@ -3096,6 +3120,7 @@ function initialKernelState(
   sessionNaming: SessionNamingSettings,
   appearance: AppearanceSettings,
   general: GeneralSettings,
+  subagent: SubagentSettings,
   shortcuts: ShortcutSettings,
   extensions: readonly KernelExtensionDescriptor[]
 ): KernelState {
@@ -3124,6 +3149,7 @@ function initialKernelState(
     sessionNaming: copySessionNamingSettings(sessionNaming),
     appearance: copyAppearanceSettings(appearance),
     general: copyGeneralSettings(general),
+    subagent: copySubagentSettings(subagent),
     shortcuts: copyShortcutSettings(shortcuts),
     runtime: toKernelRuntime('stopped', INITIAL_HOST_STATE),
     session: activePointer === null
@@ -3426,6 +3452,7 @@ function copyState(state: KernelState): KernelState {
     sessionNaming: copySessionNamingSettings(state.sessionNaming),
     appearance: copyAppearanceSettings(state.appearance),
     general: copyGeneralSettings(state.general),
+    subagent: copySubagentSettings(state.subagent),
     shortcuts: copyShortcutSettings(state.shortcuts),
     runtime: { ...state.runtime },
     session: {
@@ -3471,6 +3498,7 @@ function createStatePatch(previous: KernelState, next: KernelState): KernelState
     next.sessionNaming !== previous.sessionNaming ||
     next.appearance !== previous.appearance ||
     next.general !== previous.general ||
+    next.subagent !== previous.subagent ||
     next.shortcuts !== previous.shortcuts
   ) {
     return null
@@ -3760,6 +3788,26 @@ function copyGeneralSettings(settings: GeneralSettings): GeneralSettings {
 function sameGeneralSettings(first: GeneralSettings, second: GeneralSettings): boolean {
   return first.startupWorkspaceRestore === second.startupWorkspaceRestore &&
     first.doubleClickBorderMaximize === second.doubleClickBorderMaximize
+}
+
+function copySubagentSettings(settings: SubagentSettings): SubagentSettings {
+  return {
+    maxDepth: settings.maxDepth,
+    preventCycles: settings.preventCycles
+  }
+}
+
+function sameSubagentSettings(first: SubagentSettings, second: SubagentSettings): boolean {
+  return first.maxDepth === second.maxDepth && first.preventCycles === second.preventCycles
+}
+
+function assertSubagentSettings(value: SubagentSettings): void {
+  if (
+    (value.maxDepth !== 1 && value.maxDepth !== 2 && value.maxDepth !== 3) ||
+    typeof value.preventCycles !== 'boolean'
+  ) {
+    throw new Error('Invalid subagent settings.')
+  }
 }
 
 function sameShortcutSettings(first: ShortcutSettings, second: ShortcutSettings): boolean {

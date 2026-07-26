@@ -24,6 +24,31 @@ test('runtime forwards all three project trust states as argv entries', () => {
   assert.equal(buildPiRpcArguments(undefined, false, false).at(-1), '--no-approve')
 })
 
+test('runtime adds official subagent flags only when subagent launch settings are provided', () => {
+  assert.equal(buildPiRpcArguments().includes('--subagent-max-depth'), false)
+  assert.deepEqual(
+    buildPiRpcArguments(undefined, false, undefined, {
+      maxDepth: 2,
+      preventCycles: true
+    }).slice(-3),
+    ['--subagent-max-depth', '2', '--subagent-prevent-cycles']
+  )
+  assert.deepEqual(
+    buildPiRpcArguments(undefined, false, undefined, {
+      maxDepth: 1,
+      preventCycles: false
+    }).slice(-3),
+    ['--subagent-max-depth', '1', '--no-subagent-prevent-cycles']
+  )
+  assert.throws(
+    () => buildPiRpcArguments(undefined, false, undefined, {
+      maxDepth: 4 as 1,
+      preventCycles: true
+    }),
+    /Invalid subagent settings/u
+  )
+})
+
 test('runtime resumes an absolute session file', () => {
   const sessionFile = '/tmp/pi-session.jsonl'
 

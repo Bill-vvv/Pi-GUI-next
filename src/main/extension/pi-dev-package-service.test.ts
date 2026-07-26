@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -98,8 +98,8 @@ test('uses strict Pi command arguments and rejects invalid package names before 
 
   await service.install('@scope/good-name')
   assert.deepEqual(await service.list(), [
-    { source: 'npm:good-name@1.2.3', filtered: false },
-    { source: 'git:github.com/example/tools', filtered: true }
+    { source: 'npm:good-name@1.2.3', filtered: false, extensionEnabled: true },
+    { source: 'git:github.com/example/tools', filtered: true, extensionEnabled: false }
   ])
   await service.remove('npm:good-name')
   await service.update('git:github.com/example/tools')
@@ -123,6 +123,67 @@ test('uses strict Pi command arguments and rejects invalid package names before 
   await assert.rejects(service.remove('npm:not-installed'), /not present in user settings/u)
   await assert.rejects(service.update('git:github.com/example/missing'), /not present in user settings/u)
   assert.equal(calls.length, 4)
+})
+
+test('toggles only the package extension filter while preserving other PackageSource fields', async (t) => {
+  const agentDir = await mkdtemp(join(tmpdir(), 'pi-gui-package-extension-toggle-'))
+  t.after(() => rm(agentDir, { recursive: true, force: true }))
+  const settingsPath = join(agentDir, 'settings.json')
+  await writeFile(settingsPath, JSON.stringify({
+    theme: 'dark',
+    packages: [
+      'npm:plain',
+      {
+        source: 'npm:@mjakl/pi-subagent@1.0.0',
+        autoload: false,
+        extensions: [],
+        skills: ['skills'],
+        prompts: ['prompts'],
+        themes: ['themes'],
+        custom: { retained: true }
+      }
+    ]
+  }), 'utf8')
+  const service = new PiDevPackageService({ agentDir })
+
+  assert.deepEqual(await service.list(), [
+    { source: 'npm:plain', filtered: false, extensionEnabled: true },
+    {
+      source: 'npm:@mjakl/pi-subagent@1.0.0',
+      filtered: true,
+      extensionEnabled: false
+    }
+  ])
+  const enabled = await service.setExtensionEnabled('npm:@mjakl/pi-subagent', true)
+  assert.equal(enabled[1]?.extensionEnabled, true)
+  let settings = JSON.parse(await readFile(settingsPath, 'utf8')) as {
+    packages: Array<Record<string, unknown>>
+  }
+  assert.deepEqual(settings.packages[1], {
+    source: 'npm:@mjakl/pi-subagent@1.0.0',
+    skills: ['skills'],
+    prompts: ['prompts'],
+    themes: ['themes'],
+    custom: { retained: true }
+  })
+
+  const disabled = await service.setExtensionEnabled('npm:@mjakl/pi-subagent', false)
+  assert.equal(disabled[1]?.extensionEnabled, false)
+  settings = JSON.parse(await readFile(settingsPath, 'utf8')) as {
+    packages: Array<Record<string, unknown>>
+  }
+  assert.deepEqual(settings.packages[1], {
+    source: 'npm:@mjakl/pi-subagent@1.0.0',
+    skills: ['skills'],
+    prompts: ['prompts'],
+    themes: ['themes'],
+    custom: { retained: true },
+    extensions: []
+  })
+  await assert.rejects(
+    service.setExtensionEnabled('npm:missing', true),
+    /not present in user settings/u
+  )
 })
 
 test('fails fast when the catalog no longer contains package cards', async () => {

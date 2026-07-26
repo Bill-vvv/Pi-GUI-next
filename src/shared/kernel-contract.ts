@@ -106,6 +106,7 @@ export type KernelPiDevCatalog = {
 export type KernelInstalledPackage = {
   source: string
   filtered: boolean
+  extensionEnabled: boolean
 }
 
 export type KernelModelPricingTier = {
@@ -356,6 +357,18 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   doubleClickBorderMaximize: true
 }
 
+export const SUBAGENT_PACKAGE_NAME = '@mjakl/pi-subagent'
+
+export type SubagentSettings = {
+  maxDepth: 1 | 2 | 3
+  preventCycles: boolean
+}
+
+export const DEFAULT_SUBAGENT_SETTINGS: SubagentSettings = {
+  maxDepth: 3,
+  preventCycles: true
+}
+
 export type KernelSessionState = {
   id: string | null
   name: string | null
@@ -526,6 +539,7 @@ export type KernelState = {
   sessionNaming: SessionNamingSettings
   appearance: AppearanceSettings
   general: GeneralSettings
+  subagent: SubagentSettings
   shortcuts: ShortcutSettings
   runtime: KernelRuntimeState
   session: KernelSessionState
@@ -603,6 +617,7 @@ export type KernelCommand =
   | { type: 'kernel.list-pi-packages' }
   | { type: 'kernel.install-pi-dev-package'; name: string }
   | { type: 'kernel.remove-pi-package'; source: string }
+  | { type: 'kernel.set-subagent-enabled'; enabled: boolean }
   | { type: 'kernel.update-pi-package'; source: string }
   | { type: 'kernel.update-pi-packages' }
   | { type: 'kernel.list-providers' }
@@ -634,6 +649,7 @@ export type KernelCommand =
   | { type: 'kernel.set-session-naming'; settings: SessionNamingSettings }
   | { type: 'kernel.set-appearance'; settings: AppearanceSettings }
   | { type: 'kernel.set-general'; settings: GeneralSettings }
+  | { type: 'kernel.set-subagent'; settings: SubagentSettings }
   | { type: 'kernel.set-shortcuts'; settings: ShortcutSettings }
   | { type: 'kernel.invoke-command'; commandId: string; argument: string }
 
@@ -690,6 +706,7 @@ export type KernelApi = {
   listPiPackages: () => Promise<KernelInstalledPackage[]>
   installPiDevPackage: (name: string) => Promise<KernelState>
   removePiPackage: (source: string) => Promise<KernelState>
+  setSubagentEnabled: (enabled: boolean) => Promise<KernelInstalledPackage[]>
   updatePiPackage: (source: string) => Promise<KernelState>
   updatePiPackages: () => Promise<KernelState>
   listProviders: () => Promise<KernelProviderConfig[]>
@@ -722,6 +739,7 @@ export type KernelApi = {
   setSessionNaming: (settings: SessionNamingSettings) => Promise<KernelState>
   setAppearance: (settings: AppearanceSettings) => Promise<KernelState>
   setGeneral: (settings: GeneralSettings) => Promise<KernelState>
+  setSubagent: (settings: SubagentSettings) => Promise<KernelState>
   setShortcuts: (settings: ShortcutSettings) => Promise<KernelState>
   invokeCommand: (commandId: string, argument: string) => Promise<KernelState>
   openExternal: (url: string) => Promise<void>

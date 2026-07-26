@@ -153,6 +153,14 @@ const kernelApi: KernelApi = {
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
   },
+  setSubagentEnabled: (enabled) => {
+    const command: KernelCommand = {
+      type: 'kernel.set-subagent-enabled',
+      enabled
+    }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelInstalledPackage[]>
+  },
   updatePiPackage: (source) => {
     const command: KernelCommand = { type: 'kernel.update-pi-package', source }
 
@@ -277,6 +285,11 @@ const kernelApi: KernelApi = {
   },
   setGeneral: (settings) => {
     const command: KernelCommand = { type: 'kernel.set-general', settings }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+  },
+  setSubagent: (settings) => {
+    const command: KernelCommand = { type: 'kernel.set-subagent', settings }
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
   },

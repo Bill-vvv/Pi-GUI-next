@@ -8,9 +8,11 @@ import {
   DEFAULT_APPEARANCE_SETTINGS,
   DEFAULT_GENERAL_SETTINGS,
   DEFAULT_SESSION_NAMING_SETTINGS,
+  DEFAULT_SUBAGENT_SETTINGS,
   type AppearanceSettings,
   type GeneralSettings,
-  type SessionNamingSettings
+  type SessionNamingSettings,
+  type SubagentSettings
 } from '../../shared/kernel-contract.ts'
 import {
   copyShortcutSettings,
@@ -103,7 +105,7 @@ type ProjectConfigFileV8 = {
   general: GeneralSettings
 }
 
-type ProjectConfigFile = {
+type ProjectConfigFileV9 = {
   version: 9
   projects: Array<{ path: string }>
   activeProjectKey: string | null
@@ -111,6 +113,17 @@ type ProjectConfigFile = {
   appearance: AppearanceSettings
   general: GeneralSettings
   shortcuts: ShortcutSettings
+}
+
+type ProjectConfigFile = {
+  version: 10
+  projects: Array<{ path: string }>
+  activeProjectKey: string | null
+  sessionNaming: SessionNamingSettings
+  appearance: AppearanceSettings
+  general: GeneralSettings
+  shortcuts: ShortcutSettings
+  subagent: SubagentSettings
 }
 
 export type ProjectRegistry = {
@@ -123,6 +136,7 @@ type ProjectConfiguration = ProjectRegistry & {
   appearance: AppearanceSettings
   general: GeneralSettings
   shortcuts: ShortcutSettings
+  subagent: SubagentSettings
 }
 
 type ProjectStateFileV1 = {
@@ -205,6 +219,10 @@ export class ProjectStore {
     return copyShortcutSettings((await this.readConfiguration()).shortcuts)
   }
 
+  async loadSubagent(): Promise<SubagentSettings> {
+    return copySubagent((await this.readConfiguration()).subagent)
+  }
+
   addProject(project: { path: string }): Promise<ProjectRegistry> {
     assertProject(project)
     return this.enqueueSave(async () => {
@@ -218,7 +236,8 @@ export class ProjectStore {
         sessionNaming: configuration.sessionNaming,
         appearance: configuration.appearance,
         general: configuration.general,
-        shortcuts: configuration.shortcuts
+        shortcuts: configuration.shortcuts,
+        subagent: configuration.subagent
       }
       await writeJson(this.configFile, toProjectConfigFile(next))
       await ensureJson(
@@ -305,6 +324,18 @@ export class ProjectStore {
     })
   }
 
+  saveSubagent(settings: SubagentSettings): Promise<void> {
+    assertSubagent(settings)
+    const nextSettings = copySubagent(settings)
+    return this.enqueueSave(async () => {
+      const configuration = await this.readConfiguration()
+      await writeJson(this.configFile, toProjectConfigFile({
+        ...configuration,
+        subagent: nextSettings
+      }))
+    })
+  }
+
   private async readConfiguration(): Promise<ProjectConfiguration> {
     let text: string
     try {
@@ -317,7 +348,8 @@ export class ProjectStore {
           sessionNaming: { ...DEFAULT_SESSION_NAMING_SETTINGS },
           appearance: { ...DEFAULT_APPEARANCE_SETTINGS },
           general: { ...DEFAULT_GENERAL_SETTINGS },
-          shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS)
+          shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS),
+          subagent: { ...DEFAULT_SUBAGENT_SETTINGS }
         }
       }
       throw error
@@ -327,13 +359,24 @@ export class ProjectStore {
     if (isProjectConfigFile(value)) {
       return copyConfiguration(value)
     }
+    if (isProjectConfigFileV9(value)) {
+      return {
+        ...copyRegistry(value),
+        sessionNaming: copySessionNaming(value.sessionNaming),
+        appearance: copyAppearance(value.appearance),
+        general: requireGeneral(value.general),
+        shortcuts: copyShortcutSettings(value.shortcuts),
+        subagent: { ...DEFAULT_SUBAGENT_SETTINGS }
+      }
+    }
     if (isProjectConfigFileV8(value)) {
       return {
         ...copyRegistry(value),
         sessionNaming: copySessionNaming(value.sessionNaming),
         appearance: copyAppearance(value.appearance),
         general: requireGeneral(value.general),
-        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS)
+        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS),
+        subagent: { ...DEFAULT_SUBAGENT_SETTINGS }
       }
     }
     if (isProjectConfigFileV7(value)) {
@@ -342,7 +385,8 @@ export class ProjectStore {
         sessionNaming: copySessionNaming(value.sessionNaming),
         appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
         general: requireGeneral(value.general),
-        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS)
+        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS),
+        subagent: { ...DEFAULT_SUBAGENT_SETTINGS }
       }
     }
     if (isProjectConfigFileV6(value)) {
@@ -351,7 +395,8 @@ export class ProjectStore {
         sessionNaming: copySessionNaming(value.sessionNaming),
         appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
         general: requireGeneral(value.general),
-        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS)
+        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS),
+        subagent: { ...DEFAULT_SUBAGENT_SETTINGS }
       }
     }
     if (isProjectConfigFileV5(value)) {
@@ -360,7 +405,8 @@ export class ProjectStore {
         sessionNaming: copySessionNaming(value.sessionNaming),
         appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
         general: { ...DEFAULT_GENERAL_SETTINGS },
-        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS)
+        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS),
+        subagent: { ...DEFAULT_SUBAGENT_SETTINGS }
       }
     }
     if (isProjectConfigFileV4(value)) {
@@ -369,7 +415,8 @@ export class ProjectStore {
         sessionNaming: copySessionNaming(value.sessionNaming),
         appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
         general: { ...DEFAULT_GENERAL_SETTINGS },
-        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS)
+        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS),
+        subagent: { ...DEFAULT_SUBAGENT_SETTINGS }
       }
     }
     if (isProjectConfigFileV3(value)) {
@@ -378,7 +425,8 @@ export class ProjectStore {
         sessionNaming: copySessionNaming(value.sessionNaming),
         appearance: { ...DEFAULT_APPEARANCE_SETTINGS },
         general: { ...DEFAULT_GENERAL_SETTINGS },
-        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS)
+        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS),
+        subagent: { ...DEFAULT_SUBAGENT_SETTINGS }
       }
     }
     if (isProjectConfigFileV2(value)) {
@@ -387,7 +435,8 @@ export class ProjectStore {
         sessionNaming: { ...DEFAULT_SESSION_NAMING_SETTINGS },
         appearance: { ...DEFAULT_APPEARANCE_SETTINGS },
         general: { ...DEFAULT_GENERAL_SETTINGS },
-        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS)
+        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS),
+        subagent: { ...DEFAULT_SUBAGENT_SETTINGS }
       }
     }
     if (isProjectConfigFileV1(value)) {
@@ -397,7 +446,8 @@ export class ProjectStore {
         sessionNaming: { ...DEFAULT_SESSION_NAMING_SETTINGS },
         appearance: { ...DEFAULT_APPEARANCE_SETTINGS },
         general: { ...DEFAULT_GENERAL_SETTINGS },
-        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS)
+        shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS),
+        subagent: { ...DEFAULT_SUBAGENT_SETTINGS }
       }
     }
     throw new Error(`Invalid Pi GUI project config: ${this.configFile}`)
@@ -708,7 +758,7 @@ function isProjectConfigFileV8(value: unknown): value is ProjectConfigFileV8 {
   return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
 }
 
-function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
+function isProjectConfigFileV9(value: unknown): value is ProjectConfigFileV9 {
   if (
     !isRecord(value) ||
     Object.keys(value).length !== 7 ||
@@ -721,6 +771,26 @@ function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
     !isAppearance(value.appearance) ||
     !acceptsGeneral(value.general) ||
     !isShortcutSettings(value.shortcuts)
+  ) {
+    return false
+  }
+  return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
+}
+
+function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 8 ||
+    value.version !== 10 ||
+    !Array.isArray(value.projects) ||
+    !value.projects.every(isProject) ||
+    new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
+    (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
+    !isSessionNaming(value.sessionNaming) ||
+    !isAppearance(value.appearance) ||
+    !acceptsGeneral(value.general) ||
+    !isShortcutSettings(value.shortcuts) ||
+    !isSubagent(value.subagent)
   ) {
     return false
   }
@@ -782,13 +852,14 @@ function isProjectConfigFileV4(value: unknown): value is ProjectConfigFileV4 {
 
 function toProjectConfigFile(configuration: ProjectConfiguration): ProjectConfigFile {
   return {
-    version: 9,
+    version: 10,
     projects: configuration.projects.map((project) => ({ ...project })),
     activeProjectKey: configuration.activeProjectKey,
     sessionNaming: copySessionNaming(configuration.sessionNaming),
     appearance: copyAppearance(configuration.appearance),
     general: copyGeneral(configuration.general),
-    shortcuts: copyShortcutSettings(configuration.shortcuts)
+    shortcuts: copyShortcutSettings(configuration.shortcuts),
+    subagent: copySubagent(configuration.subagent)
   }
 }
 
@@ -805,7 +876,8 @@ function copyConfiguration(configuration: ProjectConfiguration): ProjectConfigur
     sessionNaming: copySessionNaming(configuration.sessionNaming),
     appearance: copyAppearance(configuration.appearance),
     general: requireGeneral(configuration.general),
-    shortcuts: copyShortcutSettings(configuration.shortcuts)
+    shortcuts: copyShortcutSettings(configuration.shortcuts),
+    subagent: copySubagent(configuration.subagent)
   }
 }
 
@@ -831,6 +903,24 @@ function copyGeneral(settings: GeneralSettings): GeneralSettings {
     startupWorkspaceRestore: settings.startupWorkspaceRestore,
     doubleClickBorderMaximize: settings.doubleClickBorderMaximize
   }
+}
+
+function copySubagent(settings: SubagentSettings): SubagentSettings {
+  return {
+    maxDepth: settings.maxDepth,
+    preventCycles: settings.preventCycles
+  }
+}
+
+function assertSubagent(value: SubagentSettings): void {
+  if (!isSubagent(value)) throw new Error('Invalid Pi GUI subagent settings.')
+}
+
+function isSubagent(value: unknown): value is SubagentSettings {
+  return isRecord(value) &&
+    Object.keys(value).length === 2 &&
+    (value.maxDepth === 1 || value.maxDepth === 2 || value.maxDepth === 3) &&
+    typeof value.preventCycles === 'boolean'
 }
 
 function assertShortcuts(value: ShortcutSettings): void {

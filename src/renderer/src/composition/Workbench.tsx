@@ -21,6 +21,7 @@ import type {
   KernelSessionPreview,
   KernelState,
   SessionNamingSettings,
+  SubagentSettings,
   ShortcutSettings,
   ThinkingLevel
 } from '../../../shared/kernel-contract'
@@ -150,6 +151,8 @@ type WorkbenchProps = {
   onSetThinkingLevel: (level: ThinkingLevel) => Promise<void>
   onSetSessionNaming: (settings: SessionNamingSettings) => Promise<void>
   onSetGeneral: (settings: GeneralSettings) => Promise<void>
+  onSetSubagentEnabled: (enabled: boolean) => Promise<void>
+  onSetSubagent: (settings: SubagentSettings) => Promise<void>
   onSetAppearance: (settings: AppearanceSettings) => Promise<void>
   onSetShortcuts: (settings: ShortcutSettings) => Promise<void>
 }
@@ -224,6 +227,8 @@ export function Workbench({
   onSetThinkingLevel,
   onSetSessionNaming,
   onSetGeneral,
+  onSetSubagentEnabled,
+  onSetSubagent,
   onSetAppearance,
   onSetShortcuts
 }: WorkbenchProps): React.JSX.Element {
@@ -787,6 +792,15 @@ export function Workbench({
                 </button>
                 <button
                   type="button"
+                  className={settingsSection === 'subagent' ? 'selected' : ''}
+                  aria-current={settingsSection === 'subagent' ? 'page' : undefined}
+                  onClick={() => setSettingsSection('subagent')}
+                >
+                  <Icon name="subagents" />
+                  <span>Subagent</span>
+                </button>
+                <button
+                  type="button"
                   className={settingsSection === 'skills' ? 'selected' : ''}
                   aria-current={settingsSection === 'skills' ? 'page' : undefined}
                   onClick={() => setSettingsSection('skills')}
@@ -1202,6 +1216,14 @@ export function Workbench({
               settingsActionRef.current = 'set-general'
               return onSetGeneral(settings)
             }}
+            onSetSubagentEnabled={(enabled) => {
+              settingsActionRef.current = 'set-subagent-enabled'
+              return onSetSubagentEnabled(enabled)
+            }}
+            onSetSubagent={(settings) => {
+              settingsActionRef.current = 'set-subagent'
+              return onSetSubagent(settings)
+            }}
             onSetAppearance={(settings) => {
               settingsActionRef.current = 'set-appearance'
               return onSetAppearance(settings)
@@ -1496,6 +1518,7 @@ function settingsSectionForAction(action: string | null): SettingsSection | null
   if (action === 'set-general') return 'general'
   if (action === 'set-appearance') return 'appearance'
   if (action === 'set-model') return 'models'
+  if (action === 'set-subagent-enabled' || action === 'set-subagent') return 'subagent'
   if (action === 'set-session-naming') return 'preferences'
   return null
 }

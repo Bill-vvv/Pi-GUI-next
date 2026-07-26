@@ -7,7 +7,8 @@ import type {
   KernelProjectState,
   RuntimeStatus,
   SessionNamingSettings,
-  ShortcutSettings
+  ShortcutSettings,
+  SubagentSettings
 } from '../../shared/kernel-contract.ts'
 import { DEFAULT_SHORTCUT_SETTINGS } from '../../shared/shortcut-settings.ts'
 import type { ProjectSessionRegistry, SessionPointer } from '../project/session-pointer.ts'
@@ -20,6 +21,7 @@ import type {
 } from '../pi-rpc/pi-rpc-client.ts'
 import {
   COPY_LAST_ANSWER_COMMAND_ID,
+  DEFAULT_SUBAGENT_SETTINGS,
   EXPORT_SESSION_COMMAND_ID,
   FORK_SESSION_COMMAND_ID,
 } from '../../shared/kernel-contract.ts'
@@ -656,6 +658,37 @@ test('general settings can toggle double-click border maximize', async () => {
     doubleClickBorderMaximize: false
   }])
   assert.equal(kernel.getState().general.doubleClickBorderMaximize, false)
+})
+
+test('subagent settings update only after strict persistence succeeds', async () => {
+  const persisted: SubagentSettings[] = []
+  let rejectPersistence = false
+  const kernel = new WorkbenchKernel(
+    () => new FakeRuntimeHost(),
+    { projects: [], activeProjectKey: null },
+    {
+      ...kernelOptions(),
+      persistSubagent: async (settings) => {
+        if (rejectPersistence) throw new Error('subagent persistence failed')
+        persisted.push(settings)
+      }
+    }
+  )
+
+  assert.deepEqual(kernel.getState().subagent, DEFAULT_SUBAGENT_SETTINGS)
+  await kernel.setSubagent({ maxDepth: 2, preventCycles: false })
+  assert.deepEqual(persisted, [{ maxDepth: 2, preventCycles: false }])
+  assert.deepEqual(kernel.getState().subagent, { maxDepth: 2, preventCycles: false })
+  rejectPersistence = true
+  await assert.rejects(
+    kernel.setSubagent({ maxDepth: 1, preventCycles: true }),
+    /subagent persistence failed/u
+  )
+  assert.deepEqual(kernel.getState().subagent, { maxDepth: 2, preventCycles: false })
+  await assert.rejects(
+    kernel.setSubagent({ maxDepth: 4 as 1, preventCycles: true }),
+    /Invalid subagent settings/u
+  )
 })
 
 test('shortcut settings update only after strict persistence succeeds', async () => {
@@ -3169,8 +3202,8 @@ test('activating a registered session preserves and reuses managed runtimes', as
 
   assert.equal(firstRuntime.stopCalls, 0)
   assert.deepEqual(launches, [
-    { sessionFile: firstPointer.sessionFile },
-    { sessionFile: secondPointer.sessionFile }
+    { sessionFile: firstPointer.sessionFile, subagent: DEFAULT_SUBAGENT_SETTINGS },
+    { sessionFile: secondPointer.sessionFile, subagent: DEFAULT_SUBAGENT_SETTINGS }
   ])
   assert.equal(kernel.getState().activeSessionKey, secondPointer.sessionFile)
   assert.equal(kernel.getState().session.id, secondPointer.sessionId)
@@ -3780,7 +3813,7 @@ test('explicit resume after a crash reuses the managed crashed runtime', async (
   await kernel.resumeSession()
 
   assert.equal(kernel.getState().runtime.status, 'crashed')
-  assert.deepEqual(launches, [{}])
+  assert.deepEqual(launches, [{ subagent: DEFAULT_SUBAGENT_SETTINGS }])
   assert.equal(resumedRuntime.startCalls, 0)
 })
 
@@ -3810,7 +3843,10 @@ test('a stored pointer is resumable from a stopped kernel relaunch', async () =>
   assert.equal(kernel.getState().session.id, pointer.sessionId)
   await kernel.resumeSession()
 
-  assert.deepEqual(launches, [{ sessionFile: pointer.sessionFile }])
+  assert.deepEqual(launches, [{
+    sessionFile: pointer.sessionFile,
+    subagent: DEFAULT_SUBAGENT_SETTINGS
+  }])
   assert.equal(kernel.getState().runtime.status, 'ready')
 })
 
@@ -4583,7 +4619,9 @@ test('project trust choices gate runtime creation and separate persisted from on
       await start
 
       assert.deepEqual(launchOptions, [
-        scenario.override === undefined ? {} : { projectTrust: scenario.override }
+        scenario.override === undefined
+          ? { subagent: DEFAULT_SUBAGENT_SETTINGS }
+          : { projectTrust: scenario.override, subagent: DEFAULT_SUBAGENT_SETTINGS }
       ])
       assert.deepEqual(persisted, scenario.persisted)
       assert.equal(kernel.getState().projectTrustRequest, null)
@@ -4636,7 +4674,7 @@ test('persistent project trust decisions reject concurrent resolve and remain re
   await kernel.resolveProjectTrust(request.id, 'persist-trusted')
   await start
   assert.equal(persistCalls, 2)
-  assert.deepEqual(launches, [{}])
+  assert.deepEqual(launches, [{ subagent: DEFAULT_SUBAGENT_SETTINGS }])
   releasePersistence()
 })
 
@@ -4700,7 +4738,7 @@ test('stored or inherited project trust decisions skip prompting and overrides',
   )
 
   await kernel.start()
-  assert.deepEqual(launches, [{}])
+  assert.deepEqual(launches, [{ subagent: DEFAULT_SUBAGENT_SETTINGS }])
   assert.equal(kernel.getState().projectTrustRequest, null)
 })
 

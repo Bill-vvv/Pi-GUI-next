@@ -20,6 +20,7 @@ import {
   type ResolvePiExecutableOptions
 } from './pi-executable.ts'
 import { errorMessage } from '../utils/errors.ts'
+import type { SubagentSettings } from '../../shared/kernel-contract.ts'
 
 const DEFAULT_RPC_TIMEOUT_MS = 10_000
 const STOP_GRACE_MS = 1_000
@@ -36,12 +37,14 @@ export type LinuxLocalRuntimeOptions = {
   sessionFile?: string
   noSession?: boolean
   projectTrust?: boolean
+  subagent?: SubagentSettings
 }
 
 export function buildPiRpcArguments(
   sessionFile?: string,
   noSession = false,
-  projectTrust?: boolean
+  projectTrust?: boolean,
+  subagent?: SubagentSettings
 ): string[] {
   if (sessionFile !== undefined && noSession) {
     throw new Error('Session file and no-session mode cannot be used together.')
@@ -63,6 +66,15 @@ export function buildPiRpcArguments(
   }
   if (projectTrust === true) arguments_.push('--approve')
   else if (projectTrust === false) arguments_.push('--no-approve')
+  if (subagent !== undefined) {
+    assertSubagentSettings(subagent)
+    arguments_.push('--subagent-max-depth', String(subagent.maxDepth))
+    arguments_.push(
+      subagent.preventCycles
+        ? '--subagent-prevent-cycles'
+        : '--no-subagent-prevent-cycles'
+    )
+  }
   return arguments_
 }
 
@@ -102,6 +114,7 @@ export class LinuxLocalRuntime implements RuntimeHost {
     if (options.sessionFile !== undefined && !isAbsolute(options.sessionFile)) {
       throw new Error(`Session file must be an absolute path: ${options.sessionFile}`)
     }
+    if (options.subagent !== undefined) assertSubagentSettings(options.subagent)
     this.options = options
   }
 
@@ -151,7 +164,8 @@ export class LinuxLocalRuntime implements RuntimeHost {
       buildPiRpcArguments(
         this.options.sessionFile,
         this.options.noSession,
-        this.options.projectTrust
+        this.options.projectTrust,
+        this.options.subagent
       ),
       {
         cwd: this.options.cwd,
@@ -573,4 +587,13 @@ function formatExitError(code: number | null, signal: NodeJS.Signals | null): st
 
 function startCancelledError(): Error {
   return new Error('Runtime start cancelled.')
+}
+
+function assertSubagentSettings(settings: SubagentSettings): void {
+  if (
+    (settings.maxDepth !== 1 && settings.maxDepth !== 2 && settings.maxDepth !== 3) ||
+    typeof settings.preventCycles !== 'boolean'
+  ) {
+    throw new Error('Invalid subagent settings.')
+  }
 }

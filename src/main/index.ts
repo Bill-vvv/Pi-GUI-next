@@ -23,6 +23,7 @@ import {
   WINDOW_MAXIMIZED_CHANGED_CHANNEL,
   WINDOW_TOGGLE_FULLSCREEN_CHANNEL,
   WINDOW_TOGGLE_MAXIMIZE_CHANNEL,
+  SUBAGENT_PACKAGE_NAME,
   type KernelEvent,
   type KernelProviderAuthEvent
 } from '../shared/kernel-contract.ts'
@@ -141,6 +142,7 @@ async function startApplication(): Promise<void> {
   const storedProjects = await projectStore.loadProjects()
   const sessionNaming = await projectStore.loadSessionNaming()
   const appearance = await projectStore.loadAppearance()
+  const subagent = await projectStore.loadSubagent()
   const shortcuts = await projectStore.loadShortcuts()
   const extensionStore = new PiExtensionStore()
   const providerStore = new PiProviderStore()
@@ -153,6 +155,10 @@ async function startApplication(): Promise<void> {
     piExecutablePath: process.env.PI_GUI_PI_EXECUTABLE,
     fetch: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init)
   })
+  let subagentPackageEnabled = isSubagentPackageEnabled(await piDevPackageService.list())
+  const refreshSubagentPackageEnabled = async (): Promise<void> => {
+    subagentPackageEnabled = isSubagentPackageEnabled(await piDevPackageService.list())
+  }
   const projectTrust = new PiProjectTrust({
     explicitExecutable: process.env.PI_GUI_PI_EXECUTABLE
   })
@@ -180,7 +186,8 @@ async function startApplication(): Promise<void> {
         cwd: project.path,
         explicitExecutable: process.env.PI_GUI_PI_EXECUTABLE,
         sessionFile: launchOptions.sessionFile,
-        projectTrust: launchOptions.projectTrust
+        projectTrust: launchOptions.projectTrust,
+        ...(subagentPackageEnabled ? { subagent: launchOptions.subagent } : {})
       }),
     projectRegistry,
     {
@@ -209,6 +216,8 @@ async function startApplication(): Promise<void> {
       persistAppearance: (settings) => projectStore.saveAppearance(settings),
       general,
       persistGeneral: (settings) => projectStore.saveGeneral(settings),
+      subagent,
+      persistSubagent: (settings) => projectStore.saveSubagent(settings),
       shortcuts,
       persistShortcuts: (settings) => projectStore.saveShortcuts(settings),
       generateSessionName: generateSessionNameWithPi,
@@ -363,10 +372,20 @@ async function startApplication(): Promise<void> {
         return piDevPackageService.list()
       case 'kernel.install-pi-dev-package':
         await piDevPackageService.install(command.name)
+        if (command.name === SUBAGENT_PACKAGE_NAME) await refreshSubagentPackageEnabled()
         return kernel.getState()
       case 'kernel.remove-pi-package':
         await piDevPackageService.remove(command.source)
+        if (isSubagentPackageSource(command.source)) await refreshSubagentPackageEnabled()
         return kernel.getState()
+      case 'kernel.set-subagent-enabled': {
+        const packages = await piDevPackageService.setExtensionEnabled(
+          `npm:${SUBAGENT_PACKAGE_NAME}`,
+          command.enabled
+        )
+        subagentPackageEnabled = isSubagentPackageEnabled(packages)
+        return packages
+      }
       case 'kernel.update-pi-package':
         await piDevPackageService.update(command.source)
         return kernel.getState()
@@ -470,6 +489,9 @@ async function startApplication(): Promise<void> {
         return kernel.getState()
       case 'kernel.set-general':
         await kernel.setGeneral(command.settings)
+        return kernel.getState()
+      case 'kernel.set-subagent':
+        await kernel.setSubagent(command.settings)
         return kernel.getState()
       case 'kernel.set-shortcuts':
         await kernel.setShortcuts(command.settings)
@@ -665,4 +687,15 @@ function assertTrustedIpcSender(event: IpcMainInvokeEvent, rendererTarget: Rende
   ) {
     throw new Error('Kernel commands are only accepted from the Pi GUI renderer.')
   }
+}
+
+function isSubagentPackageEnabled(
+  packages: readonly { source: string, extensionEnabled: boolean }[]
+): boolean {
+  return packages.some((pkg) => isSubagentPackageSource(pkg.source) && pkg.extensionEnabled)
+}
+
+function isSubagentPackageSource(source: string): boolean {
+  const base = `npm:${SUBAGENT_PACKAGE_NAME}`
+  return source === base || source.startsWith(`${base}@`)
 }

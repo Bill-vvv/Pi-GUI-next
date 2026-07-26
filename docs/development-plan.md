@@ -1,10 +1,10 @@
 # Pi GUI 开发计划
 
 > 当前阶段：P2 — Workbench Foundation
-> 计划版本：6.3
-> 最后更新：2026-07-24
+> 计划版本：6.6
+> 最后更新：2026-07-26
 > 总体状态：In Progress
-> 当前 Slice：S15 — TUI 日常能力补齐（Complete）
+> 当前 Slice：S16 — Subagent Extension 适配（Complete）
 
 ## 1. 计划用途
 
@@ -459,6 +459,7 @@ P2 先用一个短 Slice 固定结构，再实现基础功能，随后在真实�
 | S13 | 交互优化与 P2 发布证据 | `Complete` | 完成低成本可配置的 Session 语义命名、Tab/Arrow slash 补全与 combobox 语义、Runtime context action 成功后的 Composer 焦点恢复、Project/Session 切换反馈、Kernel 连接重试以及空对话与无详情 crash 状态；候选 `fe1e559` 的 AppImage 通过 17 步 P1 回归与 P2 双 Project、双 Session、slash command、单 Runtime 和交互链路，schema v2 脱敏报告与六张截图位于 `release/evidence/2026-07-22T03-37-46-614Z-fe1e559bca43/` |
 | S14 | 优化 | `Complete` | 按实际使用中发现的问题完成四十二项交互、并行 Runtime、输入、设置和职责边界优化；队列修改因 Pi 0.80.10 缺少 typed mutation RPC 明确延期，不以 Renderer 伪实现阻塞收口 |
 | S15 | TUI 日常能力补齐 | `Complete` | 六个阶段均已完成：Project 资源 trust / reload、Session Fork / 归档即时补救、安全导出 / 回复复制 / 生命周期统计、Project 路径搜索 / GUI typed 命令、公开 SDK 凭证交互 / Provider 定向 reload 标记，以及窗口内快捷键 / Pi 压缩生命周期；未照搬 Tree、Clone、CLI/headless、工具控制或完整生态管理 |
+| S16 | Subagent Extension 适配 | `Complete` | 从 pi.dev 候选中固定适配兼容 Pi 0.80.10 的 `@mjakl/pi-subagent`；用户显式安装，拓展页通过 Pi 官方 PackageSource resource filter 真实启停；独立 Subagent 页修改最大嵌套深度和循环保护，新建或显式 reload 后生效；不实现 Agent definition CRUD、任务监控或内建 Subagent Runtime |
 
 P2 最初把“多 Project、多 Session”限定为可保存、发现和切换。2026-07-23 用户确认并行是旧版已有且当前必须恢复的核心能力后，D-017 替代该限制：Workbench Kernel 现在按 Session 管理独立 Runtime context，允许多个 Pi Runtime 并行，同时保持 Electron Main 单一 control plane。
 
@@ -737,6 +738,7 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-24 | S15-6 Complete / S15 Complete | 设置新增固定 11 个应用动作的快捷键页；完整 binding map 以 XDG config v9 持久化，`null` 明确表示未绑定，录入、冲突/保留组合拒绝、清除和恢复默认均复用同一 shared 校验。快捷键只在窗口聚焦且没有模态框、菜单、认证交互或 IME 组合输入时执行，文本控件只接受固定默认表中的已确认安全组合，不注册 `globalShortcut`。Pi `compaction_start` / `compaction_end` 按 Runtime context 归一化 reason、outcome 与 `willRetry`；成功后原子刷新 Timeline、usage 和生命周期 statistics，失败、取消、异常事件或 teardown 保留旧投影并显式收口等待 promise，不伪造 `agent_settled` | 254 项 core tests、`pnpm typecheck`、生产 build 与 diff check 通过；三路终审修复 nullable wire result、overflow `willRetry`、active-run 边界、通知叠放、异常/teardown promise 悬挂和 IME 229。隔离 XDG 与 `PI_CODING_AGENT_DIR` 的真实 Pi 0.80.10 Electron probe 通过；当前源码打入临时 AppImage 后再次通过同一隔离 probe，临时产物已清理且未覆盖仓库既有 release。S15 Complete |
 | 2026-07-25 | Session 无感启动 | 纠正 S14-03 的“只读浏览、首次发送才激活”语义：侧栏单击历史 Session 立即投影历史并 `activate-session` 启动/恢复 Runtime；活动 stopped/crashed Session 再次点击也会恢复。发送时自动激活与 Composer 恢复按钮保留为失败回退 | 文档与实现同步；`pnpm typecheck`、生产 build 与 diff check 验证 |
 | 2026-07-25 | Session 后台启动丝滑化 | 纠正“点击即启动”被做成全局 exclusive 等待的误解：点击当帧切换可见目标与历史预览；`activate-session`/`start-session` 走非阻塞 ensure 泵，不再锁死侧栏；历史 Session 以 120ms settle 合并快速连点，只启动最后停留目标；已有受管 Runtime 立即切换；提交/命令仍可 await 同一 ensure | Renderer 协调层改动；Kernel launch 单飞不变；见 `p2-workbench-structure.md` §6.2 |
+| 2026-07-26 | S16 Complete | 对比 pi.dev 与上游源码后选择 `@mjakl/pi-subagent`；config v10 持久化最大深度和循环保护，Runtime 仅在 Package 已安装且 Extension 已开启时传入上游公开参数；新增独立 Subagent 页，并在拓展页复用同一真实开关。150 项定向 core tests、`pnpm typecheck`、生产 build 与 diff check 通过 | 保持显式安装和 reload 生效边界；后续只有在真实需求确认后再讨论 Agent definition 编辑或运行中任务视图 |
 
 ## 17. 计划变更记录
 
@@ -807,3 +809,4 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-24 | 6.3 | 完成 S15-6 窗口内快捷键与 Pi 压缩生命周期，并收口 S15 | 桌面快捷键需要有限、可持久化且不破坏文本/IME/模态交互；自动压缩又必须与 agent settled 分离，并在多 Runtime 下只刷新事件所属 Session | S15 Complete。快捷键使用严格 XDG config v9 完整表且不注册系统级热键；压缩事件按 context 归一化，成功原子刷新 Conversation/usage/statistics，失败、取消、异常和 teardown 保留旧投影并结束等待 |
 | 2026-07-25 | 6.4 | Session 点击改为无感启动 Runtime | 用户要求点击 Session 即启动，而不是先只读预览再手动“启动 Pi”或等到首次发送 | Renderer 在选中历史 Session 时立即投影历史并调用 activate-session；保留发送时自动激活与 Composer 恢复按钮作失败回退；不改变 Kernel ownership 或 Session 事实源 |
 | 2026-07-25 | 6.5 | 点击启动改为后台 settle/合并，不再锁导航 | 用户指出“点击即启动”不等于每次点击都阻塞等待 Runtime 完成 | 视图切换与历史预览当帧完成；activate/start 走非阻塞 ensure 泵；历史 Session 120ms settle 合并连点；已有 Runtime 立即切换；提交仍可 await 同一任务 |
+| 2026-07-26 | 6.6 | 在拓展版基线上加入首个固定 Subagent Extension 适配 | 用户要求寻找 pi.dev 中成熟的 Subagent，并提供可关闭、可在独立导航页修改的 GUI | 固定 `@mjakl/pi-subagent`；安装与启停复用 Pi Package 事实源，GUI 只保存运行参数；当前 Runtime 不静默重启，Agent CRUD 与任务监控不进入首期 |

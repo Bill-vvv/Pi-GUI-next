@@ -26,6 +26,7 @@ export type IconName =
   | 'settings'
   | 'skills'
   | 'stop'
+  | 'subagents'
 
 export type IconSize = 'sm' | 'control' | 'lg'
 
@@ -240,6 +241,15 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
       return (
         <svg {...common}>
           <rect x="6" y="6" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="1.9" />
+        </svg>
+      )
+    case 'subagents':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="7" r="3" stroke="currentColor" strokeWidth="1.8" />
+          <circle cx="6" cy="17" r="2.5" stroke="currentColor" strokeWidth="1.8" />
+          <circle cx="18" cy="17" r="2.5" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M12 10v2.5M12 12.5H6v2M12 12.5h6v2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       )
   }

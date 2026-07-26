@@ -48,6 +48,12 @@
   background: var(--color-surface-hover);
 }
 
+.settings-back:focus-visible,
+.settings-nav button:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+
 .settings-nav {
   display: flex;
   flex-direction: column;
@@ -482,7 +488,8 @@
 .settings-extension-remove:disabled,
 .settings-pi-dev-search button:disabled,
 .settings-skill-create-toggle:disabled,
-.settings-skill-create-actions button:disabled {
+.settings-skill-create-actions button:disabled,
+.settings-link-button:disabled {
   cursor: default;
   opacity: 0.55;
 }
@@ -497,6 +504,54 @@
 .settings-link-button:hover {
   color: var(--color-text-primary);
   background: var(--color-surface-hover);
+}
+
+.settings-subagent-actions {
+  width: min(300px, 46%);
+  min-width: 0;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settings-subagent-package-select {
+  width: 132px;
+  min-width: 0;
+}
+
+.settings-subagent-actions button:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  border-color: var(--color-border-focus);
+  background: var(--color-surface-hover);
+}
+
+.settings-subagent-actions button:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+
+.settings-subagent-actions button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.settings-subagent-error {
+  margin: 0;
+  border-top: 1px solid var(--color-border-divider);
+  padding: 12px 18px;
+  color: var(--color-status-error);
+  font-size: var(--text-body-sm);
+  line-height: var(--line-body-sm);
+}
+
+.settings-subagent-notice {
+  margin: 0;
+  padding: 0 12px;
+  color: var(--color-text-muted);
+  font-size: var(--text-body-sm);
+  line-height: var(--line-body-sm);
 }
 
 .settings-pi-dev-catalog {
@@ -789,8 +844,14 @@
   }
 
   .settings-row-control,
-  .settings-density-control {
+  .settings-density-control,
+  .settings-subagent-actions {
     width: 100%;
+  }
+
+  .settings-subagent-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 
   .settings-density-examples {

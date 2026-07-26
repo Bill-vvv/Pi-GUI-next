@@ -1,6 +1,9 @@
 import { spawn } from 'node:child_process'
-import { mkdir, readFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
+
+import { lock } from 'proper-lockfile'
 
 import type {
   KernelInstalledPackage,
@@ -87,6 +90,46 @@ export class PiDevPackageService {
 
   async list(): Promise<KernelInstalledPackage[]> {
     return readInstalledPackages(join(this.agentDir, 'settings.json'))
+  }
+
+  async setExtensionEnabled(
+    source: string,
+    enabled: boolean
+  ): Promise<KernelInstalledPackage[]> {
+    const settingsPath = join(this.agentDir, 'settings.json')
+    await mkdir(dirname(settingsPath), { recursive: true })
+    const release = await lock(settingsPath, {
+      realpath: false,
+      retries: {
+        retries: 9,
+        factor: 1,
+        minTimeout: 20,
+        maxTimeout: 20
+      }
+    })
+    try {
+      const settings = await readSettings(settingsPath)
+      const packages = readPackageSources(settings)
+      const index = findConfiguredPackageIndex(packages, source)
+      if (index === -1) throw new Error('Pi package is not present in user settings.')
+      const current = packages[index]!
+      if (enabled) {
+        if (typeof current === 'string') return describeInstalledPackages(packages)
+        const next = { ...current }
+        delete next.extensions
+        if (next.autoload === false) delete next.autoload
+        packages[index] = next
+      } else {
+        packages[index] = typeof current === 'string'
+          ? { source: current, extensions: [] }
+          : { ...current, extensions: [] }
+      }
+      settings.packages = packages
+      await writeSettingsAtomically(settingsPath, settings)
+      return describeInstalledPackages(packages)
+    } finally {
+      await release()
+    }
   }
 
   async remove(source: string): Promise<void> {
@@ -271,25 +314,19 @@ function parseCatalogTotal(html: string, fallback: number): number {
 }
 
 async function readInstalledPackages(settingsPath: string): Promise<KernelInstalledPackage[]> {
-  let raw: string
+  let settings: Record<string, unknown>
   try {
-    raw = await readFile(settingsPath, 'utf8')
+    settings = await readSettings(settingsPath)
   } catch (error) {
     if (isMissingPathError(error)) return []
     throw error
   }
+  return describeInstalledPackages(readPackageSources(settings))
+}
 
-  let settings: unknown
-  try {
-    settings = JSON.parse(raw)
-  } catch {
-    throw new Error(`Pi settings file is not valid JSON: ${settingsPath}`)
-  }
-  if (!isRecord(settings)) throw new Error(`Pi settings file must contain a JSON object: ${settingsPath}`)
+function readPackageSources(settings: Record<string, unknown>): Array<string | Record<string, unknown>> {
   if (settings.packages === undefined) return []
   if (!Array.isArray(settings.packages)) throw new Error('Pi settings packages must be an array.')
-
-  const installed: KernelInstalledPackage[] = []
   for (const item of settings.packages) {
     const source = typeof item === 'string'
       ? item
@@ -298,9 +335,90 @@ async function readInstalledPackages(settingsPath: string): Promise<KernelInstal
     if (source.length === 0 || source.trim() !== source || /[\0\r\n]/u.test(source)) {
       throw new Error('Pi settings package source is invalid.')
     }
-    installed.push({ source, filtered: typeof item !== 'string' })
+    if (typeof item !== 'string') {
+      if (item.autoload !== undefined && typeof item.autoload !== 'boolean') {
+        throw new Error('Pi settings package autoload must be a boolean.')
+      }
+      for (const field of ['extensions', 'skills', 'prompts', 'themes'] as const) {
+        if (
+          item[field] !== undefined &&
+          (!Array.isArray(item[field]) || !item[field].every(isValidPackageFilterEntry))
+        ) {
+          throw new Error(`Pi settings package ${field} must be an array of non-empty strings.`)
+        }
+      }
+    }
   }
-  return installed
+  return settings.packages as Array<string | Record<string, unknown>>
+}
+
+function describeInstalledPackages(
+  packages: readonly (string | Record<string, unknown>)[]
+): KernelInstalledPackage[] {
+  return packages.map((item) => {
+    const source = typeof item === 'string' ? item : item.source as string
+    return {
+      source,
+      filtered: typeof item !== 'string',
+      extensionEnabled: typeof item === 'string' || (
+        Array.isArray(item.extensions)
+          ? item.extensions.length > 0
+          : item.autoload !== false
+      )
+    }
+  })
+}
+
+function findConfiguredPackageIndex(
+  packages: readonly (string | Record<string, unknown>)[],
+  source: string
+): number {
+  const exact = packages.findIndex((item) =>
+    (typeof item === 'string' ? item : item.source) === source
+  )
+  if (exact !== -1) return exact
+  const npmName = packageNameFromNpmSource(source)
+  return npmName === undefined
+    ? -1
+    : packages.findIndex((item) =>
+        packageNameFromNpmSource(typeof item === 'string' ? item : item.source as string) === npmName
+      )
+}
+
+async function readSettings(settingsPath: string): Promise<Record<string, unknown>> {
+  let raw: string
+  try {
+    raw = await readFile(settingsPath, 'utf8')
+  } catch (error) {
+    if (isMissingPathError(error)) return {}
+    throw error
+  }
+  let settings: unknown
+  try {
+    settings = JSON.parse(raw)
+  } catch {
+    throw new Error(`Pi settings file is not valid JSON: ${settingsPath}`)
+  }
+  if (!isRecord(settings)) throw new Error(`Pi settings file must contain a JSON object: ${settingsPath}`)
+  return settings
+}
+
+async function writeSettingsAtomically(
+  settingsPath: string,
+  settings: Record<string, unknown>
+): Promise<void> {
+  const temporaryPath = `${settingsPath}.tmp-${randomUUID()}`
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify(settings, null, 2)}\n`, {
+      flag: 'wx',
+      mode: 0o600
+    })
+    await rename(temporaryPath, settingsPath)
+  } finally {
+    await unlink(temporaryPath).catch((error: unknown) => {
+      if (!isMissingPathError(error)) throw error
+    })
+  }
 }
 
 async function readInstalledPackageNames(settingsPath: string): Promise<Set<string>> {
@@ -328,6 +446,13 @@ function assertValidNpmPackageName(name: string): void {
 function isValidNpmPackageName(name: string): boolean {
   if (name.length === 0 || name.length > 214 || name !== name.toLowerCase()) return false
   return /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/u.test(name)
+}
+
+function isValidPackageFilterEntry(value: unknown): value is string {
+  return typeof value === 'string' &&
+    value.length > 0 &&
+    value.trim() === value &&
+    !/[\0\r\n]/u.test(value)
 }
 
 function readAttribute(attributes: string, name: string): string | undefined {

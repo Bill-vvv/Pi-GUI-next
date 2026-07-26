@@ -233,3 +233,11 @@
 - 决策：自定义模型的输入、输出、缓存读取与缓存写入单价使用 Pi 原生 `models.json` `cost` 字段，单位为 USD/百万 token。用户可手动编辑，或显式通过 Electron Main 一键拉取当前 Provider 全部模型的价格；Main 只请求一次 LiteLLM 公开价格目录，按模型 ID、Provider/模型 ID 和稳定的 Provider 优先后缀规则逐项匹配，只把每个命中模型的匹配键、经校验的四项单价及未命中模型列表经窄 typed IPC 返回。Renderer 不直接联网。
 - 原因：缺少 `cost` 会让 Pi 已记录的 token 无法形成正确费用；复制公开目录的单价比要求用户逐项查找可靠，同时仍需展示匹配键并允许手动修正，避免同名代理模型被静默误价。
 - 影响：拉价不读取 Provider 凭据，不建立 GUI 价格数据库、后台自动刷新或第二套 usage 事实源。公开目录缺失缓存价格时按 0 写入；单项未命中不阻断其他模型回填，非法价格则 Fail Fast。保存后的价格由下一次新建或显式重载的 Runtime 使用，只影响 Pi 后续生成的费用记录，不追溯改写既有 Session cost。
+
+## D-030 — 首个 Subagent 适配固定复用 Pi Package 与 Extension 资源过滤
+
+- 日期：2026-07-26
+- 状态：Accepted；扩展 D-016 的 Pi 官方配置事实边界与 P3 Extension 适配方向
+- 决策：首期固定适配 `@mjakl/pi-subagent`，由用户通过 Pi 原生 Package 命令显式安装。启停不建立 GUI 插件注册表，也不卸载 Package；GUI 只修改 Pi `settings.json` 中该 Package 的 Extension resource filter。最大嵌套深度和循环保护作为 GUI 配置写入 XDG，并且只在 Package 已安装且 Extension 已开启时，通过上游公开 CLI 参数进入新建或显式重载的 Pi Runtime。
+- 原因：该 Extension 已提供独立子进程、并行委派、持久会话、实时进度和递归保护，并明确兼容当前 Pi 0.80.10。复用 Pi 的 PackageSource 能让“关闭”对应真实加载状态；把开关仅保存在 Renderer 或私有 Extension 列表会形成第二份事实并可能继续执行代码。
+- 影响：设置新增独立 Subagent 页面，拓展页同时提供同一真实开关。安装、启停和参数变化不静默重启已有 Runtime；新建或显式 reload 后生效。首期不提供 Agent definition CRUD、任务监控、通用 Package resource 管理或内建 Subagent Runtime。

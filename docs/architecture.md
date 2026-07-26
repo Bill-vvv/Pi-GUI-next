@@ -48,6 +48,8 @@ subscribe
 | Conversation 内容 | Pi session 文件 | 由 Pi 管理 |
 | Pi credential/provider auth | Pi | GUI 不回读凭据；认证与刷新由 Pi 管理 |
 | 自定义 Provider/Model 配置与模型单价 | Pi `models.json` | GUI 只编辑官方配置；密钥只写不回读；显式拉价后保存 USD/百万 token 单价 |
+| Subagent Package 与 Extension 启停 | Pi `settings.json` `packages` | GUI 只安装固定 Package，并通过官方资源过滤控制其 Extension 是否加载 |
+| Subagent 运行参数 | Workbench Kernel | XDG config；只在新建或显式重载 Runtime 时作为 Extension CLI 参数生效 |
 | Project、外观、通用与有限应用快捷键设置 | Workbench Kernel | XDG config |
 | 最近 session 指针与非敏感启动证据 | Workbench Kernel | XDG state |
 | Runtime 瞬时状态 | Workbench Kernel | 仅内存 |
@@ -59,6 +61,12 @@ Electron Main 只请求一次 LiteLLM 公开价格目录，批量匹配当前 Pr
 typed IPC 返回每个命中模型的匹配键、四项单价及未命中模型列表；
 Renderer 不直接联网，也不建立价格数据库或后台自动刷新。保存后的单价由下一次新建或显式重载的
 Runtime 使用，供 Pi 计算后续请求费用；不改写既有 Session 中已经记录的历史 cost。
+
+首期 Subagent 适配固定使用 `@mjakl/pi-subagent`。第三方 Package 只能由用户显式安装；
+“关闭”保留 Package 安装，只把对应 Extension resource 在 Pi 官方 PackageSource 中禁用。
+GUI 只持久化最大嵌套深度和循环保护，并且只有在 Package 已安装且 Extension 已开启时，
+才把上游公开的 `--subagent-max-depth` 与 cycle guard 参数加入新 Runtime。安装、启停或参数
+变化都不静默重启已有 Session；用户新建或显式 reload 后才使用新状态。
 
 ## Conversation 展示投影
 

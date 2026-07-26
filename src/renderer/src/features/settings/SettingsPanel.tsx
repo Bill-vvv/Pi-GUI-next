@@ -16,6 +16,7 @@ import type {
   KernelProviderTestResult,
   KernelState,
   SessionNamingSettings,
+  SubagentSettings as SubagentSettingsValue,
   ShortcutSettings
 } from '../../../../shared/kernel-contract'
 import { FontSelect } from '../../components/FontSelect'
@@ -24,6 +25,7 @@ import { InstalledPackages } from './InstalledPackages'
 import { PiDevCatalog } from './PiDevCatalog'
 import { CredentialsPanel } from './CredentialsPanel'
 import { ShortcutSettingsPanel } from './ShortcutSettingsPanel'
+import { SubagentPackageControl, SubagentSettings } from './SubagentSettings'
 import {
   TOOL_DISPLAY_DENSITIES,
   type ToolDisplayDensity
@@ -37,6 +39,7 @@ export type SettingsSection =
   | 'appearance'
   | 'packages'
   | 'extensions'
+  | 'subagent'
   | 'skills'
   | 'preferences'
 
@@ -86,6 +89,8 @@ type SettingsPanelProps = {
   onSetModel: (provider: string, modelId: string) => Promise<void>
   onSetSessionNaming: (settings: SessionNamingSettings) => Promise<void>
   onSetGeneral: (settings: GeneralSettings) => Promise<void>
+  onSetSubagentEnabled: (enabled: boolean) => Promise<void>
+  onSetSubagent: (settings: SubagentSettingsValue) => Promise<void>
   onSetAppearance: (settings: AppearanceSettings) => Promise<void>
   onSetShortcuts: (settings: ShortcutSettings) => Promise<void>
   onShortcutRecordingChange: (recording: boolean) => void
@@ -127,6 +132,8 @@ export function SettingsPanel({
   onSetModel,
   onSetSessionNaming,
   onSetGeneral,
+  onSetSubagentEnabled,
+  onSetSubagent,
   onSetAppearance,
   onSetShortcuts,
   onShortcutRecordingChange,
@@ -579,6 +586,18 @@ export function SettingsPanel({
               }}
               onOpenExternal={onOpenExternal}
             />
+            <SubagentPackageControl
+              heading="已适配"
+              idPrefix="settings-extensions-subagent"
+              busy={busy}
+              onListPiPackages={onListPiPackages}
+              onInstallPiDevPackage={async (name) => {
+                await onInstallPiDevPackage(name)
+                setPackageRevision((revision) => revision + 1)
+              }}
+              onSetSubagentEnabled={onSetSubagentEnabled}
+              onOpenExternal={onOpenExternal}
+            />
             <section className="settings-group" aria-labelledby="settings-local-extensions-heading">
               <h3 id="settings-local-extensions-heading" className="settings-group-heading">本地路径</h3>
               <article className="settings-card settings-extension-installer">
@@ -644,6 +663,21 @@ export function SettingsPanel({
               )}
             </section>
           </>
+        ) : null}
+
+        {section === 'subagent' ? (
+          <SubagentSettings
+            settings={state.subagent}
+            busy={busy}
+            onListPiPackages={onListPiPackages}
+            onInstallPiDevPackage={async (name) => {
+              await onInstallPiDevPackage(name)
+              setPackageRevision((revision) => revision + 1)
+            }}
+            onSetSubagentEnabled={onSetSubagentEnabled}
+            onSetSubagent={onSetSubagent}
+            onOpenExternal={onOpenExternal}
+          />
         ) : null}
 
         {section === 'skills' ? (

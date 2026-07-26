@@ -418,6 +418,7 @@ const initialState: KernelState = {
   availableModels,
   sessionNaming: { mode: 'auto' },
   general: { startupWorkspaceRestore: 'restore', doubleClickBorderMaximize: true },
+  subagent: { maxDepth: 3, preventCycles: true },
   shortcuts: { ...DEFAULT_SHORTCUT_SETTINGS },
   appearance: {
     theme: 'system',
@@ -487,6 +488,23 @@ const initialState: KernelState = {
 export function createPreviewKernelApi(): KernelApi {
   const runningVariant = new URLSearchParams(window.location.search).get('running') === '1'
   let state = structuredClone(initialState)
+  let installedPackages = [
+    {
+      source: 'npm:example-skill-pack',
+      filtered: false,
+      extensionEnabled: true
+    },
+    {
+      source: 'git:github.com/example/pi-tools',
+      filtered: true,
+      extensionEnabled: false
+    },
+    {
+      source: 'npm:@mjakl/pi-subagent@1.0.0',
+      filtered: false,
+      extensionEnabled: true
+    }
+  ]
   if (runningVariant) {
     state = {
       ...state,
@@ -778,12 +796,33 @@ export function createPreviewKernelApi(): KernelApi {
       ],
       total: 2
     }),
-    listPiPackages: async () => [
-      { source: 'npm:example-skill-pack', filtered: false },
-      { source: 'git:github.com/example/pi-tools', filtered: true }
-    ],
-    installPiDevPackage: current,
-    removePiPackage: current,
+    listPiPackages: async () => structuredClone(installedPackages),
+    installPiDevPackage: (name) => {
+      const source = `npm:${name}`
+      if (!installedPackages.some((pkg) => pkg.source === source || pkg.source.startsWith(`${source}@`))) {
+        installedPackages = [
+          ...installedPackages,
+          { source, filtered: false, extensionEnabled: true }
+        ]
+      }
+      return current()
+    },
+    removePiPackage: (source) => {
+      installedPackages = installedPackages.filter((pkg) => pkg.source !== source)
+      return current()
+    },
+    setSubagentEnabled: async (enabled) => {
+      const base = 'npm:@mjakl/pi-subagent'
+      if (!installedPackages.some((pkg) => pkg.source === base || pkg.source.startsWith(`${base}@`))) {
+        throw new Error('Subagent Package is not installed.')
+      }
+      installedPackages = installedPackages.map((pkg) =>
+        pkg.source === base || pkg.source.startsWith(`${base}@`)
+          ? { ...pkg, extensionEnabled: enabled }
+          : pkg
+      )
+      return structuredClone(installedPackages)
+    },
     updatePiPackage: current,
     updatePiPackages: current,
     listProviders: async () => structuredClone(previewProviders),
@@ -863,6 +902,7 @@ export function createPreviewKernelApi(): KernelApi {
       commit({ ...state, session: { ...state.session, thinkingLevel } }),
     setSessionNaming: (sessionNaming) => commit({ ...state, sessionNaming }),
     setGeneral: (general) => commit({ ...state, general }),
+    setSubagent: (subagent) => commit({ ...state, subagent }),
     setShortcuts: (shortcuts) => commit({ ...state, shortcuts }),
     setAppearance: (appearance) => commit({ ...state, appearance }),
     invokeCommand: current,
