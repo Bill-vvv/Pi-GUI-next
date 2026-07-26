@@ -300,7 +300,8 @@ export function App(): React.JSX.Element {
     let succeeded = false
     const revisionBeforeAction = eventRevision.current
     try {
-      const state = await operation()
+      const state: unknown = await operation()
+      assertKernelState(state)
       if (eventRevision.current === revisionBeforeAction) {
         kernelStateRef.current = state
         setKernelState(state)
@@ -1126,6 +1127,22 @@ export function App(): React.JSX.Element {
       )}
     </>
   )
+}
+
+function assertKernelState(value: unknown): asserts value is KernelState {
+  const state = value as Partial<KernelState> | null
+  if (
+    state === null ||
+    typeof state !== 'object' ||
+    !Array.isArray(state.projects) ||
+    !Array.isArray(state.sessions) ||
+    state.runtime === null ||
+    typeof state.runtime !== 'object' ||
+    state.conversation === null ||
+    typeof state.conversation !== 'object'
+  ) {
+    throw new Error('Pi GUI 返回了无效状态，请重启应用以同步 Main 与 preload。')
+  }
 }
 
 function lastAssistantFinalAnswer(state: KernelState): string | null {
