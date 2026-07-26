@@ -157,6 +157,10 @@
   margin-inline: -0.25rem;
 }
 
+.project-list-section[hidden] {
+  display: none;
+}
+
 .empty-project-state {
   margin: 0;
 }

@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 
 import type {
   KernelCommandDescriptor,
@@ -24,6 +23,12 @@ import {
   replaceProjectPathToken
 } from './project-path-input'
 import { readDroppedPromptAttachments } from './prompt-attachments'
+import { ComposerModelPicker } from './ComposerModelPicker'
+import {
+  projectPathMatchKey,
+  ProjectPathSurface,
+  SlashCommandSurface
+} from './ComposerSuggestionSurfaces'
 
 type PendingAttachment = {
   id: string
@@ -72,16 +77,6 @@ type ComposerProps = {
   onSetThinkingLevel: (level: ThinkingLevel) => Promise<void>
 }
 
-const THINKING_LEVELS: ThinkingLevel[] = [
-  'off',
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max'
-]
-
 export function Composer({
   state,
   sessionPreview,
@@ -118,13 +113,10 @@ export function Composer({
   const [selectedProjectPath, setSelectedProjectPath] = useState<string | null>(null)
   const [dismissedProjectPathKey, setDismissedProjectPathKey] = useState<string | null>(null)
   const [commandError, setCommandError] = useState<string | null>(null)
-  const [modelPickerOpen, setModelPickerOpen] = useState(false)
-  const [modelMenuOpen, setModelMenuOpen] = useState(false)
+  const [modelPickerOpenRequestId, setModelPickerOpenRequestId] = useState<number | null>(null)
   const composerRef = useRef<HTMLFormElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const slashSurfaceRef = useRef<HTMLElement>(null)
-  const modelPickerRef = useRef<HTMLDetailsElement>(null)
-  const modelMenuTriggerRef = useRef<HTMLButtonElement>(null)
   const selectedCommandOptionRef = useRef<HTMLButtonElement>(null)
   const selectedProjectPathOptionRef = useRef<HTMLButtonElement>(null)
   const restoreFocusRef = useRef(false)
@@ -134,18 +126,6 @@ export function Composer({
   const appliedDraftRequestIdRef = useRef<number | null>(null)
   const appliedControlRequestIdRef = useRef<number | null>(null)
   const projectPathSearchRevisionRef = useRef(0)
-  const { popoverRef: modelPickerPopoverRef, position: modelPickerPosition } =
-    useViewportPopoverPosition(modelPickerOpen, modelPickerRef, 420, {
-      preferredWidth: 380,
-      align: 'before'
-    })
-  const modelPickerPlaced = modelPickerPosition !== null
-  const { popoverRef: modelMenuPopoverRef, position: modelMenuPosition } =
-    useViewportPopoverPosition(modelMenuOpen, modelMenuTriggerRef, 320, {
-      preferredWidth: 240,
-      axis: 'horizontal'
-    })
-  const modelMenuPlaced = modelMenuPosition !== null
   const { activeProjectKey, activeSessionKey, runtime, session } = state
   const displayedContextKey = [
     activeProjectKey ?? 'no-project',
@@ -163,7 +143,6 @@ export function Composer({
   const submissionBusy = busy && !preparingNewSession
   const commands = preparingNewSession ? [] : state.commands ?? []
   const availableModels = state.availableModels ?? []
-  const thinkingLevelMap = session.model?.thinkingLevelMap ?? {}
   const viewedSessionRuntimeStatus = viewingInactiveSession
     ? state.sessions.find(({ key }) => key === viewedSessionKey)?.runtimeStatus ?? 'stopped'
     : runtime.status
@@ -245,11 +224,6 @@ export function Composer({
     activeSessionKey !== null &&
     session.resumeAvailable &&
     !busy
-  const availableThinkingLevels = session.model?.reasoning === true
-    ? THINKING_LEVELS.filter((level) => isThinkingLevelAvailable(level, thinkingLevelMap))
-    : []
-  const currentThinkingLevel = session.thinkingLevel
-
   useLayoutEffect(() => {
     const composer = composerRef.current
     const mainChat = composer?.closest<HTMLElement>('.main-chat')
@@ -307,8 +281,7 @@ export function Composer({
     setDismissedProjectPathKey(null)
     projectPathSearchRevisionRef.current += 1
     setCommandError(null)
-    setModelPickerOpen(false)
-    setModelMenuOpen(false)
+    setModelPickerOpenRequestId(null)
   }, [activeProjectKey, activeSessionKey, sessionPreview?.sessionKey, viewingNewSession])
 
   useEffect(() => {
@@ -344,8 +317,7 @@ export function Composer({
     ) return
     appliedControlRequestIdRef.current = controlRequest.id
     if (controlRequest.action === 'focus') {
-      setModelPickerOpen(false)
-      setModelMenuOpen(false)
+      setModelPickerOpenRequestId(null)
       requestAnimationFrame(() => {
         const textarea = textareaRef.current
         if (textarea === null || textarea.disabled) return
@@ -358,8 +330,7 @@ export function Composer({
       viewingInactiveSession ||
       (viewingNewSession && !newSessionPrepared)
     ) return
-    setModelMenuOpen(false)
-    setModelPickerOpen(true)
+    setModelPickerOpenRequestId(controlRequest.id)
   }, [
     controlRequest,
     runtime.status,
@@ -507,77 +478,6 @@ export function Composer({
     document.addEventListener('pointerdown', handlePointerDown, true)
     return () => document.removeEventListener('pointerdown', handlePointerDown, true)
   }, [projectPathRequestKey, showProjectPathSurface])
-
-  useEffect(() => {
-    if (!modelPickerOpen) return
-    const handlePointerDown = (event: PointerEvent): void => {
-      const path = event.composedPath()
-      if (
-        (modelPickerRef.current !== null && path.includes(modelPickerRef.current)) ||
-        (modelPickerPopoverRef.current !== null && path.includes(modelPickerPopoverRef.current)) ||
-        (modelMenuPopoverRef.current !== null && path.includes(modelMenuPopoverRef.current))
-      ) return
-      setModelPickerOpen(false)
-      setModelMenuOpen(false)
-    }
-    document.addEventListener('pointerdown', handlePointerDown, true)
-    return () => document.removeEventListener('pointerdown', handlePointerDown, true)
-  }, [modelPickerOpen])
-
-  useEffect(() => {
-    if (!modelPickerOpen || !modelPickerPlaced) return
-    const focusFrame = requestAnimationFrame(() => {
-      const popover = modelPickerPopoverRef.current
-      const preferredTarget =
-        popover?.querySelector<HTMLElement>('.model-picker-item.selected:not(:disabled)') ??
-        popover?.querySelector<HTMLElement>('.model-picker-model-button')
-      preferredTarget?.focus()
-    })
-    return () => cancelAnimationFrame(focusFrame)
-  }, [modelPickerOpen, modelPickerPlaced])
-
-  useEffect(() => {
-    if (!modelPickerOpen) return
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') return
-      event.preventDefault()
-      event.stopPropagation()
-      if (modelMenuOpen) {
-        setModelMenuOpen(false)
-        requestAnimationFrame(() => modelMenuTriggerRef.current?.focus())
-        return
-      }
-      closeModelPickerAndRestoreFocus()
-    }
-    document.addEventListener('keydown', handleKeyDown, true)
-    return () => document.removeEventListener('keydown', handleKeyDown, true)
-  }, [modelMenuOpen, modelPickerOpen])
-
-  useEffect(() => {
-    if (!modelMenuOpen || !modelMenuPlaced) return
-    const focusFrame = requestAnimationFrame(() => {
-      const popover = modelMenuPopoverRef.current
-      const preferredTarget =
-        popover?.querySelector<HTMLElement>('.model-picker-item.selected:not(:disabled)') ??
-        popover?.querySelector<HTMLElement>('.model-picker-item:not(:disabled)')
-      preferredTarget?.focus()
-    })
-    return () => cancelAnimationFrame(focusFrame)
-  }, [modelMenuOpen, modelMenuPlaced])
-
-  useEffect(() => {
-    if (runtime.status === 'ready' || runtime.status === 'running') return
-    setModelPickerOpen(false)
-    setModelMenuOpen(false)
-  }, [runtime.status])
-
-  function closeModelPickerAndRestoreFocus(): void {
-    setModelPickerOpen(false)
-    setModelMenuOpen(false)
-    requestAnimationFrame(() => {
-      modelPickerRef.current?.querySelector<HTMLElement>('summary')?.focus()
-    })
-  }
 
   async function invokeCommand(command: KernelCommandDescriptor, argument: string): Promise<void> {
     if (!ready || submitting || submissionBusy) return
@@ -857,90 +757,27 @@ export function Composer({
       ) : null}
 
       {showSlashCommandSurface ? (
-        <section ref={slashSurfaceRef} className="slash-command-surface" aria-label="Slash 命令">
-          <div id="slash-command-listbox" className="slash-command-list" role="listbox">
-            {matchingCommands.length > 0 ? (
-              matchingCommands.map((command) => (
-                <button
-                  ref={command.id === activeCommandId ? selectedCommandOptionRef : undefined}
-                  id={`slash-command-${command.id}`}
-                  className={`slash-command-option${command.id === activeCommandId ? ' selected' : ''}`}
-                  type="button"
-                  role="option"
-                  aria-selected={command.id === activeCommandId}
-                  key={command.id}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => completeCommand(command)}
-                >
-                  <span className="slash-command-name">
-                    /{command.name}
-                    {command.argumentHint !== null ? (
-                      <span className="slash-command-argument-hint"> {command.argumentHint}</span>
-                    ) : null}
-                  </span>
-                  <span className="slash-command-description">{command.description}</span>
-                  <span className="slash-command-source">{commandSourceLabel(command.source)}</span>
-                </button>
-              ))
-            ) : (
-              <p id="slash-command-empty-state" role="status">没有匹配的命令</p>
-            )}
-          </div>
-        </section>
+        <SlashCommandSurface
+          commands={matchingCommands}
+          activeCommandId={activeCommandId}
+          surfaceRef={slashSurfaceRef}
+          selectedOptionRef={selectedCommandOptionRef}
+          onSelect={completeCommand}
+        />
       ) : null}
 
       {showProjectPathSurface && projectPathSurfacePosition !== null
-        ? createPortal(
-            <div
-              ref={projectPathSurfaceRef}
-              className="project-path-surface"
-              data-placement={projectPathSurfacePosition.placement}
+        ? (
+            <ProjectPathSurface
+              search={visibleProjectPathSearch}
+              matches={projectPathMatches}
+              activeOptionKey={activeProjectPathOptionKey}
+              placement={projectPathSurfacePosition.placement}
               style={projectPathSurfacePosition.style}
-            >
-              <div
-                id="project-path-listbox"
-                className="project-path-list"
-                role="listbox"
-                aria-label="项目路径"
-              >
-                {visibleProjectPathSearch === null ||
-                visibleProjectPathSearch.status === 'loading' ? (
-                  <p className="project-path-state" role="status" aria-live="polite">
-                    正在搜索项目路径…
-                  </p>
-                ) : visibleProjectPathSearch.status === 'error' ? (
-                  <p className="project-path-state error" role="alert">
-                    项目路径搜索失败，请重试。
-                  </p>
-                ) : projectPathMatches.length === 0 ? (
-                  <p className="project-path-state" role="status">没有匹配的项目路径</p>
-                ) : (
-                  projectPathMatches.map((match, index) => {
-                    const matchKey = projectPathMatchKey(match)
-                    const selected = matchKey === activeProjectPathOptionKey
-                    return (
-                      <button
-                        ref={selected ? selectedProjectPathOptionRef : undefined}
-                        id={`project-path-option-${index}`}
-                        className={`project-path-option${selected ? ' selected' : ''}`}
-                        type="button"
-                        role="option"
-                        aria-selected={selected}
-                        key={`${matchKey}:${index}`}
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => completeProjectPath(match)}
-                      >
-                        <span className="project-path-kind">
-                          {match.kind === 'directory' ? '目录' : '文件'}
-                        </span>
-                        <span className="project-path-value">{match.path}</span>
-                      </button>
-                    )
-                  })
-                )}
-              </div>
-            </div>,
-            document.body
+              surfaceRef={projectPathSurfaceRef}
+              selectedOptionRef={selectedProjectPathOptionRef}
+              onSelect={completeProjectPath}
+            />
           )
         : null}
 
@@ -1201,175 +1038,20 @@ export function Composer({
               {runtime.status === 'starting' ? '正在启动' : '正在停止'}
             </span>
           ) : (
-            <details
-              ref={modelPickerRef}
-              className="composer-model-controls"
-              open={modelPickerOpen}
-            >
-              <summary
-                className="model-picker-button"
-                aria-label="选择模型和思考强度"
-                aria-haspopup="dialog"
-                aria-expanded={modelPickerOpen}
-                aria-controls={modelPickerOpen ? 'model-picker-popover' : undefined}
-                onClick={(event) => {
-                  // Fully control open state in React. Native <details> toggle races with
-                  // portaled menus and can drop model selection clicks.
-                  event.preventDefault()
-                  setModelPickerOpen((open) => {
-                    if (open) setModelMenuOpen(false)
-                    return !open
-                  })
-                }}
-              >
-                <span className="model-summary-label">
-                  {session.model?.name ?? session.model?.id ?? '选择模型'}
-                </span>
-                {currentThinkingLevel !== null ? (
-                  <span className="model-summary-meta">
-                    {thinkingOptionLabel(currentThinkingLevel)}
-                  </span>
-                ) : null}
-              </summary>
-              {modelPickerOpen && modelPickerPosition !== null
-                ? createPortal(
-                    <div
-                      ref={modelPickerPopoverRef}
-                      id="model-picker-popover"
-                      className="model-picker-popover"
-                      role="dialog"
-                      aria-label="模型和思考强度设置"
-                      data-placement={modelPickerPosition.placement}
-                      style={modelPickerPosition.style}
-                    >
-                      <div className="model-picker-content">
-                        <section className="model-picker-thinking-section" aria-label="思考强度">
-                          <h3 className="model-picker-section-heading">思考强度</h3>
-                          {session.model === null ? (
-                            <p className="model-picker-empty" role="status">请先选择模型</p>
-                          ) : session.model.reasoning === false ? (
-                            <p className="model-picker-empty" role="status">
-                              当前模型不支持思考强度
-                            </p>
-                          ) : availableThinkingLevels.length === 0 ? (
-                            <p className="model-picker-empty" role="status">
-                              当前模型没有可用的思考强度
-                            </p>
-                          ) : (
-                            <div className="model-picker-thinking-list">
-                              {availableThinkingLevels.map((level) => {
-                                const selected = session.thinkingLevel === level
-                                return (
-                                  <button
-                                    className={`picker-option model-picker-item${selected ? ' selected' : ''}`}
-                                    type="button"
-                                    key={level}
-                                    aria-pressed={selected}
-                                    disabled={busy || runtime.status !== 'ready'}
-                                    onClick={() => {
-                                      closeModelPickerAndRestoreFocus()
-                                      void onSetThinkingLevel(level).catch(() => undefined)
-                                    }}
-                                  >
-                                    <span className="model-picker-option-copy">
-                                      <span className="model-picker-option-label">
-                                        {thinkingOptionLabel(level)}
-                                      </span>
-                                      <span className="model-picker-option-meta">
-                                        {thinkingLabel(level)}
-                                      </span>
-                                    </span>
-                                    {selected
-                                      ? <span className="model-picker-selected">当前</span>
-                                      : null}
-                                  </button>
-                                )
-                              })}
-                            </div>
-                          )}
-                        </section>
-
-                        <div className="model-picker-model-menu">
-                          <button
-                            ref={modelMenuTriggerRef}
-                            className="model-picker-model-button"
-                            type="button"
-                            aria-label="选择其他模型"
-                            aria-haspopup="menu"
-                            aria-expanded={modelMenuOpen}
-                            aria-controls={modelMenuOpen ? 'model-picker-model-popover' : undefined}
-                            data-placement={modelMenuPosition?.placement ?? 'right'}
-                            onClick={() => setModelMenuOpen((open) => !open)}
-                          >
-                            <span className="model-picker-option-copy">
-                              <span className="model-picker-heading-label">模型</span>
-                              <span className="model-picker-option-label">
-                                {session.model?.name ?? session.model?.id ?? '选择模型'}
-                              </span>
-                            </span>
-                            <Icon name="arrow-right" size="sm" />
-                          </button>
-                          {modelMenuOpen && modelMenuPosition !== null
-                            ? createPortal(
-                                <div
-                                  ref={modelMenuPopoverRef}
-                                  id="model-picker-model-popover"
-                                  className="model-picker-model-popover"
-                                  role="menu"
-                                  aria-label="选择模型"
-                                  data-placement={modelMenuPosition.placement}
-                                  style={modelMenuPosition.style}
-                                >
-                                  {availableModels.length > 0 ? (
-                                    <div className="model-picker-model-list">
-                                      {availableModels.map((model) => {
-                                        const selected =
-                                          session.model?.provider === model.provider &&
-                                          session.model.id === model.id
-                                        return (
-                                          <button
-                                            className={`picker-option model-picker-item${selected ? ' selected' : ''}`}
-                                            type="button"
-                                            role="menuitemradio"
-                                            key={`${model.provider}:${model.id}`}
-                                            aria-checked={selected}
-                                            disabled={busy || runtime.status !== 'ready'}
-                                            onClick={() => {
-                                              closeModelPickerAndRestoreFocus()
-                                              if (!selected) {
-                                                void onSetModel(model.provider, model.id).catch(() => undefined)
-                                              }
-                                            }}
-                                          >
-                                            <span className="model-picker-option-copy">
-                                              <span className="model-picker-option-label">
-                                                {model.name.trim() || model.id}
-                                              </span>
-                                              <span className="model-picker-option-meta">
-                                                {model.provider}/{model.id}
-                                              </span>
-                                            </span>
-                                            {selected
-                                              ? <span className="model-picker-selected">当前</span>
-                                              : null}
-                                          </button>
-                                        )
-                                      })}
-                                    </div>
-                                  ) : (
-                                    <p className="model-picker-empty" role="status">暂无可用模型</p>
-                                  )}
-                                </div>,
-                                document.body
-                              )
-                            : null}
-                        </div>
-                      </div>
-                    </div>,
-                    document.body
-                  )
-                : null}
-            </details>
+            <ComposerModelPicker
+              key={controlRequest?.action === 'focus' ? `focus:${controlRequest.id}` : 'model-picker'}
+              model={session.model}
+              thinkingLevel={session.thinkingLevel}
+              availableModels={availableModels}
+              runtimeStatus={runtime.status}
+              busy={busy}
+              contextKey={displayedContextKey}
+              openRequestId={
+                controlRequest?.action === 'focus' ? null : modelPickerOpenRequestId
+              }
+              onSetModel={onSetModel}
+              onSetThinkingLevel={onSetThinkingLevel}
+            />
           )}
 
           <ContextIndicator usage={viewingInactiveSession ? null : session.usage} />
@@ -1477,54 +1159,6 @@ function composerPlaceholder(
   if (viewedSessionRuntimeStatus === 'running') return 'Enter 排队，Alt+Enter 引导'
   if (viewedSessionRuntimeStatus === 'crashed') return 'Pi Runtime 已退出'
   return ''
-}
-
-function thinkingLabel(level: ThinkingLevel): string {
-  return {
-    off: '关闭',
-    minimal: '最小',
-    low: '低',
-    medium: '中',
-    high: '高',
-    xhigh: '极高',
-    max: '最高'
-  }[level]
-}
-
-function thinkingOptionLabel(level: ThinkingLevel): string {
-  return {
-    off: 'Off',
-    minimal: 'Minimal',
-    low: 'Low',
-    medium: 'Medium',
-    high: 'High',
-    xhigh: 'Extra High',
-    max: 'Max'
-  }[level]
-}
-
-function isThinkingLevelAvailable(
-  level: ThinkingLevel,
-  thinkingLevelMap: Partial<Record<ThinkingLevel, string | null>>
-): boolean {
-  const mappedLevel = thinkingLevelMap[level]
-  if (mappedLevel === null) return false
-  if (level === 'xhigh' || level === 'max') return mappedLevel !== undefined
-  return true
-}
-
-function commandSourceLabel(source: KernelCommandDescriptor['source']): string {
-  return {
-    gui: 'GUI',
-    'pi-rpc': 'Pi RPC',
-    extension: 'Extension',
-    prompt: 'Prompt',
-    skill: 'Skill'
-  }[source]
-}
-
-function projectPathMatchKey(match: KernelProjectPathMatch): string {
-  return `${match.kind}:${match.path}`
 }
 
 function errorMessage(error: unknown): string {

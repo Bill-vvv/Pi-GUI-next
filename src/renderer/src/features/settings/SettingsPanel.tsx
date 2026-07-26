@@ -303,6 +303,40 @@ export function SettingsPanel({
                 </div>
               </div>
             </section>
+          </>
+        ) : null}
+
+        {section === 'appearance' ? (
+          <>
+            <div className="settings-section-heading">
+              <h2>外观</h2>
+            </div>
+
+            <section className="settings-group" aria-label="主题">
+              <div className="settings-group-card">
+                <div className="settings-row">
+                  <div className="settings-row-copy">
+                    <h4>界面主题</h4>
+                    <p>{appearanceThemeDescription(state.appearance.theme)}</p>
+                  </div>
+                  <div className="settings-row-control settings-theme-control">
+                    <Select
+                      id="appearance-theme"
+                      value={state.appearance.theme}
+                      groups={themeOptionGroups}
+                      disabled={busy}
+                      onValueChange={(value) => {
+                        if (!isAppearanceTheme(value)) return
+                        void onSetAppearance({
+                          ...state.appearance,
+                          theme: value
+                        }).catch(() => undefined)
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </section>
 
             <section className="settings-group" aria-label="界面强调">
               <div className="settings-group-card">
@@ -344,40 +378,6 @@ export function SettingsPanel({
                         void onSetAppearance({
                           ...state.appearance,
                           surfaceTransparency
-                        }).catch(() => undefined)
-                      }}
-                    />
-                  </div>
-                </div>
-              </div>
-            </section>
-          </>
-        ) : null}
-
-        {section === 'appearance' ? (
-          <>
-            <div className="settings-section-heading">
-              <h2>外观</h2>
-            </div>
-
-            <section className="settings-group" aria-label="主题">
-              <div className="settings-group-card">
-                <div className="settings-row">
-                  <div className="settings-row-copy">
-                    <h4>界面主题</h4>
-                    <p>{appearanceThemeDescription(state.appearance.theme)}</p>
-                  </div>
-                  <div className="settings-row-control settings-theme-control">
-                    <Select
-                      id="appearance-theme"
-                      value={state.appearance.theme}
-                      groups={themeOptionGroups}
-                      disabled={busy}
-                      onValueChange={(value) => {
-                        if (!isAppearanceTheme(value)) return
-                        void onSetAppearance({
-                          ...state.appearance,
-                          theme: value
                         }).catch(() => undefined)
                       }}
                     />
