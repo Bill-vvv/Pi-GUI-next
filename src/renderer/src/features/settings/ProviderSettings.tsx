@@ -21,7 +21,7 @@ type ProviderSettingsProps = {
   onTestProvider: (providerId: string, modelId: string) => Promise<KernelProviderTestResult>
   onFetchModelPricing: (
     providerId: string,
-    modelId: string
+    modelIds: string[]
   ) => Promise<KernelModelPricingFetchResult>
 }
 
@@ -138,7 +138,7 @@ export function ProviderSettings({
           const result = await onTestProvider(input.id, input.models[0].id)
           setMessage(testSuccessMessage(result, true))
         } else {
-          setMessage('Provider 已保存。')
+          setMessage('Provider 已保存；运行中的对话需重载后使用新配置。')
         }
       })
       .catch((reason: unknown) => {
@@ -181,43 +181,60 @@ export function ProviderSettings({
       .finally(() => setAction(null))
   }
 
-  function handleFetchModelPricing(index: number): void {
-    const model = draft?.models[index]
-    if (
-      draft === null ||
-      model === undefined ||
-      model.id.trim().length === 0 ||
-      !PROVIDER_ID_PATTERN.test(draft.id) ||
-      RESERVED_PROVIDER_IDS.has(draft.id) ||
-      controlsDisabled
-    ) {
+  function handleFetchModelPricing(): void {
+    if (draft === null || controlsDisabled) return
+    let modelIds: string[]
+    try {
+      modelIds = pricingModelIds(draft)
+    } catch (reason) {
+      setError(errorMessage(reason, '无法拉取模型价格。'))
+      setMessage(null)
       return
     }
-    setAction(`pricing:${index}`)
+    setAction('pricing:all')
     setError(null)
-    setMessage(`正在从 LiteLLM 拉取 ${model.id} 的价格…`)
-    void onFetchModelPricing(draft.id, model.id)
+    setMessage(`正在从 LiteLLM 拉取 ${modelIds.length} 个模型的价格…`)
+    void onFetchModelPricing(draft.id, modelIds)
       .then((result) => {
+        const pricingByModelId = new Map(result.matches.map((match) => [match.modelId, match.pricing]))
         setDraft((current) => {
-          if (current === null || current.models[index] === undefined) return current
+          if (current === null) return current
           return {
             ...current,
-            models: current.models.map((candidate, modelIndex) => modelIndex === index
-              ? {
-                  ...candidate,
-                  input: String(result.pricing.input),
-                  output: String(result.pricing.output),
-                  cacheRead: String(result.pricing.cacheRead),
-                  cacheWrite: String(result.pricing.cacheWrite),
-                  pricingTiers: undefined
-                }
-              : candidate)
+            models: current.models.map((model) => {
+              const pricing = pricingByModelId.get(model.id)
+              return pricing === undefined
+                ? model
+                : {
+                    ...model,
+                    input: String(pricing.input),
+                    output: String(pricing.output),
+                    cacheRead: String(pricing.cacheRead),
+                    cacheWrite: String(pricing.cacheWrite),
+                    pricingTiers: undefined
+                  }
+            })
           }
         })
-        setMessage(`已从 LiteLLM 匹配 ${result.modelKey} 并更新价格。`)
+        if (result.matches.length === 0) {
+          setError(`LiteLLM 未匹配任何模型：${result.missingModelIds.join('、')}。`)
+          setMessage(null)
+          return
+        }
+        const matches = result.matches
+          .map((match) => match.modelId === match.modelKey
+            ? match.modelId
+            : `${match.modelId} → ${match.modelKey}`)
+          .join('、')
+        const missing = result.missingModelIds.length === 0
+          ? ''
+          : `；未匹配：${result.missingModelIds.join('、')}`
+        setMessage(
+          `已从 LiteLLM 填入 ${result.matches.length}/${modelIds.length} 个模型价格（${matches}）${missing}；保存后生效。`
+        )
       })
       .catch((reason: unknown) => {
-        setError(errorMessage(reason, `无法从 LiteLLM 拉取 ${model.id} 的价格。`))
+        setError(errorMessage(reason, '无法从 LiteLLM 拉取模型价格。'))
         setMessage(null)
       })
       .finally(() => setAction(null))
@@ -247,9 +264,7 @@ export function ProviderSettings({
           draft={draft}
           disabled={controlsDisabled}
           mode={draft.originalId === null ? 'create' : 'edit'}
-          fetchingModelIndex={
-            action?.startsWith('pricing:') ? Number(action.slice('pricing:'.length)) : null
-          }
+          fetchingPricing={action === 'pricing:all'}
           onChange={setDraft}
           onCancel={() => {
             setDraft(null)
@@ -397,7 +412,7 @@ function ProviderForm({
   draft,
   disabled,
   mode,
-  fetchingModelIndex,
+  fetchingPricing,
   onChange,
   onCancel,
   onFetchModelPricing,
@@ -406,10 +421,10 @@ function ProviderForm({
   draft: ProviderDraft
   disabled: boolean
   mode: 'create' | 'edit'
-  fetchingModelIndex: number | null
+  fetchingPricing: boolean
   onChange: (draft: ProviderDraft) => void
   onCancel: () => void
-  onFetchModelPricing: (index: number) => void
+  onFetchModelPricing: () => void
   onSubmit: (mode: FormSubmitMode) => void
 }): React.JSX.Element {
   function updateModel(index: number, patch: Partial<ModelDraft>): void {
@@ -422,7 +437,7 @@ function ProviderForm({
   return (
     <form
       className="settings-card settings-card-stacked provider-form"
-      aria-busy={fetchingModelIndex !== null}
+      aria-busy={fetchingPricing}
       onSubmit={(event) => {
         event.preventDefault()
         onSubmit('save')
@@ -506,13 +521,23 @@ function ProviderForm({
 
       <div className="provider-model-editor-heading">
         <h4>模型</h4>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => onChange({ ...draft, models: [...draft.models, emptyModelDraft()] })}
-        >
-          添加模型
-        </button>
+        <div className="provider-model-editor-heading-actions">
+          <button
+            type="button"
+            disabled={disabled}
+            data-tooltip="一次请求 LiteLLM 公开价格目录，并匹配当前 Provider 的全部模型。"
+            onClick={onFetchModelPricing}
+          >
+            {fetchingPricing ? '正在拉取全部价格…' : '一键拉取全部价格'}
+          </button>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange({ ...draft, models: [...draft.models, emptyModelDraft()] })}
+          >
+            添加模型
+          </button>
+        </div>
       </div>
       <div className="provider-model-editors">
         {draft.models.map((model, index) => (
@@ -520,23 +545,6 @@ function ProviderForm({
             <div className="provider-model-editor-title">
               <legend>模型 {index + 1}</legend>
               <div className="provider-model-editor-actions">
-                <button
-                  type="button"
-                  disabled={
-                    disabled ||
-                    model.id.trim().length === 0 ||
-                    !PROVIDER_ID_PATTERN.test(draft.id) ||
-                    RESERVED_PROVIDER_IDS.has(draft.id)
-                  }
-                  data-tooltip={
-                    PROVIDER_ID_PATTERN.test(draft.id) && !RESERVED_PROVIDER_IDS.has(draft.id)
-                      ? '从 LiteLLM 公开价格目录匹配此模型。'
-                      : '请先填写有效的 Provider ID。'
-                  }
-                  onClick={() => onFetchModelPricing(index)}
-                >
-                  {fetchingModelIndex === index ? '正在从 LiteLLM 拉取…' : '从 LiteLLM 拉取'}
-                </button>
                 <button
                   type="button"
                   disabled={disabled || draft.models.length === 1}
@@ -761,6 +769,20 @@ function providerInput(draft: ProviderDraft): KernelProviderInput {
   }
 }
 
+function pricingModelIds(draft: ProviderDraft): string[] {
+  if (!PROVIDER_ID_PATTERN.test(draft.id) || RESERVED_PROVIDER_IDS.has(draft.id)) {
+    throw new Error('请先填写有效的 Provider ID。')
+  }
+  const modelIds = draft.models.map((model, index) => {
+    if (model.id.length === 0 || model.id.trim() !== model.id || /[\0\r\n]/u.test(model.id)) {
+      throw new Error(`模型 ${index + 1} 的 ID 不能为空或包含首尾空格。`)
+    }
+    return model.id
+  })
+  if (new Set(modelIds).size !== modelIds.length) throw new Error('模型 ID 不能重复。')
+  return modelIds
+}
+
 function optionalPositiveInteger(value: string, label: string, modelId: string): number | null {
   if (value.length === 0) return null
   const number = Number(value)
@@ -823,7 +845,8 @@ function errorMessage(reason: unknown, fallback: string): string {
 
 function testSuccessMessage(result: KernelProviderTestResult, afterSave: boolean): string {
   const prefix = afterSave ? 'Provider 已保存，连接测试成功' : '连接测试成功'
-  return `${prefix}：${result.provider}/${result.modelId}（${result.durationMs} ms）。`
+  const reloadNotice = afterSave ? '；运行中的对话需重载后使用新配置' : ''
+  return `${prefix}：${result.provider}/${result.modelId}（${result.durationMs} ms）${reloadNotice}。`
 }
 
 function formatModelPrice(value: number | null): string {

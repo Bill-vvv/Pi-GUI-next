@@ -230,6 +230,6 @@
 
 - 日期：2026-07-25
 - 状态：Accepted；扩展 D-016 的自定义 Model 配置边界
-- 决策：自定义模型的输入、输出、缓存读取与缓存写入单价使用 Pi 原生 `models.json` `cost` 字段，单位为 USD/百万 token。用户可手动编辑，或显式通过 Electron Main 从 LiteLLM 公开价格目录拉取；Main 按模型 ID、Provider/模型 ID 和稳定的 Provider 优先后缀规则匹配，只把匹配键和经校验的四项单价经窄 typed IPC 返回。Renderer 不直接联网。
+- 决策：自定义模型的输入、输出、缓存读取与缓存写入单价使用 Pi 原生 `models.json` `cost` 字段，单位为 USD/百万 token。用户可手动编辑，或显式通过 Electron Main 一键拉取当前 Provider 全部模型的价格；Main 只请求一次 LiteLLM 公开价格目录，按模型 ID、Provider/模型 ID 和稳定的 Provider 优先后缀规则逐项匹配，只把每个命中模型的匹配键、经校验的四项单价及未命中模型列表经窄 typed IPC 返回。Renderer 不直接联网。
 - 原因：缺少 `cost` 会让 Pi 已记录的 token 无法形成正确费用；复制公开目录的单价比要求用户逐项查找可靠，同时仍需展示匹配键并允许手动修正，避免同名代理模型被静默误价。
-- 影响：拉价不读取 Provider 凭据，不建立 GUI 价格数据库、后台自动刷新或第二套 usage 事实源。公开目录缺失缓存价格时按 0 写入；未命中或返回非法价格时 Fail Fast。保存后的价格只影响 Pi 后续生成的费用记录，不追溯改写既有 Session cost。
+- 影响：拉价不读取 Provider 凭据，不建立 GUI 价格数据库、后台自动刷新或第二套 usage 事实源。公开目录缺失缓存价格时按 0 写入；单项未命中不阻断其他模型回填，非法价格则 Fail Fast。保存后的价格由下一次新建或显式重载的 Runtime 使用，只影响 Pi 后续生成的费用记录，不追溯改写既有 Session cost。

@@ -54,10 +54,11 @@ subscribe
 
 GUI 不建立 Conversation 数据库，也不把 renderer 投影当作对话事实来源。
 
-自定义模型的 `cost` 仍由 Pi 官方 `models.json` 持久化。用户显式点击拉取价格时，
-Electron Main 从 LiteLLM 公开价格目录匹配模型并通过窄 typed IPC 返回匹配键与四项单价；
-Renderer 不直接联网，也不建立价格数据库或后台自动刷新。保存后的单价供 Pi 计算后续请求费用，
-不改写既有 Session 中已经记录的历史 cost。
+自定义模型的 `cost` 仍由 Pi 官方 `models.json` 持久化。用户显式点击一键拉价时，
+Electron Main 只请求一次 LiteLLM 公开价格目录，批量匹配当前 Provider 的全部模型，并通过窄
+typed IPC 返回每个命中模型的匹配键、四项单价及未命中模型列表；
+Renderer 不直接联网，也不建立价格数据库或后台自动刷新。保存后的单价由下一次新建或显式重载的
+Runtime 使用，供 Pi 计算后续请求费用；不改写既有 Session 中已经记录的历史 cost。
 
 ## Conversation 展示投影
 

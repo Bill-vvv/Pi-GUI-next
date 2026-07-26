@@ -13,7 +13,7 @@ type JsonObject = Record<string, unknown>
 
 export async function fetchLiteLlmModelPricing(
   providerId: string,
-  modelId: string,
+  modelIds: string[],
   fetch: Fetch
 ): Promise<KernelModelPricingFetchResult> {
   const controller = new AbortController()
@@ -27,15 +27,25 @@ export async function fetchLiteLlmModelPricing(
 
     const value: unknown = await response.json()
     if (!isRecord(value)) throw new Error('LiteLLM pricing response is not a JSON object.')
-    const modelKey = resolveModelKey(value, providerId, modelId)
-    if (modelKey === null) {
-      throw new Error(`LiteLLM pricing does not contain model ${providerId}/${modelId}.`)
+    const matches: KernelModelPricingFetchResult['matches'] = []
+    const missingModelIds: string[] = []
+    for (const modelId of modelIds) {
+      const modelKey = resolveModelKey(value, providerId, modelId)
+      if (modelKey === null) {
+        missingModelIds.push(modelId)
+        continue
+      }
+      matches.push({
+        modelId,
+        modelKey,
+        pricing: parsePricing(value[modelKey], modelKey)
+      })
     }
 
     return {
       source: 'litellm',
-      modelKey,
-      pricing: parsePricing(value[modelKey], modelKey)
+      matches,
+      missingModelIds
     }
   } catch (error) {
     if (controller.signal.aborted) throw new Error('LiteLLM pricing request timed out.')

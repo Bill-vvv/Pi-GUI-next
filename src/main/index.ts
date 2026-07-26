@@ -395,7 +395,7 @@ async function startApplication(): Promise<void> {
       case 'kernel.fetch-model-pricing':
         return fetchLiteLlmModelPricing(
           command.providerId,
-          command.modelId,
+          command.modelIds,
           (input, init) => net.fetch(input, init)
         )
       case 'kernel.list-provider-credentials':

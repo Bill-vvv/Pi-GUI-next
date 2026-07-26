@@ -40,7 +40,7 @@ type CredentialsPanelProps = {
   onTestProvider: (providerId: string, modelId: string) => Promise<KernelProviderTestResult>
   onFetchModelPricing: (
     providerId: string,
-    modelId: string
+    modelIds: string[]
   ) => Promise<KernelModelPricingFetchResult>
 }
 
@@ -188,6 +188,7 @@ export function CredentialsPanel({
   }, [promptState?.promptId])
 
   const controlsDisabled = busy || loading || action !== null || operation !== null
+  const configuredCredentials = credentials.filter((credential) => credential.configured)
 
   async function login(
     credential: KernelProviderCredential,
@@ -324,13 +325,13 @@ export function CredentialsPanel({
         )}
         {loading ? (
           <div className="settings-empty-state" role="status">正在读取 Provider 凭证…</div>
-        ) : credentials.length === 0 ? (
+        ) : configuredCredentials.length === 0 ? (
           <div className="settings-empty-state" role="status">
-            <h3>暂无可用 Provider 凭证</h3>
+            <h3>暂无已配置的 Provider 凭证</h3>
           </div>
         ) : (
           <div className="credentials-list">
-            {credentials.map((credential) => (
+            {configuredCredentials.map((credential) => (
               <article className="settings-card settings-card-stacked credential-card" key={credential.providerId}>
                 <div className="credential-card-heading">
                   <div>

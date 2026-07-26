@@ -97,7 +97,11 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
   if (value.type === 'kernel.fetch-model-pricing') {
     return (
       isProviderId(value.providerId) &&
-      isProviderModelId(value.modelId) &&
+      Array.isArray(value.modelIds) &&
+      value.modelIds.length > 0 &&
+      value.modelIds.length <= 256 &&
+      value.modelIds.every(isProviderModelId) &&
+      new Set(value.modelIds).size === value.modelIds.length &&
       Object.keys(value).length === 3
     )
   }

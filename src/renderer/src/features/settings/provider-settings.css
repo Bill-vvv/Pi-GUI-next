@@ -92,9 +92,16 @@
 
 .provider-card-title,
 .provider-card-actions,
+.provider-model-editor-heading-actions,
 .provider-model-flags,
 .provider-form-actions {
   gap: 9px;
+}
+
+.provider-model-editor-heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .provider-card-title {

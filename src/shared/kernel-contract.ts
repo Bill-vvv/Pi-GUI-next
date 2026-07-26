@@ -227,8 +227,12 @@ export type KernelProviderTestResult = {
 
 export type KernelModelPricingFetchResult = {
   source: 'litellm'
-  modelKey: string
-  pricing: KernelModelPricing
+  matches: Array<{
+    modelId: string
+    modelKey: string
+    pricing: KernelModelPricing
+  }>
+  missingModelIds: string[]
 }
 
 export type KernelProviderAuthType = 'api_key' | 'oauth'
@@ -605,7 +609,7 @@ export type KernelCommand =
   | { type: 'kernel.save-provider'; provider: KernelProviderInput }
   | { type: 'kernel.remove-provider'; providerId: string }
   | { type: 'kernel.test-provider'; providerId: string; modelId: string }
-  | { type: 'kernel.fetch-model-pricing'; providerId: string; modelId: string }
+  | { type: 'kernel.fetch-model-pricing'; providerId: string; modelIds: string[] }
   | { type: 'kernel.list-provider-credentials' }
   | {
       type: 'kernel.login-provider'
@@ -694,7 +698,7 @@ export type KernelApi = {
   testProvider: (providerId: string, modelId: string) => Promise<KernelProviderTestResult>
   fetchModelPricing: (
     providerId: string,
-    modelId: string
+    modelIds: string[]
   ) => Promise<KernelModelPricingFetchResult>
   listProviderCredentials: () => Promise<KernelProviderCredential[]>
   loginProvider: (

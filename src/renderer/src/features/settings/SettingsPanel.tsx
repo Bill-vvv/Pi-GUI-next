@@ -66,7 +66,7 @@ type SettingsPanelProps = {
   onTestProvider: (providerId: string, modelId: string) => Promise<KernelProviderTestResult>
   onFetchModelPricing: (
     providerId: string,
-    modelId: string
+    modelIds: string[]
   ) => Promise<KernelModelPricingFetchResult>
   onListProviderCredentials: () => Promise<KernelProviderCredential[]>
   onLoginProvider: (

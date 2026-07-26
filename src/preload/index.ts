@@ -183,8 +183,8 @@ const kernelApi: KernelApi = {
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelProviderTestResult>
   },
-  fetchModelPricing: (providerId, modelId) => {
-    const command: KernelCommand = { type: 'kernel.fetch-model-pricing', providerId, modelId }
+  fetchModelPricing: (providerId, modelIds) => {
+    const command: KernelCommand = { type: 'kernel.fetch-model-pricing', providerId, modelIds }
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelModelPricingFetchResult>
   },
