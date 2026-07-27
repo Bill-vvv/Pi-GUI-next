@@ -22,6 +22,7 @@ import { delimiter, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { spawn } from 'node:child_process'
+import { countReplaceToolMetadataPayloadChars } from './memory-event-metrics.mjs'
 
 const execFileAsync = promisify(execFile)
 const SCRIPT_PATH = fileURLToPath(import.meta.url)
@@ -498,12 +499,13 @@ async function exerciseUi() {
     )
     const abortAck = await evaluateValue(
       activeCdp,
-      `window.piGui.abort().then((state) => ({ runtimeStatus: state.runtime.status }))`
+      `window.piGui.abort()`
     )
     if (
       abortAck === null ||
       typeof abortAck !== 'object' ||
-      !['running', 'ready'].includes(abortAck.runtimeStatus)
+      !Number.isInteger(abortAck.revision) ||
+      abortAck.revision < 0
     ) {
       fail('E_ABORT_RPC_ACK')
     }
@@ -1892,7 +1894,18 @@ async function descendantPids(rootPid) {
   return descendants
 }
 
+
+function assertMemoryProbePayloadAccounting() {
+  // Keep the packaged probe formula aligned with scripts/memory-event-metrics.mjs.
+  const expected = countReplaceToolMetadataPayloadChars({
+    expected: { status: 'running', details: 'old' },
+    metadata: { status: 'completed', details: 'done' }
+  })
+  if (!(expected > 0)) fail('E_MEMORY_PROBE_PAYLOAD_HELPER')
+}
+
 async function installMemoryEventProbe(cdp) {
+  assertMemoryProbePayloadAccounting()
   if (!MEMORY_DIAGNOSTICS_ENABLED) return
   const installed = await evaluateValue(
     cdp,
@@ -1956,7 +1969,7 @@ async function installMemoryEventProbe(cdp) {
               metrics.appendedChars += patch.output.length + patch.details.length
             } else if (patch.type === 'replace-tool-metadata') {
               metrics.entryPatches.replaceToolMetadata += 1
-              metrics.insertedPayloadChars += stringChars(patch.metadata)
+              metrics.insertedPayloadChars += stringChars(patch.expected) + stringChars(patch.metadata)
             }
           }
           return

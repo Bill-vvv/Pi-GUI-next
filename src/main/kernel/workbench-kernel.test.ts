@@ -508,8 +508,8 @@ class FailingCommandRuntimeHost extends FakeRuntimeHost {
 }
 
 class FailingThenStoppingRuntimeHost extends FailingCommandRuntimeHost {
-  constructor() {
-    super('get_messages')
+  constructor(sessionState?: PiRpcSessionState) {
+    super('get_messages', sessionState)
   }
 
   override async stop(): Promise<void> {
@@ -5206,6 +5206,67 @@ test('failed launch cleanup keeps runtime ownership so stop can be retried', asy
   await kernel.stop()
   assert.equal(runtime.stopCalls, 2)
   assert.equal(kernel.getState().runtime.status, 'stopped')
+})
+
+test('persisted session launch stop failure retains ownership and activate retries cleanup', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stored-session.jsonl',
+    sessionId: 'stored-session',
+    sessionName: 'Stored session'
+  }
+  const failing = new FailingThenStoppingRuntimeHost({
+    sessionId: pointer.sessionId,
+    sessionFile: pointer.sessionFile,
+    sessionName: pointer.sessionName ?? undefined,
+    thinkingLevel: 'medium',
+    isStreaming: false,
+    messageCount: 0,
+    pendingMessageCount: 0
+  })
+  const freshRuntime = new FakeRuntimeHost({
+    sessionId: pointer.sessionId,
+    sessionFile: pointer.sessionFile,
+    sessionName: pointer.sessionName ?? undefined
+  })
+  const runtimes = [failing, freshRuntime]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions(pointer)
+  )
+
+  await assert.rejects(
+    kernel.activateSession(pointer.sessionFile),
+    /get_messages failed Cleanup failed while stopping runtime: stop failed/
+  )
+  assert.equal(failing.stopCalls, 1)
+  assert.equal(kernel.getState().runtime.status, 'crashed')
+  assert.equal(kernel.getState().activeSessionKey, pointer.sessionFile)
+
+  await kernel.activateSession(pointer.sessionFile)
+  assert.equal(failing.stopCalls, 2)
+  assert.equal(freshRuntime.startCalls, 1)
+  assert.equal(kernel.getState().runtime.status, 'ready')
+  assert.equal(kernel.getState().session.id, pointer.sessionId)
+
+  freshRuntime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_update',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'recovered' }],
+        timestamp: 42
+      }
+    }
+  })
+  const entry = kernel.getState().conversation.entries[0]
+  assert.equal(entry?.kind === 'message' ? entry.text : null, 'recovered')
 })
 
 test('resume session ID mismatch preserves the pointer and cleans up the runtime', async () => {

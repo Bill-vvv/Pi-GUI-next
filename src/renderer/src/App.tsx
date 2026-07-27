@@ -8,6 +8,7 @@ import {
   type GeneralSettings,
   type KernelArchiveReceipt,
   type KernelForkCandidate,
+  type KernelMutationAck,
   type KernelProjectTrustChoice,
   type KernelPromptAttachment,
   type KernelSessionPreview,
@@ -20,6 +21,7 @@ import {
 import { Workbench } from './composition/Workbench'
 import { useSessionRuntimeController } from './composition/useSessionRuntimeController'
 import type { ComposerDraftRequest } from './features/composer/Composer'
+import { awaitMutationAck as awaitKernelMutationAck } from './kernel/await-mutation-ack'
 import { applyStatePatches } from './kernel/kernel-state-patches'
 import { KernelRevisionBarrier } from './kernel/kernel-revision-barrier'
 import { unknownErrorMessage as errorMessage } from './unknown-error-message'
@@ -71,20 +73,10 @@ export function App(): React.JSX.Element {
   const forkRequestRevision = useRef(0)
   const composerDraftRevision = useRef(0)
 
-  async function awaitMutationAck<T>(operation: () => Promise<T>): Promise<T> {
-    const result = await operation()
-    const barrier = revisionBarrierRef.current
-    // Package-list helpers and void wrappers are not revision acks; only settle on ack shapes.
-    if (
-      barrier !== null &&
-      typeof result === 'object' &&
-      result !== null &&
-      'revision' in result &&
-      typeof (result as { revision: unknown }).revision === 'number'
-    ) {
-      await barrier.waitForRevision((result as { revision: number }).revision)
-    }
-    return result
+  async function awaitMutationAck<T extends KernelMutationAck>(
+    operation: () => Promise<T>
+  ): Promise<T> {
+    return awaitKernelMutationAck(operation, revisionBarrierRef.current)
   }
 
   const {
@@ -203,7 +195,11 @@ export function App(): React.JSX.Element {
         applyStatePatches(state, patches.map((entry) => entry.patch)),
       fetchSnapshot: () => window.piGui.getState(),
       scheduleFrame: (callback) => requestAnimationFrame(callback),
-      cancelFrame: (handle) => cancelAnimationFrame(handle as number)
+      cancelFrame: (handle) => cancelAnimationFrame(handle as number),
+      onRecoveryError: (error) => {
+        if (!active) return
+        setIpcError(errorMessage(error))
+      }
     })
     revisionBarrierRef.current = barrier
 
@@ -258,7 +254,7 @@ export function App(): React.JSX.Element {
 
   async function runAction(
     action: string,
-    operation: () => Promise<unknown>,
+    operation: () => Promise<KernelMutationAck>,
     exclusive = true
   ): Promise<void> {
     if (exclusive) {
@@ -273,6 +269,40 @@ export function App(): React.JSX.Element {
     try {
       // Mutating invokes return a narrow ack. Settle only after the ack revision is applied.
       await awaitMutationAck(operation)
+      succeeded = true
+    } catch (error) {
+      if (actionPresentationRevision.current === presentationRevision) {
+        setActionError(errorMessage(error))
+      }
+      throw error
+    } finally {
+      if (actionPresentationRevision.current === presentationRevision) {
+        setCompletedAction({ action, succeeded })
+      }
+      if (exclusive) {
+        pendingActionRef.current = null
+        setPendingAction(null)
+      }
+    }
+  }
+
+  /** Domain/catalog operations that intentionally do not return KernelMutationAck. */
+  async function runPlainAction(
+    action: string,
+    operation: () => Promise<unknown>,
+    exclusive = true
+  ): Promise<void> {
+    if (exclusive) {
+      if (pendingActionRef.current !== null) throw new Error('Another action is already running.')
+      pendingActionRef.current = action
+      setPendingAction(action)
+    }
+    const presentationRevision = actionPresentationRevision.current + 1
+    actionPresentationRevision.current = presentationRevision
+    setActionError(null)
+    let succeeded = false
+    try {
+      await operation()
       succeeded = true
     } catch (error) {
       if (actionPresentationRevision.current === presentationRevision) {
@@ -517,7 +547,7 @@ export function App(): React.JSX.Element {
     setActionError(null)
     try {
       await waitForRuntimeEnsureIdle()
-      await window.piGui.undoArchiveSession(token)
+      await awaitMutationAck(() => window.piGui.undoArchiveSession(token))
       removeArchiveNotification(token)
       setCompletedAction({ action: 'undo-archive-session', succeeded: true })
     } catch (error) {
@@ -557,11 +587,14 @@ export function App(): React.JSX.Element {
     requestId: string,
     choice: KernelProjectTrustChoice
   ): Promise<void> {
-    await window.piGui.resolveProjectTrust(requestId, choice)
+    await runAction(
+      'resolve-project-trust',
+      () => window.piGui.resolveProjectTrust(requestId, choice)
+    )
   }
 
   async function setShortcuts(settings: ShortcutSettings): Promise<void> {
-    await window.piGui.setShortcuts(settings)
+    await runAction('set-shortcuts', () => window.piGui.setShortcuts(settings))
   }
 
   if (kernelState === null) {
@@ -773,14 +806,13 @@ export function App(): React.JSX.Element {
         runAction('set-general', () => window.piGui.setGeneral(settings))
       }
       onSetSubagentEnabled={(enabled) =>
-        runAction('set-subagent-enabled', async () => {
-          await window.piGui.setSubagentEnabled(enabled)
-        })
+        runPlainAction('set-subagent-enabled', () => window.piGui.setSubagentEnabled(enabled))
       }
       onSetMagicContextEnabled={(enabled) =>
-        runAction('set-magic-context-enabled', async () => {
-          await window.piGui.setMagicContextEnabled(enabled)
-        })
+        runPlainAction(
+          'set-magic-context-enabled',
+          () => window.piGui.setMagicContextEnabled(enabled)
+        )
       }
       onSetAdvisorSystemEnabled={(enabled) =>
         runAction(

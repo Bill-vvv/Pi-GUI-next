@@ -9,6 +9,8 @@ import {
 } from '../../../shared/kernel-contract.ts'
 
 export const DEFAULT_REVISION_WAIT_TIMEOUT_MS = 2_000
+export const DEFAULT_RESYNC_TIMEOUT_MS = 2_000
+export const DEFAULT_MAX_PENDING_PATCHES = 256
 
 export type RevisionFrameHandle = number | object
 
@@ -21,8 +23,10 @@ export type KernelRevisionBarrierOptions = {
   fetchSnapshot: () => Promise<unknown>
   scheduleFrame: (callback: () => void) => RevisionFrameHandle
   cancelFrame: (handle: RevisionFrameHandle) => void
-  now?: () => number
   waitTimeoutMs?: number
+  resyncTimeoutMs?: number
+  maxPendingPatches?: number
+  onRecoveryError?: (error: unknown) => void
 }
 
 type PendingPatch = {
@@ -42,7 +46,8 @@ type RevisionWaiter = {
  * - Full-state events apply immediately and advance appliedRevision.
  * - Patches advance appliedRevision only after the scheduled frame applies them.
  * - Mutation acks settle only once appliedRevision >= ack.revision.
- * - A single targeted snapshot resync recovers from gaps or wait timeouts.
+ * - A single targeted snapshot resync recovers from gaps, queue overflow, or wait timeouts.
+ * - Once initialized, recovery snapshots never regress or reapply an equal revision.
  */
 export class KernelRevisionBarrier {
   private readonly options: KernelRevisionBarrierOptions
@@ -52,6 +57,7 @@ export class KernelRevisionBarrier {
   private frameHandle: RevisionFrameHandle | null = null
   private readonly waiters = new Set<RevisionWaiter>()
   private resyncPromise: Promise<void> | null = null
+  private resyncGeneration = 0
   private disposed = false
 
   constructor(options: KernelRevisionBarrierOptions) {
@@ -79,12 +85,13 @@ export class KernelRevisionBarrier {
 
   /**
    * Apply an initial or recovery snapshot. Events that already advanced past the
-   * snapshot revision win the startup race and keep their applied state.
+   * snapshot revision win the startup race and keep their applied state. After the
+   * barrier is initialized, equal or older snapshots are ignored (no force path).
    */
-  handleSnapshot(value: unknown, options: { force?: boolean } = {}): void {
+  handleSnapshot(value: unknown): void {
     if (this.disposed) return
     const snapshot = parseKernelSnapshot(value)
-    if (!options.force && this.currentState !== null && this.appliedRevision >= snapshot.revision) {
+    if (this.currentState !== null && snapshot.revision <= this.appliedRevision) {
       return
     }
     const pending = this.pendingPatches.filter((entry) => entry.revision > snapshot.revision)
@@ -148,6 +155,7 @@ export class KernelRevisionBarrier {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.resyncGeneration += 1
     this.cancelFrame()
     this.pendingPatches = []
     const error = new Error('Kernel revision barrier is disposed.')
@@ -160,22 +168,32 @@ export class KernelRevisionBarrier {
       throw new Error('Kernel state patch revision is invalid.')
     }
     if (this.currentState === null) {
-      this.pendingPatches.push({ revision, patch })
-      this.pendingPatches.sort((left, right) => left.revision - right.revision)
+      this.storePendingPatch(revision, patch)
       return
     }
     if (revision <= this.appliedRevision) return
 
     const expectedNext = this.nextExpectedRevision()
     if (revision > expectedNext) {
-      void this.resync()
+      this.startResync()
       return
     }
 
+    this.storePendingPatch(revision, patch)
+    if (this.pendingPatches.length === 0) return
+    this.scheduleFlush()
+  }
+
+  private storePendingPatch(revision: number, patch: KernelStatePatch): void {
     if (this.pendingPatches.some((entry) => entry.revision === revision)) return
     this.pendingPatches.push({ revision, patch })
     this.pendingPatches.sort((left, right) => left.revision - right.revision)
-    this.scheduleFlush()
+    const maxPending = this.options.maxPendingPatches ?? DEFAULT_MAX_PENDING_PATCHES
+    if (this.pendingPatches.length <= maxPending) return
+    // Diff queue is unusable once capped; drop it and recover from one snapshot.
+    this.cancelFrame()
+    this.pendingPatches = []
+    this.startResync()
   }
 
   private nextExpectedRevision(): number {
@@ -202,7 +220,7 @@ export class KernelRevisionBarrier {
       if (entry.revision < expected) continue
       if (entry.revision > expected) {
         this.pendingPatches = batch.filter((candidate) => candidate.revision >= expected)
-        void this.resync()
+        this.startResync()
         return
       }
       contiguous.push(entry)
@@ -238,21 +256,71 @@ export class KernelRevisionBarrier {
     }
   }
 
+  private startResync(): void {
+    void this.resync().catch(() => undefined)
+  }
+
   private async resync(): Promise<void> {
     if (this.disposed) return
     if (this.resyncPromise !== null) {
       await this.resyncPromise
       return
     }
+    const generation = this.resyncGeneration + 1
+    this.resyncGeneration = generation
+    const timeoutMs = this.options.resyncTimeoutMs ?? DEFAULT_RESYNC_TIMEOUT_MS
     const run = (async () => {
-      const snapshot = await this.options.fetchSnapshot()
-      this.handleSnapshot(snapshot, { force: true })
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null
+      try {
+        const snapshot = await new Promise<unknown>((resolve, reject) => {
+          timeoutHandle = setTimeout(() => {
+            timeoutHandle = null
+            reject(new Error(`Kernel snapshot resync timed out after ${timeoutMs}ms.`))
+          }, timeoutMs)
+          void this.options.fetchSnapshot().then(
+            (value) => {
+              if (timeoutHandle === null) return
+              clearTimeout(timeoutHandle)
+              timeoutHandle = null
+              resolve(value)
+            },
+            (error: unknown) => {
+              if (timeoutHandle === null) return
+              clearTimeout(timeoutHandle)
+              timeoutHandle = null
+              reject(error)
+            }
+          )
+        })
+        if (this.disposed || this.resyncGeneration !== generation) return
+        this.handleSnapshot(snapshot)
+      } catch (error) {
+        if (!this.disposed && this.resyncGeneration === generation) {
+          this.reportRecoveryError(error)
+        }
+        throw error
+      } finally {
+        if (timeoutHandle !== null) clearTimeout(timeoutHandle)
+      }
     })()
-    this.resyncPromise = run
+    this.resyncPromise = run.then(
+      () => undefined,
+      () => undefined
+    )
     try {
       await run
     } finally {
-      if (this.resyncPromise === run) this.resyncPromise = null
+      if (this.resyncGeneration === generation) this.resyncPromise = null
+    }
+  }
+
+  private reportRecoveryError(error: unknown): void {
+    const onRecoveryError = this.options.onRecoveryError
+    if (onRecoveryError === undefined) return
+    try {
+      onRecoveryError(error)
+    } catch {
+      // Callback faults must not break recovery bookkeeping.
     }
   }
 
@@ -276,4 +344,3 @@ export function parseKernelSnapshot(value: unknown): KernelSnapshot {
   }
   return value
 }
-

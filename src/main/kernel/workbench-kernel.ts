@@ -1699,6 +1699,25 @@ export class WorkbenchKernel {
         throw new Error('Runtime start cancelled.')
       }
       const launchError = await this.cleanupFailedLaunch(runtime, error)
+      const retained = this.contextByRuntime.get(runtime)
+      if (retained !== undefined) {
+        // Stop failed: ownership/subscription retained and context marked crashed.
+        if (previousContext !== null && this.contexts.has(previousContext) && previousContext !== retained) {
+          this.publishRetainedLaunchCrash(retained, launchError)
+          this.loadContext(previousContext)
+        } else {
+          this.activeContext = retained
+          this.runtime = retained.runtime
+          this.unsubscribeRuntime = retained.unsubscribeRuntime
+          this.stopRequested = retained.stopRequested
+          this.state = {
+            ...this.state,
+            runtime: retained.state.runtime
+          }
+        }
+        this.emitState()
+        throw launchError
+      }
       const failedRuntime = toKernelRuntime('crashed', runtime.getState(), errorMessage(launchError))
       if (previousContext !== null && this.contexts.has(previousContext)) {
         this.loadContext(previousContext)
@@ -1720,15 +1739,38 @@ export class WorkbenchKernel {
 
   private async cleanupFailedLaunch(runtime: RuntimeHost, error: unknown): Promise<unknown> {
     const context = this.contextByRuntime.get(runtime)
-    context?.unsubscribeRuntime?.()
-    if (this.runtime === runtime) this.unsubscribeRuntime = null
     let cleanupError: unknown = null
     try {
       await runtime.stop()
     } catch (caught) {
       cleanupError = caught
     }
-    if (cleanupError === null && context !== undefined) {
+
+    if (cleanupError !== null) {
+      // Retain maps + subscription until a later stop succeeds. Clear stopRequested so
+      // activate/stop can retry cleanup on the still-owned Context.
+      if (context !== undefined) {
+        context.stopRequested = false
+        context.state = {
+          ...context.state,
+          runtime: toKernelRuntime(
+            'crashed',
+            runtime.getState(),
+            `${errorMessage(error)} Cleanup failed while stopping runtime: ${errorMessage(cleanupError)}`
+          )
+        }
+      }
+      if (this.runtime === runtime) this.stopRequested = false
+      return new Error(
+        `${errorMessage(error)} Cleanup failed while stopping runtime: ${errorMessage(cleanupError)}`,
+        { cause: error }
+      )
+    }
+
+    // Stop succeeded: only now drop the runtime subscription and ownership maps.
+    context?.unsubscribeRuntime?.()
+    if (context !== undefined) {
+      context.unsubscribeRuntime = null
       this.contexts.delete(context)
       this.contextByRuntime.delete(runtime)
       for (const [key, candidate] of this.contextBySessionKey) {
@@ -1736,12 +1778,21 @@ export class WorkbenchKernel {
       }
       if (this.activeContext === context) this.activeContext = null
     }
-    if (this.runtime === runtime) this.runtime = null
-    if (cleanupError === null) return error
-    return new Error(
-      `${errorMessage(error)} Cleanup failed while stopping runtime: ${errorMessage(cleanupError)}`,
-      { cause: error }
-    )
+    if (this.runtime === runtime) {
+      this.runtime = null
+      this.unsubscribeRuntime = null
+    }
+    return error
+  }
+
+  private publishRetainedLaunchCrash(context: RuntimeContext, failure: unknown): void {
+    const navigationBefore = this.projectNavigationState(context.projectPath)
+    context.stopRequested = false
+    context.state = {
+      ...context.state,
+      runtime: toKernelRuntime('crashed', context.runtime.getState(), errorMessage(failure))
+    }
+    this.publishContextNavigationChange(context, navigationBefore)
   }
 
   async prompt(message: string, attachments: readonly KernelPromptAttachment[] = []): Promise<void> {
