@@ -1203,6 +1203,16 @@ async function clickTitledButton(cdp, selector, title) {
 }
 
 async function clickTitledButtonWithFeedback(cdp, selector, title) {
+  await waitForExpression(
+    cdp,
+    `Array.from(document.querySelectorAll(${JSON.stringify(selector)})).some((candidate) =>
+      candidate instanceof HTMLButtonElement &&
+      candidate.getAttribute('title') === ${JSON.stringify(title)} &&
+      !candidate.disabled
+    )`,
+    TIMEOUT.page,
+    'E_CLICK_TITLE'
+  )
   const observed = await evaluateValue(
     cdp,
     `new Promise((resolveClick) => {
