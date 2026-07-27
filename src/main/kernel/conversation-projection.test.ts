@@ -431,6 +431,60 @@ test('projects visible pi-subagents custom messages as dedicated notices', () =>
   })
 })
 
+test('coalesces repeated live Subagent completion lifecycle events by stable message identity', () => {
+  const message = {
+    role: 'custom',
+    customType: 'subagent-notify',
+    content: 'Background task completed: **parallel:explorer+reviewer**\n\nReview complete.',
+    display: true,
+    timestamp: 203
+  }
+
+  const started = projectPiEvent([], { type: 'message_start', message })
+  const ended = projectPiEvent(started, { type: 'message_end', message })
+
+  assert.equal(started.length, 1)
+  assert.equal(ended.length, 1)
+  assert.deepEqual(ended, [{
+    id: 'subagent-notice:subagent-notify:203',
+    kind: 'subagent-notice',
+    noticeType: 'completion',
+    text: message.content,
+    timestamp: 203,
+    completion: {
+      index: 0,
+      agent: 'parallel:explorer+reviewer',
+      status: 'completed',
+      task: '后台任务结果',
+      currentTool: null,
+      currentPath: null,
+      toolCount: 0,
+      turnCount: 0,
+      tokens: 0,
+      durationMs: 0,
+      error: null,
+      finalOutput: message.content
+    }
+  }])
+})
+
+test('keeps separate historical Subagent notices even when timestamps match', () => {
+  const message = {
+    role: 'custom',
+    customType: 'subagent-notify',
+    content: 'Background task completed: **researcher**\n\nDone.',
+    display: true,
+    timestamp: 204
+  }
+
+  const entries = projectMessages([message, message])
+
+  assert.deepEqual(entries.map((entry) => entry.id), [
+    'subagent-notice:history:0',
+    'subagent-notice:history:1'
+  ])
+})
+
 test('coalesces structured Subagent attention into one supervisor request without protocol commands', () => {
   const control = {
     role: 'custom',

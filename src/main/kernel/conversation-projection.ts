@@ -468,7 +468,7 @@ function projectMessage(
       if (warning === null) return entries
       const entry: KernelSubagentNoticeEntry = {
         id: historicalIdentity === undefined
-          ? `subagent-notice:watchdog:${timestamp}:${entries.length}`
+          ? `subagent-notice:watchdog:${timestamp}`
           : `subagent-notice:${historicalIdentity}`,
         kind: 'subagent-notice',
         noticeType: warning.severity === 'blocker'
@@ -494,7 +494,7 @@ function projectMessage(
     )
     const entry: KernelSubagentNoticeEntry = {
       id: projectedCoordination?.id ?? (historicalIdentity === undefined
-        ? `subagent-notice:${customType}:${timestamp}:${entries.length}`
+        ? `subagent-notice:${customType}:${timestamp}`
         : `subagent-notice:${historicalIdentity}`),
       kind: 'subagent-notice',
       noticeType,
