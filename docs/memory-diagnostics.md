@@ -1,7 +1,7 @@
 # Memory Diagnostics and Runtime Lifecycle
 
-> Slice: S26 — Memory Budget & Runtime Hibernation  
-> Status: In Progress  
+> Slice: S26 — Memory Budget & Runtime Hibernation
+> Status: In Progress
 > Last updated: 2026-07-28
 
 ## 1. Purpose and evidence levels
@@ -157,13 +157,13 @@ The real working Renderer had about 520 DOM nodes, about 3 KiB visible body text
 
 The selected policy combines established patterns rather than copying one product literally:
 
-- **Chrome tab discard**: preserve tab identity, rank background tabs by importance/recency, discard under pressure and reload on selection; active tabs are protected until necessary.  
+- **Chrome tab discard**: preserve tab identity, rank background tabs by importance/recency, discard under pressure and reload on selection; active tabs are protected until necessary.
   Source: <https://developer.chrome.com/blog/tab-discarding>
-- **Jupyter kernel culling**: document persistence and execution kernel lifetime are separate; automatic idle culling is opt-in, with busy and connected kernels protected by default.  
+- **Jupyter kernel culling**: document persistence and execution kernel lifetime are separate; automatic idle culling is opt-in, with busy and connected kernels protected by default.
   Source: <https://jupyter-server.readthedocs.io/en/latest/other/full-config.html>
-- **VS Code extension hosts**: heavyweight Extension execution is isolated from the UI and shared by host location instead of creating one host per editor.  
+- **VS Code extension hosts**: heavyweight Extension execution is isolated from the UI and shared by host location instead of creating one host per editor.
   Source: <https://code.visualstudio.com/api/advanced-topics/extension-host>
-- **Electron performance guidance**: measure retained objects and process costs continuously, defer work, and avoid blocking or unnecessary module/state loading instead of relying on GC flags.  
+- **Electron performance guidance**: measure retained objects and process costs continuously, defer work, and avoid blocking or unnecessary module/state loading instead of relying on GC flags.
   Source: <https://www.electronjs.org/docs/latest/tutorial/performance>
 
 For Pi GUI this becomes: Jupyter-style Session/Runtime separation, Chrome-style foreground protection and conservative LRU, and VS Code-style reuse of shareable Project services.
