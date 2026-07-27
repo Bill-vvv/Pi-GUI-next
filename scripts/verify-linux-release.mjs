@@ -1423,8 +1423,8 @@ async function availableThinkingLevelFromGui(cdp) {
   const level = await evaluateValue(
     cdp,
     `window.piGui.getState().then((state) =>
-      Array.from(document.querySelectorAll('.model-picker-option-panel .model-picker-item:not(:disabled)'))
-        .map((button) => button.querySelector('.model-picker-option-meta')?.textContent?.trim())
+      Array.from(document.querySelectorAll('#model-picker-popover .model-picker-thinking-list .model-picker-item:not(:disabled)'))
+        .map((button) => button.querySelector('.model-picker-option-label')?.textContent?.trim())
         .find((value) =>
           ['low', 'medium', 'high', 'xhigh', 'max'].includes(value) &&
           value !== state.session.thinkingLevel
@@ -1433,7 +1433,7 @@ async function availableThinkingLevelFromGui(cdp) {
   )
   await evaluateValue(
     cdp,
-    `document.querySelector('.composer-model-controls')?.removeAttribute('open')`
+    `document.querySelector('.model-picker-button')?.click()`
   )
   if (typeof level !== 'string') fail('E_P2_TYPED_COMMAND_PRECONDITION')
   return level
@@ -1444,43 +1444,39 @@ async function selectThinkingLevelFromGui(cdp, level) {
   const selected = await evaluateValue(
     cdp,
     `(() => {
-      const button = Array.from(document.querySelectorAll('.model-picker-option-panel .model-picker-item:not(:disabled)'))
-        .find((candidate) => candidate.querySelector('.model-picker-option-meta')?.textContent?.trim() === ${JSON.stringify(level)})
+      const button = Array.from(document.querySelectorAll('#model-picker-popover .model-picker-thinking-list .model-picker-item:not(:disabled)'))
+        .find((candidate) => candidate.querySelector('.model-picker-option-label')?.textContent?.trim() === ${JSON.stringify(level)})
       if (!(button instanceof HTMLButtonElement)) return false
       button.click()
       return true
     })()`
   )
-  if (selected) {
-    await waitForExpression(
-      cdp,
-      `window.piGui.getState().then((state) => state.session.thinkingLevel === ${JSON.stringify(level)})`,
-      TIMEOUT.page,
-      'E_THINKING_LEVEL'
-    )
-  }
-  await evaluateValue(cdp, `document.querySelector('.composer-model-controls')?.removeAttribute('open')`)
+  if (!selected) fail('E_P2_TYPED_COMMAND_PRECONDITION')
+  await waitForExpression(
+    cdp,
+    `window.piGui.getState().then((state) => state.session.thinkingLevel === ${JSON.stringify(level)})`,
+    TIMEOUT.page,
+    'E_THINKING_LEVEL'
+  )
 }
 
 async function openThinkingOptions(cdp) {
-  const thinkingPanelSelected = await evaluateValue(
+  const pickerOpened = await evaluateValue(
     cdp,
     `(() => {
-      const details = document.querySelector('.composer-model-controls')
-      if (!(details instanceof HTMLDetailsElement)) return false
-      details.open = true
-      const button = Array.from(document.querySelectorAll('.model-picker-category'))
-        .find((candidate) => candidate.querySelector('.model-picker-category-label')?.textContent?.trim() === '思考强度')
-      if (!(button instanceof HTMLButtonElement) || button.disabled) return false
+      if (document.querySelector('#model-picker-popover .model-picker-thinking-section') !== null) {
+        return true
+      }
+      const button = document.querySelector('.model-picker-button')
+      if (!(button instanceof HTMLElement)) return false
       button.click()
       return true
     })()`
   )
-  if (!thinkingPanelSelected) fail('E_P2_TYPED_COMMAND_PRECONDITION')
+  if (!pickerOpened) fail('E_P2_TYPED_COMMAND_PRECONDITION')
   await waitForExpression(
     cdp,
-    `Array.from(document.querySelectorAll('.model-picker-category[aria-pressed="true"]'))
-      .some((button) => button.querySelector('.model-picker-category-label')?.textContent?.trim() === '思考强度')`,
+    `document.querySelector('#model-picker-popover .model-picker-thinking-section') !== null`,
     TIMEOUT.page,
     'E_P2_THINKING_OPTIONS'
   )
