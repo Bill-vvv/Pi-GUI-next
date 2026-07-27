@@ -853,17 +853,17 @@ async function exerciseUi() {
     const wideLayout = await evaluateValue(
       activeCdp,
       `(() => {
-        const shell = document.querySelector('.subagent-detail-shell')
+        const shell = document.querySelector('.app-shell')
         const main = document.querySelector('.main-chat')
         const detail = document.querySelector('.subagent-task-detail')
-        const sidebar = document.querySelector('.sidebar')
+        const sidebar = document.querySelector('.left-sidebar')
         if (!(shell instanceof HTMLElement) || !(main instanceof HTMLElement) ||
             !(detail instanceof HTMLElement) || !(sidebar instanceof HTMLElement)) return null
         const mainRect = main.getBoundingClientRect()
         const detailRect = detail.getBoundingClientRect()
         return {
           width: window.innerWidth,
-          shellOpen: shell.classList.contains('is-open'),
+          shellOpen: shell.classList.contains('subagent-detail-open'),
           mainDisplay: getComputedStyle(main).display,
           mainWidth: Math.round(mainRect.width),
           detailWidth: Math.round(detailRect.width),
@@ -943,7 +943,7 @@ async function exerciseUi() {
       `(() => {
         const main = document.querySelector('.main-chat')
         const detail = document.querySelector('.subagent-task-detail')
-        const sidebar = document.querySelector('.sidebar')
+        const sidebar = document.querySelector('.left-sidebar')
         const back = document.querySelector('.subagent-task-detail-back')
         const close = document.querySelector('.subagent-task-detail-close')
         if (!(main instanceof HTMLElement) || !(detail instanceof HTMLElement) ||
@@ -996,7 +996,7 @@ async function exerciseUi() {
     const reducedMotion = await evaluateValue(
       activeCdp,
       `(() => {
-        const shell = document.querySelector('.subagent-detail-shell')
+        const shell = document.querySelector('.app-shell')
         const chip = document.querySelector('.subagent-run-chip[aria-pressed="true"]')
         if (!(shell instanceof HTMLElement) || !(chip instanceof HTMLElement)) return null
         return {
