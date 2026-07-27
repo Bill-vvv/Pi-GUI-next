@@ -1255,11 +1255,17 @@ async function clickTitledButtonWithFeedback(cdp, selector, title) {
 
 async function waitForTitledSelection(cdp, selector, title, timeoutMs, code) {
   const identityAttribute = titledButtonIdentityAttribute(selector)
+  const stateIdentityField = selector === '.project-select'
+    ? 'activeProjectKey'
+    : 'activeSessionKey'
   await waitForExpression(
     cdp,
-    `Array.from(document.querySelectorAll(${JSON.stringify(selector)})).some((element) =>
-      element.getAttribute(${JSON.stringify(identityAttribute)}) === ${JSON.stringify(title)} &&
-      element.getAttribute('aria-current') === 'true'
+    `window.piGui.getState().then((state) =>
+      state[${JSON.stringify(stateIdentityField)}] === ${JSON.stringify(title)} &&
+      Array.from(document.querySelectorAll(${JSON.stringify(selector)})).some((element) =>
+        element.getAttribute(${JSON.stringify(identityAttribute)}) === ${JSON.stringify(title)} &&
+        element.getAttribute('aria-current') === 'true'
+      )
     )`,
     timeoutMs,
     code
