@@ -797,13 +797,24 @@ async function exerciseUi() {
     s19Summary.agents = [...new Set(liveRun.participants.map((participant) => participant.agent))]
     s19Summary.observedLive = true
 
-    await clickSelector(activeCdp, '.live-process-status-summary')
-    await waitForExpression(
+    await waitForSelector(
       activeCdp,
-      `document.querySelector('.live-process-status[open]') !== null`,
-      TIMEOUT.page,
-      'E_S19_LIVE_PROCESS_EXPAND'
+      '.live-process-status-summary .process-step-expand',
+      TIMEOUT.page
     )
+    const hasLiveProcessDisclosure = await evaluateValue(
+      activeCdp,
+      `document.querySelector('.live-process-status-summary') !== null`
+    )
+    if (hasLiveProcessDisclosure) {
+      await clickSelector(activeCdp, '.live-process-status-summary')
+      await waitForExpression(
+        activeCdp,
+        `document.querySelector('.live-process-status[open]') !== null`,
+        TIMEOUT.page,
+        'E_S19_LIVE_PROCESS_EXPAND'
+      )
+    }
     const compactToolGroup = await evaluateValue(
       activeCdp,
       `document.querySelector('.tool-group-summary-row') !== null && document.querySelectorAll('button.subagent-run-chip').length < 3`
