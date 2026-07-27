@@ -18,7 +18,7 @@
   isolation: isolate;
   background: var(--color-bg-app);
   padding: var(--app-shell-padding);
-  transition: grid-template-columns var(--motion-duration-layout) var(--motion-easing-layout);
+  /* Column changes alter Timeline width, so they commit without an interpolated reflow. */
 }
 
 /* Dedicated client-area edge strips. OS chrome is outside the web view, so
@@ -125,7 +125,6 @@
   height: 100%;
   overflow: hidden;
   border-radius: 18px;
-  transition: transform var(--motion-duration-layout) var(--motion-easing-layout);
 }
 
 .sidebar-content {

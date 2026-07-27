@@ -465,7 +465,7 @@ P2 先用一个短 Slice 固定结构，再实现基础功能，随后在真实�
 | S17.1 | Magic Context 可选适配 | `Complete` | 拓展页增加固定 `@cortexkit/pi-magic-context` 安装与 Extension resource 启停；Package 状态不冒充配置健康，setup/doctor 继续由上游 CLI 负责，运行态复用 Pi 命令目录中的 `/ctx-status`；不解析私有 SQLite、不内嵌配置器或伪造缓存指标 |
 | S18 | OMP 多 Advisor Extension 与 GUI 适配 | `Paused` | S18-1 至 S18-4 已完成 Package、真实 Provider、GUI 投影/控制、多 roster 与交付韧性；S18-5 可观测性与发布继续保持 Pending，按 P2.1 顺序暂停到后续统一收敛 |
 | S19 | Subagent 任务详情侧栏 | `Complete` | Canonical clean commit `b9562b4` 的正式 `pnpm verify:linux` 已通过完整 P1/P2 回归与 S19：3 路并行 worker 同时 running、运行中选择、Escape 优先级、live→completed、宽屏第三列、窄屏替换、关闭/返回/Escape 焦点恢复和 reduced-motion。AppImage SHA-256 为 `4bbe45a505f601966c75ba8c3b4074f793ee88a7aff88e83bf00af03f039c29d`，证据位于 `release/evidence/2026-07-27T16-45-59-798Z-b9562b4ca6c3/` |
-| S20 | 动效与交互基础 | `In Progress` | S19 和 S18-4 已完成，当前从 S20-1 建立统一 motion contract，再推进 Timeline/Composer 阅读锚点和跨 Navigator/Settings/任务详情的 Escape、外点与焦点恢复规则；动效不推动正文，不成为唯一状态表达，并以 reduced-motion 静态替代为完成门槛 |
+| S20 | 动效与交互基础 | `In Progress` | S20-1 Motion Contract 已完成，当前进入 S20-2 Timeline/Composer 阅读锚点，随后统一跨 Navigator/Settings/任务详情的 Escape、外点与焦点恢复规则；动效不推动正文，不成为唯一状态表达，并以 reduced-motion 静态替代为完成门槛 |
 | S21 | Settings Workspace 2.0 | `Planned` | 设置导航按“应用 / 模型 / Agent / 生态”分组，增加收起、真实设置搜索和应用内 deep link；统一作用域、事实来源、生效时间及 saved/loaded 差异，不建立通用设置 registry，不静默 reload Runtime |
 | S22 | Personalization v1 | `Planned` | 第一批只增加用户级的对话阅读宽度、Navigator 密度和动效偏好；使用有限语义枚举与统一 token，窄窗口、触控命中和 OS reduced-motion 继续拥有更高约束，不提供任意 CSS、像素或颜色编辑 |
 | S23 | Subagent Effective State 与任务一致性 | `Planned` | Main 投影 effective Agent definition、覆盖来源、最终启停/depth、Package/Extension/当前 Runtime 加载及 reload 状态；任务详情补同 run participant 切换、汇总和实时→历史恢复一致性，不读取 child transcript/artifact，不提前加入 GUI 运行控制 |
@@ -565,8 +565,8 @@ P2.1 在现有工作台能力基本完整后，集中处理三条体验线：动
 
 | 阶段 | 状态 | 范围 | 完成门槛 |
 | --- | --- | --- | --- |
-| S20-1 Motion Contract | `In Progress` | 盘点并统一 feedback、reveal、layout、activity 四类动效；零散时长和 easing 收敛到现有 token；明确允许动画的属性与 reduced-motion 静态替代 | Feature 动效不推动 Timeline 正文；活动状态同时有文字/形状/颜色语义；深浅主题和 reduced-motion 定向复核通过 |
-| S20-2 Timeline & Composer Stability | `Pending` | 明确 following-bottom 与 reading-history 两种阅读状态；Composer、Todo、附件、队列、streaming 和任务详情变化保持真实测量 clearance 与阅读锚点 | 用户上滚后不被后台输出拉回；底部跟随保持；宽/窄窗口详情返回恢复原 trigger、focus 和阅读位置，不依赖固定 timeout |
+| S20-1 Motion Contract | `Complete` | feedback/reveal 继续使用既有 duration/easing token，持续 activity 保留 feature-local 周期；Workbench 列宽与 Todo 托盘 measured clearance 不再插值 intrinsic grid geometry，状态动画在 OS reduced-motion 下显式静止且保留文字、ARIA、形状或颜色语义；未加入 S22 motionPreference | 新增 5 项静态 contract tests；clean `600d186` + S20 patch 隔离 worktree 的 typecheck、生产 build、446 项 core tests 与 diff check 通过。合成 browser preview 验证浅/深根 token、侧栏切换 1084→1416px 一次提交且 240ms 后不漂移，以及 loading/Todo/thinking/Project/Session 五类 activity 的 computed animation 全为 none |
+| S20-2 Timeline & Composer Stability | `In Progress` | 明确 following-bottom 与 reading-history 两种阅读状态；Composer、Todo、附件、队列、streaming 和任务详情变化保持真实测量 clearance 与阅读锚点 | 用户上滚后不被后台输出拉回；底部跟随保持；宽/窄窗口详情返回恢复原 trigger、focus 和阅读位置，不依赖固定 timeout |
 | S20-3 Interaction Consistency | `Pending` | 统一最内层 popover → 局部 editor/detail → workspace 的 Escape 层级，以及外点、返回、focus restoration、disabled 和触摸语义；窄窗口任务详情允许在同一 run participant 间切换 | Keyboard、pointer、touch、dirty draft、Project hover/action 互斥和异步双提交场景通过定向测试；不抽象无证据的万能 menu/popover |
 
 S20 明确不以“更多动画”为目标，不让位移或 pulse 成为 running/error 的唯一表达，也不通过延时猜测 DOM 已稳定。
@@ -924,6 +924,7 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-27 | P2.1 Experience Refinement Planning | 用户确认下一阶段集中于动效与交互、Settings 优化与有限定制、Subagent/Magic Context 可解释性；接受四组设置导航、阅读宽度/Navigator 密度/动效偏好、Magic Context 安装与状态入口分离，以及 S19 → S18-4 → S20 的实施顺序 | 增加 S20–S25 与 D-047–D-050；当前唯一 In Progress 仍是 S19，规划不改变 dirty source snapshot，也不提前激活未具备真实协议的控制或健康 UI |
 | 2026-07-28 | S19 Complete / S18-4 Resume | Canonical clean commit `b9562b4` 的 AppImage 正式通过 `pnpm verify:linux` 全部 18 步；P1/P2 回归、三路 worker 同时 running、Escape 优先级、live→completed、宽/窄任务详情、三种焦点恢复和 reduced-motion 全部通过。Gate 期间修复 crashed Context 显式恢复、managed Session active pointer 持久化、live completion notice 去重，并将官方 verifier 对齐当前 typed contract 和 DOM identity | S19 标记 Complete；S18 恢复 In Progress，S18-4 成为当前唯一实施阶段；正式证据位于 `release/evidence/2026-07-27T16-45-59-798Z-b9562b4ca6c3/` |
 | 2026-07-28 | S18-4 Complete / S20-1 Start | `pi-gui-multi-advisor` 升级为 0.3.0：严重度驱动 aside/steer，真实 steer 后三轮禁止连续中断；每 Advisor backlog 只保留最新一项并在 30 秒过期；generation + run token 隔离 reset/compact 后旧 completion；context 预算包含 system/tools/provider usage，最多 fresh reset 一次；assistant `message_end` 在工具 dispatch 前 quarantine 未授权工具和无当前来源的危险输出；session dedupe、content-free 抑制、三次 transient 上限与 quota/permanent/paused 状态均有界 | 29 项 Extension 测试、独立 typecheck、453 项 core tests、0.3.0 pack dry-run 与隔离真实 Pi RPC 双轮 smoke 通过；根级 typecheck 被并行 Navigator `completionRevision` contract 修改阻断，非 Advisor 路径。S18 暂停并保留 S18-5 Pending；S20 进入 In Progress，S20-1 成为当前唯一实施阶段 |
+| 2026-07-28 | S20-1 Motion Contract Complete | 复用现有四档 duration 与两类 easing；普通 transition 不允许 raw timing；移除 Workbench `grid-template-columns` 和 Todo `grid-template-rows` 插值，避免 Timeline 宽度与 measured Composer clearance 在动效窗口内持续重排；全局 loading 补显式静态 reduced-motion，Todo reduced 状态改为 transition none；持续 activity 保持 feature-local 周期并要求静态状态语义 | 5 项 motion contract tests、clean isolated typecheck/build、446 项 core tests、diff check 和隔离 browser preview 通过；侧栏切换后主区宽度一次提交并稳定，浅/深语义 token 可区分，五类 activity 在 reduced-motion 下 animation 均为 none。S20-2 成为当前唯一 In Progress |
 
 ## 17. 计划变更记录
 

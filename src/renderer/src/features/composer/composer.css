@@ -124,7 +124,7 @@
 .composer-todo-body {
   display: grid;
   grid-template-rows: 1fr;
-  transition: grid-template-rows var(--motion-duration-layout) var(--motion-easing-layout);
+  /* The measured panel height owns Timeline clearance; collapse must not animate that geometry. */
 }
 
 .composer-todo-panel.collapsed .composer-todo-body {
@@ -1054,7 +1054,7 @@
   .composer-todo-panel,
   .composer-todo-chevron,
   .composer-todo-body {
-    transition-duration: 1ms;
+    transition: none;
   }
 
   .composer-todo-state-icon.active {

@@ -213,7 +213,7 @@
   color: var(--color-text-muted);
   font-size: 18px;
   line-height: 1;
-  transition: transform 140ms ease;
+  transition: transform var(--motion-duration-control) var(--motion-easing-standard);
 }
 
 .provider-model-disclosure[aria-expanded='true'] .provider-model-chevron {

@@ -124,6 +124,12 @@ pre,
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .screen-loading::before {
+    animation: none;
+    opacity: 0.72;
+    transform: none;
+  }
+
   *,
   *::before,
   *::after {
