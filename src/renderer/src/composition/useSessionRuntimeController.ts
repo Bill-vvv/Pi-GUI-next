@@ -42,12 +42,9 @@ export function useSessionRuntimeController(
     new SessionRuntimeController({
       settleMs: options.settleMs,
       getKernelState: () => optionsRef.current.getKernelState(),
-      getEventRevision: () => optionsRef.current.getEventRevision(),
       startSession: () => optionsRef.current.startSession(),
       activateSession: (sessionKey) => optionsRef.current.activateSession(sessionKey),
       previewSession: (sessionKey) => optionsRef.current.previewSession(sessionKey),
-      applyReturnedState: (state, revision) =>
-        optionsRef.current.applyReturnedState(state, revision),
       beginActionPresentation: () => optionsRef.current.beginActionPresentation(),
       isActionPresentationCurrent: (revision) =>
         optionsRef.current.isActionPresentationCurrent(revision),

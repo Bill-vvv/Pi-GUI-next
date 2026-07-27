@@ -656,8 +656,12 @@ export type KernelForkCandidate = {
   timestamp: string
 }
 
-export type KernelForkResult = {
-  state: KernelState
+/** Narrow invoke acknowledgement for mutations that already publish state events. */
+export type KernelMutationAck = {
+  revision: number
+}
+
+export type KernelForkResult = KernelMutationAck & {
   draft: string
   cancelled: boolean
 }
@@ -670,8 +674,7 @@ export type KernelArchiveReceipt = {
   durationMs: number
 }
 
-export type KernelArchiveResult = {
-  state: KernelState
+export type KernelArchiveResult = KernelMutationAck & {
   receipt: KernelArchiveReceipt
 }
 
@@ -961,17 +964,17 @@ export type KernelApi = {
   getPathForFile: (file: File) => string
   getState: () => Promise<KernelState>
   listSystemFonts: () => Promise<string[]>
-  addProject: () => Promise<KernelState>
-  activateProject: (projectKey: string) => Promise<KernelState>
-  startSession: () => Promise<KernelState>
-  reloadSession: () => Promise<KernelState>
+  addProject: () => Promise<KernelMutationAck>
+  activateProject: (projectKey: string) => Promise<KernelMutationAck>
+  startSession: () => Promise<KernelMutationAck>
+  reloadSession: () => Promise<KernelMutationAck>
   resolveProjectTrust: (
     requestId: string,
     choice: KernelProjectTrustChoice
-  ) => Promise<KernelState>
-  activateSession: (sessionKey: string) => Promise<KernelState>
+  ) => Promise<KernelMutationAck>
+  activateSession: (sessionKey: string) => Promise<KernelMutationAck>
   archiveSession: (sessionKey: string) => Promise<KernelArchiveResult>
-  undoArchiveSession: (token: string) => Promise<KernelState>
+  undoArchiveSession: (token: string) => Promise<KernelMutationAck>
   previewSession: (sessionKey: string) => Promise<KernelSessionPreview>
   previewArchivedSession: (token: string) => Promise<KernelSessionPreview>
   listForkCandidates: () => Promise<KernelForkCandidate[]>
@@ -988,17 +991,17 @@ export type KernelApi = {
     contentIndex: number
   ) => Promise<KernelMessageImage>
   searchProjectPaths: (query: string) => Promise<KernelProjectPathSearchResult>
-  reorderProjects: (projectKeys: string[]) => Promise<KernelState>
-  installExtension: (kind: KernelExtensionSelectionKind) => Promise<KernelState>
-  removeExtension: (path: string) => Promise<KernelState>
+  reorderProjects: (projectKeys: string[]) => Promise<KernelMutationAck>
+  installExtension: (kind: KernelExtensionSelectionKind) => Promise<KernelMutationAck>
+  removeExtension: (path: string) => Promise<KernelMutationAck>
   searchPiDevExtensions: (query: string) => Promise<KernelPiDevCatalog>
   searchPiDevPackages: (query: string) => Promise<KernelPiDevCatalog>
   listPiPackages: () => Promise<KernelInstalledPackage[]>
-  installPiDevPackage: (name: string) => Promise<KernelState>
-  removePiPackage: (source: string) => Promise<KernelState>
+  installPiDevPackage: (name: string) => Promise<KernelMutationAck>
+  removePiPackage: (source: string) => Promise<KernelMutationAck>
   setSubagentEnabled: (enabled: boolean) => Promise<KernelInstalledPackage[]>
   setMagicContextEnabled: (enabled: boolean) => Promise<KernelInstalledPackage[]>
-  setAdvisorSystemEnabled: (enabled: boolean) => Promise<KernelState>
+  setAdvisorSystemEnabled: (enabled: boolean) => Promise<KernelMutationAck>
   setAdvisorExtensionEnabled: (enabled: boolean) => Promise<KernelInstalledPackage[]>
   listAdvisorDefinitions: () => Promise<KernelAdvisorConfiguration>
   saveAdvisorDefinition: (
@@ -1018,8 +1021,8 @@ export type KernelApi = {
     enabled: boolean
   ) => Promise<KernelSubagentDefinition[]>
   removeSubagentDefinition: (id: string) => Promise<KernelSubagentDefinition[]>
-  updatePiPackage: (source: string) => Promise<KernelState>
-  updatePiPackages: () => Promise<KernelState>
+  updatePiPackage: (source: string) => Promise<KernelMutationAck>
+  updatePiPackages: () => Promise<KernelMutationAck>
   listProviders: () => Promise<KernelProviderConfig[]>
   saveProvider: (provider: KernelProviderInput) => Promise<KernelProviderConfig[]>
   removeProvider: (providerId: string) => Promise<KernelProviderConfig[]>
@@ -1041,18 +1044,18 @@ export type KernelApi = {
   cancelProviderLogin: (operationId: string) => Promise<void>
   logoutProvider: (providerId: string) => Promise<KernelProviderCredential[]>
   selectPromptAttachments: () => Promise<KernelPromptAttachment[]>
-  prompt: (message: string, attachments?: KernelPromptAttachment[]) => Promise<KernelState>
-  steer: (message: string, attachments?: KernelPromptAttachment[]) => Promise<KernelState>
-  followUp: (message: string, attachments?: KernelPromptAttachment[]) => Promise<KernelState>
-  abort: () => Promise<KernelState>
-  setModel: (provider: string, modelId: string) => Promise<KernelState>
-  setThinkingLevel: (level: ThinkingLevel) => Promise<KernelState>
-  setSessionNaming: (settings: SessionNamingSettings) => Promise<KernelState>
-  setAppearance: (settings: AppearanceSettings) => Promise<KernelState>
-  setGeneral: (settings: GeneralSettings) => Promise<KernelState>
-  setSubagent: (settings: SubagentSettings) => Promise<KernelState>
-  setShortcuts: (settings: ShortcutSettings) => Promise<KernelState>
-  invokeCommand: (commandId: string, argument: string) => Promise<KernelState>
+  prompt: (message: string, attachments?: KernelPromptAttachment[]) => Promise<KernelMutationAck>
+  steer: (message: string, attachments?: KernelPromptAttachment[]) => Promise<KernelMutationAck>
+  followUp: (message: string, attachments?: KernelPromptAttachment[]) => Promise<KernelMutationAck>
+  abort: () => Promise<KernelMutationAck>
+  setModel: (provider: string, modelId: string) => Promise<KernelMutationAck>
+  setThinkingLevel: (level: ThinkingLevel) => Promise<KernelMutationAck>
+  setSessionNaming: (settings: SessionNamingSettings) => Promise<KernelMutationAck>
+  setAppearance: (settings: AppearanceSettings) => Promise<KernelMutationAck>
+  setGeneral: (settings: GeneralSettings) => Promise<KernelMutationAck>
+  setSubagent: (settings: SubagentSettings) => Promise<KernelMutationAck>
+  setShortcuts: (settings: ShortcutSettings) => Promise<KernelMutationAck>
+  invokeCommand: (commandId: string, argument: string) => Promise<KernelMutationAck>
   openExternal: (url: string) => Promise<void>
   toggleFullscreen: () => Promise<boolean>
   isFullscreen: () => Promise<boolean>

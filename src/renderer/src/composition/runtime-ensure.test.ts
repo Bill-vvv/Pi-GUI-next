@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import type {
+  KernelMutationAck,
   KernelSessionPreview,
   KernelState
 } from '../../../shared/kernel-contract.ts'
@@ -113,14 +114,16 @@ test('a stale preview response cannot replace the latest target', async () => {
 })
 
 test('an old activation failure cannot overwrite a newer target', async () => {
-  const activationA = deferred<KernelState>()
-  const harness = createHarness(kernelState(), {
-    activateSession: (sessionKey) => {
+  const activationA = deferred<KernelMutationAck>()
+  let harness!: ReturnType<typeof createHarness>
+  harness = createHarness(kernelState(), {
+    activateSession: async (sessionKey) => {
       if (sessionKey === SESSION_A) return activationA.promise
-      return Promise.resolve(kernelState({
+      harness.emitKernelState(kernelState({
         activeSessionKey: SESSION_B,
         runtimeStatus: 'ready'
       }))
+      return { revision: 1 }
     }
   })
   await harness.controller.preview(SESSION_A)
@@ -138,8 +141,8 @@ test('an old activation failure cannot overwrite a newer target', async () => {
   assert.equal(harness.snapshot.sessionViewTarget, null)
 })
 
-test('command responses before or after Kernel events never regress state', async () => {
-  const lateResponse = deferred<KernelState>()
+test('mutation acks never regress state published by Kernel events', async () => {
+  const lateResponse = deferred<KernelMutationAck>()
   const lateHarness = createHarness(kernelState(), {
     activateSession: () => lateResponse.promise
   })
@@ -149,20 +152,22 @@ test('command responses before or after Kernel events never regress state', asyn
     runtimeStatus: 'running'
   })
   lateHarness.emitKernelState(eventState)
-  lateResponse.resolve(kernelState({
-    activeSessionKey: SESSION_A,
-    runtimeStatus: 'ready'
-  }))
+  // A stale invoke result carries only a revision ack and must not overwrite events.
+  lateResponse.resolve({ revision: 1 })
   await waitingForLateResponse
-  assert.equal(lateHarness.appliedStates.length, 0)
   assert.equal(lateHarness.currentState, eventState)
 
   const responseState = kernelState({
     activeSessionKey: SESSION_B,
     runtimeStatus: 'ready'
   })
-  const earlyHarness = createHarness(kernelState(), {
-    activateSession: () => Promise.resolve(responseState)
+  let earlyHarness!: ReturnType<typeof createHarness>
+  earlyHarness = createHarness(kernelState(), {
+    activateSession: async () => {
+      // Successful mutations publish state before the ack resolves.
+      earlyHarness.emitKernelState(responseState)
+      return { revision: 2 }
+    }
   })
   await earlyHarness.controller.activate(SESSION_B)
   assert.equal(earlyHarness.currentState, responseState)
@@ -236,11 +241,17 @@ test('materializing a provisional Session exits the synthetic new view', async (
     activeSessionKey: '/tmp/provisional-session.jsonl',
     runtimeStatus: 'starting'
   })
-  const harness = createHarness(kernelState({
+  let harness!: ReturnType<typeof createHarness>
+  harness = createHarness(kernelState({
     activeSessionKey: '/tmp/previous-session.jsonl',
     runtimeStatus: 'ready'
   }), {
-    startSession: () => Promise.resolve(provisionalState)
+    startSession: async () => {
+      // Match IPC timing: yield once before the published event is applied.
+      await Promise.resolve()
+      harness.emitKernelState(provisionalState)
+      return { revision: 1 }
+    }
   })
 
   const start = harness.controller.start()
@@ -252,8 +263,8 @@ test('materializing a provisional Session exits the synthetic new view', async (
 })
 
 type HarnessOptions = {
-  startSession?: () => Promise<KernelState>
-  activateSession?: (sessionKey: string) => Promise<KernelState>
+  startSession?: () => Promise<KernelMutationAck>
+  activateSession?: (sessionKey: string) => Promise<KernelMutationAck>
   previewSession?: (sessionKey: string) => Promise<KernelSessionPreview>
 }
 
@@ -268,7 +279,6 @@ function createHarness(initialState: KernelState, options: HarnessOptions = {}) 
   }
   let startCalls = 0
   const activateCalls: string[] = []
-  const appliedStates: KernelState[] = []
   const errors: unknown[] = []
   const completedActions: Array<{
     action: 'start-session' | 'activate-session'
@@ -277,29 +287,30 @@ function createHarness(initialState: KernelState, options: HarnessOptions = {}) 
   const timers = new Map<number, () => void>()
   let nextTimer = 0
 
+  const publishState = (state: KernelState): KernelMutationAck => {
+    eventRevision += 1
+    currentState = state
+    return { revision: eventRevision }
+  }
+
   const controller = new SessionRuntimeController({
     settleMs: 120,
     getKernelState: () => currentState,
-    getEventRevision: () => eventRevision,
-    startSession: () => {
+    startSession: async () => {
       startCalls += 1
-      return options.startSession?.() ?? Promise.resolve(currentState)
+      if (options.startSession !== undefined) return options.startSession()
+      return { revision: eventRevision }
     },
-    activateSession: (sessionKey) => {
+    activateSession: async (sessionKey) => {
       activateCalls.push(sessionKey)
-      return options.activateSession?.(sessionKey) ?? Promise.resolve(kernelState({
+      if (options.activateSession !== undefined) return options.activateSession(sessionKey)
+      return publishState(kernelState({
         activeSessionKey: sessionKey,
         runtimeStatus: 'ready'
       }))
     },
     previewSession: options.previewSession ??
       ((sessionKey) => Promise.resolve(sessionPreview(sessionKey))),
-    applyReturnedState: (state, revisionBeforeAction) => {
-      if (eventRevision !== revisionBeforeAction) return false
-      currentState = state
-      appliedStates.push(state)
-      return true
-    },
     beginActionPresentation: () => {
       actionPresentationRevision += 1
       return actionPresentationRevision
@@ -332,7 +343,6 @@ function createHarness(initialState: KernelState, options: HarnessOptions = {}) 
       return startCalls
     },
     activateCalls,
-    appliedStates,
     errors,
     completedActions,
     timers,
@@ -343,8 +353,7 @@ function createHarness(initialState: KernelState, options: HarnessOptions = {}) 
       return currentState
     },
     emitKernelState(state: KernelState) {
-      eventRevision += 1
-      currentState = state
+      publishState(state)
       controller.reconcileKernelState(state)
     },
     runOnlyTimer() {

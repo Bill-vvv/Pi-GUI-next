@@ -4,6 +4,7 @@ import {
   type KernelAdvisorConfiguration,
   type KernelAdvisorDefinition,
   type KernelApi,
+  type KernelMutationAck,
   type KernelEvent,
   type KernelProviderCredential,
   type KernelProviderConfig,
@@ -734,14 +735,20 @@ export function createPreviewKernelApi(): KernelApi {
   }>()
   let previewOperationRevision = 0
 
-  const commit = (next: KernelState): Promise<KernelState> => {
+  let stateRevision = 0
+
+  const acknowledge = (): KernelMutationAck => ({ revision: stateRevision })
+
+  const commit = (next: KernelState): Promise<KernelMutationAck> => {
     state = next
+    stateRevision += 1
     const snapshot = structuredClone(state)
     for (const listener of listeners) listener({ type: 'kernel.state-changed', state: snapshot })
-    return Promise.resolve(snapshot)
+    return Promise.resolve(acknowledge())
   }
 
   const current = (): Promise<KernelState> => Promise.resolve(structuredClone(state))
+  const currentAck = (): Promise<KernelMutationAck> => Promise.resolve(acknowledge())
 
   const activateSelection = (projectKey: PreviewProjectKey, sessionKey?: string) => {
     const selection = structuredClone(projectSelection(projectKey, sessionKey))
@@ -765,10 +772,10 @@ export function createPreviewKernelApi(): KernelApi {
     listSystemFonts: async () => {
       throw new Error('System font discovery is unavailable in browser preview.')
     },
-    addProject: current,
+    addProject: currentAck,
     activateProject: (projectKey) =>
-      projectKey in previewProjects ? activateSelection(projectKey as PreviewProjectKey) : current(),
-    startSession: current,
+      projectKey in previewProjects ? activateSelection(projectKey as PreviewProjectKey) : currentAck(),
+    startSession: currentAck,
     reloadSession: async () => {
       throw new Error('Session reload is unavailable in browser preview.')
     },
@@ -777,11 +784,11 @@ export function createPreviewKernelApi(): KernelApi {
     },
     activateSession: (sessionKey) => {
       const projectKey = state.activeProjectKey
-      if (!(projectKey && projectKey in previewProjects)) return current()
+      if (!(projectKey && projectKey in previewProjects)) return currentAck()
       const project = previewProjects[projectKey as PreviewProjectKey]
       return project.sessions.some(({ summary }) => summary.key === sessionKey)
         ? activateSelection(projectKey as PreviewProjectKey, sessionKey)
-        : current()
+        : currentAck()
     },
     archiveSession: async (sessionKey) => {
       const summary = state.sessions.find(({ key }) => key === sessionKey)
@@ -834,7 +841,7 @@ export function createPreviewKernelApi(): KernelApi {
             },
             conversation: structuredClone(emptyConversation)
           }
-      const committedState = await commit(nextState)
+      const ack = await commit(nextState)
       previewOperationRevision += 1
       const token = `preview-archive-${previewOperationRevision}`
       archivedSessions.set(token, {
@@ -843,7 +850,7 @@ export function createPreviewKernelApi(): KernelApi {
         preview
       })
       return {
-        state: committedState,
+        ...ack,
         receipt: {
           token,
           projectKey: preview.projectKey,
@@ -857,7 +864,7 @@ export function createPreviewKernelApi(): KernelApi {
       const archived = archivedSessions.get(token)
       if (archived === undefined) throw new Error('Archive receipt is unavailable.')
       archivedSessions.delete(token)
-      if (state.sessions.some(({ key }) => key === archived.summary.key)) return current()
+      if (state.sessions.some(({ key }) => key === archived.summary.key)) return currentAck()
       const sessions = [...state.sessions]
       sessions.splice(Math.min(archived.index, sessions.length), 0, structuredClone(archived.summary))
       return commit({ ...state, sessions })
@@ -904,7 +911,7 @@ export function createPreviewKernelApi(): KernelApi {
       previewOperationRevision += 1
       const sessionKey = `/preview/fork-${previewOperationRevision}.jsonl`
       const sessionId = `preview-fork-${previewOperationRevision}`
-      const nextState = await commit({
+      const ack = await commit({
         ...state,
         sessions: [
           {
@@ -929,7 +936,7 @@ export function createPreviewKernelApi(): KernelApi {
         conversation: structuredClone(emptyConversation)
       })
       return {
-        state: nextState,
+        ...ack,
         draft: '我们先逐项调整工作台的视觉层级。',
         cancelled: false
       }
@@ -955,7 +962,7 @@ export function createPreviewKernelApi(): KernelApi {
     reorderProjects: (projectKeys) => {
       const projectsByKey = new Map(state.projects.map((project) => [project.path, project]))
       if (projectKeys.length !== state.projects.length || projectKeys.some((key) => !projectsByKey.has(key))) {
-        return current()
+        return currentAck()
       }
       return commit({ ...state, projects: projectKeys.map((key) => projectsByKey.get(key)!) })
     },
@@ -963,7 +970,7 @@ export function createPreviewKernelApi(): KernelApi {
       const path = kind === 'file'
         ? '/home/vvv/.pi/agent/extensions/sample-extension.ts'
         : '/home/vvv/.pi/agent/extensions/sample-extension'
-      if (state.extensions.some((extension) => extension.path === path)) return current()
+      if (state.extensions.some((extension) => extension.path === path)) return currentAck()
       return commit({
         ...state,
         extensions: [
@@ -1016,11 +1023,11 @@ export function createPreviewKernelApi(): KernelApi {
           { source, filtered: false, extensionEnabled: true }
         ]
       }
-      return current()
+      return currentAck()
     },
     removePiPackage: (source) => {
       installedPackages = installedPackages.filter((pkg) => pkg.source !== source)
-      return current()
+      return currentAck()
     },
     setSubagentEnabled: async (enabled) => {
       const base = `npm:${SUBAGENT_PACKAGE_NAME}`
@@ -1159,8 +1166,8 @@ export function createPreviewKernelApi(): KernelApi {
       subagentDefinitions = subagentDefinitions.filter((definition) => definition.id !== id)
       return structuredClone(subagentDefinitions)
     },
-    updatePiPackage: current,
-    updatePiPackages: current,
+    updatePiPackage: currentAck,
+    updatePiPackages: currentAck,
     listProviders: async () => structuredClone(previewProviders),
     saveProvider: async (provider) => {
       const next = {
@@ -1222,16 +1229,16 @@ export function createPreviewKernelApi(): KernelApi {
     },
     selectPromptAttachments: async () => [],
     getPathForFile: (file) => `/preview/${file.name}`,
-    prompt: current,
-    steer: current,
-    followUp: current,
-    abort: current,
+    prompt: currentAck,
+    steer: currentAck,
+    followUp: currentAck,
+    abort: currentAck,
     setModel: (provider, modelId) => {
       const model = state.availableModels.find(
         (candidate) => candidate.provider === provider && candidate.id === modelId
       )
       return model === undefined
-        ? current()
+        ? currentAck()
         : commit({ ...state, session: { ...state.session, model: structuredClone(model) } })
     },
     setThinkingLevel: (thinkingLevel: ThinkingLevel) =>
@@ -1244,7 +1251,7 @@ export function createPreviewKernelApi(): KernelApi {
     setSubagent: (subagent) => commit({ ...state, subagent }),
     setShortcuts: (shortcuts) => commit({ ...state, shortcuts }),
     setAppearance: (appearance) => commit({ ...state, appearance }),
-    invokeCommand: current,
+    invokeCommand: currentAck,
     openExternal: async (url) => {
       window.open(url, '_blank', 'noopener,noreferrer')
     },

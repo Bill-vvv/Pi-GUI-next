@@ -1,4 +1,5 @@
 import type {
+  KernelMutationAck,
   KernelSessionPreview,
   KernelState
 } from '../../../shared/kernel-contract'
@@ -44,11 +45,9 @@ type TimerHandle = number | ReturnType<typeof setTimeout>
 export type SessionRuntimeControllerDependencies = {
   settleMs: number
   getKernelState: () => KernelState | null
-  getEventRevision: () => number
-  startSession: () => Promise<KernelState>
-  activateSession: (sessionKey: string) => Promise<KernelState>
+  startSession: () => Promise<KernelMutationAck>
+  activateSession: (sessionKey: string) => Promise<KernelMutationAck>
   previewSession: (sessionKey: string) => Promise<KernelSessionPreview>
-  applyReturnedState: (state: KernelState, revisionBeforeAction: number) => boolean
   beginActionPresentation: () => number
   isActionPresentationCurrent: (revision: number) => boolean
   onSnapshot: (snapshot: SessionRuntimeSnapshot) => void
@@ -340,16 +339,14 @@ export class SessionRuntimeController {
 
     this.dependencies.onError(null)
     const presentationRevision = this.dependencies.beginActionPresentation()
-    const revisionBeforeAction = this.dependencies.getEventRevision()
     const action = target.kind === 'new' ? 'start-session' : 'activate-session'
     try {
-      const returnedState = target.kind === 'new'
-        ? await this.dependencies.startSession()
-        : await this.dependencies.activateSession(target.sessionKey)
+      if (target.kind === 'new') await this.dependencies.startSession()
+      else await this.dependencies.activateSession(target.sessionKey)
       if (this.runtimeResultIsCurrent(target, generation)) {
-        if (this.dependencies.applyReturnedState(returnedState, revisionBeforeAction)) {
-          this.reconcileKernelState(returnedState)
-        }
+        // Mutations publish state events; reconcile from the latest projected state.
+        const latest = this.dependencies.getKernelState()
+        if (latest !== null) this.reconcileKernelState(latest)
         if (target.kind === 'new') this.markNewTargetPrepared(target)
         if (this.dependencies.isActionPresentationCurrent(presentationRevision)) {
           this.dependencies.onCompletedAction(action, true)

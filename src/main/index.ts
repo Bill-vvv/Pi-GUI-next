@@ -253,10 +253,10 @@ async function startApplication(): Promise<void> {
           ? await dialog.showOpenDialog({ properties: ['openDirectory'] })
           : await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
         const selectedPath = selection.filePaths[0]
-        if (selection.canceled || selectedPath === undefined) return kernel.getState()
+        if (selection.canceled || selectedPath === undefined) return kernel.acknowledge()
         const projectPath = await projectStore.validateProjectPath(selectedPath)
         await kernel.addProject(projectPath, await projectStore.loadSessionRegistry(projectPath))
-        return kernel.getState()
+        return kernel.acknowledge()
       }
       case 'kernel.activate-project': {
         const projectPath = await projectStore.validateProjectPath(command.projectKey)
@@ -264,7 +264,7 @@ async function startApplication(): Promise<void> {
           throw new Error(`Registered project path no longer resolves canonically: ${command.projectKey}`)
         }
         await kernel.activateProject(projectPath, await projectStore.loadSessionRegistry(projectPath))
-        return kernel.getState()
+        return kernel.acknowledge()
       }
       case 'kernel.start-session': {
         const project = configuredProject(kernel.getState())
@@ -273,14 +273,14 @@ async function startApplication(): Promise<void> {
           throw new Error(`Active project path no longer resolves canonically: ${project.path}`)
         }
         await kernel.start()
-        return kernel.getState()
+        return kernel.acknowledge()
       }
       case 'kernel.reload-session':
         await kernel.reloadSession()
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.resolve-project-trust':
         await kernel.resolveProjectTrust(command.requestId, command.choice)
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.activate-session': {
         const project = configuredProject(kernel.getState())
         const canonicalPath = await projectStore.validateProjectPath(project.path)
@@ -288,15 +288,15 @@ async function startApplication(): Promise<void> {
           throw new Error(`Active project path no longer resolves canonically: ${project.path}`)
         }
         await kernel.activateSession(command.sessionKey)
-        return kernel.getState()
+        return kernel.acknowledge()
       }
       case 'kernel.archive-session': {
         const receipt = await kernel.archiveSession(command.sessionKey)
-        return { state: kernel.getState(), receipt }
+        return { ...kernel.acknowledge(), receipt }
       }
       case 'kernel.undo-archive-session':
         await kernel.undoArchiveSession(command.token)
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.preview-session':
         return kernel.previewSession(command.sessionKey)
       case 'kernel.preview-archived-session':
@@ -305,7 +305,7 @@ async function startApplication(): Promise<void> {
         return kernel.listForkCandidates()
       case 'kernel.fork-session': {
         const result = await kernel.forkSession(command.entryId)
-        return { state: kernel.getState(), ...result }
+        return { ...kernel.acknowledge(), ...result }
       }
       case 'kernel.get-message-image':
         return kernel.getMessageImage(
@@ -362,7 +362,7 @@ async function startApplication(): Promise<void> {
       }
       case 'kernel.reorder-projects':
         await kernel.reorderProjects(command.projectKeys)
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.install-extension': {
         const options: OpenDialogOptions = command.kind === 'file'
           ? {
@@ -378,13 +378,13 @@ async function startApplication(): Promise<void> {
           ? await dialog.showOpenDialog(options)
           : await dialog.showOpenDialog(mainWindow, options)
         const selectedPath = selection.filePaths[0]
-        if (selection.canceled || selectedPath === undefined) return kernel.getState()
+        if (selection.canceled || selectedPath === undefined) return kernel.acknowledge()
         kernel.setExtensions(await extensionStore.install(selectedPath))
-        return kernel.getState()
+        return kernel.acknowledge()
       }
       case 'kernel.remove-extension':
         kernel.setExtensions(await extensionStore.remove(command.path))
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.search-pi-dev-extensions':
         return piDevPackageService.catalog(command.query, 'extension')
       case 'kernel.search-pi-dev-packages':
@@ -394,11 +394,11 @@ async function startApplication(): Promise<void> {
       case 'kernel.install-pi-dev-package':
         await piDevPackageService.install(command.name)
         if (command.name === SUBAGENT_PACKAGE_NAME) await refreshSubagentPackageEnabled()
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.remove-pi-package':
         await piDevPackageService.remove(command.source)
         if (isSubagentPackageSource(command.source)) await refreshSubagentPackageEnabled()
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.set-subagent-enabled': {
         const packages = await piDevPackageService.setExtensionEnabled(
           `npm:${SUBAGENT_PACKAGE_NAME}`,
@@ -414,7 +414,7 @@ async function startApplication(): Promise<void> {
         )
       case 'kernel.set-advisor-system-enabled':
         await kernel.setAdvisorSystemEnabled(command.enabled)
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.set-advisor-extension-enabled': {
         const matches = (await piDevPackageService.list()).filter(({ source }) =>
           isAdvisorPackageSource(source)
@@ -459,10 +459,10 @@ async function startApplication(): Promise<void> {
       }
       case 'kernel.update-pi-package':
         await piDevPackageService.update(command.source)
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.update-pi-packages':
         await piDevPackageService.update()
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.list-providers':
         return providerStore.list()
       case 'kernel.save-provider':
@@ -536,40 +536,40 @@ async function startApplication(): Promise<void> {
       }
       case 'kernel.prompt':
         await kernel.prompt(command.message, command.attachments)
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.steer':
         await kernel.steer(command.message, command.attachments)
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.follow-up':
         await kernel.followUp(command.message, command.attachments)
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.abort':
         await kernel.abort()
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.set-model':
         await kernel.setModel(command.provider, command.modelId)
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.set-thinking-level':
         await kernel.setThinkingLevel(command.level)
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.set-session-naming':
         await kernel.setSessionNaming(command.settings)
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.set-appearance':
         await kernel.setAppearance(command.settings)
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.set-general':
         await kernel.setGeneral(command.settings)
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.set-subagent':
         await kernel.setSubagent(command.settings)
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.set-shortcuts':
         await kernel.setShortcuts(command.settings)
-        return kernel.getState()
+        return kernel.acknowledge()
       case 'kernel.invoke-command':
         await kernel.invokeCommand(command.commandId, command.argument)
-        return kernel.getState()
+        return kernel.acknowledge()
     }
   })
   ipcMain.handle(OPEN_EXTERNAL_CHANNEL, async (event, value: unknown) => {

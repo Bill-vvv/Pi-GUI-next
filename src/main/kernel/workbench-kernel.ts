@@ -15,6 +15,7 @@ import type {
   KernelMessageAttachment,
   KernelMessageImage,
   KernelModelState,
+  KernelMutationAck,
   KernelProjectState,
   KernelPromptAttachment,
   KernelProjectTrustChoice,
@@ -290,6 +291,8 @@ export class WorkbenchKernel {
   private unsubscribeRuntime: (() => void) | null = null
   private sessionPointers: SessionPointer[]
   private state: KernelState
+  /** Monotonic revision bumped on every published state-changed/state-patched event. */
+  private stateRevision = 0
   private stopRequested = false
   private launchOperation: Promise<void> | null = null
   private projectChangeOperation: Promise<void> | null = null
@@ -410,6 +413,14 @@ export class WorkbenchKernel {
       }
     })
     return state
+  }
+
+  /**
+   * Narrow acknowledgement for mutating IPC. Carries the latest published revision
+   * without deep-cloning KernelState for the invoke return path.
+   */
+  acknowledge(): KernelMutationAck {
+    return { revision: this.stateRevision }
   }
 
   subscribe(listener: (event: KernelEvent) => void): () => void {
@@ -4286,11 +4297,13 @@ export class WorkbenchKernel {
 
   private emitState(): void {
     this.captureActiveContext()
+    this.stateRevision += 1
     this.notifyListeners({ type: 'kernel.state-changed', state: this.getState() })
   }
 
   private emitPatch(patch: KernelStatePatch): void {
     this.captureActiveContext()
+    this.stateRevision += 1
     this.notifyListeners({ type: 'kernel.state-patched', patch: copyPatch(patch) })
   }
 }

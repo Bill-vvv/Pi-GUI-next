@@ -710,6 +710,59 @@ test('advisor commands require strict boolean payloads', () => {
   }
 })
 
+test('mutation acknowledgements track published revisions without cloning KernelState', async () => {
+  const runtime = new FakeRuntimeHost()
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  const events: KernelEvent[] = []
+  kernel.subscribe((event) => {
+    events.push(event)
+  })
+
+  assert.deepEqual(kernel.acknowledge(), { revision: 0 })
+
+  await kernel.setAppearance({
+    theme: 'dark',
+    accentColor: 'blue',
+    surfaceTransparency: 30,
+    textSize: 'large',
+    tokenCountFormat: 'compact',
+    uiFontFamily: null,
+    codeFontFamily: null
+  })
+
+  const ack = kernel.acknowledge()
+  assert.deepEqual(ack, { revision: 1 })
+  assert.equal(Object.keys(ack).join(','), 'revision')
+  assert.equal('projects' in ack, false)
+  assert.equal('conversation' in ack, false)
+  assert.equal('runtime' in ack, false)
+  assert.equal(
+    events.filter((event) => event.type === 'kernel.state-changed').length,
+    1
+  )
+  assert.equal(kernel.getState().appearance.theme, 'dark')
+
+  // No-op settings must not publish another full state or bump revision.
+  await kernel.setAppearance({
+    theme: 'dark',
+    accentColor: 'blue',
+    surfaceTransparency: 30,
+    textSize: 'large',
+    tokenCountFormat: 'compact',
+    uiFontFamily: null,
+    codeFontFamily: null
+  })
+  assert.deepEqual(kernel.acknowledge(), { revision: 1 })
+  assert.equal(
+    events.filter((event) => event.type === 'kernel.state-changed').length,
+    1
+  )
+})
+
 test('normal start and stop follows the lifecycle', async () => {
   const runtime = new FakeRuntimeHost()
   const kernel = new WorkbenchKernel(() => runtime, { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' }, kernelOptions())

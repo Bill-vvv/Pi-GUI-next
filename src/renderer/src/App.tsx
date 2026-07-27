@@ -86,16 +86,9 @@ export function App(): React.JSX.Element {
   } = useSessionRuntimeController({
     settleMs: SESSION_RUNTIME_SETTLE_MS,
     getKernelState: () => kernelStateRef.current,
-    getEventRevision: () => eventRevision.current,
     startSession: () => window.piGui.startSession(),
     activateSession: (sessionKey) => window.piGui.activateSession(sessionKey),
     previewSession: (sessionKey) => window.piGui.previewSession(sessionKey),
-    applyReturnedState: (state, revisionBeforeAction) => {
-      if (eventRevision.current !== revisionBeforeAction) return false
-      kernelStateRef.current = state
-      setKernelState(state)
-      return true
-    },
     beginActionPresentation: () => {
       actionPresentationRevision.current += 1
       return actionPresentationRevision.current
@@ -272,7 +265,7 @@ export function App(): React.JSX.Element {
 
   async function runAction(
     action: string,
-    operation: () => Promise<KernelState>,
+    operation: () => Promise<unknown>,
     exclusive = true
   ): Promise<void> {
     if (exclusive) {
@@ -284,15 +277,10 @@ export function App(): React.JSX.Element {
     actionPresentationRevision.current = presentationRevision
     setActionError(null)
     let succeeded = false
-    const revisionBeforeAction = eventRevision.current
     try {
-      const state: unknown = await operation()
-      assertKernelState(state)
-      if (eventRevision.current === revisionBeforeAction) {
-        kernelStateRef.current = state
-        setKernelState(state)
-        reconcileKernelState(state)
-      }
+      // Mutating invokes return a narrow ack. Kernel state is applied only from
+      // kernel.state-changed / kernel.state-patched events (before or after reply).
+      await operation()
       succeeded = true
     } catch (error) {
       if (actionPresentationRevision.current === presentationRevision) {
@@ -308,13 +296,6 @@ export function App(): React.JSX.Element {
         setPendingAction(null)
       }
     }
-  }
-
-  function applyReturnedState(state: KernelState, revisionBeforeAction: number): void {
-    if (eventRevision.current !== revisionBeforeAction) return
-    kernelStateRef.current = state
-    setKernelState(state)
-    reconcileKernelState(state)
   }
 
   function closeForkDialog(): void {
@@ -376,14 +357,13 @@ export function App(): React.JSX.Element {
     setForkSubmitting(true)
     setForkError(null)
     setActionError(null)
-    const revisionBeforeAction = eventRevision.current
     try {
       const result = await window.piGui.forkSession(entryId)
       if (result.cancelled) {
         closeForkDialog()
         return
       }
-      applyReturnedState(result.state, revisionBeforeAction)
+      // State arrives via kernel events; ack carries only revision + domain fields.
       clearSessionView()
       composerDraftRevision.current += 1
       setComposerDraftRequest({
@@ -497,9 +477,7 @@ export function App(): React.JSX.Element {
     let succeeded = false
     try {
       await waitForRuntimeEnsureIdle()
-      const revisionBeforeAction = eventRevision.current
       const result = await window.piGui.archiveSession(sessionKey)
-      applyReturnedState(result.state, revisionBeforeAction)
       const expiresAt = Date.now() + result.receipt.durationMs
       setArchiveNotifications((current) => [
         ...current.filter(({ receipt }) => receipt.token !== result.receipt.token),
@@ -547,9 +525,7 @@ export function App(): React.JSX.Element {
     setActionError(null)
     try {
       await waitForRuntimeEnsureIdle()
-      const revisionBeforeAction = eventRevision.current
-      const state = await window.piGui.undoArchiveSession(token)
-      applyReturnedState(state, revisionBeforeAction)
+      await window.piGui.undoArchiveSession(token)
       removeArchiveNotification(token)
       setCompletedAction({ action: 'undo-archive-session', succeeded: true })
     } catch (error) {
@@ -589,18 +565,11 @@ export function App(): React.JSX.Element {
     requestId: string,
     choice: KernelProjectTrustChoice
   ): Promise<void> {
-    const revisionBeforeAction = eventRevision.current
-    const state = await window.piGui.resolveProjectTrust(requestId, choice)
-    if (eventRevision.current === revisionBeforeAction) {
-      kernelStateRef.current = state
-      setKernelState(state)
-    }
+    await window.piGui.resolveProjectTrust(requestId, choice)
   }
 
   async function setShortcuts(settings: ShortcutSettings): Promise<void> {
-    const revisionBeforeAction = eventRevision.current
-    const state = await window.piGui.setShortcuts(settings)
-    applyReturnedState(state, revisionBeforeAction)
+    await window.piGui.setShortcuts(settings)
   }
 
   if (kernelState === null) {
@@ -814,13 +783,11 @@ export function App(): React.JSX.Element {
       onSetSubagentEnabled={(enabled) =>
         runAction('set-subagent-enabled', async () => {
           await window.piGui.setSubagentEnabled(enabled)
-          return window.piGui.getState()
         })
       }
       onSetMagicContextEnabled={(enabled) =>
         runAction('set-magic-context-enabled', async () => {
           await window.piGui.setMagicContextEnabled(enabled)
-          return window.piGui.getState()
         })
       }
       onSetAdvisorSystemEnabled={(enabled) =>
@@ -833,10 +800,7 @@ export function App(): React.JSX.Element {
         await window.piGui.setAdvisorExtensionEnabled(enabled)
       }}
       onSetSubagent={(settings: SubagentSettings) =>
-        runAction('set-subagent', async () => {
-          await window.piGui.setSubagent(settings)
-          return window.piGui.getState()
-        })
+        runAction('set-subagent', () => window.piGui.setSubagent(settings))
       }
       onSetAppearance={(settings: AppearanceSettings) =>
         runAction('set-appearance', () => window.piGui.setAppearance(settings))
@@ -844,22 +808,6 @@ export function App(): React.JSX.Element {
       onSetShortcuts={setShortcuts}
     />
   )
-}
-
-function assertKernelState(value: unknown): asserts value is KernelState {
-  const state = value as Partial<KernelState> | null
-  if (
-    state === null ||
-    typeof state !== 'object' ||
-    !Array.isArray(state.projects) ||
-    !Array.isArray(state.sessions) ||
-    state.runtime === null ||
-    typeof state.runtime !== 'object' ||
-    state.conversation === null ||
-    typeof state.conversation !== 'object'
-  ) {
-    throw new Error('Pi GUI 返回了无效状态，请重启应用以同步 Main 与 preload。')
-  }
 }
 
 function lastAssistantFinalAnswer(state: KernelState): string | null {

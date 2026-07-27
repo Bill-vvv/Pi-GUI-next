@@ -22,6 +22,7 @@ import {
   type KernelForkResult,
   type KernelPiDevCatalog,
   type KernelMessageImage,
+  type KernelMutationAck,
   type KernelPromptAttachment,
   type KernelProjectPathSearchResult,
   type KernelProviderConfig,
@@ -49,32 +50,32 @@ const kernelApi: KernelApi = {
   addProject: () => {
     const command: KernelCommand = { type: 'kernel.add-project' }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   activateProject: (projectKey) => {
     const command: KernelCommand = { type: 'kernel.activate-project', projectKey }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   startSession: () => {
     const command: KernelCommand = { type: 'kernel.start-session' }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   reloadSession: () => {
     const command: KernelCommand = { type: 'kernel.reload-session' }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   resolveProjectTrust: (requestId, choice) => {
     const command: KernelCommand = { type: 'kernel.resolve-project-trust', requestId, choice }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   activateSession: (sessionKey) => {
     const command: KernelCommand = { type: 'kernel.activate-session', sessionKey }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   archiveSession: (sessionKey) => {
     const command: KernelCommand = { type: 'kernel.archive-session', sessionKey }
@@ -84,7 +85,7 @@ const kernelApi: KernelApi = {
   undoArchiveSession: (token) => {
     const command: KernelCommand = { type: 'kernel.undo-archive-session', token }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   previewSession: (sessionKey) => {
     const command: KernelCommand = { type: 'kernel.preview-session', sessionKey }
@@ -139,17 +140,17 @@ const kernelApi: KernelApi = {
   reorderProjects: (projectKeys) => {
     const command: KernelCommand = { type: 'kernel.reorder-projects', projectKeys }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   installExtension: (kind) => {
     const command: KernelCommand = { type: 'kernel.install-extension', kind }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   removeExtension: (path) => {
     const command: KernelCommand = { type: 'kernel.remove-extension', path }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   searchPiDevExtensions: (query) => {
     const command: KernelCommand = { type: 'kernel.search-pi-dev-extensions', query }
@@ -169,12 +170,12 @@ const kernelApi: KernelApi = {
   installPiDevPackage: (name) => {
     const command: KernelCommand = { type: 'kernel.install-pi-dev-package', name }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   removePiPackage: (source) => {
     const command: KernelCommand = { type: 'kernel.remove-pi-package', source }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   setSubagentEnabled: (enabled) => {
     const command: KernelCommand = {
@@ -198,7 +199,7 @@ const kernelApi: KernelApi = {
       enabled
     }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   setAdvisorExtensionEnabled: (enabled) => {
     const command: KernelCommand = {
@@ -251,12 +252,12 @@ const kernelApi: KernelApi = {
   updatePiPackage: (source) => {
     const command: KernelCommand = { type: 'kernel.update-pi-package', source }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   updatePiPackages: () => {
     const command: KernelCommand = { type: 'kernel.update-pi-packages' }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   listProviders: () => {
     const command: KernelCommand = { type: 'kernel.list-providers' }
@@ -325,7 +326,7 @@ const kernelApi: KernelApi = {
       ...(attachments !== undefined && attachments.length > 0 ? { attachments } : {})
     }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   steer: (message, attachments) => {
     const command: KernelCommand = {
@@ -334,7 +335,7 @@ const kernelApi: KernelApi = {
       ...(attachments !== undefined && attachments.length > 0 ? { attachments } : {})
     }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   followUp: (message, attachments) => {
     const command: KernelCommand = {
@@ -343,52 +344,52 @@ const kernelApi: KernelApi = {
       ...(attachments !== undefined && attachments.length > 0 ? { attachments } : {})
     }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   abort: () => {
     const command: KernelCommand = { type: 'kernel.abort' }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   setModel: (provider, modelId) => {
     const command: KernelCommand = { type: 'kernel.set-model', provider, modelId }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   setThinkingLevel: (level) => {
     const command: KernelCommand = { type: 'kernel.set-thinking-level', level }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   setSessionNaming: (settings) => {
     const command: KernelCommand = { type: 'kernel.set-session-naming', settings }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   setAppearance: (settings) => {
     const command: KernelCommand = { type: 'kernel.set-appearance', settings }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   setGeneral: (settings) => {
     const command: KernelCommand = { type: 'kernel.set-general', settings }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   setSubagent: (settings) => {
     const command: KernelCommand = { type: 'kernel.set-subagent', settings }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   setShortcuts: (settings) => {
     const command: KernelCommand = { type: 'kernel.set-shortcuts', settings }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   invokeCommand: (commandId, argument) => {
     const command: KernelCommand = { type: 'kernel.invoke-command', commandId, argument }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   openExternal: (url) => ipcRenderer.invoke(OPEN_EXTERNAL_CHANNEL, url) as Promise<void>,
   toggleFullscreen: () => ipcRenderer.invoke(WINDOW_TOGGLE_FULLSCREEN_CHANNEL) as Promise<boolean>,
