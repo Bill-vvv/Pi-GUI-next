@@ -332,8 +332,9 @@ async function exerciseUi() {
     }
   })
 
-  await runStep('high_thinking', async () => {
-    await selectThinkingLevelFromGui(activeCdp, 'high')
+  await runStep('thinking_level', async () => {
+    const availableThinkingLevel = await availableThinkingLevelFromGui(activeCdp)
+    await selectThinkingLevelFromGui(activeCdp, availableThinkingLevel)
   })
 
   await runStep('tool_turn', async () => {
@@ -1426,7 +1427,7 @@ async function availableThinkingLevelFromGui(cdp) {
       Array.from(document.querySelectorAll('#model-picker-popover .model-picker-thinking-list .model-picker-item:not(:disabled)'))
         .map((button) => button.querySelector('.model-picker-option-label')?.textContent?.trim())
         .find((value) =>
-          ['low', 'medium', 'high', 'xhigh', 'max'].includes(value) &&
+          ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(value) &&
           value !== state.session.thinkingLevel
         ) ?? null
     )`
