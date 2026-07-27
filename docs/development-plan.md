@@ -1,10 +1,10 @@
 # Pi GUI 开发计划
 
 > 当前阶段：P2 — Workbench Foundation
-> 计划版本：8.4
+> 计划版本：8.5
 > 最后更新：2026-07-28
 > 总体状态：In Progress
-> 当前 Slice：S21-1 — Settings Information Architecture（In Progress）
+> 当前 Slice：S26 — Memory Budget & Runtime Hibernation（In Progress）
 
 ## 1. 计划用途
 
@@ -463,20 +463,21 @@ P2 先用一个短 Slice 固定结构，再实现基础功能，随后在真实�
 | S16 | Subagent Extension 适配 | `Complete` | 固定适配 `pi-subagents`；拓展页以独立“已适配拓展”区域负责安装和真实启停；独立 Subagent 页只读取可用状态并修改最大嵌套深度，Runtime 通过 `PI_SUBAGENT_MAX_DEPTH` 配置，新建或显式 reload 后生效；不实现 Agent definition CRUD、任务监控或内建 Subagent Runtime |
 | S17 | Subagent Agent 管理 | `Complete` | Subagent 页接入真实用户级与当前项目 Agent Markdown 定义；内置 Package 文件不改写，界面直接编辑并可恢复默认；Agent 启停复用官方 disabled override，列表每页 6 项并支持作用域/启动状态筛选与多选批量修改；编辑器分基础/高级设置；Main 只读写固定 Agent 与 settings 路径，Renderer 不取得任意文件能力；core tests、typecheck、生产 build 与 diff check 通过 |
 | S17.1 | Magic Context 可选适配 | `Complete` | 拓展页增加固定 `@cortexkit/pi-magic-context` 安装与 Extension resource 启停；Package 状态不冒充配置健康，setup/doctor 继续由上游 CLI 负责，运行态复用 Pi 命令目录中的 `/ctx-status`；不解析私有 SQLite、不内嵌配置器或伪造缓存指标 |
-| S18 | OMP 多 Advisor Extension 与 GUI 适配 | `Paused` | S18-1 至 S18-4 已完成 Package、真实 Provider、GUI 投影/控制、多 roster 与交付韧性；S18-5 可观测性与发布继续保持 Pending，按 P2.1 顺序暂停到后续统一收敛 |
+| S18 | OMP 多 Advisor Extension 与 GUI 适配 | `Paused` | S18-1 至 S18-4 已完成 Package、真实 Provider、GUI 投影/控制、多 roster 与交付韧性；S18-5 可观测性与发布继续保持 Pending。2026-07-28 实测 Renderer 可增长至约 5.4 GiB、多个 Session Runtime 无 idle eviction 后，S26 成为当前优先级，S18 后续发布收敛暂停至首个内存预算 gate 完成 |
 | S19 | Subagent 任务详情侧栏 | `Complete` | Canonical clean commit `b9562b4` 的正式 `pnpm verify:linux` 已通过完整 P1/P2 回归与 S19：3 路并行 worker 同时 running、运行中选择、Escape 优先级、live→completed、宽屏第三列、窄屏替换、关闭/返回/Escape 焦点恢复和 reduced-motion。AppImage SHA-256 为 `4bbe45a505f601966c75ba8c3b4074f793ee88a7aff88e83bf00af03f039c29d`，证据位于 `release/evidence/2026-07-27T16-45-59-798Z-b9562b4ca6c3/` |
-| S20 | 动效与交互基础 | `Paused` | S20-1 Motion Contract 与 S20-2 Timeline/Composer 阅读稳定已完成；按 P2.1 顺序先实施 S21-1，再恢复 S20-3 统一跨 Navigator/Settings/任务详情的 Escape、外点与焦点规则；动效不推动正文，不成为唯一状态表达，并以 reduced-motion 静态替代为完成门槛 |
-| S21 | Settings Workspace 2.0 | `In Progress` | S21-1 当前实施设置导航“应用 / 模型 / Agent / 生态”分组、收起和窄屏信息架构；后续增加真实设置搜索、应用内 deep link 以及作用域/事实来源/生效时间，不建立通用设置 registry，不静默 reload Runtime |
+| S20 | 动效与交互基础 | `Paused` | S20-1 Motion Contract 与 S20-2 Timeline/Composer Stability 已完成；S26 仍是当前唯一优先级，S20 暂停于 S20-3。首个内存预算 gate 完成后先进入 S21-1，再恢复跨 Navigator/Settings/任务详情的 Escape、外点与焦点一致性 |
+| S21 | Settings Workspace 2.0 | `Planned` | 设置导航按“应用 / 模型 / Agent / 生态”分组，增加收起、真实设置搜索和应用内 deep link；统一作用域、事实来源、生效时间及 saved/loaded 差异，不建立通用设置 registry，不静默 reload Runtime |
 | S22 | Personalization v1 | `Planned` | 第一批只增加用户级的对话阅读宽度、Navigator 密度和动效偏好；使用有限语义枚举与统一 token，窄窗口、触控命中和 OS reduced-motion 继续拥有更高约束，不提供任意 CSS、像素或颜色编辑 |
 | S23 | Subagent Effective State 与任务一致性 | `Planned` | Main 投影 effective Agent definition、覆盖来源、最终启停/depth、Package/Extension/当前 Runtime 加载及 reload 状态；任务详情补同 run participant 切换、汇总和实时→历史恢复一致性，不读取 child transcript/artifact，不提前加入 GUI 运行控制 |
 | S24 | Magic Context 状态可见性 | `Planned` | 安装/启停继续留在拓展页，独立 Context 页只读展示 Package、Extension、当前 Session loaded、真实 `/ctx-status`、状态时间与过期语义，并提供复制 setup/doctor 命令和上游文档入口；不解析 SQLite 或把“已开启”冒充健康 |
 | S25 | Magic Context 结构化可观测协议 | `Research` | 与上游共同评估版本化 capability/status/usage 协议，候选覆盖上下文占用、后台状态和 prompt-free token/cache/cost；协议稳定前不建立仪表盘，不暴露 prompt/output、embedding、credential、数据库路径或私有 schema |
+| S26 | Memory Budget & Runtime Hibernation | `In Progress` | 建立 Main/Renderer/Pi 进程树 PSS、KernelState/IPC/native allocation 与 Runtime 数量的脱敏诊断；消除重复完整状态传输和无界 IPC 放大；分离持久 Session 与执行 Runtime，并以显式休眠、quiescence lease、前台保护和保守 LRU 建立有界 warm set | 当前完整状态不足 1 MiB、DOM 约 520 节点且 JS heap 约 58 MiB 时 Renderer 仍可达到约 755 MiB working set；验收必须同时覆盖 Renderer 稳态、并行 busy 保护、空闲 Runtime 回落、Session 恢复与无后台工作丢失 |
 
 P2 最初把“多 Project、多 Session”限定为可保存、发现和切换。2026-07-23 用户确认并行是旧版已有且当前必须恢复的核心能力后，D-017 替代该限制：Workbench Kernel 现在按 Session 管理独立 Runtime context，允许多个 Pi Runtime 并行，同时保持 Electron Main 单一 control plane。
 
 #### S18 — OMP 多 Advisor Extension 与 GUI 适配
 
-当前状态：`Paused`。S18-4 已完成 Extension 内交付与韧性；S18-5 继续保持 `Pending`，按 P2.1 顺序暂停到后续可观测性与正式发布收敛。
+当前状态：`Paused`。S18-4 已完成 Extension 内交付与韧性；S18-5 继续保持 `Pending`。2026-07-28 因 S26 内存治理成为最高优先级而暂停后续可观测性与正式发布收敛；S26 建立可重复诊断、IPC/Renderer 有界增长和安全 Runtime 回收边界后再恢复。
 
 目标：
 
@@ -556,17 +557,18 @@ P2.1 在现有工作台能力基本完整后，集中处理三条体验线：动
 
 执行门槛与顺序：
 
-1. S19 必须先在 canonical clean commit/worktree 上通过正式 `pnpm verify:linux` 并标记 Complete。
-2. 随后恢复并完成 S18-4 的交付与韧性；若产品优先级变化，必须显式把 S18-4 改为 Paused，不能保持 Ready 却长期跳过。
-3. 新体验线先按 S20-1 → S20-2 → S21-1 推进，再按 S20-3 → S21-2 → S21-3 → S22 → S23 → S24 收敛；S25 在 S24 建立真实状态边界后继续 Research。所有子阶段仍遵守“同一时间只允许一个 Slice 为 In Progress”。
-4. S18-5 保持 Pending；其中可复用的 status/usage 基础在 S24/S25 设计时统一核对，但 Advisor 专属 dump、独立 transcript 与发布验收不因此自动并入 Magic Context。
+1. S19 已在 canonical clean commit/worktree 上通过正式 `pnpm verify:linux` 并标记 Complete。
+2. S18-4 和 S20-1 已完成；随后 2026-07-28 的 live diagnosis 证明 Renderer native allocation 与无 idle eviction 的多 Runtime 会让整应用在正常并行使用中达到数 GiB，因此 S26 提升为当前唯一 `In Progress`。S20-2 此后在独立 clean candidate 中完成并收口，但不改变 S26 的当前优先级。
+3. S26 先完成脱敏、可重复的内存基线，再按 IPC/Renderer 有界化、用户显式休眠、quiescence/operation lease、保守 LRU 和 Timeline 分页推进。任何自动回收都不得停止 busy、provisional 或 quiescence 未知的 Runtime。
+4. S26 完成首个预算 gate 后按 S21-1 → S20-3 → S21-2 → S21-3 → S22 → S23 → S24 收敛。S25 在 S24 建立真实状态边界后继续 Research。
+5. S18-5 保持 Pending；其中可复用的 status/usage 基础在 S24/S25 设计时统一核对，但 Advisor 专属 dump、独立 transcript 与发布验收不因此自动并入 Magic Context。
 
 ##### S20 — 动效与交互基础
 
 | 阶段 | 状态 | 范围 | 完成门槛 |
 | --- | --- | --- | --- |
 | S20-1 Motion Contract | `Complete` | feedback/reveal 继续使用既有 duration/easing token，持续 activity 保留 feature-local 周期；Workbench 列宽与 Todo 托盘 measured clearance 不再插值 intrinsic grid geometry，状态动画在 OS reduced-motion 下显式静止且保留文字、ARIA、形状或颜色语义；未加入 S22 motionPreference | 新增 5 项静态 contract tests；clean `600d186` + S20 patch 隔离 worktree 的 typecheck、生产 build、446 项 core tests 与 diff check 通过。合成 browser preview 验证浅/深根 token、侧栏切换 1084→1416px 一次提交且 240ms 后不漂移，以及 loading/Todo/thinking/Project/Session 五类 activity 的 computed animation 全为 none |
-| S20-2 Timeline & Composer Stability | `Complete` | 明确 `following` 与 `reading` 两种用户意图；任何有效上滚立即进入 reading，只有用户回到 canonical output-end 才恢复 following；entries、streaming、Composer clearance、窗口/sidebar/detail reflow 共用同步稳定器，reading 以 caret/turn anchor 抵消布局变化，following 只对齐 output sentinel 而不滚入 navigation tail；窄屏 0×0 隐藏期间不测量，Workbench layout effect 在 focus rAF 前恢复 | clean `991c0e4` + S20-2 patch 隔离候选的 typecheck、生产 build、457 项 core、11 项 contract tests 与 diff check 通过；Electron preview 实测 30px 上滚退出 following，宽/窄 detail 与隐藏期间上方新增 180px 后 reading caret 均保持 122.98px，Composer/streaming 后 output-end 误差 0.48px 且保留 447px tail；独立 review 无 blocker/high，唯一 chrome offset Medium 已修复 |
+| S20-2 Timeline & Composer Stability | `Complete` | 明确 `following` 与 `reading` 两种用户意图；任何有效上滚立即进入 reading，只有用户回到 canonical output-end 才恢复 following；entries、streaming、Composer clearance、窗口/sidebar/detail reflow 共用同步稳定器，reading 以 caret/turn anchor 抵消布局变化，following 只对齐 output sentinel 而不滚入 navigation tail；窄屏 0×0 隐藏期间不测量，Workbench layout effect 在 focus rAF 前恢复 | commit `22cf15c` 的 clean isolated candidate 通过 typecheck、生产 build、457 项 core、11 项 contract tests 与 diff check；Electron preview 实测 30px 上滚退出 following，宽/窄 detail 与隐藏期间上方新增 180px 后 reading caret 均保持 122.98px，Composer/streaming 后 output-end 误差 0.48px 且保留 447px tail；独立 review 无 blocker/high，chrome offset 与 stale programmatic marker 已修复 |
 | S20-3 Interaction Consistency | `Pending` | 统一最内层 popover → 局部 editor/detail → workspace 的 Escape 层级，以及外点、返回、focus restoration、disabled 和触摸语义；窄窗口任务详情允许在同一 run participant 间切换 | Keyboard、pointer、touch、dirty draft、Project hover/action 互斥和异步双提交场景通过定向测试；不抽象无证据的万能 menu/popover |
 
 S20 明确不以“更多动画”为目标，不让位移或 pulse 成为 running/error 的唯一表达，也不通过延时猜测 DOM 已稳定。
@@ -575,7 +577,7 @@ S20 明确不以“更多动画”为目标，不让位移或 pulse 成为 runni
 
 | 阶段 | 状态 | 范围 | 完成门槛 |
 | --- | --- | --- | --- |
-| S21-1 Information Architecture | `In Progress` | 导航分为“应用：常规/外观/快捷键”“模型：模型/凭证”“Agent：Subagent/Advisor/Context”“生态：Package/拓展/技能”；自动对话命名并入常规，删除单项偏好分类；导航可收起 | 既有功能和 dirty draft 保护无回退；窄窗口使用可访问的单页/覆盖式导航；Context 只有在 S24 有真实内容时出现 |
+| S21-1 Information Architecture | `Pending` | 导航分为“应用：常规/外观/快捷键”“模型：模型/凭证”“Agent：Subagent/Advisor/Context”“生态：Package/拓展/技能”；自动对话命名并入常规，删除单项偏好分类；导航可收起 | 既有功能和 dirty draft 保护无回退；窄窗口使用可访问的单页/覆盖式导航；Context 只有在 S24 有真实内容时出现 |
 | S21-2 Search & Deep Link | `Pending` | 扩展窄 typed section/group metadata，索引真实设置名称、组和人工同义词；搜索结果跳到稳定应用内目标 | 不索引 credential、endpoint、Agent prompt 或日志；Enter/Escape、焦点恢复和无结果状态通过；不注册 OS URL protocol，不建立插件 registry |
 | S21-3 Scope, Source & Activation | `Pending` | 为重要设置表达 application/user/project/session 作用域、GUI/Pi/Extension 事实来源与 immediate/next-session/reload 生效时机；区分 saved config 与当前 Runtime loaded config | Package installed、Extension enabled、当前 Session loaded、健康 verified 四层状态不混淆；设置保存不静默重启，reload 失败不伪装已应用 |
 
@@ -618,6 +620,36 @@ Context 页包含安装与加载摘要、最近一次真实状态、更新时间
 ##### S25 — Magic Context 结构化可观测协议
 
 S25 保持 `Research`，需要与 Magic Context 上游共同冻结版本化 capability/status/usage 协议后才能实施。候选只包含有界、脱敏的运行状态、上下文占用、是否接管原生压缩、最近后台操作、pending operation 和 historian/dreamer/sidekick/cache 的 prompt-free token/cost。协议不得携带 prompt、output、memory 内容、embedding、credential、数据库路径或私有 schema；项目级 debug telemetry 在成为公开稳定协议前不得冒充用户产品状态。
+
+##### S26 — Memory Budget & Runtime Hibernation
+
+详细测量、证据分级、产品对照、首轮预算和诊断安全边界见 [`memory-diagnostics.md`](memory-diagnostics.md)。
+
+首轮 `verified_current` 现场事实：
+
+- 同一次约 1 小时 52 分运行中，Renderer 达到约 5.4 GiB RSS，其中约 4.98 GiB 为 Chromium private anonymous `PartitionAlloc`；当时活动 Session JSONL 约 400 KiB，最大历史 Session 约 8 MiB，不能解释该增长。
+- 重启后的运行中，完整 `KernelState` 序列化约 936 KiB、Conversation 约 840 KiB / 155 entries、DOM 约 520 节点、Renderer JS heap 约 58 MiB，但 Renderer working set 仍约 755 MiB；主要差额属于 native allocation，而非普通 DOM 或 V8 heap。
+- Workbench Kernel 为每个 managed Session 保留完整 `RuntimeContext.state`，没有 idle eviction；重启不足一分钟即可因并行恢复/工作重新出现 6 个顶层 Pi Runtime。
+- Main 对大量 mutating command 同时发布 `kernel.state-changed/patched` 并在 invoke 返回值再次传输完整 `KernelState`；Main 不合并 patch，合并只在 Renderer 的 `requestAnimationFrame` 内发生，无法避免此前的 Electron structured clone 和 Chromium IPC/native buffer 分配。
+- 同一诊断 AppImage 已重复通过现有 18 步 gate，第二轮绑定 clean commit `981282e`：80 秒三路 Subagent 场景稳定产生 305–317 个完整 state 与 31–33 个 patch，而新增正文/工具 payload 仅为数 KiB；真实工作 Session 的约 936 KiB state 按同频率会形成约 286–297 MiB/80 秒的单向 Renderer payload，尚未计 Main copy、structured clone 和 invoke-return 副本。
+
+当前源码状态（2026-07-28）：已实现并测试 Session 级 `WorkbenchKernel.hibernateSession()` 内部原语，可在严格 Kernel-owned busy gate 通过后停止非前台 Runtime 并保留持久 Session identity；它尚未接入 `KernelCommand`、Main IPC、preload 或 Renderer，因此当前不是用户可见功能。Session 的用户入口、Project/全局显式休眠，以及所有 quiescence lease、自动回收和 LRU 策略仍为 Pending。
+
+实施顺序：
+
+1. **Diagnostics baseline**：在唯一 `scripts/verify-linux-release.mjs` 增加 opt-in、脱敏的进程树 PSS/RSS/private/anonymous、Renderer DOM/V8、KernelState 结构大小和 Runtime 数量采样；报告只保存计数、字节、状态和角色，不保存 prompt、输出、路径、credential 或 Session identity。
+2. **IPC containment**：mutating invoke 返回 typed acknowledgement，不再返回第二份完整 state；Main 按 Conversation identity/revision 合并 append patch 与 latest-wins metadata，并设队列/字节上限，溢出时目标 reset 而不是积压。
+3. **State separation**：Navigation、active Session metadata 与 active Conversation 使用独立有界投影；Renderer 只持有当前页和活动 run，旧 Timeline 分页读取且允许驱逐。
+4. **Explicit hibernation**：先提供用户显式 Session/Project/全局休眠，终止对应 Runtime 但保留 Pi Session 事实和导航身份；重新选择时恢复。
+5. **Safe automatic hibernation**：只有持久化、非前台、非 busy、非 provisional 且所有 Kernel/Extension operation lease 已释放的 Runtime 才能成为 quiescent。未知 Extension 状态 fail-closed；默认 warm set 候选为前台加最近一个 quiescent Runtime，grace period 与压力回收策略须经实测校准。
+6. **Extension baseline**：分别测量裸 Pi、Subagent、Magic Context、Advisor 与组合加载成本；固定成本过高的能力在其真实 owner 内延迟初始化，不由 Renderer 猜测。
+
+首轮完成门槛：
+
+- 同一 AppImage 场景可以重复生成进程角色、PSS、native/JS/DOM、state/IPC 和 Runtime 数量证据；诊断本身默认关闭、输出有界且不包含正文或身份。
+- 一个活动 Session、连续浏览 20 个 Session、三个并行 busy Runtime、完成后 grace period 和重新激活休眠 Session 五类场景均有预算；busy/background lease 不被自动终止。
+- Renderer 在压力测试后的稳态增长有明确红线，完整状态与 patch 的 IPC 字节可归因；总应用内存会在工作完成后回落，而不是只在重启时释放。
+- Pi Session、completion、排队消息、compaction、命名、Advisor、Subagent 与 Magic Context 后台工作没有因回收丢失；provisional Session 不自动休眠。
 
 P2.1 共通验收：
 
@@ -924,8 +956,11 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-27 | P2.1 Experience Refinement Planning | 用户确认下一阶段集中于动效与交互、Settings 优化与有限定制、Subagent/Magic Context 可解释性；接受四组设置导航、阅读宽度/Navigator 密度/动效偏好、Magic Context 安装与状态入口分离，以及 S19 → S18-4 → S20 的实施顺序 | 增加 S20–S25 与 D-047–D-050；当前唯一 In Progress 仍是 S19，规划不改变 dirty source snapshot，也不提前激活未具备真实协议的控制或健康 UI |
 | 2026-07-28 | S19 Complete / S18-4 Resume | Canonical clean commit `b9562b4` 的 AppImage 正式通过 `pnpm verify:linux` 全部 18 步；P1/P2 回归、三路 worker 同时 running、Escape 优先级、live→completed、宽/窄任务详情、三种焦点恢复和 reduced-motion 全部通过。Gate 期间修复 crashed Context 显式恢复、managed Session active pointer 持久化、live completion notice 去重，并将官方 verifier 对齐当前 typed contract 和 DOM identity | S19 标记 Complete；S18 恢复 In Progress，S18-4 成为当前唯一实施阶段；正式证据位于 `release/evidence/2026-07-27T16-45-59-798Z-b9562b4ca6c3/` |
 | 2026-07-28 | S18-4 Complete / S20-1 Start | `pi-gui-multi-advisor` 升级为 0.3.0：严重度驱动 aside/steer，真实 steer 后三轮禁止连续中断；每 Advisor backlog 只保留最新一项并在 30 秒过期；generation + run token 隔离 reset/compact 后旧 completion；context 预算包含 system/tools/provider usage，最多 fresh reset 一次；assistant `message_end` 在工具 dispatch 前 quarantine 未授权工具和无当前来源的危险输出；session dedupe、content-free 抑制、三次 transient 上限与 quota/permanent/paused 状态均有界 | 29 项 Extension 测试、独立 typecheck、453 项 core tests、0.3.0 pack dry-run 与隔离真实 Pi RPC 双轮 smoke 通过；根级 typecheck 被并行 Navigator `completionRevision` contract 修改阻断，非 Advisor 路径。S18 暂停并保留 S18-5 Pending；S20 进入 In Progress，S20-1 成为当前唯一实施阶段 |
-| 2026-07-28 | S20-1 Motion Contract Complete | 复用现有四档 duration 与两类 easing；普通 transition 不允许 raw timing；移除 Workbench `grid-template-columns` 和 Todo `grid-template-rows` 插值，避免 Timeline 宽度与 measured Composer clearance 在动效窗口内持续重排；全局 loading 补显式静态 reduced-motion，Todo reduced 状态改为 transition none；持续 activity 保持 feature-local 周期并要求静态状态语义 | 5 项 motion contract tests、clean isolated typecheck/build、446 项 core tests、diff check 和隔离 browser preview 通过；侧栏切换后主区宽度一次提交并稳定，浅/深语义 token 可区分，五类 activity 在 reduced-motion 下 animation 均为 none。S20-2 成为当前唯一 In Progress |
-| 2026-07-28 | S20-2 Timeline & Composer Stability Complete / S21-1 Start | Timeline 用显式 `following`/`reading` 用户意图区分底部跟随与历史阅读；统一 entries、streaming、Composer、窗口、sidebar 与任务详情 reflow 的同步稳定器，使用 caret/turn anchor 恢复 reading，使用 output sentinel 恢复 following；移除 Composer 自行滚动与 scrollHeight 底部猜测，窄屏隐藏期间不测量，detail close 在 focus 前恢复布局 | clean isolated typecheck/build、457 项 core、11 项 contract tests、diff check 与 Electron 宽/窄/Composer/streaming probe 通过；独立 review 无 blocker/high，修复 chrome reading-line 与 stale programmatic marker。S20 暂停于 S20-3，S21-1 成为唯一 In Progress |
+| 2026-07-28 | S20-1 Motion Contract Complete | 复用现有四档 duration 与两类 easing；普通 transition 不允许 raw timing；移除 Workbench `grid-template-columns` 和 Todo `grid-template-rows` 插值，避免 Timeline 宽度与 measured Composer clearance 在动效窗口内持续重排；全局 loading 补显式静态 reduced-motion，Todo reduced 状态改为 transition none；持续 activity 保持 feature-local 周期并要求静态状态语义 | 5 项 motion contract tests、clean isolated typecheck/build、446 项 core tests、diff check 和隔离 browser preview 通过；侧栏切换后主区宽度一次提交并稳定，浅/深语义 token 可区分，五类 activity 在 reduced-motion 下 animation 均为 none。S20-2 随后开始实施 |
+| 2026-07-28 | S26 Memory Diagnosis Start | 用户将内存列为最高优先级并要求立即诊断。Live PSS、`smaps`、Electron app metrics、Renderer CDP 和 source audit 已区分 Renderer native allocation、重复完整 state/IPC 和无 idle eviction 的多 Runtime 三条路径；对照 Chrome tab discard、Jupyter kernel culling、VS Code extension host 与 Electron profiling 原则后冻结“持久 Session 与执行 Runtime 分离、busy 保护、显式休眠、quiescence lease、保守 LRU”方向 | S20-2 暂停，S26 成为唯一 In Progress。同一诊断 AppImage 两次通过现有 18 步 gate并各记录 8 个内存点，第二轮绑定 `981282e`；80 秒 Subagent 场景稳定为 305–317 full state / 31–33 patch。Canonical 存在其他在途 writer 时不直接覆盖，详细证据见 `memory-diagnostics.md` |
+| 2026-07-28 | S26 IPC containment / hibernation groundwork | Mutating IPC 改为 revision acknowledgement + Renderer applied-revision barrier，Subagent/Todo/attachment metadata 走 identity-safe patch；Kernel 增加非前台持久 Session 的显式休眠内部原语，并在 stop/launch cleanup 失败时保留 Runtime ownership | Rebased `p2` 隔离分支通过 typecheck、476 项 core tests、16 项 barrier/metrics 定向测试、verifier 语法与 diff check；休眠当前仅为 Kernel 内部 groundwork，没有 IPC/preload/Renderer 用户入口，Project/全局显式控制、quiescence lease、自动回收与 LRU 仍未交付 |
+| 2026-07-28 | S20-2 Timeline & Composer Stability Complete under S26 priority | 在独立 clean candidate 中完成显式 following/reading 状态、caret/turn 阅读锚点、canonical output sentinel、Composer measured layout event、window/sidebar/detail 同步稳定与窄屏隐藏恢复；没有修改 Kernel、IPC 或 S26 内存治理源码 | commit `22cf15c` 通过 isolated typecheck/build、457 项 core、11 项 contract tests、diff check 与 Electron 行为 probe，独立 review 无 blocker/high。S20-2 标记 Complete；S26 继续保持唯一 In Progress，S20 暂停于 S20-3，S21 保持 Planned |
+
 
 ## 17. 计划变更记录
 
@@ -1014,4 +1049,5 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-27 | 8.1 | Subagent supervisor 通知改为结构化内部协作生命周期 | 实际使用中同一请求重复展示 attention、request、reply 与 wait，且把主 Agent 可自行处理的事项误报为用户警报 | 新增 D-046；稳定 request identity、同目标语义合并、成功 reply 原地 handled、管理工具简洁文案。缺少结构化 details 的旧消息仅兼容显示，不靠 Markdown 猜关联 |
 | 2026-07-27 | 8.2 | 增加 P2.1 Experience Refinement 与 S20–S25 | 用户确认下一阶段的三条主线及四项产品决策，需要在继续实现前固定依赖、范围、非目标和完成门槛 | S19 仍是唯一 In Progress，完成后恢复 S18-4，再进入 S20；Settings 分组和三个有限定制项、Subagent effective state、Magic Context 只读状态与后续结构化协议分别进入 Planned/Research |
 | 2026-07-28 | 8.3 | S19 通过 canonical AppImage 正式 gate，并恢复 S18-4 | Source snapshot 只能提前发现交互问题；最终完成必须绑定 clean commit、真实 AppImage、完整 P1/P2 回归和 S19 专项摘要 | S19 标记 Complete；S18/S18-4 恢复 In Progress。证据绑定 `b9562b4`、AppImage SHA-256 和脱敏报告目录，S20 继续等待 S18-4 完成 |
-| 2026-07-28 | 8.4 | 完成 S18-4、S20-1 与 S20-2，并按交错顺序进入 S21-1 | 体验基础必须先消除 Advisor delivery、intrinsic layout 动画与 Timeline 阅读位置的不稳定，再重构 Settings 信息架构；S20-3 按批准顺序在 S21-1 后恢复 | S18-4、S20-1、S20-2 标记 Complete；S18 与 S20 Paused；S21/S21-1 成为唯一 In Progress |
+| 2026-07-28 | 8.4 | 增加 S26 Memory Budget & Runtime Hibernation，并暂停 S20-2 | 实际运行出现约 5.4 GiB Renderer `PartitionAlloc`，重启后多个顶层 Pi Runtime 又快速恢复；只靠重启或 DOM 挂载窗口不能建立内存上限 | S26 成为唯一 In Progress；先建立脱敏诊断和预算，再消除重复 IPC、分页/驱逐 Conversation，并以显式休眠、operation lease、quiescence 和保守 LRU 回收空闲 Runtime；S20-2 在首个内存预算 gate 后恢复 |
+| 2026-07-28 | 8.5 | 在不改变 S26 优先级的前提下完成 S20-2 | S20-2 已在独立 clean worktree 接近完成，继续收口不会触碰 S26 的 Kernel/IPC/Runtime owner；完成事实必须纳入最新计划，而不能把旧顺序误写成 S21 已开始 | S20-2 标记 Complete，S20 继续 Paused 于 S20-3；S26 保持唯一 In Progress，首个预算 gate 后进入 S21-1 |
