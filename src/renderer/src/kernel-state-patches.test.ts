@@ -4,7 +4,8 @@ import test from 'node:test'
 import type {
   KernelConversationEntry,
   KernelState,
-  KernelStatePatch
+  KernelStatePatch,
+  KernelToolEntryPatchMetadata
 } from '../../shared/kernel-contract.ts'
 import {
   appendProjectedText,
@@ -167,6 +168,76 @@ test('tool output growth updates metadata atomically and preserves entry identit
   assert.equal(next.conversation.entries[1], untouched)
 })
 
+test('tool metadata replacement applies only to its expected snapshot', () => {
+  const running = subagentTool('running', 'stable output')
+  const expected = toolMetadata(running)
+  const participant = running.subagent!.participants[0]!
+  const completed: KernelToolEntryPatchMetadata = {
+    ...expected,
+    status: 'success',
+    durationMs: 2300,
+    subagent: {
+      ...running.subagent!,
+      participants: [{
+        ...participant,
+        status: 'completed',
+        currentTool: null,
+        turnCount: 3,
+        toolCount: 4,
+        tokens: 1250,
+        durationMs: 2300,
+        finalOutput: 'Done.'
+      }]
+    }
+  }
+  const state = kernelState([running])
+  const next = applyStatePatches(state, [{
+    projectKey: state.activeProjectKey,
+    sessionKey: state.activeSessionKey,
+    conversation: {
+      entries: [{
+        type: 'replace-tool-metadata',
+        index: 0,
+        toolCallId: running.toolCallId,
+        expectedOutputLength: running.output.length,
+        expected,
+        metadata: completed
+      }]
+    }
+  }])
+
+  const patched = next.conversation.entries[0]
+  assert.equal(patched?.kind === 'tool' ? patched.output : null, 'stable output')
+  assert.equal(patched?.kind === 'tool' ? patched.status : null, 'success')
+  assert.equal(patched?.kind === 'tool' ? patched.subagent?.participants[0]?.status : null, 'completed')
+
+  const staleRunning: KernelToolEntryPatchMetadata = {
+    ...expected,
+    subagent: {
+      ...running.subagent!,
+      participants: [{ ...participant, currentTool: 'grep', tokens: 250 }]
+    }
+  }
+  const afterStale = applyStatePatches(next, [{
+    projectKey: state.activeProjectKey,
+    sessionKey: state.activeSessionKey,
+    conversation: {
+      entries: [{
+        type: 'replace-tool-metadata',
+        index: 0,
+        toolCallId: running.toolCallId,
+        expectedOutputLength: running.output.length,
+        expected,
+        metadata: staleRunning
+      }]
+    }
+  }])
+
+  assert.equal(afterStale.conversation.entries[0], patched)
+  assert.equal(patched?.kind === 'tool' ? patched.status : null, 'success')
+  assert.equal(patched?.kind === 'tool' ? patched.subagent?.participants[0]?.finalOutput : null, 'Done.')
+})
+
 test('a completed tool snapshot ignores an older duplicate running patch', () => {
   const completed = subagentTool('success', 'complete output')
   const completedParticipant = completed.subagent!.participants[0]!
@@ -316,6 +387,20 @@ function subagentTool(
         finalOutput: null
       }]
     }
+  }
+}
+
+function toolMetadata(
+  entry: Extract<KernelConversationEntry, { kind: 'tool' }>
+): KernelToolEntryPatchMetadata {
+  return {
+    status: entry.status,
+    details: entry.details,
+    truncated: entry.truncated,
+    durationMs: entry.durationMs,
+    subagent: entry.subagent,
+    todos: entry.todos,
+    attachments: entry.attachments
   }
 }
 

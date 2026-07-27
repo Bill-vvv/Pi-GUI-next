@@ -2923,7 +2923,7 @@ test('Pi patches append tool output and falls back for a non-prefix message rewr
   }
 })
 
-test('Subagent metadata-only tool changes use full state while output growth stays atomic', async () => {
+test('Subagent metadata-only tool changes use identity-safe patches while output growth stays atomic', async () => {
   const runtime = new FakeRuntimeHost()
   const kernel = new WorkbenchKernel(
     () => runtime,
@@ -3023,12 +3023,25 @@ test('Subagent metadata-only tool changes use full state while output growth sta
   })
 
   const metadataEvent = events.at(-1)
-  assert.equal(metadataEvent?.type, 'kernel.state-changed')
-  if (metadataEvent?.type === 'kernel.state-changed') {
-    const tool = metadataEvent.state.conversation.entries[0]
-    assert.equal(tool?.kind === 'tool' ? tool.output : null, 'working')
-    assert.equal(tool?.kind === 'tool' ? tool.subagent?.participants[0]?.currentTool : null, 'grep')
-    assert.equal(tool?.kind === 'tool' ? tool.subagent?.participants[0]?.tokens : null, 250)
+  assert.equal(metadataEvent?.type, 'kernel.state-patched')
+  const metadataPatch = metadataEvent?.type === 'kernel.state-patched'
+    ? metadataEvent.patch.conversation?.entries?.[0]
+    : undefined
+  assert.equal(metadataPatch?.type, 'replace-tool-metadata')
+  if (metadataPatch?.type === 'replace-tool-metadata') {
+    assert.equal(metadataPatch.toolCallId, 'subagent-1')
+    assert.equal(metadataPatch.expectedOutputLength, 'working'.length)
+    assert.equal(metadataPatch.expected.subagent?.participants[0]?.currentTool, 'read')
+    assert.equal(metadataPatch.metadata.subagent?.participants[0]?.currentTool, 'grep')
+    assert.equal(metadataPatch.metadata.subagent?.participants[0]?.tokens, 250)
+    const participant = metadataPatch.metadata.subagent?.participants[0]
+    assert.ok(participant)
+    participant.currentTool = 'mutated externally'
+    const storedTool = kernel.getState().conversation.entries[0]
+    assert.equal(
+      storedTool?.kind === 'tool' ? storedTool.subagent?.participants[0]?.currentTool : null,
+      'grep'
+    )
   }
 
   runtime.emit({
@@ -3065,17 +3078,22 @@ test('Subagent metadata-only tool changes use full state while output growth sta
   })
 
   const terminalEvent = events.at(-1)
-  assert.equal(terminalEvent?.type, 'kernel.state-changed')
-  if (terminalEvent?.type === 'kernel.state-changed') {
-    const tool = terminalEvent.state.conversation.entries[0]
-    assert.equal(tool?.kind === 'tool' ? tool.status : null, 'success')
-    assert.equal(tool?.kind === 'tool' ? tool.output : null, 'working')
-    assert.equal(tool?.kind === 'tool' ? tool.subagent?.participants[0]?.status : null, 'completed')
+  assert.equal(terminalEvent?.type, 'kernel.state-patched')
+  const terminalPatch = terminalEvent?.type === 'kernel.state-patched'
+    ? terminalEvent.patch.conversation?.entries?.[0]
+    : undefined
+  assert.equal(terminalPatch?.type, 'replace-tool-metadata')
+  if (terminalPatch?.type === 'replace-tool-metadata') {
+    assert.equal(terminalPatch.metadata.status, 'success')
+    assert.equal(terminalPatch.metadata.subagent?.participants[0]?.status, 'completed')
     assert.equal(
-      tool?.kind === 'tool' ? tool.subagent?.participants[0]?.finalOutput : null,
+      terminalPatch.metadata.subagent?.participants[0]?.finalOutput,
       'Review complete.'
     )
   }
+  const storedTool = kernel.getState().conversation.entries[0]
+  assert.equal(storedTool?.kind === 'tool' ? storedTool.status : null, 'success')
+  assert.equal(storedTool?.kind === 'tool' ? storedTool.output : null, 'working')
 })
 
 test('a successful supervisor reply publishes the handled request through full state', async () => {

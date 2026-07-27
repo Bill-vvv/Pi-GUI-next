@@ -567,6 +567,16 @@ export type KernelToolEntry = {
   attachments?: KernelToolImageAttachment[]
 }
 
+export type KernelToolEntryPatchMetadata = {
+  status: KernelToolEntry['status']
+  details: string
+  truncated: boolean
+  durationMs: number | null
+  subagent: KernelSubagentRun | null
+  todos: KernelTodoItem[] | undefined
+  attachments: KernelToolImageAttachment[] | undefined
+}
+
 export type KernelSubagentCoordination = {
   runId: string
   agent: string
@@ -825,6 +835,14 @@ export type KernelConversationEntryPatch =
       truncated: boolean
       durationMs: number | null
       subagent: KernelSubagentRun | null
+    }
+  | {
+      type: 'replace-tool-metadata'
+      index: number
+      toolCallId: string
+      expectedOutputLength: number
+      expected: KernelToolEntryPatchMetadata
+      metadata: KernelToolEntryPatchMetadata
     }
 
 export type KernelConversationPatch = {

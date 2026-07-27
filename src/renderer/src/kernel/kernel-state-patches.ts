@@ -1,4 +1,9 @@
-import type { KernelState, KernelStatePatch } from '../../../shared/kernel-contract'
+import type {
+  KernelState,
+  KernelStatePatch,
+  KernelToolEntry,
+  KernelToolEntryPatchMetadata
+} from '../../../shared/kernel-contract'
 
 export function applyStatePatches(
   state: KernelState,
@@ -68,6 +73,16 @@ export function applyStatePatches(
         if (current.toolCallId !== change.toolCallId) {
           throw new Error('Conversation tool patch identity mismatch.')
         }
+        if (change.type === 'replace-tool-metadata') {
+          const currentMetadata = toolEntryPatchMetadata(current)
+          if (sameProjectedValue(currentMetadata, change.metadata)) continue
+          if (
+            current.output.length !== change.expectedOutputLength ||
+            !sameProjectedValue(currentMetadata, change.expected)
+          ) continue
+          entries[change.index] = { ...current, ...change.metadata }
+          continue
+        }
         const output = appendProjectedText(current.output, change.from, change.output)
         if (output === null) continue
         entries[change.index] = {
@@ -95,6 +110,38 @@ export function applyStatePatches(
       ? { entries, activeRunStartIndex }
       : state.conversation
   }
+}
+
+function toolEntryPatchMetadata(entry: KernelToolEntry): KernelToolEntryPatchMetadata {
+  return {
+    status: entry.status,
+    details: entry.details,
+    truncated: entry.truncated,
+    durationMs: entry.durationMs,
+    subagent: entry.subagent,
+    todos: entry.todos,
+    attachments: entry.attachments
+  }
+}
+
+function sameProjectedValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true
+  if (
+    left === null || right === null ||
+    typeof left !== 'object' || typeof right !== 'object' ||
+    Array.isArray(left) !== Array.isArray(right)
+  ) return false
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length &&
+      left.every((value, index) => sameProjectedValue(value, right[index]))
+  }
+  const leftRecord = left as Record<string, unknown>
+  const rightRecord = right as Record<string, unknown>
+  const leftKeys = Object.keys(leftRecord)
+  if (leftKeys.length !== Object.keys(rightRecord).length) return false
+  return leftKeys.every((key) =>
+    Object.hasOwn(rightRecord, key) && sameProjectedValue(leftRecord[key], rightRecord[key])
+  )
 }
 
 export function appendProjectedText(

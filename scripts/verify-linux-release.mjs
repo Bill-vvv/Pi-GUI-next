@@ -1913,7 +1913,8 @@ async function installMemoryEventProbe(cdp) {
           insert: 0,
           appendMessageText: 0,
           appendThinkingText: 0,
-          appendToolOutput: 0
+          appendToolOutput: 0,
+          replaceToolMetadata: 0
         }
       }
       const stringChars = (value, visited = new Set()) => {
@@ -1953,6 +1954,9 @@ async function installMemoryEventProbe(cdp) {
             } else if (patch.type === 'append-tool-output') {
               metrics.entryPatches.appendToolOutput += 1
               metrics.appendedChars += patch.output.length + patch.details.length
+            } else if (patch.type === 'replace-tool-metadata') {
+              metrics.entryPatches.replaceToolMetadata += 1
+              metrics.insertedPayloadChars += stringChars(patch.metadata)
             }
           }
           return

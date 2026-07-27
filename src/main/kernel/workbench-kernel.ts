@@ -26,6 +26,7 @@ import type {
   KernelSessionUsage,
   KernelSubagentRun,
   KernelToolEntry,
+  KernelToolEntryPatchMetadata,
   KernelState,
   KernelStatePatch,
   RuntimeStatus,
@@ -4729,6 +4730,13 @@ function copyPatch(patch: KernelStatePatch): KernelStatePatch {
                         subagent: copySubagentRun(entryPatch.subagent)
                       }
                     }
+                    if (entryPatch.type === 'replace-tool-metadata') {
+                      return {
+                        ...entryPatch,
+                        expected: copyToolEntryPatchMetadata(entryPatch.expected),
+                        metadata: copyToolEntryPatchMetadata(entryPatch.metadata)
+                      }
+                    }
                     return { ...entryPatch }
                   })
                 }),
@@ -4787,22 +4795,33 @@ function createConversationEntryPatch(
       previous.name !== next.name ||
       previous.args !== next.args ||
       previous.timestamp !== next.timestamp ||
-      !sameTodoItems(previous.todos, next.todos) ||
-      !sameToolImageAttachments(previous.attachments, next.attachments) ||
-      !next.output.startsWith(previous.output) ||
-      next.output.length === previous.output.length
+      !next.output.startsWith(previous.output)
     ) return null
+    if (next.output.length > previous.output.length) {
+      if (
+        !sameTodoItems(previous.todos, next.todos) ||
+        !sameToolImageAttachments(previous.attachments, next.attachments)
+      ) return null
+      return {
+        type: 'append-tool-output',
+        index,
+        toolCallId: next.toolCallId,
+        from: previous.output.length,
+        output: next.output.slice(previous.output.length),
+        status: next.status,
+        details: next.details,
+        truncated: next.truncated,
+        durationMs: next.durationMs,
+        subagent: next.subagent
+      }
+    }
     return {
-      type: 'append-tool-output',
+      type: 'replace-tool-metadata',
       index,
       toolCallId: next.toolCallId,
-      from: previous.output.length,
-      output: next.output.slice(previous.output.length),
-      status: next.status,
-      details: next.details,
-      truncated: next.truncated,
-      durationMs: next.durationMs,
-      subagent: next.subagent
+      expectedOutputLength: previous.output.length,
+      expected: toolEntryPatchMetadata(previous),
+      metadata: toolEntryPatchMetadata(next)
     }
   }
 
@@ -4838,6 +4857,29 @@ function copyConversationEntry(entry: KernelConversationEntry): KernelConversati
     attachments: entry.attachments.map((attachment) => attachment.type === 'image'
       ? { ...attachment, hints: [...attachment.hints] }
       : { ...attachment })
+  }
+}
+
+function toolEntryPatchMetadata(entry: KernelToolEntry): KernelToolEntryPatchMetadata {
+  return {
+    status: entry.status,
+    details: entry.details,
+    truncated: entry.truncated,
+    durationMs: entry.durationMs,
+    subagent: entry.subagent,
+    todos: entry.todos,
+    attachments: entry.attachments
+  }
+}
+
+function copyToolEntryPatchMetadata(
+  metadata: KernelToolEntryPatchMetadata
+): KernelToolEntryPatchMetadata {
+  return {
+    ...metadata,
+    subagent: copySubagentRun(metadata.subagent),
+    todos: metadata.todos?.map((todo) => ({ ...todo })),
+    attachments: copyToolImageAttachments(metadata.attachments)
   }
 }
 
