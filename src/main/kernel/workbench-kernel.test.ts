@@ -722,7 +722,7 @@ test('normal start and stop follows the lifecycle', async () => {
   assert.equal(kernel.getState().runtime.status, 'stopped')
 })
 
-test('appearance settings persist strict theme, accent, transparency, and text size changes', async () => {
+test('appearance settings persist strict visual and token count format changes', async () => {
   const persisted: AppearanceSettings[] = []
   const kernel = new WorkbenchKernel(
     () => new FakeRuntimeHost(),
@@ -740,6 +740,7 @@ test('appearance settings persist strict theme, accent, transparency, and text s
     accentColor: 'amber',
     surfaceTransparency: 20,
     textSize: 'default',
+    tokenCountFormat: 'full',
     uiFontFamily: null,
     codeFontFamily: null
   })
@@ -748,6 +749,7 @@ test('appearance settings persist strict theme, accent, transparency, and text s
     accentColor: 'blue',
     surfaceTransparency: 30,
     textSize: 'large',
+    tokenCountFormat: 'compact',
     uiFontFamily: null,
     codeFontFamily: null
   })
@@ -756,6 +758,7 @@ test('appearance settings persist strict theme, accent, transparency, and text s
     accentColor: 'blue',
     surfaceTransparency: 30,
     textSize: 'large',
+    tokenCountFormat: 'compact',
     uiFontFamily: null,
     codeFontFamily: null
   }])
@@ -765,6 +768,19 @@ test('appearance settings persist strict theme, accent, transparency, and text s
       accentColor: 'amber',
       surfaceTransparency: 20,
       textSize: 'default',
+      tokenCountFormat: 'full',
+      uiFontFamily: null,
+      codeFontFamily: null
+    } as unknown as AppearanceSettings),
+    /Invalid appearance settings/
+  )
+  await assert.rejects(
+    kernel.setAppearance({
+      theme: 'system',
+      accentColor: 'amber',
+      surfaceTransparency: 20,
+      textSize: 'default',
+      tokenCountFormat: 'short',
       uiFontFamily: null,
       codeFontFamily: null
     } as unknown as AppearanceSettings),

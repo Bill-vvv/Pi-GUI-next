@@ -85,7 +85,7 @@ test('concurrent project registrations complete in FIFO order without temporary 
   const configDirectory = join(configHome, 'pi-gui-next')
   const configText = await readFile(join(configDirectory, 'config.json'), 'utf8')
   assert.deepEqual(JSON.parse(configText), {
-    version: 12,
+    version: 13,
     projects: [firstProject, secondProject],
     activeProjectKey: secondProject.path,
     sessionNaming: { mode: 'auto' },
@@ -94,6 +94,7 @@ test('concurrent project registrations complete in FIFO order without temporary 
       accentColor: 'amber',
       surfaceTransparency: 20,
       textSize: 'default',
+      tokenCountFormat: 'full',
       uiFontFamily: null,
       codeFontFamily: null
     },
@@ -172,7 +173,7 @@ test('session naming settings migrate to the current config without storing OAut
     modelId: 'gpt-5.4-mini'
   })
   assert.deepEqual(JSON.parse(await readFile(join(configDirectory, 'config.json'), 'utf8')), {
-    version: 12,
+    version: 13,
     projects: [project],
     activeProjectKey: project.path,
     sessionNaming: {
@@ -185,6 +186,7 @@ test('session naming settings migrate to the current config without storing OAut
       accentColor: 'amber',
       surfaceTransparency: 20,
       textSize: 'default',
+      tokenCountFormat: 'full',
       uiFontFamily: null,
       codeFontFamily: null
     },
@@ -198,7 +200,7 @@ test('session naming settings migrate to the current config without storing OAut
   })
 })
 
-test('appearance settings migrate config v4 to v12 and persist theme, accent, transparency, and text size', async (t) => {
+test('appearance settings migrate config v4 to v13 and persist theme, accent, transparency, text size, and token format', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-gui-appearance-settings-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const configHome = join(root, 'config')
@@ -223,6 +225,7 @@ test('appearance settings migrate config v4 to v12 and persist theme, accent, tr
     accentColor: 'amber',
     surfaceTransparency: 20,
     textSize: 'default',
+    tokenCountFormat: 'full',
     uiFontFamily: 'Noto Sans',
     codeFontFamily: 'JetBrains Mono'
   })
@@ -232,13 +235,14 @@ test('appearance settings migrate config v4 to v12 and persist theme, accent, tr
       accentColor: 'purple',
       surfaceTransparency: 30,
       textSize: 'large',
+      tokenCountFormat: 'compact',
       uiFontFamily: 'Noto Sans',
       codeFontFamily: 'JetBrains Mono'
     })
     assert.equal((await new ProjectStore(options).loadAppearance()).theme, theme)
   }
   assert.deepEqual(JSON.parse(await readFile(join(configDirectory, 'config.json'), 'utf8')), {
-    version: 12,
+    version: 13,
     projects: [project],
     activeProjectKey: project.path,
     sessionNaming: { mode: 'auto' },
@@ -247,6 +251,7 @@ test('appearance settings migrate config v4 to v12 and persist theme, accent, tr
       accentColor: 'purple',
       surfaceTransparency: 30,
       textSize: 'large',
+      tokenCountFormat: 'compact',
       uiFontFamily: 'Noto Sans',
       codeFontFamily: 'JetBrains Mono'
     },
@@ -258,6 +263,45 @@ test('appearance settings migrate config v4 to v12 and persist theme, accent, tr
     shortcuts: DEFAULT_SHORTCUT_SETTINGS,
     subagent: DEFAULT_SUBAGENT_SETTINGS
   })
+})
+
+test('config v12 gains the default full token count format and persists v13', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-gui-token-format-v12-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const configHome = join(root, 'config')
+  const configDirectory = join(configHome, 'pi-gui-next')
+  const configFile = join(configDirectory, 'config.json')
+  await mkdir(configDirectory, { recursive: true })
+  await writeFile(configFile, JSON.stringify({
+    version: 12,
+    projects: [],
+    activeProjectKey: null,
+    sessionNaming: { mode: 'auto' },
+    appearance: {
+      theme: 'system',
+      accentColor: 'amber',
+      surfaceTransparency: 20,
+      textSize: 'default',
+      uiFontFamily: null,
+      codeFontFamily: null
+    },
+    general: {
+      startupWorkspaceRestore: 'restore',
+      doubleClickBorderMaximize: true,
+      fastExtensionLoading: false
+    },
+    shortcuts: DEFAULT_SHORTCUT_SETTINGS,
+    subagent: DEFAULT_SUBAGENT_SETTINGS
+  }))
+  const store = new ProjectStore({ configHome, stateHome: join(root, 'state') })
+
+  const appearance = await store.loadAppearance()
+  assert.equal(appearance.tokenCountFormat, 'full')
+  await store.saveAppearance({ ...appearance, tokenCountFormat: 'compact' })
+
+  const persisted = JSON.parse(await readFile(configFile, 'utf8'))
+  assert.equal(persisted.version, 13)
+  assert.equal(persisted.appearance.tokenCountFormat, 'compact')
 })
 
 test('config v7 gains the default text size and roundtrips startup workspace restore', async (t) => {
@@ -292,6 +336,7 @@ test('config v7 gains the default text size and roundtrips startup workspace res
     accentColor: 'green',
     surfaceTransparency: 10,
     textSize: 'default',
+    tokenCountFormat: 'full',
     uiFontFamily: null,
     codeFontFamily: null
   })
@@ -312,7 +357,7 @@ test('config v7 gains the default text size and roundtrips startup workspace res
     fastExtensionLoading: true
   })
   assert.deepEqual(JSON.parse(await readFile(join(configDirectory, 'config.json'), 'utf8')), {
-    version: 12,
+    version: 13,
     projects: [project],
     activeProjectKey: project.path,
     sessionNaming: { mode: 'auto' },
@@ -321,6 +366,7 @@ test('config v7 gains the default text size and roundtrips startup workspace res
       accentColor: 'green',
       surfaceTransparency: 10,
       textSize: 'default',
+      tokenCountFormat: 'full',
       uiFontFamily: null,
       codeFontFamily: null
     },
@@ -334,7 +380,7 @@ test('config v7 gains the default text size and roundtrips startup workspace res
   })
 })
 
-test('config v11 strictly migrates fast extension loading to false and persists v12', async (t) => {
+test('config v11 strictly migrates fast extension loading to false and persists v13', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-gui-general-v11-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const configHome = join(root, 'config')
@@ -382,7 +428,7 @@ test('config v11 strictly migrates fast extension loading to false and persists 
     fastExtensionLoading: true
   })
   const persisted = JSON.parse(await readFile(configFile, 'utf8'))
-  assert.equal(persisted.version, 12)
+  assert.equal(persisted.version, 13)
   assert.deepEqual(persisted.general, {
     startupWorkspaceRestore: 'restore',
     doubleClickBorderMaximize: true,
@@ -491,11 +537,11 @@ test('shortcut settings migrate from v8, roundtrip null bindings, and restore de
   await store.saveShortcuts(DEFAULT_SHORTCUT_SETTINGS)
   assert.deepEqual(await store.loadShortcuts(), DEFAULT_SHORTCUT_SETTINGS)
   const persisted = JSON.parse(await readFile(configFile, 'utf8'))
-  assert.equal(persisted.version, 12)
+  assert.equal(persisted.version, 13)
   assert.deepEqual(persisted.shortcuts, DEFAULT_SHORTCUT_SETTINGS)
 })
 
-test('subagent settings migrate from v9 and v10 and persist as config v12', async (t) => {
+test('subagent settings migrate from v9 and v10 and persist as config v13', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-gui-subagent-settings-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const configHome = join(root, 'config')
@@ -531,12 +577,15 @@ test('subagent settings migrate from v9 and v10 and persist as config v12', asyn
     stateHome: join(root, 'state')
   }).loadSubagent(), { maxDepth: 2 })
   let persisted = JSON.parse(await readFile(configFile, 'utf8'))
-  assert.equal(persisted.version, 12)
+  assert.equal(persisted.version, 13)
   assert.deepEqual(persisted.subagent, { maxDepth: 2 })
 
+  const legacyV10Appearance = { ...persisted.appearance }
+  delete legacyV10Appearance.tokenCountFormat
   await writeFile(configFile, JSON.stringify({
     ...persisted,
     version: 10,
+    appearance: legacyV10Appearance,
     subagent: { maxDepth: 1, preventCycles: false }
   }))
   assert.deepEqual(await new ProjectStore({
@@ -545,7 +594,7 @@ test('subagent settings migrate from v9 and v10 and persist as config v12', asyn
   }).loadSubagent(), { maxDepth: 1 })
   await store.saveSubagent({ maxDepth: 3 })
   persisted = JSON.parse(await readFile(configFile, 'utf8'))
-  assert.equal(persisted.version, 12)
+  assert.equal(persisted.version, 13)
   assert.deepEqual(persisted.subagent, { maxDepth: 3 })
   assert.throws(
     () => store.saveSubagent({ maxDepth: 4 as 1 }),
@@ -731,7 +780,7 @@ test('version 1 project and session files migrate on the next write', async (t) 
   })
 
   assert.deepEqual(JSON.parse(await readFile(join(configDirectory, 'config.json'), 'utf8')), {
-    version: 12,
+    version: 13,
     projects: [oldProject, newProject],
     activeProjectKey: newProject.path,
     sessionNaming: { mode: 'auto' },
@@ -740,6 +789,7 @@ test('version 1 project and session files migrate on the next write', async (t) 
       accentColor: 'amber',
       surfaceTransparency: 20,
       textSize: 'default',
+      tokenCountFormat: 'full',
       uiFontFamily: null,
       codeFontFamily: null
     },

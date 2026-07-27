@@ -453,6 +453,7 @@ const initialState: KernelState = {
   appearance: {
     theme: 'system',
     textSize: 'default',
+    tokenCountFormat: 'full',
     accentColor: 'amber',
     surfaceTransparency: 20,
     uiFontFamily: null,

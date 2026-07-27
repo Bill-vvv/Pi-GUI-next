@@ -182,6 +182,7 @@ test('Timeline keeps the Agent name on a clickable completion capsule without th
   const detailHtml = renderToStaticMarkup(createElement(SubagentTaskDetail, {
     entry: completion,
     participant: completionParticipant,
+    tokenCountFormat: 'full',
     onClose: () => undefined
   }))
   assert.match(detailHtml, /Private completion preview/)
@@ -275,6 +276,7 @@ test('SubagentTaskDetail SSR renders normalized fields, controls and error befor
   const html = renderToStaticMarkup(createElement(SubagentTaskDetail, {
     entry: toolEntry(normalized),
     participant: normalized,
+    tokenCountFormat: 'full',
     onClose: () => undefined
   }))
 
@@ -313,6 +315,7 @@ test('SubagentTaskDetail SSR uses the safe Markdown pipeline for final output', 
   const html = renderToStaticMarkup(createElement(SubagentTaskDetail, {
     entry: { ...toolEntry(completed), truncated: true },
     participant: completed,
+    tokenCountFormat: 'full',
     onClose: () => undefined
   }))
 

@@ -60,21 +60,24 @@ export async function readSessionActivityAt(pointer: SessionPointer): Promise<nu
     return null
   }
 
-  let activityAt: number | null = null
-  for (const entry of entries) {
-    if (entry.type !== 'message') continue
-    const timestamp = sessionTimestamp(entry.timestamp)
-    if (timestamp !== null && (activityAt === null || timestamp > activityAt)) {
-      activityAt = timestamp
-    }
+  const branch = activeSessionBranch(entries)
+  for (let index = branch.length - 1; index >= 0; index -= 1) {
+    const entry = branch[index]
+    if (entry?.type === 'message') return sessionTimestamp(entry.timestamp)
   }
-  return activityAt
+  return null
 }
 
 export async function readSessionMessages(pointer: SessionPointer): Promise<unknown[]> {
   const entries = await readSessionTranscript(pointer)
   if (entries.length === 0) return []
 
+  return activeSessionBranch(entries)
+    .filter((candidate) => candidate.type === 'message' && isObject(candidate.message))
+    .map((candidate) => candidate.message)
+}
+
+function activeSessionBranch(entries: SessionTranscriptEntry[]): SessionTranscriptEntry[] {
   const entriesById = new Map(entries.map((entry) => [entry.id, entry]))
   const branch: SessionTranscriptEntry[] = []
   let entry: SessionTranscriptEntry | undefined = entries.at(-1)
@@ -83,10 +86,7 @@ export async function readSessionMessages(pointer: SessionPointer): Promise<unkn
     entry = entry.parentId === null ? undefined : entriesById.get(entry.parentId)
   }
   branch.reverse()
-
   return branch
-    .filter((candidate) => candidate.type === 'message' && isObject(candidate.message))
-    .map((candidate) => candidate.message)
 }
 
 function parseLine(line: string, lineNumber: number): unknown {
@@ -121,11 +121,13 @@ function validateParentGraph(
   }
 }
 
+const PI_SESSION_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u
+
 function sessionTimestamp(value: unknown): number | null {
-  if (typeof value === 'number') return Number.isFinite(value) ? value : null
-  if (typeof value !== 'string') return null
+  if (typeof value !== 'string' || !PI_SESSION_TIMESTAMP_PATTERN.test(value)) return null
   const timestamp = Date.parse(value)
-  return Number.isFinite(timestamp) ? timestamp : null
+  if (!Number.isFinite(timestamp)) return null
+  return new Date(timestamp).toISOString() === value ? timestamp : null
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

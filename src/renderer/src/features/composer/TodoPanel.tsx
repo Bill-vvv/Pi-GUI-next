@@ -32,19 +32,27 @@ export function TodoPanel({ todos }: TodoPanelProps): React.JSX.Element {
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="composer-todo-summary">
-          <span className="composer-todo-mark" aria-hidden="true" />
+          <span
+            className={`composer-todo-state-icon ${status.tone}`}
+            role="status"
+            aria-label={status.label}
+            aria-live="polite"
+          >
+            <Icon name={status.icon} size="control" />
+          </span>
           <strong>任务</strong>
-          <span className="composer-todo-count">{completedCount} / {todos.length} 完成</span>
+          <span
+            className="composer-todo-count"
+            aria-label={`已完成 ${completedCount} 项，共 ${todos.length} 项`}
+          >
+            {completedCount}/{todos.length}
+          </span>
           {!expanded && current !== null ? (
             <span className="composer-todo-current">
               <span aria-hidden="true">· </span>
               {current.content}
             </span>
           ) : null}
-        </span>
-        <span className={`composer-todo-state ${status.tone}`} role="status" aria-live="polite">
-          <span className="composer-todo-state-dot" aria-hidden="true" />
-          {status.label}
         </span>
         <span className="composer-todo-chevron" aria-hidden="true">
           <Icon name="chevron-down" size="sm" />
@@ -58,12 +66,12 @@ export function TodoPanel({ todos }: TodoPanelProps): React.JSX.Element {
               <li
                 className={`composer-todo-item ${todo.status}`}
                 data-priority={todo.priority ?? undefined}
+                aria-label={`${index + 1}. ${todo.content}，${todoStatusLabel(todo.status)}`}
                 aria-current={todo.status === 'in_progress' ? 'step' : undefined}
                 key={todo.id ?? `${index}:${todo.content}`}
               >
-                <span className="composer-todo-item-mark" aria-hidden="true" />
+                <span className="composer-todo-item-index" aria-hidden="true">{index + 1}</span>
                 <span className="composer-todo-item-content">{todo.content}</span>
-                <span className="composer-todo-item-status">{todoStatusLabel(todo.status)}</span>
               </li>
             ))}
           </ol>
@@ -74,16 +82,17 @@ export function TodoPanel({ todos }: TodoPanelProps): React.JSX.Element {
 }
 
 function todoPanelStatus(todos: readonly KernelTodoItem[]): {
+  icon: 'loader' | 'check'
   label: string
   tone: 'active' | 'waiting' | 'settled'
 } {
   if (todos.some(({ status }) => status === 'in_progress')) {
-    return { label: '正在处理', tone: 'active' }
+    return { icon: 'loader', label: '正在处理', tone: 'active' }
   }
   if (todos.some(({ status }) => status === 'pending')) {
-    return { label: '等待继续', tone: 'waiting' }
+    return { icon: 'loader', label: '等待继续', tone: 'waiting' }
   }
-  return { label: '已结束', tone: 'settled' }
+  return { icon: 'check', label: '已完成', tone: 'settled' }
 }
 
 function todoStatusLabel(status: KernelTodoStatus): string {

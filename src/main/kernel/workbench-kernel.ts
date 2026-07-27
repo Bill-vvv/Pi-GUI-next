@@ -4955,6 +4955,7 @@ function copyAppearanceSettings(settings: AppearanceSettings): AppearanceSetting
     accentColor: settings.accentColor,
     surfaceTransparency: settings.surfaceTransparency,
     textSize: settings.textSize,
+    tokenCountFormat: settings.tokenCountFormat,
     uiFontFamily: settings.uiFontFamily,
     codeFontFamily: settings.codeFontFamily
   }
@@ -4965,6 +4966,7 @@ function sameAppearanceSettings(first: AppearanceSettings, second: AppearanceSet
     first.accentColor === second.accentColor &&
     first.surfaceTransparency === second.surfaceTransparency &&
     first.textSize === second.textSize &&
+    first.tokenCountFormat === second.tokenCountFormat &&
     first.uiFontFamily === second.uiFontFamily &&
     first.codeFontFamily === second.codeFontFamily
 }
@@ -5063,6 +5065,7 @@ function assertAppearanceSettings(value: AppearanceSettings): void {
     !isAppearanceAccentColor(value.accentColor) ||
     !isSurfaceTransparency(value.surfaceTransparency) ||
     !isTextSize(value.textSize) ||
+    !isTokenCountFormat(value.tokenCountFormat) ||
     !isOptionalFontFamily(value.uiFontFamily) ||
     !isOptionalFontFamily(value.codeFontFamily)
   ) {
@@ -5088,6 +5091,10 @@ function isSurfaceTransparency(value: unknown): value is AppearanceSettings['sur
 
 function isTextSize(value: unknown): value is AppearanceSettings['textSize'] {
   return value === 'small' || value === 'default' || value === 'large'
+}
+
+function isTokenCountFormat(value: unknown): value is AppearanceSettings['tokenCountFormat'] {
+  return value === 'full' || value === 'compact'
 }
 
 function isOptionalFontFamily(value: unknown): value is string | null {

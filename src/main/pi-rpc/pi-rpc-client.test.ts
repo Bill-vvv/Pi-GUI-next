@@ -518,6 +518,74 @@ test('gets session token and context usage statistics', async () => {
   })
 })
 
+test('rejects malformed get_session_stats responses', async () => {
+  const valid = {
+    sessionId: 'session-1',
+    userMessages: 3,
+    assistantMessages: 4,
+    toolCalls: 5,
+    toolResults: 5,
+    totalMessages: 12,
+    tokens: {
+      input: 42000,
+      output: 3600,
+      cacheRead: 18000,
+      cacheWrite: 2000,
+      total: 65600
+    },
+    cost: 0.42,
+    contextUsage: {
+      tokens: 56000,
+      contextWindow: 200000,
+      percent: 28
+    }
+  }
+  const invalidData = [
+    { ...valid, userMessages: 1.5 },
+    { ...valid, cost: -0.01 },
+    { ...valid, tokens: { ...valid.tokens, input: Number.MAX_SAFE_INTEGER + 1 } },
+    { ...valid, contextUsage: { ...valid.contextUsage, tokens: 1.5 } },
+    { ...valid, contextUsage: { ...valid.contextUsage, contextWindow: 1.5 } },
+    { ...valid, contextUsage: { ...valid.contextUsage, percent: -0.001 } }
+  ]
+
+  for (const data of invalidData) {
+    const fake = createFakeProcess()
+    const client = new PiRpcClient(fake.child)
+    const stats = client.getSessionStats()
+    const [request] = readRequests(fake.stdin)
+    fake.stdout.write(`${JSON.stringify({ type: 'response', id: request?.id, success: true, data })}\n`)
+
+    await assert.rejects(stats, /Invalid Pi RPC get_session_stats response/)
+  }
+})
+
+test('accepts finite non-negative context percentages above 100', async () => {
+  const fake = createFakeProcess()
+  const client = new PiRpcClient(fake.child)
+  const stats = client.getSessionStats()
+  const [request] = readRequests(fake.stdin)
+
+  fake.stdout.write(`${JSON.stringify({
+    type: 'response',
+    id: request?.id,
+    success: true,
+    data: {
+      sessionId: 'session-1',
+      userMessages: 1,
+      assistantMessages: 1,
+      toolCalls: 0,
+      toolResults: 0,
+      totalMessages: 2,
+      tokens: { input: 120, output: 20, cacheRead: 0, cacheWrite: 0, total: 140 },
+      cost: 0.01,
+      contextUsage: { tokens: 128000, contextWindow: 100000, percent: 128 }
+    }
+  })}\n`)
+
+  assert.equal((await stats).contextUsage?.percent, 128)
+})
+
 test('rejects malformed get_available_models responses', async () => {
   const invalidData = [
     {},
@@ -529,6 +597,9 @@ test('rejects malformed get_available_models responses', async () => {
     { models: [{ id: 'gpt-test', provider: ' ' }] },
     { models: [{ id: 'gpt-test', provider: 'openai', reasoning: 'yes' }] },
     { models: [{ id: 'gpt-test', provider: 'openai', thinkingLevelMap: { low: 1 } }] },
+    { models: [{ id: 'gpt-test', provider: 'openai', contextWindow: 0 }] },
+    { models: [{ id: 'gpt-test', provider: 'openai', contextWindow: 1.5 }] },
+    { models: [{ id: 'gpt-test', provider: 'openai', contextWindow: Number.MAX_SAFE_INTEGER + 1 }] },
     { models: [{ id: 'gpt-test', provider: 'openai', cost: { input: 1 } }] },
     {
       models: [{

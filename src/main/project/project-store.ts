@@ -96,12 +96,16 @@ type ProjectConfigFileV7 = {
   general: GeneralSettings
 }
 
+type LegacyAppearanceSettingsV8 = LegacyAppearanceSettingsV7 & {
+  textSize: AppearanceSettings['textSize']
+}
+
 type ProjectConfigFileV8 = {
   version: 8
   projects: Array<{ path: string }>
   activeProjectKey: string | null
   sessionNaming: SessionNamingSettings
-  appearance: AppearanceSettings
+  appearance: LegacyAppearanceSettingsV8
   general: GeneralSettings
 }
 
@@ -110,7 +114,7 @@ type ProjectConfigFileV9 = {
   projects: Array<{ path: string }>
   activeProjectKey: string | null
   sessionNaming: SessionNamingSettings
-  appearance: AppearanceSettings
+  appearance: LegacyAppearanceSettingsV8
   general: GeneralSettings
   shortcuts: ShortcutSettings
 }
@@ -125,7 +129,7 @@ type ProjectConfigFileV10 = {
   projects: Array<{ path: string }>
   activeProjectKey: string | null
   sessionNaming: SessionNamingSettings
-  appearance: AppearanceSettings
+  appearance: LegacyAppearanceSettingsV8
   general: GeneralSettings
   shortcuts: ShortcutSettings
   subagent: LegacySubagentSettingsV10
@@ -136,15 +140,20 @@ type ProjectConfigFileV11 = {
   projects: Array<{ path: string }>
   activeProjectKey: string | null
   sessionNaming: SessionNamingSettings
-  appearance: AppearanceSettings
+  appearance: LegacyAppearanceSettingsV8
   general: Pick<GeneralSettings, 'startupWorkspaceRestore' | 'doubleClickBorderMaximize'>
   shortcuts: ShortcutSettings
   subagent: SubagentSettings
 }
 
-type ProjectConfigFile = Omit<ProjectConfigFileV11, 'version' | 'general'> & {
+type ProjectConfigFileV12 = Omit<ProjectConfigFileV11, 'version' | 'general'> & {
   version: 12
   general: GeneralSettings
+}
+
+type ProjectConfigFile = Omit<ProjectConfigFileV12, 'version' | 'appearance'> & {
+  version: 13
+  appearance: AppearanceSettings
 }
 
 export type ProjectRegistry = {
@@ -380,11 +389,21 @@ export class ProjectStore {
     if (isProjectConfigFile(value)) {
       return copyConfiguration(value)
     }
+    if (isProjectConfigFileV12(value)) {
+      return {
+        ...copyRegistry(value),
+        sessionNaming: copySessionNaming(value.sessionNaming),
+        appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
+        general: requireGeneral(value.general),
+        shortcuts: copyShortcutSettings(value.shortcuts),
+        subagent: copySubagent(value.subagent)
+      }
+    }
     if (isProjectConfigFileV11(value)) {
       return {
         ...copyRegistry(value),
         sessionNaming: copySessionNaming(value.sessionNaming),
-        appearance: copyAppearance(value.appearance),
+        appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
         general: {
           ...copyGeneralV11(value.general),
           fastExtensionLoading: DEFAULT_GENERAL_SETTINGS.fastExtensionLoading
@@ -397,7 +416,7 @@ export class ProjectStore {
       return {
         ...copyRegistry(value),
         sessionNaming: copySessionNaming(value.sessionNaming),
-        appearance: copyAppearance(value.appearance),
+        appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
         general: requireGeneral(value.general),
         shortcuts: copyShortcutSettings(value.shortcuts),
         subagent: { maxDepth: value.subagent.maxDepth }
@@ -407,7 +426,7 @@ export class ProjectStore {
       return {
         ...copyRegistry(value),
         sessionNaming: copySessionNaming(value.sessionNaming),
-        appearance: copyAppearance(value.appearance),
+        appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
         general: requireGeneral(value.general),
         shortcuts: copyShortcutSettings(value.shortcuts),
         subagent: { ...DEFAULT_SUBAGENT_SETTINGS }
@@ -417,7 +436,7 @@ export class ProjectStore {
       return {
         ...copyRegistry(value),
         sessionNaming: copySessionNaming(value.sessionNaming),
-        appearance: copyAppearance(value.appearance),
+        appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
         general: requireGeneral(value.general),
         shortcuts: copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS),
         subagent: { ...DEFAULT_SUBAGENT_SETTINGS }
@@ -784,7 +803,7 @@ function isProjectConfigFileV8(value: unknown): value is ProjectConfigFileV8 {
     new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
     (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
     !isSessionNaming(value.sessionNaming) ||
-    !isAppearance(value.appearance) ||
+    !isAppearanceV8(value.appearance) ||
     !acceptsGeneral(value.general)
   ) {
     return false
@@ -802,7 +821,7 @@ function isProjectConfigFileV9(value: unknown): value is ProjectConfigFileV9 {
     new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
     (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
     !isSessionNaming(value.sessionNaming) ||
-    !isAppearance(value.appearance) ||
+    !isAppearanceV8(value.appearance) ||
     !acceptsGeneral(value.general) ||
     !isShortcutSettings(value.shortcuts)
   ) {
@@ -815,13 +834,33 @@ function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
   if (
     !isRecord(value) ||
     Object.keys(value).length !== 8 ||
-    value.version !== 12 ||
+    value.version !== 13 ||
     !Array.isArray(value.projects) ||
     !value.projects.every(isProject) ||
     new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
     (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
     !isSessionNaming(value.sessionNaming) ||
     !isAppearance(value.appearance) ||
+    !acceptsGeneral(value.general) ||
+    !isShortcutSettings(value.shortcuts) ||
+    !isSubagent(value.subagent)
+  ) {
+    return false
+  }
+  return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
+}
+
+function isProjectConfigFileV12(value: unknown): value is ProjectConfigFileV12 {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 8 ||
+    value.version !== 12 ||
+    !Array.isArray(value.projects) ||
+    !value.projects.every(isProject) ||
+    new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
+    (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
+    !isSessionNaming(value.sessionNaming) ||
+    !isAppearanceV8(value.appearance) ||
     !acceptsGeneral(value.general) ||
     !isShortcutSettings(value.shortcuts) ||
     !isSubagent(value.subagent)
@@ -841,7 +880,7 @@ function isProjectConfigFileV11(value: unknown): value is ProjectConfigFileV11 {
     new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
     (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
     !isSessionNaming(value.sessionNaming) ||
-    !isAppearance(value.appearance) ||
+    !isAppearanceV8(value.appearance) ||
     !isGeneralV11(value.general) ||
     !isShortcutSettings(value.shortcuts) ||
     !isSubagent(value.subagent)
@@ -861,7 +900,7 @@ function isProjectConfigFileV10(value: unknown): value is ProjectConfigFileV10 {
     new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
     (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
     !isSessionNaming(value.sessionNaming) ||
-    !isAppearance(value.appearance) ||
+    !isAppearanceV8(value.appearance) ||
     !acceptsGeneral(value.general) ||
     !isShortcutSettings(value.shortcuts) ||
     !isLegacySubagentV10(value.subagent)
@@ -926,7 +965,7 @@ function isProjectConfigFileV4(value: unknown): value is ProjectConfigFileV4 {
 
 function toProjectConfigFile(configuration: ProjectConfiguration): ProjectConfigFile {
   return {
-    version: 12,
+    version: 13,
     projects: configuration.projects.map((project) => ({ ...project })),
     activeProjectKey: configuration.activeProjectKey,
     sessionNaming: copySessionNaming(configuration.sessionNaming),
@@ -967,6 +1006,7 @@ function copyAppearance(settings: AppearanceSettings): AppearanceSettings {
     accentColor: settings.accentColor,
     surfaceTransparency: settings.surfaceTransparency,
     textSize: settings.textSize,
+    tokenCountFormat: settings.tokenCountFormat,
     uiFontFamily: settings.uiFontFamily,
     codeFontFamily: settings.codeFontFamily
   }
@@ -1102,6 +1142,18 @@ function assertAppearance(value: AppearanceSettings): void {
 
 function isAppearance(value: unknown): value is AppearanceSettings {
   return isRecord(value) &&
+    Object.keys(value).length === 7 &&
+    isAppearanceTheme(value.theme) &&
+    isAppearanceAccentColor(value.accentColor) &&
+    isSurfaceTransparency(value.surfaceTransparency) &&
+    isTextSize(value.textSize) &&
+    isTokenCountFormat(value.tokenCountFormat) &&
+    isOptionalFontFamily(value.uiFontFamily) &&
+    isOptionalFontFamily(value.codeFontFamily)
+}
+
+function isAppearanceV8(value: unknown): value is LegacyAppearanceSettingsV8 {
+  return isRecord(value) &&
     Object.keys(value).length === 6 &&
     isAppearanceTheme(value.theme) &&
     isAppearanceAccentColor(value.accentColor) &&
@@ -1154,6 +1206,10 @@ function isSurfaceTransparency(value: unknown): value is AppearanceSettings['sur
 
 function isTextSize(value: unknown): value is AppearanceSettings['textSize'] {
   return value === 'small' || value === 'default' || value === 'large'
+}
+
+function isTokenCountFormat(value: unknown): value is AppearanceSettings['tokenCountFormat'] {
+  return value === 'full' || value === 'compact'
 }
 
 function isOptionalFontFamily(value: unknown): value is string | null {

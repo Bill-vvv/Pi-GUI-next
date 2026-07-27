@@ -26,6 +26,7 @@ import type {
   KernelToolImageAttachment
 } from '../../../../shared/kernel-contract'
 import { Icon } from '../../components/Icon'
+import { formatDuration } from '../../format-duration.ts'
 import { unknownErrorMessage } from '../../unknown-error-message'
 import { MarkdownMessage } from './MarkdownMessage'
 import {
@@ -446,7 +447,16 @@ function ThinkingStep({
   pinned?: boolean
 }): React.JSX.Element {
   const status = active ? 'running' : 'completed'
+  const activeSummaryLabel = active && entry.summary
+    ? latestThinkingSummaryLabel([entry])
+    : null
   const hasText = entry.text.trim().length > 0
+  const showDetail = hasText && (
+    activeSummaryLabel === null || thinkingSummarySemanticLineCount(entry.text) > 1
+  )
+  const title = active
+    ? <ThinkingStatus label={activeSummaryLabel ?? '正在思考'} />
+    : elapsedMs === null ? '思考' : `思考了 ${formatDuration(elapsedMs)}`
   const [expanded, setExpanded] = useState(pinned || active)
   const previousActiveRef = useRef(active)
   useLayoutEffect(() => {
@@ -459,25 +469,29 @@ function ThinkingStep({
   }, [active, pinned])
   return (
     <li className={`process-step thinking ${entry.summary ? 'summary' : 'narrative'} ${status}`}>
-      <details
-        className="process-thinking"
-        open={expanded}
-        onToggle={(event) => setExpanded(event.currentTarget.open)}
-      >
-        <summary className="process-thinking-summary">
-          <span className="process-thinking-title">
-            {active
-              ? <ThinkingStatus label="正在思考" />
-              : elapsedMs === null ? '思考' : `思考了 ${formatDuration(elapsedMs)}`}
-          </span>
-          <span className="process-thinking-expand" aria-hidden="true" />
-        </summary>
-        {expanded && hasText ? (
-          <div className="process-thinking-detail">
-            <MarkdownMessage text={entry.text} streaming={active} />
+      {showDetail ? (
+        <details
+          className="process-thinking"
+          open={expanded}
+          onToggle={(event) => setExpanded(event.currentTarget.open)}
+        >
+          <summary className="process-thinking-summary">
+            <span className="process-thinking-title">{title}</span>
+            <span className="process-thinking-expand" aria-hidden="true" />
+          </summary>
+          {expanded ? (
+            <div className="process-thinking-detail">
+              <MarkdownMessage text={entry.text} streaming={active} />
+            </div>
+          ) : null}
+        </details>
+      ) : (
+        <div className="process-thinking">
+          <div className="process-thinking-summary static">
+            <span className="process-thinking-title">{title}</span>
           </div>
-        ) : null}
-      </details>
+        </div>
+      )}
     </li>
   )
 }
@@ -1509,6 +1523,12 @@ function thinkingSummaryLineLabel(line: string): string | null {
   return label.length === 0 ? null : label
 }
 
+function thinkingSummarySemanticLineCount(text: string): number {
+  return text.split(/\r?\n/u).reduce((count, line) => (
+    thinkingSummaryLineLabel(line) === null ? count : count + 1
+  ), 0)
+}
+
 function currentRunningEntry<T extends KernelConversationEntry>(
   entries: readonly T[]
 ): T | undefined {
@@ -1734,13 +1754,4 @@ function fileBasename(path: string): string {
 function lineCount(value: string): number {
   if (value.length === 0) return 0
   return value.split('\n').length
-}
-
-function formatDuration(durationMs: number): string {
-  if (durationMs < 1_000) return `${durationMs}ms`
-  if (durationMs >= 60_000) {
-    const totalSeconds = Math.round(durationMs / 1_000)
-    return `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`
-  }
-  return `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 1 : 0)}s`
 }

@@ -360,7 +360,7 @@
 - 状态：Accepted；收紧 D-028 中 JSONL `lastActivityAt` 的事实口径
 - 决策：持久化 Session 的 `lastActivityAt` 取 Pi transcript 内最新 `type: "message"` entry 的时间。文件 mtime、最后一条任意 JSONL entry、Session 激活/恢复，以及启动时追加的 capability、`session_info`、模型或其他运行元数据都不得推进活动时间。新对话在尚未持久化时继续使用 provisional 活动时间；真实 prompt/run 完成后 Kernel 可即时推进内存活动时间，后续 transcript 扫描必须收敛到对应 message 时间。
 - 原因：加载 Extension 时可以在没有新对话内容的情况下追加 capability custom entry 并改写 JSONL mtime；若把文件或任意尾 entry 当成活动事实，单击历史 Session 就会刷新时间并改变排序，把“最近打开”错误伪装成“最近对话活动”。
-- 影响：Session 点击、恢复、能力握手和重命名不再改变时间或排序；用户/Assistant/toolResult/custom message 等真实 message entry 仍推进最近活动。活动时间读取是只读 metadata 投影，不建立第二份访问时间或持久化排序事实。
+- 影响：Session 点击、恢复、能力握手和重命名不再改变时间或排序；用户/Assistant/toolResult/custom message 等真实 message entry 仍推进最近活动。活动时间读取是只读 metadata 投影，不建立第二份访问时间或持久化排序事实。Pi 顶层 Session entry timestamp 只接受 `Date#toISOString()` 产生的 canonical UTC 字符串；数字秒、数字毫秒、相对时钟及可被 `Date.parse` 模糊解释的非 canonical 字符串不得进入 `lastActivityAt`。嵌套 message payload 自身的数字 timestamp 属于另一协议字段，不参与该边界。
 
 ## D-046 — Subagent supervisor 协作使用结构化生命周期
 
@@ -369,3 +369,35 @@
 - 决策：固定 `subagent_control_notice` 与 `subagent_supervisor_request` 继续进入 Conversation，但 Main 必须只从白名单 details 投影 `runId`、Agent、participant index、request ID、reason、是否需要 supervisor 回复及 `pending/handled` 生命周期。具体 request 使用稳定 request identity；同一 `runId + participant index` 的 supervisor request 替代泛化 `needs_attention`，重复事件原地 upsert。成功的 `subagent_supervisor` / `intercom` reply tool result 将对应 request 原地标为 handled，失败不得伪装已处理。Renderer 将该状态解释为主 Agent 内部协作而非默认用户警报；只有结构化 `completion_guard` 与 Watchdog blocker 使用 alert。`subagent_wait`、supervisor reply、status/steer/resume 等管理工具使用简洁状态文案，原始参数与输出只在展开的技术详情中出现。
 - 原因：同一个 supervisor 请求过去会同时产生泛化 attention、具体 request、reply 工具与 wait 工具，并把 Run ID、intercom target 和可执行命令直接堆入主阅读流；这既重复，也把“主 Agent 可自行处理”误报为“用户必须处理”。上游 custom message 已提供稳定结构化 identity，没有必要靠 Markdown 命令文本关联。
 - 影响：历史恢复与实时消息继续共用同一 projector；旧版缺少结构化 details 的通知保留兼容降级，但不获得跨消息关联。GUI 不建立任务数据库、不直接绕过主 Agent 回复子代理，也不从通知正文猜 `runId`。若主 Agent 真正需要产品选择或授权，仍通过正常 Assistant 对话向用户提问。
+
+## D-047 — P2.1 按收口门槛和单活动 Slice 推进三条体验线
+
+- 日期：2026-07-27
+- 状态：Accepted；扩展 P2 Workbench Foundation，不改变 P3 通用生态边界
+- 决策：下一阶段定义为 P2.1 Experience Refinement，集中推进动效与交互、Settings 优化与有限定制、Subagent/Magic Context 可解释性。S19 必须先在 canonical clean commit/worktree 上通过正式 `pnpm verify:linux`；随后恢复并完成 S18-4，之后按 S20 Motion Contract、Timeline/Composer 稳定性和 Settings Workspace 的依赖顺序实施。任一时刻仍只允许一个 Slice 为 `In Progress`；如果改变 S18-4 优先级，必须显式把它改为 Paused，而不是保持 Ready 却长期跳过。
+- 原因：当前 S19 dirty source snapshot 同时触及 Timeline、Workbench、Composer、Navigator 与 Settings，继续叠加体验改动会扩大冲突并破坏正式验收边界；三个新方向又共享 motion、设置生命周期和 typed status 基础，必须先固定依赖而不能作为互不相干的零散补丁并行写入同一工作树。
+- 影响：开发计划增加 S20–S25。设计调查和只读审计可以并行，source 实现保持单一 writer 和单活动 Slice；S18-5 继续 Pending，其中共享 status/usage 基础可在 S24/S25 重新利用，但 Advisor 专属范围不自动并入 Magic Context。
+
+## D-048 — Settings 使用四组导航并显式表达事实来源与生效时机
+
+- 日期：2026-07-27
+- 状态：Accepted；扩展 S14-02/S14-16 与 D-032/D-040 的设置入口边界
+- 决策：Settings Workspace 按“应用：常规/外观/快捷键”“模型：模型/凭证”“Agent：Subagent/Advisor/Context”“生态：Package/拓展/技能”分组；自动对话命名并入常规，删除单项偏好分类。导航允许收起，并以窄 typed section/group metadata 提供只索引真实设置的应用内搜索和 deep link。重要设置必须能区分 application/user/project/session 作用域、GUI/Pi/Extension 事实来源，以及 immediate/next-session/reload 生效时机；持久化 saved config 与当前 Runtime loaded config 不得混为一体。
+- 原因：当前设置能力已较完整，但 Package 安装、Extension resource、当前 Session 加载和配置健康仍主要靠分散说明文字区分；用户难以判断修改影响范围和是否已经作用于当前 Runtime。分组、搜索和统一 lifecycle 语义比继续堆叠新控件更能改善可理解性。
+- 影响：Package 安装与 Extension 启停继续由拓展页拥有；Subagent、Advisor 与 Context 专页只管理各自功能和真实状态。设置保存不静默 reload，reload 失败不伪装已应用。`settings-redesign-preview.html` 只是交互参考，不是生产状态或未接通选项的事实源；本决定不建立通用插件设置 registry 或 OS URL protocol。
+
+## D-049 — Personalization v1 只开放三个有限语义设置
+
+- 日期：2026-07-27
+- 状态：Accepted；扩展现有 AppearanceSettings 的有限 token 配置方向
+- 决策：第一批新增用户级 `conversationWidth: compact | standard | wide`、`navigatorDensity: comfortable | compact` 与 `motionPreference: system | reduced | minimal`。阅读宽度通过语义化 Conversation max-width 控制，窄窗口服从可用空间；Navigator 密度只调整视觉行高、组间距与辅助信息，不改变每页 5 个 Session、分页外保留项或最小交互命中；动效偏好只能在 OS 能力之上进一步减少动效，不能覆盖 `prefers-reduced-motion` 强制恢复完整动画。
+- 原因：这三项分别覆盖阅读、导航和状态变化的高频差异，同时可以落在统一 token 与有限枚举上，不需要把产品变成任意 CSS 编辑器。连续像素、颜色和布局参数会扩大验证组合并破坏响应式与无障碍边界。
+- 影响：配置需要明确 schema migration、非法值回退和首帧尽早应用。首批不加入任意 CSS、像素宽度、颜色、圆角、间距、代码字号比例、默认 Sidebar 状态、代码换行或详情宽度；后续选项必须基于真实使用反馈另行决策。
+
+## D-050 — Subagent 与 Magic Context 优化以 typed effective/status 投影为边界
+
+- 日期：2026-07-27
+- 状态：Accepted；扩展 D-033/D-035/D-038/D-042，不放宽现有文件与运行控制边界
+- 决策：Subagent 下一阶段由 Main 投影 effective Agent definition、builtin/user/project 覆盖来源、最终 enabled/depth、Package/Extension 状态、当前 Runtime 是否发现 Agent，以及 reload 差异；Renderer 不解析 Markdown frontmatter、Pi settings 或名称。任务详情可以消费现有 run/participant 摘要增加同 run 切换、真实状态汇总和实时到历史的一致性，但不读取 child transcript/artifact。Magic Context 安装与 Extension 启停继续留在拓展页；独立 Context 页只读展示 Package、Extension、当前 Session loaded、真实 `/ctx-status`、状态时间与 stale 语义，并提供复制官方 setup/doctor 命令和文档入口。更深 usage/health UI 必须等待上游版本化 capability/status/usage 协议。
+- 原因：用户当前最缺少的是“为什么不可用、当前到底加载了什么”的解释，而不是另一套 Agent/Context Runtime。Renderer 直接读取 Agent 文件、Magic Context SQLite 或 debug telemetry 会建立第二份事实；凭文本拼接 stop/steer/setup/doctor 又会突破 typed IPC 和父 Agent 协调所有权。
+- 影响：Magic Context 的 Package installed、Extension enabled、Session loaded 与 health verified 保持四个不同事实；没有结构化 doctor 证据时健康为 unknown，Runtime reload 后旧状态立即失效。GUI 不执行任意 Shell、不编辑 `magic-context.jsonc`、不解析私有数据库、不从 Pi compaction 推断后台状态，也不在 `pi-subagents` 提供稳定 typed capability 前加入 stop/interrupt/resume/steer/supervisor reply 控制。后续公开协议不得包含 prompt、output、memory 内容、embedding、credential、数据库路径或私有 schema。

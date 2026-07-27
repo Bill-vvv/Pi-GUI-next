@@ -281,11 +281,12 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isAppearanceSettings(value: unknown): value is AppearanceSettings {
   return isRecord(value) &&
-    Object.keys(value).length === 6 &&
+    Object.keys(value).length === 7 &&
     isAppearanceTheme(value.theme) &&
     isAppearanceAccentColor(value.accentColor) &&
     isSurfaceTransparency(value.surfaceTransparency) &&
     isTextSize(value.textSize) &&
+    isTokenCountFormat(value.tokenCountFormat) &&
     isOptionalFontFamily(value.uiFontFamily) &&
     isOptionalFontFamily(value.codeFontFamily)
 }
@@ -517,6 +518,10 @@ function isSurfaceTransparency(value: unknown): value is AppearanceSettings['sur
 
 function isTextSize(value: unknown): value is AppearanceSettings['textSize'] {
   return value === 'small' || value === 'default' || value === 'large'
+}
+
+function isTokenCountFormat(value: unknown): value is AppearanceSettings['tokenCountFormat'] {
+  return value === 'full' || value === 'compact'
 }
 
 function isOptionalFontFamily(value: unknown): value is string | null {

@@ -342,6 +342,7 @@ export type AppearanceSettings = {
   accentColor: 'amber' | 'blue' | 'green' | 'purple' | 'rose'
   surfaceTransparency: 0 | 10 | 20 | 30 | 40
   textSize: 'small' | 'default' | 'large'
+  tokenCountFormat: 'full' | 'compact'
   uiFontFamily: string | null
   codeFontFamily: string | null
 }
@@ -351,6 +352,7 @@ export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   accentColor: 'amber',
   surfaceTransparency: 20,
   textSize: 'default',
+  tokenCountFormat: 'full',
   uiFontFamily: null,
   codeFontFamily: null
 }

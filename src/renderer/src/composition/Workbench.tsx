@@ -3,7 +3,8 @@ import {
   useEffect,
   useRef,
   useState,
-  type MouseEvent as ReactMouseEvent
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode
 } from 'react'
 
 import type {
@@ -99,6 +100,7 @@ type WorkbenchProps = {
   pendingAction: string | null
   completedAction: { action: string; succeeded: boolean } | null
   actionError: string | null
+  operationNotifications: ReactNode
   systemFonts: string[] | null
   systemFontsError: string | null
   forkDialogOpen: boolean
@@ -216,6 +218,7 @@ export function Workbench({
   pendingAction,
   completedAction,
   actionError,
+  operationNotifications,
   systemFonts,
   systemFontsError,
   forkDialogOpen,
@@ -744,6 +747,7 @@ export function Workbench({
             sessionPreviewPending={sessionPreviewPending}
             pendingAction={pendingAction}
             contextActionStatus={contextActionStatus}
+            tokenCountFormat={state.appearance.tokenCountFormat}
             pinnedProjectKeys={pinnedProjectKeys}
             onTogglePinnedProject={togglePinnedProject}
             onExpandSidebar={() => setSidebarCollapsed(false)}
@@ -810,6 +814,7 @@ export function Workbench({
         tabIndex={-1}
         aria-label={`${projectName} 对话工作区`}
       >
+        {operationNotifications}
         {sidebarCollapsed ? (
           <div className="left-sidebar-bottom-triggers">
             <IconButton
@@ -1027,6 +1032,7 @@ export function Workbench({
         <SubagentTaskDetail
           entry={selectedSubagentTask.entry}
           participant={selectedSubagentTask.participant}
+          tokenCountFormat={state.appearance.tokenCountFormat}
           panelRef={subagentTaskDetailRef}
           onClose={() => closeSubagentTaskDetail(true)}
         />

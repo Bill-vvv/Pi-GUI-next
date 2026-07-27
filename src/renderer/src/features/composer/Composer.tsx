@@ -17,6 +17,11 @@ import { useViewportPopoverPosition } from '../../components/useViewportPopoverP
 import { formatUsd } from '../../format-usd'
 import { unknownErrorMessage as errorMessage } from '../../unknown-error-message'
 import {
+  formatPercent,
+  formatTokenCount,
+  normalizeContextPercent
+} from '../../usage-formatters'
+import {
   filterSlashCommands,
   parseSlashCommandToken,
   resolveSlashCommand
@@ -1070,16 +1075,25 @@ export function Composer({
             />
           )}
 
-          <ContextIndicator usage={viewingInactiveSession ? null : session.usage} />
+          <ContextIndicator
+            usage={viewingInactiveSession ? null : session.usage}
+            tokenCountFormat={state.appearance.tokenCountFormat}
+          />
         </div>
       </div>
     </form>
   )
 }
 
-function ContextIndicator({ usage }: { usage: KernelSessionUsage | null }): React.JSX.Element {
-  const contextPercent = usage?.contextPercent ?? null
-  const ringPercent = contextPercent === null ? 0 : clampPercent(contextPercent)
+function ContextIndicator({
+  usage,
+  tokenCountFormat
+}: {
+  usage: KernelSessionUsage | null
+  tokenCountFormat: KernelState['appearance']['tokenCountFormat']
+}): React.JSX.Element {
+  const contextPercent = normalizeContextPercent(usage?.contextPercent ?? null)
+  const ringPercent = contextPercent ?? 0
   const promptTokens = usage === null
     ? null
     : usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens
@@ -1108,16 +1122,18 @@ function ContextIndicator({ usage }: { usage: KernelSessionUsage | null }): Reac
           <span>当前未提供 token 使用量</span>
         ) : (
           <>
-            <span className="context-tooltip-context">{contextUsageLabel(usage)}</span>
+            <span className="context-tooltip-context">
+              {contextUsageLabel(usage, tokenCountFormat)}
+            </span>
             <dl className="context-tooltip-stats">
               <dt>总输入（含缓存）</dt>
-              <dd>{formatTokenCount(promptTokens)}</dd>
+              <dd>{formatTokenCount(promptTokens, tokenCountFormat)}</dd>
               <dt>缓存读取</dt>
-              <dd>{formatTokenCount(usage.cacheReadTokens)}</dd>
+              <dd>{formatTokenCount(usage.cacheReadTokens, tokenCountFormat)}</dd>
               <dt>缓存写入</dt>
-              <dd>{formatTokenCount(usage.cacheWriteTokens)}</dd>
+              <dd>{formatTokenCount(usage.cacheWriteTokens, tokenCountFormat)}</dd>
               <dt>输出</dt>
-              <dd>{formatTokenCount(usage.outputTokens)}</dd>
+              <dd>{formatTokenCount(usage.outputTokens, tokenCountFormat)}</dd>
               <dt>缓存率</dt>
               <dd>{formatPercent(cacheRate)}</dd>
               <dt>本对话累计（USD）</dt>
@@ -1125,35 +1141,23 @@ function ContextIndicator({ usage }: { usage: KernelSessionUsage | null }): Reac
             </dl>
           </>
         )}
-        <span className="context-tooltip-note">
-          由 Pi 按各轮实际用量累计，不是模型单价。
-        </span>
       </div>
     </div>
   )
 }
 
-function contextUsageLabel(usage: KernelSessionUsage): string {
+function contextUsageLabel(
+  usage: KernelSessionUsage,
+  tokenCountFormat: KernelState['appearance']['tokenCountFormat']
+): string {
   const tokens = usage.contextTokens === null
     ? '—'
-    : formatTokenCount(usage.contextTokens)
+    : formatTokenCount(usage.contextTokens, tokenCountFormat)
   const window = usage.contextWindow === null
     ? '—'
-    : formatTokenCount(usage.contextWindow)
+    : formatTokenCount(usage.contextWindow, tokenCountFormat)
   const percent = formatPercent(usage.contextPercent)
   return `上下文 ${tokens} / ${window} · ${percent}`
-}
-
-function formatTokenCount(value: number | null): string {
-  return value === null ? '—' : value.toLocaleString()
-}
-
-function formatPercent(value: number | null): string {
-  return value === null ? '—' : `${value.toFixed(1)}%`
-}
-
-function clampPercent(value: number): number {
-  return Math.min(100, Math.max(0, value))
 }
 
 function composerPlaceholder(

@@ -1,14 +1,15 @@
 import { createContext, type Ref } from 'react'
 
 import type {
+  AppearanceSettings,
   KernelSubagentNoticeEntry,
   KernelSubagentParticipant,
   KernelToolEntry
 } from '../../../../shared/kernel-contract'
 import { Icon } from '../../components/Icon'
+import { formatTokenCount } from '../../usage-formatters'
 import { MarkdownMessage } from './MarkdownMessage'
 import {
-  formatSubagentCount,
   formatSubagentDuration,
   subagentParticipantLabel,
   subagentParticipantStatusLabel,
@@ -72,11 +73,13 @@ export function SubagentTaskCapsule({
 export function SubagentTaskDetail({
   entry,
   participant,
+  tokenCountFormat = 'full',
   panelRef,
   onClose
 }: {
   entry: KernelToolEntry | KernelSubagentNoticeEntry
   participant: KernelSubagentParticipant
+  tokenCountFormat?: AppearanceSettings['tokenCountFormat']
   panelRef?: Ref<HTMLElement>
   onClose: () => void
 }): React.JSX.Element {
@@ -156,7 +159,7 @@ export function SubagentTaskDetail({
             <dl className="subagent-task-metrics">
               <div><dt>轮次</dt><dd>{participant.turnCount}</dd></div>
               <div><dt>工具</dt><dd>{participant.toolCount}</dd></div>
-              <div><dt>Token</dt><dd>{formatSubagentCount(participant.tokens)}</dd></div>
+              <div><dt>Token</dt><dd>{formatTokenCount(participant.tokens, tokenCountFormat)}</dd></div>
               <div><dt>耗时</dt><dd>{formatSubagentDuration(participant.durationMs)}</dd></div>
             </dl>
           </section>

@@ -35,6 +35,27 @@ test('uses the final entry as leaf and excludes abandoned branches', async (t) =
   assert.deepEqual(await readSessionMessages(pointer), [root, active])
 })
 
+test('activity time follows the active branch and excludes newer abandoned messages', async (t) => {
+  const { pointer, write } = await sessionFixture(t)
+  await write([
+    header(pointer.sessionId),
+    entry('root', null, 'message', { role: 'user', content: 'root' }, {
+      timestamp: '2026-07-22T10:00:00.000Z'
+    }),
+    entry('abandoned', 'root', 'message', { role: 'assistant', content: 'abandoned' }, {
+      timestamp: '2026-07-22T12:00:00.000Z'
+    }),
+    entry('active', 'root', 'message', { role: 'assistant', content: 'active' }, {
+      timestamp: '2026-07-22T10:02:00.000Z'
+    })
+  ])
+
+  assert.equal(
+    await readSessionActivityAt(pointer),
+    Date.parse('2026-07-22T10:02:00.000Z')
+  )
+})
+
 test('walks through a non-message metadata leaf', async (t) => {
   const { pointer, write } = await sessionFixture(t)
   const message = { role: 'user', content: 'kept' }
@@ -47,12 +68,12 @@ test('walks through a non-message metadata leaf', async (t) => {
   assert.deepEqual(await readSessionMessages(pointer), [message])
 })
 
-test('activity time follows messages and ignores later runtime-load metadata', async (t) => {
+test('activity time follows the latest message entry despite clock skew and later metadata', async (t) => {
   const { pointer, write } = await sessionFixture(t)
   await write([
     header(pointer.sessionId),
     entry('user', null, 'message', { role: 'user', content: 'hello' }, {
-      timestamp: '2026-07-22T01:00:00.000Z'
+      timestamp: '2026-07-22T02:30:00.000Z'
     }),
     entry('assistant', 'user', 'message', { role: 'assistant', content: 'done' }, {
       timestamp: '2026-07-22T01:01:00.000Z'
@@ -71,6 +92,28 @@ test('activity time follows messages and ignores later runtime-load metadata', a
     await readSessionActivityAt(pointer),
     Date.parse('2026-07-22T01:01:00.000Z')
   )
+})
+
+test('activity time accepts only canonical Pi entry timestamps without guessing units', async (t) => {
+  const { pointer, write } = await sessionFixture(t)
+  const message = { role: 'user', content: 'kept despite invalid activity metadata' }
+  const invalidTimestamps: unknown[] = [
+    1_785_000_000,
+    1_785_000_000_000,
+    42,
+    '2026-07-22T01:01:00Z',
+    '2026-07-22T01:01:00.000+00:00',
+    '2026-02-30T01:01:00.000Z'
+  ]
+
+  for (const timestamp of invalidTimestamps) {
+    await write([
+      header(pointer.sessionId),
+      entry('message', null, 'message', message, { timestamp })
+    ])
+    assert.equal(await readSessionActivityAt(pointer), null)
+    assert.deepEqual(await readSessionMessages(pointer), [message])
+  }
 })
 
 test('rejects an invalid header or mismatched session ID', async (t) => {

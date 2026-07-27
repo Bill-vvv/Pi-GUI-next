@@ -36,12 +36,20 @@ test('latest thinking summary status uses the newest semantic line without markd
   assert.doesNotMatch(html, />正在继续</)
 })
 
-test('active thinking summary replaces generic status while tools keep priority', () => {
+test('active thinking summary replaces generic status without repeating a single-line detail', () => {
   const summary = thinking('streaming', '**Tracing the display path**', true)
-  const thinkingHtml = renderLiveTurn([summary])
-  assert.match(thinkingHtml, />Tracing the display path</)
-  assert.doesNotMatch(thinkingHtml, />正在思考</)
+  const standardHtml = renderLiveTurn([summary])
+  assert.match(standardHtml, />Tracing the display path</)
+  assert.doesNotMatch(standardHtml, />正在思考</)
 
+  const detailedHtml = renderLiveTurn([summary], 'detailed')
+  assert.match(detailedHtml, />Tracing the display path</)
+  assert.doesNotMatch(detailedHtml, />正在思考</)
+  assert.doesNotMatch(detailedHtml, /process-thinking-detail/)
+})
+
+test('active tools keep priority over the latest thinking summary', () => {
+  const summary = thinking('streaming', '**Tracing the display path**', true)
   const tool: KernelToolEntry = {
     id: 'tool:read',
     kind: 'tool',
@@ -70,10 +78,13 @@ test('waiting status falls back when no usable summary exists', () => {
   assert.match(renderLiveTurn(entries), />正在继续</)
 })
 
-function renderLiveTurn(entries: KernelConversationEntry[]): string {
+function renderLiveTurn(
+  entries: KernelConversationEntry[],
+  toolDisplayDensity: 'compact' | 'standard' | 'detailed' = 'standard'
+): string {
   return renderToStaticMarkup(createElement(LiveTurn, {
     turn: { id: 'turn', entries },
-    toolDisplayDensity: 'standard',
+    toolDisplayDensity,
     thinkingElapsedByEntryId: new Map()
   }))
 }

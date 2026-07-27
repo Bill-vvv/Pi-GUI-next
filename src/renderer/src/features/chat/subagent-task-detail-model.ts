@@ -1,3 +1,4 @@
+import { formatDuration } from '../../format-duration.ts'
 import type {
   KernelConversationEntry,
   KernelSubagentNoticeEntry,
@@ -179,15 +180,6 @@ export function subagentParticipantLabel(participant: KernelSubagentParticipant)
   return participant.task.trim() || participant.agent
 }
 
-export function formatSubagentCount(value: number): string {
-  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value)
-}
-
 export function formatSubagentDuration(durationMs: number): string {
-  if (durationMs < 1_000) return `${durationMs}ms`
-  if (durationMs >= 60_000) {
-    const totalSeconds = Math.round(durationMs / 1_000)
-    return `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`
-  }
-  return `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 1 : 0)}s`
+  return formatDuration(durationMs)
 }

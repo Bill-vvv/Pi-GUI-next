@@ -3,6 +3,7 @@ export type IconName =
   | 'appearance'
   | 'arrow-right'
   | 'attach'
+  | 'check'
   | 'chevron-down'
   | 'copy'
   | 'enter'
@@ -13,6 +14,7 @@ export type IconName =
   | 'fork'
   | 'left-sidebar-close'
   | 'left-sidebar-open'
+  | 'loader'
   | 'messages'
   | 'model'
   | 'packages'
@@ -72,6 +74,12 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
         <svg {...common}>
           <path d="M8.25 12.4 13.8 6.85a3.4 3.4 0 0 1 4.8 4.8l-6.9 6.9a5.1 5.1 0 0 1-7.2-7.2l7.05-7.05" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
           <path d="m9.55 15.15 6.1-6.1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      )
+    case 'check':
+      return (
+        <svg {...common}>
+          <path d="m5.5 12.5 4 4 9-9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       )
     case 'chevron-down':
@@ -145,6 +153,12 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
           <rect x="4" y="5" width="16" height="14" rx="3" stroke="currentColor" strokeWidth="1.8" />
           <path d="M9 5v14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
           <path d="m12 9 3 3-3 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" opacity="0.72" />
+        </svg>
+      )
+    case 'loader':
+      return (
+        <svg {...common}>
+          <path d="M20 12a8 8 0 1 1-2.34-5.66" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
         </svg>
       )
     case 'messages':

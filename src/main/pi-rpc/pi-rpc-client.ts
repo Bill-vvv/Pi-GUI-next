@@ -670,7 +670,7 @@ function isPiRpcAvailableModel(value: unknown): value is PiRpcAvailableModel {
     (!('name' in value) || typeof value.name === 'string') &&
     (!('reasoning' in value) || typeof value.reasoning === 'boolean') &&
     isOptionalThinkingLevelMap(value.thinkingLevelMap) &&
-    (!('contextWindow' in value) || typeof value.contextWindow === 'number') &&
+    (!('contextWindow' in value) || isPositiveSafeInteger(value.contextWindow)) &&
     (!('cost' in value) || isPiRpcModelCost(value.cost))
   )
 }
@@ -721,35 +721,39 @@ function projectPiRpcModelCost(cost: PiRpcModelCost): PiRpcModelCost {
 }
 
 function isPiRpcSessionStats(value: unknown): value is PiRpcSessionStats {
-  if (!isRecord(value) || typeof value.sessionId !== 'string' || typeof value.cost !== 'number') {
+  if (
+    !isRecord(value) ||
+    typeof value.sessionId !== 'string' ||
+    !isNonNegativeNumber(value.cost)
+  ) {
     return false
   }
   const tokens = value.tokens
   if (
     !isRecord(tokens) ||
-    !isNonNegativeNumber(tokens.input) ||
-    !isNonNegativeNumber(tokens.output) ||
-    !isNonNegativeNumber(tokens.cacheRead) ||
-    !isNonNegativeNumber(tokens.cacheWrite) ||
-    !isNonNegativeNumber(tokens.total)
+    !isNonNegativeSafeInteger(tokens.input) ||
+    !isNonNegativeSafeInteger(tokens.output) ||
+    !isNonNegativeSafeInteger(tokens.cacheRead) ||
+    !isNonNegativeSafeInteger(tokens.cacheWrite) ||
+    !isNonNegativeSafeInteger(tokens.total)
   ) {
     return false
   }
   const contextUsage = value.contextUsage
   return (
     (!('sessionFile' in value) || typeof value.sessionFile === 'string') &&
-    isNonNegativeNumber(value.userMessages) &&
-    isNonNegativeNumber(value.assistantMessages) &&
-    isNonNegativeNumber(value.toolCalls) &&
-    isNonNegativeNumber(value.toolResults) &&
-    isNonNegativeNumber(value.totalMessages) &&
+    isNonNegativeSafeInteger(value.userMessages) &&
+    isNonNegativeSafeInteger(value.assistantMessages) &&
+    isNonNegativeSafeInteger(value.toolCalls) &&
+    isNonNegativeSafeInteger(value.toolResults) &&
+    isNonNegativeSafeInteger(value.totalMessages) &&
     (
       contextUsage === undefined ||
       (
         isRecord(contextUsage) &&
-        (contextUsage.tokens === null || isNonNegativeNumber(contextUsage.tokens)) &&
-        isPositiveNumber(contextUsage.contextWindow) &&
-        (contextUsage.percent === null || isNonNegativeNumber(contextUsage.percent))
+        (contextUsage.tokens === null || isNonNegativeSafeInteger(contextUsage.tokens)) &&
+        isPositiveSafeInteger(contextUsage.contextWindow) &&
+        (contextUsage.percent === null || isContextPercent(contextUsage.percent))
       )
     )
   )
@@ -759,8 +763,16 @@ function isNonNegativeNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
 
-function isPositiveNumber(value: unknown): value is number {
-  return isNonNegativeNumber(value) && value > 0
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && isNonNegativeNumber(value)
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return isNonNegativeSafeInteger(value) && value > 0
+}
+
+function isContextPercent(value: unknown): value is number {
+  return isNonNegativeNumber(value)
 }
 
 function normalizePiRpcModel(model: PiRpcModel): PiRpcModel {

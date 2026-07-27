@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 
 import {
   KERNEL_PROVIDER_APIS,
+  type AppearanceSettings,
   type KernelModelPricing,
   type KernelModelPricingFetchResult,
   type KernelProviderApi,
@@ -11,11 +12,13 @@ import {
   type KernelProviderTestResult
 } from '../../../../shared/kernel-contract'
 import { Select } from '../../components/Select'
+import { formatTokenCount } from '../../usage-formatters'
 import { hasUnsavedSettingsDraft } from './settings-workspace'
 import './provider-settings.css'
 
 type ProviderSettingsProps = {
   busy: boolean
+  tokenCountFormat: AppearanceSettings['tokenCountFormat']
   onListProviders: () => Promise<KernelProviderConfig[]>
   onSaveProvider: (provider: KernelProviderInput) => Promise<KernelProviderConfig[]>
   onRemoveProvider: (providerId: string) => Promise<KernelProviderConfig[]>
@@ -71,6 +74,7 @@ const MODEL_CAPABILITY_OPTIONS = [{
 
 export function ProviderSettings({
   busy,
+  tokenCountFormat,
   onListProviders,
   onSaveProvider,
   onRemoveProvider,
@@ -381,11 +385,11 @@ export function ProviderSettings({
                             <dl className="provider-model-details">
                               <div>
                                 <dt>上下文窗口</dt>
-                                <dd>{displayedModel.contextWindow === null ? '未提供' : displayedModel.contextWindow.toLocaleString()}</dd>
+                                <dd>{displayedModel.contextWindow === null ? '未提供' : formatTokenCount(displayedModel.contextWindow, tokenCountFormat)}</dd>
                               </div>
                               <div>
                                 <dt>最大输出</dt>
-                                <dd>{displayedModel.maxTokens === null ? '未提供' : displayedModel.maxTokens.toLocaleString()}</dd>
+                                <dd>{displayedModel.maxTokens === null ? '未提供' : formatTokenCount(displayedModel.maxTokens, tokenCountFormat)}</dd>
                               </div>
                               <div>
                                 <dt>推理</dt>

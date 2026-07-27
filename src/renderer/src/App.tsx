@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 
 import {
   COPY_LAST_ANSWER_COMMAND_ID,
@@ -630,9 +629,65 @@ export function App(): React.JSX.Element {
     )
   }
 
+  const operationNotifications =
+    archiveNotifications.length === 0 && compactionNotice === null ? null : (
+      <section
+        className="archive-notification-region"
+        aria-label="操作通知"
+        aria-live="polite"
+        aria-relevant="additions removals"
+      >
+        {archiveNotifications.map((notification) => (
+          <article
+            className="archive-notification"
+            key={notification.receipt.token}
+            aria-busy={notification.pending !== null}
+          >
+            <div className="archive-notification-copy">
+              <strong>
+                {notification.receipt.sessionName?.trim() ||
+                  `对话 ${notification.receipt.sessionKey.split(/[\\/]/).at(-1) ?? ''}`}
+              </strong>
+              <span>已归档，可在短时间内撤销或临时查看</span>
+            </div>
+            <div className="archive-notification-actions">
+              <button
+                type="button"
+                disabled={notification.pending !== null}
+                onClick={() => void undoArchive(notification)}
+              >
+                {notification.pending === 'undo' ? '撤销中…' : '撤销'}
+              </button>
+              <button
+                type="button"
+                disabled={notification.pending !== null}
+                onClick={() => void previewArchivedSession(notification)}
+              >
+                {notification.pending === 'preview' ? '读取中…' : '临时查看'}
+              </button>
+            </div>
+          </article>
+        ))}
+        {compactionNotice === null ? null : (
+          <article className="archive-notification">
+            <div className="archive-notification-copy">
+              <strong>上下文整理未完成</strong>
+              <span>
+                {compactionNotice === 'cancelled'
+                  ? '上下文整理已取消，对话内容保持不变。'
+                  : '上下文整理失败，对话内容保持不变。'}
+              </span>
+            </div>
+            <div className="archive-notification-actions">
+              <button type="button" onClick={() => setCompactionNotice(null)}>关闭</button>
+            </div>
+          </article>
+        )}
+      </section>
+    )
+
   return (
-    <>
-      <Workbench
+    <Workbench
       state={kernelState}
       sessionPreview={sessionPreview}
       archivedSessionPreview={archivedSessionPreview?.preview ?? null}
@@ -651,6 +706,7 @@ export function App(): React.JSX.Element {
       pendingAction={pendingAction}
       completedAction={completedAction}
       actionError={actionError ?? ipcError}
+      operationNotifications={operationNotifications}
       systemFonts={systemFonts}
       systemFontsError={systemFontsError}
       forkDialogOpen={forkDialogOpen}
@@ -786,64 +842,7 @@ export function App(): React.JSX.Element {
         runAction('set-appearance', () => window.piGui.setAppearance(settings))
       }
       onSetShortcuts={setShortcuts}
-      />
-      {archiveNotifications.length === 0 && compactionNotice === null ? null : createPortal(
-        <section
-          className="archive-notification-region"
-          aria-label="操作通知"
-          aria-live="polite"
-          aria-relevant="additions removals"
-        >
-          {archiveNotifications.map((notification) => (
-            <article
-              className="archive-notification"
-              key={notification.receipt.token}
-              aria-busy={notification.pending !== null}
-            >
-              <div className="archive-notification-copy">
-                <strong>
-                  {notification.receipt.sessionName?.trim() ||
-                    `对话 ${notification.receipt.sessionKey.split(/[\\/]/).at(-1) ?? ''}`}
-                </strong>
-                <span>已归档，可在短时间内撤销或临时查看</span>
-              </div>
-              <div className="archive-notification-actions">
-                <button
-                  type="button"
-                  disabled={notification.pending !== null}
-                  onClick={() => void undoArchive(notification)}
-                >
-                  {notification.pending === 'undo' ? '撤销中…' : '撤销'}
-                </button>
-                <button
-                  type="button"
-                  disabled={notification.pending !== null}
-                  onClick={() => void previewArchivedSession(notification)}
-                >
-                  {notification.pending === 'preview' ? '读取中…' : '临时查看'}
-                </button>
-              </div>
-            </article>
-          ))}
-          {compactionNotice === null ? null : (
-            <article className="archive-notification">
-              <div className="archive-notification-copy">
-                <strong>上下文整理未完成</strong>
-                <span>
-                  {compactionNotice === 'cancelled'
-                    ? '上下文整理已取消，对话内容保持不变。'
-                    : '上下文整理失败，对话内容保持不变。'}
-                </span>
-              </div>
-              <div className="archive-notification-actions">
-                <button type="button" onClick={() => setCompactionNotice(null)}>关闭</button>
-              </div>
-            </article>
-          )}
-        </section>,
-        document.body
-      )}
-    </>
+    />
   )
 }
 

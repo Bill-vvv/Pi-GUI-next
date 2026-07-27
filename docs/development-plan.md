@@ -465,6 +465,12 @@ P2 先用一个短 Slice 固定结构，再实现基础功能，随后在真实�
 | S17.1 | Magic Context 可选适配 | `Complete` | 拓展页增加固定 `@cortexkit/pi-magic-context` 安装与 Extension resource 启停；Package 状态不冒充配置健康，setup/doctor 继续由上游 CLI 负责，运行态复用 Pi 命令目录中的 `/ctx-status`；不解析私有 SQLite、不内嵌配置器或伪造缓存指标 |
 | S18 | OMP 多 Advisor Extension 与 GUI 适配 | `Paused` | S18-1 至 S18-3 已完成 Package、真实 Provider、GUI 投影/控制和多 roster；S18-4 保持 Ready，但当前让路给 S19。S19 已通过 AppImage `source_snapshot` 的真实 3+ 并行任务、宽/窄窗口、焦点与 reduced-motion；待 canonical clean commit/worktree 的正式 `verify:linux` 后恢复 S18-4 |
 | S19 | Subagent 任务详情侧栏 | `In Progress` | Source slice 与 review 修复已实现；隔离候选 AppImage `source_snapshot` 已真实通过 3 路并行 worker、运行中选择、live→completed 保持、宽屏第三列、窄屏替换、返回/关闭/Escape 焦点恢复和 reduced-motion。证据位于 `release/evidence/2026-07-26T21-31-42-278Z-s19-source-snapshot/`；canonical 工作树仍未形成 clean commit，正式 `pnpm verify:linux` 前不标 Complete |
+| S20 | 动效与交互基础 | `Planned` | 在 S19 canonical 收口和 S18-4 完成后，依次建立统一 motion contract、Timeline/Composer 阅读锚点和跨 Navigator/Settings/任务详情的 Escape、外点与焦点恢复规则；动效不推动正文，不成为唯一状态表达，并以 reduced-motion 静态替代为完成门槛 |
+| S21 | Settings Workspace 2.0 | `Planned` | 设置导航按“应用 / 模型 / Agent / 生态”分组，增加收起、真实设置搜索和应用内 deep link；统一作用域、事实来源、生效时间及 saved/loaded 差异，不建立通用设置 registry，不静默 reload Runtime |
+| S22 | Personalization v1 | `Planned` | 第一批只增加用户级的对话阅读宽度、Navigator 密度和动效偏好；使用有限语义枚举与统一 token，窄窗口、触控命中和 OS reduced-motion 继续拥有更高约束，不提供任意 CSS、像素或颜色编辑 |
+| S23 | Subagent Effective State 与任务一致性 | `Planned` | Main 投影 effective Agent definition、覆盖来源、最终启停/depth、Package/Extension/当前 Runtime 加载及 reload 状态；任务详情补同 run participant 切换、汇总和实时→历史恢复一致性，不读取 child transcript/artifact，不提前加入 GUI 运行控制 |
+| S24 | Magic Context 状态可见性 | `Planned` | 安装/启停继续留在拓展页，独立 Context 页只读展示 Package、Extension、当前 Session loaded、真实 `/ctx-status`、状态时间与过期语义，并提供复制 setup/doctor 命令和上游文档入口；不解析 SQLite 或把“已开启”冒充健康 |
+| S25 | Magic Context 结构化可观测协议 | `Research` | 与上游共同评估版本化 capability/status/usage 协议，候选覆盖上下文占用、后台状态和 prompt-free token/cache/cost；协议稳定前不建立仪表盘，不暴露 prompt/output、embedding、credential、数据库路径或私有 schema |
 
 P2 最初把“多 Project、多 Session”限定为可保存、发现和切换。2026-07-23 用户确认并行是旧版已有且当前必须恢复的核心能力后，D-017 替代该限制：Workbench Kernel 现在按 Session 管理独立 Runtime context，允许多个 Pi Runtime 并行，同时保持 Electron Main 单一 control plane。
 
@@ -542,6 +548,83 @@ S18 总体验收：
 - 宽窗口、窄窗口、键盘、Escape、Project/Session 切换和 reduced-motion 路径通过定向复核。
 - typecheck、生产 build、diff check 与相关 Renderer 定向测试通过。
 - canonical clean commit/worktree 的正式 `pnpm verify:linux` 产出脱敏 AppImage 报告与截图；临时 source snapshot 只用于提前发现真实交互问题。
+
+#### P2.1 — Experience Refinement
+
+P2.1 在现有工作台能力基本完整后，集中处理三条体验线：动效与交互稳定、设置可理解与有限定制、Subagent/Magic Context 可解释性。它不改变 P3 的通用生态边界，也不把固定适配扩张为任意 Extension UI 框架。
+
+执行门槛与顺序：
+
+1. S19 必须先在 canonical clean commit/worktree 上通过正式 `pnpm verify:linux` 并标记 Complete。
+2. 随后恢复并完成 S18-4 的交付与韧性；若产品优先级变化，必须显式把 S18-4 改为 Paused，不能保持 Ready 却长期跳过。
+3. 新体验线先按 S20-1 → S20-2 → S21-1 推进，再按 S20-3 → S21-2 → S21-3 → S22 → S23 → S24 收敛；S25 在 S24 建立真实状态边界后继续 Research。所有子阶段仍遵守“同一时间只允许一个 Slice 为 In Progress”。
+4. S18-5 保持 Pending；其中可复用的 status/usage 基础在 S24/S25 设计时统一核对，但 Advisor 专属 dump、独立 transcript 与发布验收不因此自动并入 Magic Context。
+
+##### S20 — 动效与交互基础
+
+| 阶段 | 状态 | 范围 | 完成门槛 |
+| --- | --- | --- | --- |
+| S20-1 Motion Contract | `Pending` | 盘点并统一 feedback、reveal、layout、activity 四类动效；零散时长和 easing 收敛到现有 token；明确允许动画的属性与 reduced-motion 静态替代 | Feature 动效不推动 Timeline 正文；活动状态同时有文字/形状/颜色语义；深浅主题和 reduced-motion 定向复核通过 |
+| S20-2 Timeline & Composer Stability | `Pending` | 明确 following-bottom 与 reading-history 两种阅读状态；Composer、Todo、附件、队列、streaming 和任务详情变化保持真实测量 clearance 与阅读锚点 | 用户上滚后不被后台输出拉回；底部跟随保持；宽/窄窗口详情返回恢复原 trigger、focus 和阅读位置，不依赖固定 timeout |
+| S20-3 Interaction Consistency | `Pending` | 统一最内层 popover → 局部 editor/detail → workspace 的 Escape 层级，以及外点、返回、focus restoration、disabled 和触摸语义；窄窗口任务详情允许在同一 run participant 间切换 | Keyboard、pointer、touch、dirty draft、Project hover/action 互斥和异步双提交场景通过定向测试；不抽象无证据的万能 menu/popover |
+
+S20 明确不以“更多动画”为目标，不让位移或 pulse 成为 running/error 的唯一表达，也不通过延时猜测 DOM 已稳定。
+
+##### S21 — Settings Workspace 2.0
+
+| 阶段 | 状态 | 范围 | 完成门槛 |
+| --- | --- | --- | --- |
+| S21-1 Information Architecture | `Pending` | 导航分为“应用：常规/外观/快捷键”“模型：模型/凭证”“Agent：Subagent/Advisor/Context”“生态：Package/拓展/技能”；自动对话命名并入常规，删除单项偏好分类；导航可收起 | 既有功能和 dirty draft 保护无回退；窄窗口使用可访问的单页/覆盖式导航；Context 只有在 S24 有真实内容时出现 |
+| S21-2 Search & Deep Link | `Pending` | 扩展窄 typed section/group metadata，索引真实设置名称、组和人工同义词；搜索结果跳到稳定应用内目标 | 不索引 credential、endpoint、Agent prompt 或日志；Enter/Escape、焦点恢复和无结果状态通过；不注册 OS URL protocol，不建立插件 registry |
+| S21-3 Scope, Source & Activation | `Pending` | 为重要设置表达 application/user/project/session 作用域、GUI/Pi/Extension 事实来源与 immediate/next-session/reload 生效时机；区分 saved config 与当前 Runtime loaded config | Package installed、Extension enabled、当前 Session loaded、健康 verified 四层状态不混淆；设置保存不静默重启，reload 失败不伪装已应用 |
+
+设置行不机械堆叠三个 badge；默认立即生效项保持简洁，只在特殊作用域、外部事实源或需 reload 时提高可见性。`settings-redesign-preview.html` 只作为交互参考，模拟状态和未接通选项不是生产事实。
+
+##### S22 — Personalization v1
+
+第一批只接入三个用户级设置：
+
+1. `conversationWidth: compact | standard | wide`：通过语义化 Conversation max-width 调整阅读宽度；窄窗口自动服从可用空间，Composer 与 Timeline 保持同一左右边界。
+2. `navigatorDensity: comfortable | compact`：只调整 Project/Session 行高、组间距和辅助信息密度；普通历史默认 5 个、每次继续展开 5 个及分页外保留项规则不变，触控/键盘命中仍满足最小尺寸。
+3. `motionPreference: system | reduced | minimal`：`system` 遵循 OS；`reduced/minimal` 只能进一步减少动效，不能覆盖 OS reduced-motion 强制恢复完整动画。
+
+配置使用有限枚举、明确 migration 和首帧尽早应用；非法值回退默认。第一批不增加任意像素宽度、CSS、颜色、圆角或间距编辑，代码字号比例、默认 Sidebar 状态、代码换行和详情宽度留待真实使用反馈后另行规划。
+
+##### S23 — Subagent Effective State 与任务一致性
+
+实施顺序：
+
+1. Main 归一化 effective Agent definition：最终来源、builtin/user/project 各层存在性、控制 enabled 的作用域、shadowed override、effective model/thinking/context/tools/skills、全局与单 Agent depth 结果。
+2. 同一 typed projection 同时报告 Package 安装、Extension resource、当前 Runtime 是否发现该 Agent，以及是否等待 reload；Renderer 不解析 Markdown frontmatter、settings JSON 或 Agent 名称。
+3. 任务详情显示 single/parallel/chain mode、participant 总量和 pending/running/completed/failed 汇总；窄窗口可直接切换同一 run 的 participant。若现有数据不能表达 chain DAG，则只展示真实 participant 列表，不绘制推测工作流。
+4. 验证实时运行 → completion → settled → Session 切换 → reload → 历史读取的 identity 一致；缺少 child transcript/artifact 时明确只保存了概要和最终输出。
+
+stop/interrupt/resume/steer/supervisor reply 先保持 Research：只有 `pi-subagents` 提供稳定 typed capability，且 run/participant/request identity 与主 Agent 协调所有权明确后，才另行决定 GUI 控制；不得拼接 slash、Shell 或文本命令绕过父 Agent。
+
+##### S24 — Magic Context 状态可见性
+
+状态模型必须分离：
+
+- Package：missing / installed。
+- Extension：disabled / enabled。
+- Session：unavailable / not-loaded / loaded。
+- Status：unknown / fresh / stale / warning / error。
+
+事实来源分别为 Pi Package service、resource filter、真实 command catalog/capability 和受约束的 `/ctx-status` custom entry。状态绑定 Project、Session、Runtime identity、来源与接收时间；Runtime reload 后旧状态立即失效。没有结构化 setup/doctor 证据时，健康始终为 unknown。
+
+Context 页包含安装与加载摘要、最近一次真实状态、更新时间/过期语义、刷新入口，以及复制官方 setup/doctor 命令和打开上游文档。安装与启停仍只在拓展页操作；Conversation 内最多显示轻量“Context managed”状态入口，info 状态不持续占据 Timeline，warning/error 继续允许进入 Timeline。GUI 不执行任意 Shell、不编辑 `magic-context.jsonc`、不解析 SQLite，也不从 Pi 原生 compaction 推断 Magic Context 后台状态。
+
+##### S25 — Magic Context 结构化可观测协议
+
+S25 保持 `Research`，需要与 Magic Context 上游共同冻结版本化 capability/status/usage 协议后才能实施。候选只包含有界、脱敏的运行状态、上下文占用、是否接管原生压缩、最近后台操作、pending operation 和 historian/dreamer/sidekick/cache 的 prompt-free token/cost。协议不得携带 prompt、output、memory 内容、embedding、credential、数据库路径或私有 schema；项目级 debug telemetry 在成为公开稳定协议前不得冒充用户产品状态。
+
+P2.1 共通验收：
+
+- 深色与浅色主题；1440px、约 1000px 和 700px 以下窗口。
+- 鼠标、键盘、Escape、焦点恢复、触摸语义和 reduced-motion。
+- 长 Timeline 的底部跟随与历史阅读锚点。
+- 当前 Session、后台 Session、reload 和历史恢复。
+- 每个 source Slice 至少通过定向测试、`pnpm typecheck`、生产 build 与 `git diff --check`；涉及 Runtime、Extension 或跨进程 contract 时再补 `pnpm test:core`、真实 Pi smoke，并在候选发布点运行 `pnpm verify:linux`。
 
 #### S14 — 优化记录
 
@@ -837,6 +920,7 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-26 | S19 Official Verifier Ready | 唯一 `scripts/verify-linux-release.mjs` 兼容 provisional cold-start 自动启动，并在原 P1/P2 链路后加入 S19：Niri 精确宽/窄窗口、3 个 worker 同时 running、稳定 locator、Escape/关闭/返回焦点、live→completed identity 与 reduced-motion；schema v2 增加脱敏 `s19Summary` 和三张截图。review 发现并修复最终输出/error 遮罩、并行重叠断言、完成后 locator 复核和 failed report 虚列截图 | `node --check`、348 项 core tests、`pnpm typecheck`、生产 build 与全仓 diff check 通过；正式脚本尚未在 canonical clean commit 上执行，S19 继续保持 In Progress |
 | 2026-07-27 | S19 Subagent 正文收敛 | 按用户确认移除普通 completion custom message 的正文结果预览；前台任务胶囊保持不变，后台 completion 形成独立轻量胶囊并复用任务详情，需要介入的控制、转向、supervisor 请求与 Watchdog 通知继续显示 | Main 按固定协议归一化 completion 详情，Renderer 以 notice identity 打开详情且不猜原 `toolCallId`；增加投影、locator 与 SSR 定向测试。S19 仍待 canonical clean `verify:linux` |
 | 2026-07-27 | S19-1 Supervisor 协作收敛 | 将重复 attention、具体 request、reply 与 wait 从多段协议日志收敛为结构化生命周期；request 以稳定 ID 去重并替代同 run participant 的泛化 attention，成功 reply 原地更新为已处理 | Main 白名单投影协调 identity/reason/status，Renderer 将内部协作降级为 status，并为 wait/reply/status/steer/resume 使用简洁文案；只有 completion guard 与 Watchdog blocker 使用 alert，原始命令只在技术详情中出现 |
+| 2026-07-27 | P2.1 Experience Refinement Planning | 用户确认下一阶段集中于动效与交互、Settings 优化与有限定制、Subagent/Magic Context 可解释性；接受四组设置导航、阅读宽度/Navigator 密度/动效偏好、Magic Context 安装与状态入口分离，以及 S19 → S18-4 → S20 的实施顺序 | 增加 S20–S25 与 D-047–D-050；当前唯一 In Progress 仍是 S19，规划不改变 dirty source snapshot，也不提前激活未具备真实协议的控制或健康 UI |
 
 ## 17. 计划变更记录
 
@@ -923,3 +1007,4 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-26 | 7.9 | 当前 Slice 切换到 S19 并暂停 S18 | S19 source slice 已进入独立 review 修复与验收，计划不能同时把 S18/S19 标为 In Progress | S19 成为唯一 In Progress；S18 标记 Paused，S18-4 保持 Ready，并在 S19 完成真实并行、响应式、reduced-motion 与 AppImage 验收后恢复 |
 | 2026-07-27 | 8.0 | Subagent 完成结果从 Timeline 正文收敛到任务详情 | 用户确认子代理处理信息不必在正文重复展示，点击任务胶囊阅读即可 | 普通 completion 只显示轻量可点击胶囊并以 notice identity 打开详情；前台任务胶囊、控制、转向、supervisor 请求和 Watchdog 通知保持，不新增原 run 文本关联或后台任务数据库 |
 | 2026-07-27 | 8.1 | Subagent supervisor 通知改为结构化内部协作生命周期 | 实际使用中同一请求重复展示 attention、request、reply 与 wait，且把主 Agent 可自行处理的事项误报为用户警报 | 新增 D-046；稳定 request identity、同目标语义合并、成功 reply 原地 handled、管理工具简洁文案。缺少结构化 details 的旧消息仅兼容显示，不靠 Markdown 猜关联 |
+| 2026-07-27 | 8.2 | 增加 P2.1 Experience Refinement 与 S20–S25 | 用户确认下一阶段的三条主线及四项产品决策，需要在继续实现前固定依赖、范围、非目标和完成门槛 | S19 仍是唯一 In Progress，完成后恢复 S18-4，再进入 S20；Settings 分组和三个有限定制项、Subagent effective state、Magic Context 只读状态与后续结构化协议分别进入 Planned/Research |

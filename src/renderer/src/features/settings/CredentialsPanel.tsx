@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import type {
+  AppearanceSettings,
   KernelModelPricingFetchResult,
   KernelProviderAuthEvent,
   KernelProviderAuthMethod,
@@ -18,6 +19,7 @@ import './credentials-panel.css'
 
 type CredentialsPanelProps = {
   busy: boolean
+  tokenCountFormat: AppearanceSettings['tokenCountFormat']
   onListProviderCredentials: () => Promise<KernelProviderCredential[]>
   onLoginProvider: (
     providerId: string,
@@ -69,6 +71,7 @@ type AuthNoticeState = {
 
 export function CredentialsPanel({
   busy,
+  tokenCountFormat,
   onListProviderCredentials,
   onLoginProvider,
   onSubmitProviderAuthPrompt,
@@ -406,6 +409,7 @@ export function CredentialsPanel({
         </h3>
         <ProviderSettings
           busy={busy || operation !== null}
+          tokenCountFormat={tokenCountFormat}
           onListProviders={onListProviders}
           onSaveProvider={onSaveProvider}
           onRemoveProvider={onRemoveProvider}

@@ -6,7 +6,9 @@ import { Icon } from '../../components/Icon'
 import { IconButton } from '../../components/IconButton'
 import { useViewportPopoverPosition } from '../../components/useViewportPopoverPosition'
 import { formatUsd } from '../../format-usd'
+import { formatTokenCount } from '../../usage-formatters'
 import { formatSessionActivityAge } from './session-activity-time'
+import { sessionLifecycleLabel } from './session-lifecycle-presentation'
 import {
   COLLAPSED_SESSION_LIMIT,
   nextVisibleSessionCountWithRetained,
@@ -40,6 +42,7 @@ type ProjectNavigatorProps = {
   sessionPreviewPending: boolean
   pendingAction: string | null
   contextActionStatus: string | null
+  tokenCountFormat: KernelState['appearance']['tokenCountFormat']
   pinnedProjectKeys: Set<string>
   onTogglePinnedProject: (projectKey: string) => void
   onExpandSidebar: () => void
@@ -68,6 +71,7 @@ export function ProjectNavigator({
   sessionPreviewPending,
   pendingAction,
   contextActionStatus,
+  tokenCountFormat,
   pinnedProjectKeys,
   onTogglePinnedProject,
   onExpandSidebar,
@@ -636,7 +640,7 @@ export function ProjectNavigator({
                           <button
                             className="session-item"
                             type="button"
-                            aria-label={sessionAriaLabel(summary)}
+                            aria-label={sessionAriaLabel(summary, tokenCountFormat)}
                             aria-current={sessionSelected ? 'true' : undefined}
                             aria-describedby={
                               sessionHoverCard?.sessionKey === summary.key && sessionCardPosition !== null
@@ -891,23 +895,23 @@ export function ProjectNavigator({
                 </div>
                 <div className="session-hover-stat-row session-hover-stat-row-divider">
                   <dt>Token 总量</dt>
-                  <dd>{hoveredSession.statistics.totalTokens.toLocaleString()}</dd>
+                  <dd>{formatTokenCount(hoveredSession.statistics.totalTokens, tokenCountFormat)}</dd>
                 </div>
                 <div className="session-hover-stat-row">
                   <dt>输入</dt>
-                  <dd>{hoveredSession.statistics.inputTokens.toLocaleString()}</dd>
+                  <dd>{formatTokenCount(hoveredSession.statistics.inputTokens, tokenCountFormat)}</dd>
                 </div>
                 <div className="session-hover-stat-row">
                   <dt>输出</dt>
-                  <dd>{hoveredSession.statistics.outputTokens.toLocaleString()}</dd>
+                  <dd>{formatTokenCount(hoveredSession.statistics.outputTokens, tokenCountFormat)}</dd>
                 </div>
                 <div className="session-hover-stat-row">
                   <dt>缓存读取</dt>
-                  <dd>{hoveredSession.statistics.cacheReadTokens.toLocaleString()}</dd>
+                  <dd>{formatTokenCount(hoveredSession.statistics.cacheReadTokens, tokenCountFormat)}</dd>
                 </div>
                 <div className="session-hover-stat-row">
                   <dt>缓存写入</dt>
-                  <dd>{hoveredSession.statistics.cacheWriteTokens.toLocaleString()}</dd>
+                  <dd>{formatTokenCount(hoveredSession.statistics.cacheWriteTokens, tokenCountFormat)}</dd>
                 </div>
                 <div className="session-hover-stat-row session-hover-stat-row-divider">
                   <dt>费用（USD）</dt>
@@ -941,7 +945,10 @@ export function sessionTitle(session: KernelState['sessions'][number]): string {
   return `对话 ${session.id.slice(0, 8)}`
 }
 
-function sessionAriaLabel(session: KernelState['sessions'][number]): string {
+function sessionAriaLabel(
+  session: KernelState['sessions'][number],
+  tokenCountFormat: KernelState['appearance']['tokenCountFormat']
+): string {
   const title = sessionTitle(session)
   if (session.provisional === true) {
     return `${title}。创建中，尚未落盘，不可恢复`
@@ -953,7 +960,7 @@ function sessionAriaLabel(session: KernelState['sessions'][number]): string {
   return [
     title,
     `消息 ${statistics.totalMessages.toLocaleString()}，用户 ${statistics.userMessages.toLocaleString()}，助手 ${statistics.assistantMessages.toLocaleString()}`,
-    `Token ${statistics.totalTokens.toLocaleString()}，费用 ${formatUsd(statistics.cost)}`
+    `Token ${formatTokenCount(statistics.totalTokens, tokenCountFormat)}，费用 ${formatUsd(statistics.cost)}`
   ].join('。')
 }
 
@@ -970,13 +977,6 @@ function findSessionSummary(
     const match = project.sessions?.find((session) => session.key === sessionKey)
     if (match !== undefined) return match
   }
-  return null
-}
-
-function sessionLifecycleLabel(status: KernelState['runtime']['status']): string | null {
-  if (status === 'starting') return '正在启动'
-  if (status === 'running') return '正在处理'
-  if (status === 'stopping') return '正在收尾'
   return null
 }
 

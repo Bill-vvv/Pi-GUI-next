@@ -238,6 +238,12 @@ export function SettingsPanel({
       label: `${value}%`
     }))
   }]
+  const tokenCountFormatOptionGroups: SelectOptionGroup[] = [{
+    options: [
+      { value: 'full', label: '完整数字（65,600）' },
+      { value: 'compact', label: 'k / m / b 缩写（65.6k）' }
+    ]
+  }]
   return (
     <section className="settings-screen" aria-label="设置">
       <div className="settings-content">
@@ -450,6 +456,27 @@ export function SettingsPanel({
             >
               <h3 id="appearance-conversation-heading" className="settings-group-heading">Agent 对话</h3>
               <div className="settings-group-card">
+                <div className="settings-row">
+                  <div className="settings-row-copy">
+                    <h4>Token 数量</h4>
+                    <p>选择完整数字，或使用 k、m、b 单位缩写</p>
+                  </div>
+                  <div className="settings-row-control settings-theme-control">
+                    <Select
+                      id="appearance-token-count-format"
+                      value={state.appearance.tokenCountFormat}
+                      groups={tokenCountFormatOptionGroups}
+                      disabled={busy}
+                      onValueChange={(value) => {
+                        if (!isTokenCountFormat(value)) return
+                        void onSetAppearance({
+                          ...state.appearance,
+                          tokenCountFormat: value
+                        }).catch(() => undefined)
+                      }}
+                    />
+                  </div>
+                </div>
                 <div className="settings-row settings-tool-density">
                   <div className="settings-row-copy">
                     <h4>工作过程密度</h4>
@@ -816,6 +843,7 @@ export function SettingsPanel({
             </div>
             <CredentialsPanel
               busy={busy}
+              tokenCountFormat={state.appearance.tokenCountFormat}
               onListProviderCredentials={onListProviderCredentials}
               onLoginProvider={onLoginProvider}
               onSubmitProviderAuthPrompt={onSubmitProviderAuthPrompt}
@@ -935,6 +963,10 @@ function isAppearanceTheme(value: string): value is AppearanceSettings['theme'] 
 
 function isAppearanceTextSize(value: string): value is AppearanceSettings['textSize'] {
   return value === 'small' || value === 'default' || value === 'large'
+}
+
+function isTokenCountFormat(value: string): value is AppearanceSettings['tokenCountFormat'] {
+  return value === 'full' || value === 'compact'
 }
 
 function isAppearanceAccentColor(value: string): value is AppearanceSettings['accentColor'] {

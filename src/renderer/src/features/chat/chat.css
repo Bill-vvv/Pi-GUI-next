@@ -1316,6 +1316,14 @@
   color: var(--color-text-soft);
 }
 
+.process-thinking-summary.static {
+  cursor: default;
+}
+
+.process-thinking-summary.static:hover {
+  color: var(--color-text-muted);
+}
+
 .process-thinking-summary:focus-visible {
   outline: 1px solid var(--color-border-hover);
   outline-offset: 0.2rem;
