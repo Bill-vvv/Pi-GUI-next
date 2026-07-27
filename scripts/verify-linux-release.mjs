@@ -58,6 +58,15 @@ const TIMEOUT = {
   crash: 30_000,
   close: 30_000
 }
+const THINKING_LEVEL_LABELS = {
+  off: 'Off',
+  minimal: 'Minimal',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra High',
+  max: 'Max'
+}
 
 let stage = 'preflight'
 let reportDirectory = null
@@ -1423,14 +1432,18 @@ async function availableThinkingLevelFromGui(cdp) {
   await openThinkingOptions(cdp)
   const level = await evaluateValue(
     cdp,
-    `window.piGui.getState().then((state) =>
-      Array.from(document.querySelectorAll('#model-picker-popover .model-picker-thinking-list .model-picker-item:not(:disabled)'))
-        .map((button) => button.querySelector('.model-picker-option-label')?.textContent?.trim())
+    `window.piGui.getState().then((state) => {
+      const labelToLevel = Object.fromEntries(
+        Object.entries(${JSON.stringify(THINKING_LEVEL_LABELS)})
+          .map(([thinkingLevel, label]) => [label, thinkingLevel])
+      )
+      return Array.from(document.querySelectorAll('#model-picker-popover .model-picker-thinking-list .model-picker-item:not(:disabled)'))
+        .map((button) => labelToLevel[button.querySelector('.model-picker-option-label')?.textContent?.trim() ?? ''])
         .find((value) =>
           ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(value) &&
           value !== state.session.thinkingLevel
         ) ?? null
-    )`
+    })`
   )
   await evaluateValue(
     cdp,
@@ -1441,12 +1454,14 @@ async function availableThinkingLevelFromGui(cdp) {
 }
 
 async function selectThinkingLevelFromGui(cdp, level) {
+  const label = THINKING_LEVEL_LABELS[level]
+  if (typeof label !== 'string') fail('E_P2_TYPED_COMMAND_PRECONDITION')
   await openThinkingOptions(cdp)
   const selected = await evaluateValue(
     cdp,
     `(() => {
       const button = Array.from(document.querySelectorAll('#model-picker-popover .model-picker-thinking-list .model-picker-item:not(:disabled)'))
-        .find((candidate) => candidate.querySelector('.model-picker-option-label')?.textContent?.trim() === ${JSON.stringify(level)})
+        .find((candidate) => candidate.querySelector('.model-picker-option-label')?.textContent?.trim() === ${JSON.stringify(label)})
       if (!(button instanceof HTMLButtonElement)) return false
       button.click()
       return true
