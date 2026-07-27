@@ -68,6 +68,23 @@ P2 在完整保留上述 P1 链路的基础上，还必须从同一 AppImage 验
 
 真实 UI gate 独占工作站窗口：同一用户同时只能运行一个 `pnpm verify:linux`。canonical `pnpm dev` 仍在运行时，验证器必须在启动 AppImage 前以 `E_DEV_GUI_RUNNING` Fail Fast，防止后台 Agent 反复打开或聚焦测试 GUI；正式验收应先关闭开发实例。只有人工监督且明确接受窗口抢占时，才可显式设置 `PI_GUI_VERIFY_ALLOW_ACTIVE_DEV=1` 覆盖该保护，跨进程互斥仍然生效。异常退出遗留的 verifier lock 只能在 owner 进程已不存在后回收。
 
+## S26 内存诊断模式
+
+内存诊断继续扩展同一个正式 verifier，不建立第二个 launcher：
+
+```bash
+pnpm verify:linux -- --memory-diagnostics
+# 等价：PI_GUI_VERIFY_MEMORY_DIAGNOSTICS=1 pnpm verify:linux
+```
+
+该模式默认关闭；启用后，在单 Runtime ready、工具 turn 完成、重开恢复、两个 Project Runtime、三个 Session Runtime、三路 Subagent running/completed 和最终关闭前采样。`report.json.memoryDiagnostics` 只记录：
+
+- AppImage 后代进程按 `app-root`、Electron Main/Renderer/GPU/Utility、顶层 Pi Runtime、Pi child 等角色聚合后的进程数与 RSS/PSS/private/anonymous/swap bytes；
+- Renderer 的 V8 heap、DOM counter、完整 KernelState/Conversation/Navigation JSON bytes、entry 数量与 runtime status；额外的只读 event listener 只累计 full-state/patch 次数、patch 结构和追加字符数，不保存 payload；
+- 所有样本的有界列表和峰值，不保存进程命令行、Project/Session identity、路径、prompt、output、tool content、credential 或 Extension 私有内容。
+
+诊断字段首期只建立基线，不自动把观察值当发布预算；预算必须由相同 AppImage 场景重复采样后冻结。诊断仍服从 clean worktree、单 verifier lock、真实 AppImage、隔离 XDG、截图脱敏和 active-dev guard。首轮 live/isolated 证据、根因排序和预算草案见 [`memory-diagnostics.md`](memory-diagnostics.md)。
+
 ## Fail Fast
 
 任一必需命令失败、版本不匹配、工作区不干净、证据与 commit 不一致，或只能从开发服务器完成链路时，发布停止；不得静默 fallback 到另一套 runtime、checkout 或产物。

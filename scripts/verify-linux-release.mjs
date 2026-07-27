@@ -32,6 +32,9 @@ const VERIFY_LOCK_DIRECTORY = join(
 )
 const VERIFY_LOCK_OWNER_PATH = join(VERIFY_LOCK_DIRECTORY, 'owner.json')
 const VERIFY_ACTIVE_DEV_OVERRIDE = 'PI_GUI_VERIFY_ALLOW_ACTIVE_DEV'
+const MEMORY_DIAGNOSTICS_ENABLED = process.argv.includes('--memory-diagnostics') ||
+  process.env.PI_GUI_VERIFY_MEMORY_DIAGNOSTICS === '1'
+const MEMORY_DIAGNOSTICS_SAMPLE_LIMIT = 12
 const NON_RUN_GUARD_CODES = new Set(['E_VERIFY_ALREADY_RUNNING', 'E_DEV_GUI_RUNNING'])
 const PI_VERSION = '0.80.10'
 const CWD_MARKER_NAME = '.pi-gui-s7-cwd-ok'
@@ -91,6 +94,10 @@ let projectPaths = []
 const steps = []
 const screenshotFiles = []
 const processTotals = { stdoutChars: 0, stderrChars: 0 }
+const memoryDiagnostics = {
+  enabled: MEMORY_DIAGNOSTICS_ENABLED,
+  samples: []
+}
 const p2Summary = {
   projects: { configured: 0, discovered: 0, switched: false },
   sessions: { materialized: 0, listed: 0, switched: false, restored: false },
@@ -379,6 +386,7 @@ async function exerciseUi() {
       TIMEOUT.page,
       'E_LAUNCH_SURFACE'
     )
+    await installMemoryEventProbe(activeCdp)
   })
 
   await runStep('runtime_identity', async () => {
@@ -445,6 +453,7 @@ async function exerciseUi() {
     if (actualExecutable === null || actualExecutable !== expectedExecutable) {
       fail('E_PI_EXECUTABLE')
     }
+    await captureMemorySample('single-runtime-ready')
   })
 
   await runStep('high_thinking', async () => {
@@ -470,6 +479,7 @@ async function exerciseUi() {
     const cwdMarker = await readFile(join(projectPath, CWD_MARKER_NAME), 'utf8').catch(() => null)
     if (cwdMarker !== CWD_MARKER_CONTENT) fail('E_RUNTIME_CWD')
     await captureScreenshot(activeCdp, 'ready-tool.png')
+    await captureMemorySample('tool-turn-settled')
   })
 
   await runStep('abort_turn', async () => {
@@ -571,6 +581,7 @@ async function exerciseUi() {
       TIMEOUT.page,
       'E_REOPEN_RESUME_AVAILABLE'
     )
+    await installMemoryEventProbe(activeCdp)
   })
 
   await runStep('reopen_resume', async () => {
@@ -579,6 +590,7 @@ async function exerciseUi() {
     await waitForMessageCount(activeCdp, messagesBeforeReopen, TIMEOUT.ready)
     await assertSameSessionPointer(sessionPointer, projectPath)
     await captureScreenshot(activeCdp, 'reopened-resumed.png')
+    await captureMemorySample('reopened-runtime-ready')
   })
 
   await runStep('p2_projects', async () => {
@@ -650,6 +662,7 @@ async function exerciseUi() {
     p2Summary.projects.switched = true
     p2Summary.interaction.composerFocusRestored = true
     p2Summary.interaction.parallelRuntimes = true
+    await captureMemorySample('two-project-runtimes-ready')
   })
 
   await runStep('p2_sessions', async () => {
@@ -715,6 +728,7 @@ async function exerciseUi() {
     await waitForComposerFocus(activeCdp)
     p2Summary.sessions.switched = true
     p2Summary.sessions.restored = true
+    await captureMemorySample('three-session-runtimes-ready')
   })
 
   await runStep('p2_slash_commands', async () => {
@@ -902,6 +916,7 @@ async function exerciseUi() {
     s19Summary.parallelParticipants = liveRun.participants.length
     s19Summary.agents = [...new Set(liveRun.participants.map((participant) => participant.agent))]
     s19Summary.observedLive = true
+    await captureMemorySample('three-subagents-running')
 
     const capsulesAlreadyVisible = await evaluateValue(
       activeCdp,
@@ -1031,6 +1046,7 @@ async function exerciseUi() {
     )
     s19Summary.liveToCompleted = true
     await captureScreenshot(activeCdp, 's19-wide-completed.png')
+    await captureMemorySample('three-subagents-completed')
 
     await clickSelector(activeCdp, '.subagent-task-detail-close')
     await waitForExpression(
@@ -1129,6 +1145,7 @@ async function exerciseUi() {
   })
 
   await runStep('final_close', async () => {
+    await captureMemorySample('before-final-close')
     await closeApp(activeApp, activeCdp)
     activeApp = null
     activeCdp = null
@@ -1875,6 +1892,313 @@ async function descendantPids(rootPid) {
   return descendants
 }
 
+async function installMemoryEventProbe(cdp) {
+  if (!MEMORY_DIAGNOSTICS_ENABLED) return
+  const installed = await evaluateValue(
+    cdp,
+    `(() => {
+      if (globalThis.__PI_GUI_MEMORY_EVENT_PROBE__ !== undefined) return true
+      const metrics = {
+        fullStateEvents: 0,
+        patchEvents: 0,
+        compactionEvents: 0,
+        otherEvents: 0,
+        latestStateEntries: 0,
+        patchRuntime: 0,
+        patchSession: 0,
+        patchConversation: 0,
+        appendedChars: 0,
+        insertedPayloadChars: 0,
+        entryPatches: {
+          insert: 0,
+          appendMessageText: 0,
+          appendThinkingText: 0,
+          appendToolOutput: 0
+        }
+      }
+      const stringChars = (value, visited = new Set()) => {
+        if (typeof value === 'string') return value.length
+        if (value === null || typeof value !== 'object' || visited.has(value)) return 0
+        visited.add(value)
+        let chars = 0
+        if (Array.isArray(value)) {
+          for (const item of value) chars += stringChars(item, visited)
+        } else {
+          for (const item of Object.values(value)) chars += stringChars(item, visited)
+        }
+        return chars
+      }
+      const unsubscribe = window.piGui.subscribe((event) => {
+        if (event.type === 'kernel.state-changed') {
+          metrics.fullStateEvents += 1
+          metrics.latestStateEntries = event.state.conversation.entries.length
+          return
+        }
+        if (event.type === 'kernel.state-patched') {
+          metrics.patchEvents += 1
+          if (event.patch.runtime !== undefined) metrics.patchRuntime += 1
+          if (event.patch.session !== undefined) metrics.patchSession += 1
+          if (event.patch.conversation === undefined) return
+          metrics.patchConversation += 1
+          for (const patch of event.patch.conversation.entries ?? []) {
+            if (patch.type === 'insert') {
+              metrics.entryPatches.insert += 1
+              metrics.insertedPayloadChars += stringChars(patch.entry)
+            } else if (patch.type === 'append-message-text') {
+              metrics.entryPatches.appendMessageText += 1
+              metrics.appendedChars += patch.text.length
+            } else if (patch.type === 'append-thinking-text') {
+              metrics.entryPatches.appendThinkingText += 1
+              metrics.appendedChars += patch.text.length
+            } else if (patch.type === 'append-tool-output') {
+              metrics.entryPatches.appendToolOutput += 1
+              metrics.appendedChars += patch.output.length + patch.details.length
+            }
+          }
+          return
+        }
+        if (event.type === 'kernel.compaction-started' || event.type === 'kernel.compaction-ended') {
+          metrics.compactionEvents += 1
+        } else {
+          metrics.otherEvents += 1
+        }
+      })
+      Object.defineProperty(globalThis, '__PI_GUI_MEMORY_EVENT_PROBE__', {
+        value: { metrics, unsubscribe },
+        configurable: true
+      })
+      return true
+    })()`
+  )
+  if (installed !== true) fail('E_MEMORY_EVENT_PROBE')
+}
+
+async function captureMemorySample(label) {
+  if (!MEMORY_DIAGNOSTICS_ENABLED || activeApp === null || activeCdp === null) return
+  if (memoryDiagnostics.samples.length >= MEMORY_DIAGNOSTICS_SAMPLE_LIMIT) return
+  const rootPid = activeApp.rootPid
+  if (!Number.isInteger(rootPid)) return
+
+  await observeTree(activeApp)
+  const pids = [rootPid, ...await descendantPids(rootPid)]
+  const records = (await Promise.all(
+    pids.map((pid) => readLinuxProcessMemory(pid, rootPid))
+  )).filter((record) => record !== null)
+  const recordsByPid = new Map(records.map((record) => [record.pid, record]))
+  for (const record of records) {
+    if (record.baseRole !== 'pi') continue
+    record.role = hasPiAncestor(record, recordsByPid) ? 'pi-child' : 'pi-runtime'
+  }
+
+  const roles = {}
+  const totals = emptyMemoryTotals()
+  for (const record of records) {
+    const summary = roles[record.role] ?? { processes: 0, ...emptyMemoryTotals() }
+    summary.processes += 1
+    addMemoryTotals(summary, record.memory)
+    roles[record.role] = summary
+    addMemoryTotals(totals, record.memory)
+  }
+
+  const [rendererState, rendererHeap, rendererDom, rendererEvents] = await Promise.all([
+    evaluateValue(
+      activeCdp,
+      `window.piGui.getState().then((state) => {
+        const utf8Bytes = (text) => {
+          let bytes = 0
+          for (let index = 0; index < text.length; index += 1) {
+            const code = text.charCodeAt(index)
+            if (code <= 0x7f) bytes += 1
+            else if (code <= 0x7ff) bytes += 2
+            else if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length &&
+              text.charCodeAt(index + 1) >= 0xdc00 && text.charCodeAt(index + 1) <= 0xdfff) {
+              bytes += 4
+              index += 1
+            } else bytes += 3
+          }
+          return bytes
+        }
+        const bytes = (value) => utf8Bytes(JSON.stringify(value))
+        const kinds = {}
+        for (const entry of state.conversation.entries) {
+          kinds[entry.kind] = (kinds[entry.kind] ?? 0) + 1
+        }
+        return {
+          stateJsonBytes: bytes(state),
+          conversationJsonBytes: bytes(state.conversation),
+          navigationJsonBytes: bytes({ projects: state.projects, sessions: state.sessions }),
+          entries: state.conversation.entries.length,
+          entryKinds: kinds,
+          projects: state.projects.length,
+          sessions: state.sessions.length,
+          runtimeStatus: state.runtime.status,
+          domElements: document.getElementsByTagName('*').length,
+          bodyTextChars: document.body.innerText.length
+        }
+      })`
+    ).catch(() => null),
+    activeCdp.send('Runtime.getHeapUsage').catch(() => null),
+    activeCdp.send('Memory.getDOMCounters').catch(() => null),
+    evaluateValue(
+      activeCdp,
+      `(() => {
+        const metrics = globalThis.__PI_GUI_MEMORY_EVENT_PROBE__?.metrics
+        if (metrics === undefined) return null
+        return {
+          ...metrics,
+          entryPatches: { ...metrics.entryPatches }
+        }
+      })()`
+    ).catch(() => null)
+  ])
+
+  memoryDiagnostics.samples.push({
+    label,
+    capturedAt: new Date().toISOString(),
+    elapsedMs: Date.now() - Date.parse(STARTED_AT),
+    processCount: records.length,
+    totals,
+    roles,
+    renderer: {
+      state: rendererState,
+      heap: rendererHeap,
+      dom: rendererDom,
+      events: rendererEvents
+    }
+  })
+}
+
+function hasPiAncestor(record, recordsByPid) {
+  const visited = new Set([record.pid])
+  let parent = recordsByPid.get(record.ppid)
+  while (parent !== undefined && !visited.has(parent.pid)) {
+    if (parent.baseRole === 'pi') return true
+    visited.add(parent.pid)
+    parent = recordsByPid.get(parent.ppid)
+  }
+  return false
+}
+
+async function readLinuxProcessMemory(pid, rootPid) {
+  try {
+    const [smaps, status, command, commandLine] = await Promise.all([
+      readFile(`/proc/${pid}/smaps_rollup`, 'utf8'),
+      readFile(`/proc/${pid}/status`, 'utf8'),
+      readFile(`/proc/${pid}/comm`, 'utf8'),
+      readFile(`/proc/${pid}/cmdline`)
+    ])
+    const ppid = Number(/^PPid:\s+(\d+)$/m.exec(status)?.[1] ?? 0)
+    const comm = command.trim()
+    const argv = commandLine.toString('utf8').replaceAll('\0', ' ')
+    let role = 'other'
+    if (comm === 'pi') role = 'pi'
+    else if (argv.includes('--type=renderer')) role = 'renderer'
+    else if (argv.includes('--type=gpu-process')) role = 'gpu'
+    else if (argv.includes('--type=utility')) role = 'utility'
+    else if (argv.includes('--type=zygote')) role = 'zygote'
+    else if (pid === rootPid) role = 'app-root'
+    else if (comm.includes('pi-gui') || argv.includes('pi-gui-next')) role = 'electron-main'
+    return {
+      pid,
+      ppid,
+      role,
+      baseRole: role,
+      memory: {
+        rssBytes: smapsBytes(smaps, 'Rss'),
+        pssBytes: smapsBytes(smaps, 'Pss'),
+        privateBytes: smapsBytes(smaps, 'Private_Clean') + smapsBytes(smaps, 'Private_Dirty'),
+        anonymousBytes: smapsBytes(smaps, 'Anonymous'),
+        swapBytes: smapsBytes(smaps, 'Swap')
+      }
+    }
+  } catch {
+    return null
+  }
+}
+
+function smapsBytes(text, field) {
+  const value = Number(new RegExp(`^${field}:\\s+(\\d+)\\s+kB$`, 'm').exec(text)?.[1] ?? 0)
+  return Number.isFinite(value) ? value * 1024 : 0
+}
+
+function emptyMemoryTotals() {
+  return {
+    rssBytes: 0,
+    pssBytes: 0,
+    privateBytes: 0,
+    anonymousBytes: 0,
+    swapBytes: 0
+  }
+}
+
+function addMemoryTotals(target, value) {
+  target.rssBytes += value.rssBytes
+  target.pssBytes += value.pssBytes
+  target.privateBytes += value.privateBytes
+  target.anonymousBytes += value.anonymousBytes
+  target.swapBytes += value.swapBytes
+}
+
+function memoryDiagnosticsReport() {
+  if (!MEMORY_DIAGNOSTICS_ENABLED) return { enabled: false }
+  const maxima = {
+    processCount: 0,
+    totalPssBytes: 0,
+    rendererPssBytes: 0,
+    piRuntimeProcesses: 0,
+    piChildProcesses: 0,
+    piPssBytes: 0,
+    rendererHeapUsedBytes: 0,
+    rendererStateJsonBytes: 0,
+    rendererFullStateEvents: 0,
+    rendererPatchEvents: 0
+  }
+  for (const sample of memoryDiagnostics.samples) {
+    maxima.processCount = Math.max(maxima.processCount, sample.processCount)
+    maxima.totalPssBytes = Math.max(maxima.totalPssBytes, sample.totals.pssBytes)
+    maxima.rendererPssBytes = Math.max(
+      maxima.rendererPssBytes,
+      sample.roles.renderer?.pssBytes ?? 0
+    )
+    maxima.piRuntimeProcesses = Math.max(
+      maxima.piRuntimeProcesses,
+      sample.roles['pi-runtime']?.processes ?? 0
+    )
+    maxima.piChildProcesses = Math.max(
+      maxima.piChildProcesses,
+      sample.roles['pi-child']?.processes ?? 0
+    )
+    maxima.piPssBytes = Math.max(
+      maxima.piPssBytes,
+      (sample.roles['pi-runtime']?.pssBytes ?? 0) + (sample.roles['pi-child']?.pssBytes ?? 0)
+    )
+    maxima.rendererHeapUsedBytes = Math.max(
+      maxima.rendererHeapUsedBytes,
+      sample.renderer.heap?.usedSize ?? 0
+    )
+    maxima.rendererStateJsonBytes = Math.max(
+      maxima.rendererStateJsonBytes,
+      sample.renderer.state?.stateJsonBytes ?? 0
+    )
+    maxima.rendererFullStateEvents = Math.max(
+      maxima.rendererFullStateEvents,
+      sample.renderer.events?.fullStateEvents ?? 0
+    )
+    maxima.rendererPatchEvents = Math.max(
+      maxima.rendererPatchEvents,
+      sample.renderer.events?.patchEvents ?? 0
+    )
+  }
+  return {
+    enabled: true,
+    redacted: true,
+    units: 'bytes',
+    sampleLimit: MEMORY_DIAGNOSTICS_SAMPLE_LIMIT,
+    maxima,
+    samples: memoryDiagnostics.samples
+  }
+}
+
 async function findUniquePiRpcProcess(app, projectPath) {
   const deadline = Date.now() + 10_000
   while (Date.now() < deadline) {
@@ -2128,6 +2452,7 @@ async function writeReport(status, error) {
     },
     system: await osIdentity(),
     processOutputCounts: { ...processTotals },
+    memoryDiagnostics: memoryDiagnosticsReport(),
     p2Summary,
     s19Summary,
     evidence: {
