@@ -1188,12 +1188,19 @@ async function clickButtonText(cdp, selector, text) {
   if (!clicked) fail('E_CLICK_TEXT')
 }
 
+function titledButtonIdentityAttribute(selector) {
+  if (selector === '.project-select') return 'data-project-key'
+  if (selector === '.session-item') return 'data-session-key'
+  throw new Error(`Unsupported titled button selector: ${selector}`)
+}
+
 async function clickTitledButton(cdp, selector, title) {
+  const identityAttribute = titledButtonIdentityAttribute(selector)
   const clicked = await evaluateValue(
     cdp,
     `(() => {
       const element = Array.from(document.querySelectorAll(${JSON.stringify(selector)}))
-        .find((candidate) => candidate.getAttribute('title') === ${JSON.stringify(title)})
+        .find((candidate) => candidate.getAttribute(${JSON.stringify(identityAttribute)}) === ${JSON.stringify(title)})
       if (!(element instanceof HTMLButtonElement) || element.disabled) return false
       element.click()
       return true
@@ -1203,11 +1210,12 @@ async function clickTitledButton(cdp, selector, title) {
 }
 
 async function clickTitledButtonWithFeedback(cdp, selector, title) {
+  const identityAttribute = titledButtonIdentityAttribute(selector)
   await waitForExpression(
     cdp,
     `Array.from(document.querySelectorAll(${JSON.stringify(selector)})).some((candidate) =>
       candidate instanceof HTMLButtonElement &&
-      candidate.getAttribute('title') === ${JSON.stringify(title)} &&
+      candidate.getAttribute(${JSON.stringify(identityAttribute)}) === ${JSON.stringify(title)} &&
       !candidate.disabled
     )`,
     TIMEOUT.page,
@@ -1217,7 +1225,7 @@ async function clickTitledButtonWithFeedback(cdp, selector, title) {
     cdp,
     `new Promise((resolveClick) => {
       const element = Array.from(document.querySelectorAll(${JSON.stringify(selector)}))
-        .find((candidate) => candidate.getAttribute('title') === ${JSON.stringify(title)})
+        .find((candidate) => candidate.getAttribute(${JSON.stringify(identityAttribute)}) === ${JSON.stringify(title)})
       if (!(element instanceof HTMLButtonElement) || element.disabled) {
         resolveClick(false)
         return
@@ -1246,10 +1254,11 @@ async function clickTitledButtonWithFeedback(cdp, selector, title) {
 }
 
 async function waitForTitledSelection(cdp, selector, title, timeoutMs, code) {
+  const identityAttribute = titledButtonIdentityAttribute(selector)
   await waitForExpression(
     cdp,
     `Array.from(document.querySelectorAll(${JSON.stringify(selector)})).some((element) =>
-      element.getAttribute('title') === ${JSON.stringify(title)} &&
+      element.getAttribute(${JSON.stringify(identityAttribute)}) === ${JSON.stringify(title)} &&
       element.getAttribute('aria-current') === 'true'
     )`,
     timeoutMs,
@@ -1258,9 +1267,10 @@ async function waitForTitledSelection(cdp, selector, title, timeoutMs, code) {
 }
 
 async function selectedTitledButton(cdp, selector) {
+  const identityAttribute = titledButtonIdentityAttribute(selector)
   const title = await evaluateValue(
     cdp,
-    `document.querySelector(${JSON.stringify(`${selector}[aria-current="true"]`)})?.getAttribute('title') ?? null`
+    `document.querySelector(${JSON.stringify(`${selector}[aria-current="true"]`)})?.getAttribute(${JSON.stringify(identityAttribute)}) ?? null`
   )
   return typeof title === 'string' && title.length > 0 ? title : null
 }

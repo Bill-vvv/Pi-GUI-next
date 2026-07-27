@@ -500,6 +500,7 @@ export function ProjectNavigator({
                     type="button"
                     aria-current={selected ? 'true' : undefined}
                     aria-expanded={expanded}
+                    data-project-key={project.path}
                     aria-describedby={
                       projectHoverCard?.projectKey === project.path && projectCardPosition !== null
                         ? projectHoverCardId
@@ -642,6 +643,7 @@ export function ProjectNavigator({
                             type="button"
                             aria-label={sessionAriaLabel(summary, tokenCountFormat)}
                             aria-current={sessionSelected ? 'true' : undefined}
+                            data-session-key={summary.key}
                             aria-describedby={
                               sessionHoverCard?.sessionKey === summary.key && sessionCardPosition !== null
                                 ? sessionHoverCardId
