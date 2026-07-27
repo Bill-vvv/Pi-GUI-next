@@ -4674,13 +4674,23 @@ test('session switch crash during persistence cannot commit ready or the target 
   assert.equal(kernel.getState().runtime.status, 'stopped')
 })
 
-test('explicit resume after a crash reuses the managed crashed runtime', async () => {
-  const firstRuntime = new FakeRuntimeHost()
+test('explicit resume after a crash replaces the managed runtime and restores the session', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/session-1.jsonl',
+    sessionId: 'session-1',
+    sessionName: 'Resumed session'
+  }
+  const firstRuntime = new FakeRuntimeHost({
+    sessionId: pointer.sessionId,
+    sessionFile: pointer.sessionFile,
+    sessionName: pointer.sessionName ?? undefined
+  })
   const resumedRuntime = new FakeRuntimeHost(
     {
-      sessionId: 'session-1',
-      sessionFile: '/tmp/session-1.jsonl',
-      sessionName: 'Resumed session'
+      sessionId: pointer.sessionId,
+      sessionFile: pointer.sessionFile,
+      sessionName: pointer.sessionName ?? undefined
     },
     [{ role: 'assistant', content: [{ type: 'text', text: 'Recovered' }], timestamp: 42 }]
   )
@@ -4694,19 +4704,31 @@ test('explicit resume after a crash reuses the managed crashed runtime', async (
       return runtime
     },
     { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
-    kernelOptions()
+    kernelOptions(pointer)
   )
 
-  await kernel.start()
+  await kernel.activateSession(pointer.sessionFile)
   firstRuntime.emit({ type: 'process-exit', code: 7, signal: null })
   await kernel.resumeSession()
 
-  assert.equal(kernel.getState().runtime.status, 'crashed')
-  assert.deepEqual(launches, [{
-    subagent: DEFAULT_SUBAGENT_SETTINGS,
-    fastExtensionLoading: false
-  }])
-  assert.equal(resumedRuntime.startCalls, 0)
+  assert.equal(firstRuntime.stopCalls, 1)
+  assert.equal(resumedRuntime.startCalls, 1)
+  assert.equal(kernel.getState().runtime.status, 'ready')
+  assert.equal(kernel.getState().session.id, pointer.sessionId)
+  const recovered = kernel.getState().conversation.entries[0]
+  assert.equal(recovered?.kind === 'message' ? recovered.text : null, 'Recovered')
+  assert.deepEqual(launches, [
+    {
+      sessionFile: pointer.sessionFile,
+      subagent: DEFAULT_SUBAGENT_SETTINGS,
+      fastExtensionLoading: false
+    },
+    {
+      sessionFile: pointer.sessionFile,
+      subagent: DEFAULT_SUBAGENT_SETTINGS,
+      fastExtensionLoading: false
+    }
+  ])
 })
 
 test('a stored pointer is resumable from a stopped kernel relaunch', async () => {

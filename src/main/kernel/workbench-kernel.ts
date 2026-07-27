@@ -669,7 +669,10 @@ export class WorkbenchKernel {
     await this.beginLaunch(async () => {
       const project = configuredProject(this.state)
       const managed = this.contextBySessionKey.get(contextKey(project.path, sessionKey))
-      if (managed !== undefined) {
+      const restartManaged = managed !== undefined &&
+        managed === this.activeContext &&
+        managed.state.runtime.status === 'crashed'
+      if (managed !== undefined && !restartManaged) {
         this.captureActiveContext()
         this.loadContext(managed)
         this.emitState()
@@ -686,6 +689,10 @@ export class WorkbenchKernel {
       }
       const pointer = await this.validateSession(storedPointer)
       this.assertLaunchActive()
+      if (restartManaged) {
+        await this.stopContext(managed)
+        this.assertLaunchActive()
+      }
       await this.launch(project, { sessionFile: pointer.sessionFile }, pointer.sessionId)
     })
   }
