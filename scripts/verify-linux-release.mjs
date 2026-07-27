@@ -1286,12 +1286,12 @@ async function latestParallelSubagentRun(cdp) {
     cdp,
     `window.piGui.getState().then((state) => {
       const runs = state.conversation.entries
-        .filter((entry) => entry.kind === 'tool' && entry.toolName === 'subagent' && entry.subagentRun?.mode === 'parallel')
+        .filter((entry) => entry.kind === 'tool' && entry.toolName === 'subagent' && entry.subagent?.mode === 'parallel')
         .map((entry) => ({
           toolCallId: entry.toolCallId,
           toolStatus: entry.status,
           runtime: state.runtime.status,
-          participants: entry.subagentRun.participants.map((participant) => ({
+          participants: entry.subagent.participants.map((participant) => ({
             index: participant.index,
             agent: participant.agent,
             status: participant.status,
