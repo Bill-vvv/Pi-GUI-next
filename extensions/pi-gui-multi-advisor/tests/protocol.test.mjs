@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { ADVISOR_MAX_DEDUPE_ENTRIES } from "../src/resilience.mjs";
 import {
   ADVISORY_TYPE,
   CAPABILITY_TYPE,
@@ -30,30 +31,61 @@ test("advisory is escaped, versioned, and identifies the real advisor", () => {
   assert.match(advisory.content, /check &lt;x&gt; &amp; &quot;y&quot;/);
 });
 
-test("emission guard permits one item per review and only real escalation later", () => {
+test("emission guard permits one concrete note per review with bounded exact dedupe", () => {
   const guard = createEmissionGuard();
   guard.beginReview();
-  assert.equal(guard.accept("Fix   this", "nit"), true);
+  assert.equal(guard.accept("Fix—this", "nit"), true);
   assert.equal(guard.accept("Another", "blocker"), false);
   guard.beginReview();
-  assert.equal(guard.accept(" fix this ", "nit"), false);
-  assert.equal(guard.accept("FIX THIS", "concern"), true);
+  assert.equal(guard.accept(" fix this ", "blocker"), false);
+  assert.equal(guard.accept("nothing to add", "concern"), false);
+  assert.equal(guard.accept("A concrete different issue", "concern"), true);
+
+  guard.reset();
+  for (let index = 0; index <= ADVISOR_MAX_DEDUPE_ENTRIES; index += 1) {
+    guard.beginReview();
+    assert.equal(guard.accept(`issue ${index}`, "nit"), true);
+  }
   guard.beginReview();
-  assert.equal(guard.accept("fix this", "blocker"), true);
+  assert.equal(guard.accept("issue 0", "nit"), true);
 });
 
-test("turn delta filters the extension's own advisory", () => {
+test("emission guard rejects known content-free interruption noise without consuming the review", () => {
+  for (const phrase of [
+    "Stop now.",
+    "Task complete.",
+    "No issues.",
+    "All good.",
+    "Continue.",
+    "Nothing to report.",
+  ]) {
+    const guard = createEmissionGuard();
+    guard.beginReview();
+    assert.equal(guard.accept(phrase, "blocker"), false, phrase);
+    assert.equal(guard.accept(`Concrete issue after ${phrase}`, "concern"), true, phrase);
+  }
+});
+
+test("turn delta filters advisories from every advisor without hiding ordinary custom data", () => {
   const serialized = serializeTurnDelta({
     prompt: "primary",
-    message: { customType: ADVISORY_TYPE, content: "self" },
+    message: {
+      customType: ADVISORY_TYPE,
+      content: "advisor A",
+      details: { advisorSlug: "a" },
+    },
     toolResults: [
-      { type: ADVISORY_TYPE, content: "self" },
+      { type: ADVISORY_TYPE, content: "advisor B", details: { advisorSlug: "b" } },
+      { customType: "other-extension/status", content: "ordinary custom data" },
       { role: "toolResult", content: "primary result" },
     ],
   });
   const value = JSON.parse(serialized);
   assert.equal("message" in value, false);
-  assert.deepEqual(value.toolResults, [{ role: "toolResult", content: "primary result" }]);
+  assert.deepEqual(value.toolResults, [
+    { customType: "other-extension/status", content: "ordinary custom data" },
+    { role: "toolResult", content: "primary result" },
+  ]);
 });
 
 test("capability truthfully describes the S18-3 surface", () => {
@@ -62,7 +94,7 @@ test("capability truthfully describes the S18-3 surface", () => {
   assert.deepEqual(capability, {
     protocolVersion: 2,
     identity: "pi-gui-multi-advisor",
-    version: "0.2.0",
+    version: "0.3.0",
     enabled: false,
     multiAdvisor: true,
     liveToggle: true,

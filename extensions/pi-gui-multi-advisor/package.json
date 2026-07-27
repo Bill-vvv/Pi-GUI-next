@@ -1,6 +1,6 @@
 {
   "name": "pi-gui-multi-advisor",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A standalone, configurable multi-advisor extension for Pi Coding Agent",
   "license": "MIT",
   "type": "module",

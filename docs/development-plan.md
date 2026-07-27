@@ -463,9 +463,9 @@ P2 先用一个短 Slice 固定结构，再实现基础功能，随后在真实�
 | S16 | Subagent Extension 适配 | `Complete` | 固定适配 `pi-subagents`；拓展页以独立“已适配拓展”区域负责安装和真实启停；独立 Subagent 页只读取可用状态并修改最大嵌套深度，Runtime 通过 `PI_SUBAGENT_MAX_DEPTH` 配置，新建或显式 reload 后生效；不实现 Agent definition CRUD、任务监控或内建 Subagent Runtime |
 | S17 | Subagent Agent 管理 | `Complete` | Subagent 页接入真实用户级与当前项目 Agent Markdown 定义；内置 Package 文件不改写，界面直接编辑并可恢复默认；Agent 启停复用官方 disabled override，列表每页 6 项并支持作用域/启动状态筛选与多选批量修改；编辑器分基础/高级设置；Main 只读写固定 Agent 与 settings 路径，Renderer 不取得任意文件能力；core tests、typecheck、生产 build 与 diff check 通过 |
 | S17.1 | Magic Context 可选适配 | `Complete` | 拓展页增加固定 `@cortexkit/pi-magic-context` 安装与 Extension resource 启停；Package 状态不冒充配置健康，setup/doctor 继续由上游 CLI 负责，运行态复用 Pi 命令目录中的 `/ctx-status`；不解析私有 SQLite、不内嵌配置器或伪造缓存指标 |
-| S18 | OMP 多 Advisor Extension 与 GUI 适配 | `In Progress` | S18-1 至 S18-3 已完成 Package、真实 Provider、GUI 投影/控制和多 roster；S19 已完成 canonical AppImage 正式验收，当前恢复 S18-4 交付与韧性，S18-5 继续保持 Pending |
+| S18 | OMP 多 Advisor Extension 与 GUI 适配 | `Paused` | S18-1 至 S18-4 已完成 Package、真实 Provider、GUI 投影/控制、多 roster 与交付韧性；S18-5 可观测性与发布继续保持 Pending，按 P2.1 顺序暂停到后续统一收敛 |
 | S19 | Subagent 任务详情侧栏 | `Complete` | Canonical clean commit `b9562b4` 的正式 `pnpm verify:linux` 已通过完整 P1/P2 回归与 S19：3 路并行 worker 同时 running、运行中选择、Escape 优先级、live→completed、宽屏第三列、窄屏替换、关闭/返回/Escape 焦点恢复和 reduced-motion。AppImage SHA-256 为 `4bbe45a505f601966c75ba8c3b4074f793ee88a7aff88e83bf00af03f039c29d`，证据位于 `release/evidence/2026-07-27T16-45-59-798Z-b9562b4ca6c3/` |
-| S20 | 动效与交互基础 | `Planned` | 在 S19 canonical 收口和 S18-4 完成后，依次建立统一 motion contract、Timeline/Composer 阅读锚点和跨 Navigator/Settings/任务详情的 Escape、外点与焦点恢复规则；动效不推动正文，不成为唯一状态表达，并以 reduced-motion 静态替代为完成门槛 |
+| S20 | 动效与交互基础 | `In Progress` | S19 和 S18-4 已完成，当前从 S20-1 建立统一 motion contract，再推进 Timeline/Composer 阅读锚点和跨 Navigator/Settings/任务详情的 Escape、外点与焦点恢复规则；动效不推动正文，不成为唯一状态表达，并以 reduced-motion 静态替代为完成门槛 |
 | S21 | Settings Workspace 2.0 | `Planned` | 设置导航按“应用 / 模型 / Agent / 生态”分组，增加收起、真实设置搜索和应用内 deep link；统一作用域、事实来源、生效时间及 saved/loaded 差异，不建立通用设置 registry，不静默 reload Runtime |
 | S22 | Personalization v1 | `Planned` | 第一批只增加用户级的对话阅读宽度、Navigator 密度和动效偏好；使用有限语义枚举与统一 token，窄窗口、触控命中和 OS reduced-motion 继续拥有更高约束，不提供任意 CSS、像素或颜色编辑 |
 | S23 | Subagent Effective State 与任务一致性 | `Planned` | Main 投影 effective Agent definition、覆盖来源、最终启停/depth、Package/Extension/当前 Runtime 加载及 reload 状态；任务详情补同 run participant 切换、汇总和实时→历史恢复一致性，不读取 child transcript/artifact，不提前加入 GUI 运行控制 |
@@ -476,7 +476,7 @@ P2 最初把“多 Project、多 Session”限定为可保存、发现和切换�
 
 #### S18 — OMP 多 Advisor Extension 与 GUI 适配
 
-当前状态：`In Progress`。S19 已在 canonical clean commit/worktree 完成正式 `verify:linux`，当前恢复 S18-4 交付与韧性；S18-5 继续保持 `Pending`。
+当前状态：`Paused`。S18-4 已完成 Extension 内交付与韧性；S18-5 继续保持 `Pending`，按 P2.1 顺序暂停到后续可观测性与正式发布收敛。
 
 目标：
 
@@ -495,7 +495,7 @@ Extension adapter registry，也不提前激活 P3 的全部生态管理范围�
 | S18-1 协议与单 Advisor 基线 | `Complete` | 已审计 Pi 0.80.10 Extension API 和固定 OMP WATCHDOG parser；已建立 `pi-gui-multi-advisor` 0.1.0、strict 默认关闭 state、protocol v1 与一个默认使用当前 Provider 中 `gpt-5.6-sol + medium` 的只读独立 Advisor；模型或认证不满足时明确暂停 | 7 项离线测试、独立类型校验、Package dry-run、真实 Pi 安装/加载/命令/capability，以及 `terra + low` primary → `sol + medium` Advisor 的真实 `blocker` 与 Session 持久化闭环通过 |
 | S18-2 GUI 投影与控制 | `Complete` | capability 与历史/实时 advisory strict projector、Pi RPC 固定 adapter allowlist、Extension resource / Session system 两个窄 typed control、拓展页固定项、最小 Advisor 状态页和 turn 内 Timeline 卡片 | 151 项后端定向测试、Renderer typecheck、生产 build 与 diff check 通过；Renderer 不接触 raw event，未知/非法 custom payload 不 fallback |
 | S18-3 多 Advisor roster | `Complete` | WATCHDOG 发现/合并、多个隔离 Advisor、protocol v2、Advisor 专页 typed CRUD 与固定工具授权 | 用户/Project 覆盖可解释；单项启停、模型、thinking、固定工具和指令在 reload 后真实生效；默认只读，`edit/write` 显式授权，`bash` 不开放 |
-| S18-4 交付与韧性 | `In Progress` | nit/concern/blocker、immune turns、有界 backlog、上下文维护、dedupe、quarantine、重试和错误/配额状态；S19 正式 gate 已完成，当前恢复实施 | 多 Advisor 无递归建议、无限积压或重复 emission；主 Agent 失败边界独立 |
+| S18-4 交付与韧性 | `Complete` | Package 0.3.0 实现 nit/concern/blocker delivery、steer 后三轮 interrupt immunity、每 Advisor 最新一项且 30 秒过期的异步 backlog、generation/run-token lifecycle ownership、完整 context budget 与一次 fresh-context 恢复、4096 项 session dedupe/噪声抑制、assistant `message_end` 工具执行前 quarantine，以及 transient 三次上限、quota/permanent/auth/no-model 明确暂停 | 29 项 Extension 测试、独立 Extension typecheck、453 项 core tests、Package dry-run 与隔离真实 Pi RPC 双轮 smoke 通过；两轮 Advisor 均 running→idle，只交付首条同 note advisory，第二条被 dedupe，0 Extension error。Pi 0.80.10 无 turn-end 阻塞 gate，因此本阶段只承诺可证明的异步 bounded catch-up，不伪造同步 `syncBacklog` |
 | S18-5 可观测性与发布 | `Pending`（debug usage telemetry 已局部接通） | `usage:true` 与 prompt-free realtime review usage event 已供项目级调试扩展消费；GUI status/usage/cost/context、dump、独立 transcript、可选 Advisor subagents 与 AppImage 验证仍待完成 | 只有真实能力可见；脱敏发布证据覆盖总开关、多个 Advisor、故障和恢复 |
 
 进入 S18-1 的前置条件（已满足）：
@@ -565,7 +565,7 @@ P2.1 在现有工作台能力基本完整后，集中处理三条体验线：动
 
 | 阶段 | 状态 | 范围 | 完成门槛 |
 | --- | --- | --- | --- |
-| S20-1 Motion Contract | `Pending` | 盘点并统一 feedback、reveal、layout、activity 四类动效；零散时长和 easing 收敛到现有 token；明确允许动画的属性与 reduced-motion 静态替代 | Feature 动效不推动 Timeline 正文；活动状态同时有文字/形状/颜色语义；深浅主题和 reduced-motion 定向复核通过 |
+| S20-1 Motion Contract | `In Progress` | 盘点并统一 feedback、reveal、layout、activity 四类动效；零散时长和 easing 收敛到现有 token；明确允许动画的属性与 reduced-motion 静态替代 | Feature 动效不推动 Timeline 正文；活动状态同时有文字/形状/颜色语义；深浅主题和 reduced-motion 定向复核通过 |
 | S20-2 Timeline & Composer Stability | `Pending` | 明确 following-bottom 与 reading-history 两种阅读状态；Composer、Todo、附件、队列、streaming 和任务详情变化保持真实测量 clearance 与阅读锚点 | 用户上滚后不被后台输出拉回；底部跟随保持；宽/窄窗口详情返回恢复原 trigger、focus 和阅读位置，不依赖固定 timeout |
 | S20-3 Interaction Consistency | `Pending` | 统一最内层 popover → 局部 editor/detail → workspace 的 Escape 层级，以及外点、返回、focus restoration、disabled 和触摸语义；窄窗口任务详情允许在同一 run participant 间切换 | Keyboard、pointer、touch、dirty draft、Project hover/action 互斥和异步双提交场景通过定向测试；不抽象无证据的万能 menu/popover |
 
@@ -923,6 +923,7 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-27 | S19-1 Supervisor 协作收敛 | 将重复 attention、具体 request、reply 与 wait 从多段协议日志收敛为结构化生命周期；request 以稳定 ID 去重并替代同 run participant 的泛化 attention，成功 reply 原地更新为已处理 | Main 白名单投影协调 identity/reason/status，Renderer 将内部协作降级为 status，并为 wait/reply/status/steer/resume 使用简洁文案；只有 completion guard 与 Watchdog blocker 使用 alert，原始命令只在技术详情中出现 |
 | 2026-07-27 | P2.1 Experience Refinement Planning | 用户确认下一阶段集中于动效与交互、Settings 优化与有限定制、Subagent/Magic Context 可解释性；接受四组设置导航、阅读宽度/Navigator 密度/动效偏好、Magic Context 安装与状态入口分离，以及 S19 → S18-4 → S20 的实施顺序 | 增加 S20–S25 与 D-047–D-050；当前唯一 In Progress 仍是 S19，规划不改变 dirty source snapshot，也不提前激活未具备真实协议的控制或健康 UI |
 | 2026-07-28 | S19 Complete / S18-4 Resume | Canonical clean commit `b9562b4` 的 AppImage 正式通过 `pnpm verify:linux` 全部 18 步；P1/P2 回归、三路 worker 同时 running、Escape 优先级、live→completed、宽/窄任务详情、三种焦点恢复和 reduced-motion 全部通过。Gate 期间修复 crashed Context 显式恢复、managed Session active pointer 持久化、live completion notice 去重，并将官方 verifier 对齐当前 typed contract 和 DOM identity | S19 标记 Complete；S18 恢复 In Progress，S18-4 成为当前唯一实施阶段；正式证据位于 `release/evidence/2026-07-27T16-45-59-798Z-b9562b4ca6c3/` |
+| 2026-07-28 | S18-4 Complete / S20-1 Start | `pi-gui-multi-advisor` 升级为 0.3.0：严重度驱动 aside/steer，真实 steer 后三轮禁止连续中断；每 Advisor backlog 只保留最新一项并在 30 秒过期；generation + run token 隔离 reset/compact 后旧 completion；context 预算包含 system/tools/provider usage，最多 fresh reset 一次；assistant `message_end` 在工具 dispatch 前 quarantine 未授权工具和无当前来源的危险输出；session dedupe、content-free 抑制、三次 transient 上限与 quota/permanent/paused 状态均有界 | 29 项 Extension 测试、独立 typecheck、453 项 core tests、0.3.0 pack dry-run 与隔离真实 Pi RPC 双轮 smoke 通过；根级 typecheck 被并行 Navigator `completionRevision` contract 修改阻断，非 Advisor 路径。S18 暂停并保留 S18-5 Pending；S20 进入 In Progress，S20-1 成为当前唯一实施阶段 |
 
 ## 17. 计划变更记录
 

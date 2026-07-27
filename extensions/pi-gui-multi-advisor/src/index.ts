@@ -21,13 +21,34 @@ import {
   createEmissionGuard,
   serializeTurnDelta,
 } from "./protocol.mjs";
+import {
+  ADVISOR_MAX_ADVICE_CHARS,
+  AdvisorLifecycleAbortedError,
+  admitAdvisorCandidate,
+  buildAdvisorQuarantineSourceText,
+  claimAdvisorRun,
+  invalidateAdvisorRuntime,
+  isAdvisorInterruptImmuneTurnActive,
+  ownsAdvisorRun,
+  quarantineAdvisorUnsafeOutput,
+  queueLatestAdvisorReview,
+  resolveAdvisorDelivery,
+  runBoundedAdvisorAttempts,
+  shouldResetAdvisorContext,
+  takeQueuedAdvisorReview,
+} from "./resilience.mjs";
 import { getStatePath, loadState, saveState } from "./state.mjs";
 import { loadWatchdog } from "./watchdog.mjs";
 
 const STATUS_KEY = "pi-gui-multi-advisor";
 
 type Severity = "nit" | "concern" | "blocker";
-type CapturedAdvice = { note: string; severity: Severity };
+type AdvicePayload = { note: string; severity: Severity };
+type CapturedAdvice = AdvicePayload & {
+  epoch: number;
+  generation: number;
+  turnIdentity: number;
+};
 type AdvisorModel = NonNullable<ExtensionContext["model"]>;
 type AdvisorConfig = {
   slug: string;
@@ -38,14 +59,31 @@ type AdvisorConfig = {
   instructions: string;
   enabled: boolean;
 };
-type Review = { event: TurnEndEvent; ctx: ExtensionContext; prompt: string; epoch: number };
+type Review = {
+  event: TurnEndEvent;
+  ctx: ExtensionContext;
+  prompt: string;
+  epoch: number;
+  turnIdentity: number;
+  queuedAt: number;
+  generation: number;
+};
+type RuntimeHealth = "idle" | "running" | "paused" | "quota" | "halted";
 type Runtime = {
   config: AdvisorConfig;
   agent?: Agent;
   unsubscribe?: () => void;
-  capture?: (advice: CapturedAdvice) => void;
+  capture?: (advice: AdvicePayload) => void;
   queued?: Review;
   running: boolean;
+  generation: number;
+  activeRunToken?: symbol;
+  quarantineSourceText?: string;
+  quarantineMessageOffset?: number;
+  quarantineReason?: string;
+  health: RuntimeHealth;
+  pausedReason?: string;
+  droppedReviews: number;
   guard: ReturnType<typeof createEmissionGuard>;
 };
 
@@ -98,11 +136,19 @@ export default async function multiAdvisorExtension(pi: ExtensionAPI) {
   let lastContext: ExtensionContext | undefined;
   let sharedInstructions = "";
   let runtimes = new Map<string, Runtime>();
+  let completedPrimaryTurns = 0;
+  let interruptImmuneTurnStart: number | undefined;
 
   const enabledRuntimes = () => [...runtimes.values()].filter((runtime) => runtime.config.enabled);
   const rosterSummary = () => {
     const active = enabledRuntimes();
-    const names = active.map((runtime) => runtime.config.slug).join(", ") || "none";
+    const names = active
+      .map((runtime) =>
+        `${runtime.config.slug}:${runtime.health}${
+          runtime.droppedReviews > 0 ? `;dropped=${runtime.droppedReviews}` : ""
+        }`,
+      )
+      .join(", ") || "none";
     return `${active.length}/${runtimes.size} enabled [${names}]`;
   };
   const updateStatus = (ctx: ExtensionContext, text?: string) => {
@@ -128,9 +174,32 @@ export default async function multiAdvisorExtension(pi: ExtensionAPI) {
     }
   };
 
+  const setRuntimeHealth = (
+    runtime: Runtime,
+    ctx: ExtensionContext,
+    health: RuntimeHealth,
+    reason?: string,
+    level: "warning" | "error" = "warning",
+    expectedGeneration?: number,
+  ) => {
+    if (expectedGeneration !== undefined && runtime.generation !== expectedGeneration) return;
+    const changed = runtime.health !== health || runtime.pausedReason !== reason;
+    runtime.health = health;
+    runtime.pausedReason = reason;
+    if (changed && reason) ctx.ui.notify(`${runtime.config.name} ${reason}`, level);
+    updateStatus(ctx);
+  };
+
   const disposeRuntime = (runtime: Runtime) => {
+    invalidateAdvisorRuntime(runtime);
     runtime.queued = undefined;
     runtime.capture = undefined;
+    runtime.quarantineSourceText = undefined;
+    runtime.quarantineMessageOffset = undefined;
+    runtime.quarantineReason = undefined;
+    runtime.health = "idle";
+    runtime.pausedReason = undefined;
+    runtime.droppedReviews = 0;
     runtime.guard.reset();
     runtime.agent?.abort();
     runtime.agent?.reset();
@@ -160,7 +229,14 @@ export default async function multiAdvisorExtension(pi: ExtensionAPI) {
     runtimes = new Map(
       watchdog.advisors.map((config: AdvisorConfig) => [
         config.slug,
-        { config, running: false, guard: createEmissionGuard() },
+        {
+          config,
+          running: false,
+          generation: 0,
+          health: "idle",
+          droppedReviews: 0,
+          guard: createEmissionGuard(),
+        },
       ]),
     );
     for (const item of watchdog.diagnostics) {
@@ -173,18 +249,21 @@ export default async function multiAdvisorExtension(pi: ExtensionAPI) {
     runtime: Runtime,
     ctx: ExtensionContext,
     model: AdvisorModel,
-    capture: (advice: CapturedAdvice) => void,
+    capture: (advice: AdvicePayload) => void,
   ) => {
     runtime.capture = capture;
     const thinking = (runtime.config.thinking ?? pi.getThinkingLevel()) as any;
     if (!runtime.agent) {
       let advised = false;
+      const agentGeneration = runtime.generation;
+      const advisorTools = buildTools(ctx.cwd, runtime.config.tools);
+      const availableToolNames = new Set(["advise", ...advisorTools.map((tool) => tool.name)]);
       const adviseTool: AgentTool = {
         name: "advise",
         label: "Advise",
         description: "Emit the single structured advisory for this review.",
         parameters: Type.Object({
-          note: Type.String({ minLength: 1 }),
+          note: Type.String({ minLength: 1, maxLength: ADVISOR_MAX_ADVICE_CHARS }),
           severity: Type.Union([
             Type.Literal("nit"),
             Type.Literal("concern"),
@@ -192,9 +271,12 @@ export default async function multiAdvisorExtension(pi: ExtensionAPI) {
           ]),
         }),
         async execute(_id, params) {
+          if (runtime.generation !== agentGeneration) {
+            throw new AdvisorLifecycleAbortedError();
+          }
           if (advised) throw new Error("Only one advise call is allowed per review");
           advised = true;
-          runtime.capture?.(params as CapturedAdvice);
+          runtime.capture?.(params as AdvicePayload);
           return {
             content: [{ type: "text", text: "Advisory captured." }],
             details: {},
@@ -206,7 +288,7 @@ export default async function multiAdvisorExtension(pi: ExtensionAPI) {
           systemPrompt: systemPrompt(runtime.config, sharedInstructions),
           model,
           thinkingLevel: thinking,
-          tools: [adviseTool, ...buildTools(ctx.cwd, runtime.config.tools)],
+          tools: [adviseTool, ...advisorTools],
         },
         getApiKey: (provider) => ctx.modelRegistry.getApiKeyForProvider(provider),
         convertToLlm,
@@ -215,6 +297,26 @@ export default async function multiAdvisorExtension(pi: ExtensionAPI) {
       });
       runtime.unsubscribe = runtime.agent.subscribe((event) => {
         if (event.type === "agent_start") advised = false;
+        if (event.type !== "message_end" || event.message.role !== "assistant") return;
+        if (runtime.generation !== agentGeneration) {
+          event.message.content = [{ type: "text", text: "Advisor response discarded after lifecycle reset." }];
+          event.message.stopReason = "error";
+          event.message.errorMessage = "Advisor response discarded after lifecycle reset.";
+          return;
+        }
+        const sourceText = buildAdvisorQuarantineSourceText(
+          runtime.quarantineSourceText ?? "",
+          runtime.agent?.state.messages.slice(runtime.quarantineMessageOffset ?? 0) ?? [],
+        );
+        const reason = quarantineAdvisorUnsafeOutput(
+          event.message,
+          availableToolNames,
+          sourceText,
+        );
+        if (reason) {
+          runtime.capture = undefined;
+          runtime.quarantineReason = reason;
+        }
       });
     } else {
       runtime.agent.state.model = model;
@@ -224,121 +326,301 @@ export default async function multiAdvisorExtension(pi: ExtensionAPI) {
   };
 
   const review = async (runtime: Runtime, reviewItem: Review) => {
-    const { event, ctx, prompt, epoch } = reviewItem;
-    if (!enabled || !runtime.config.enabled || epoch !== lifecycleEpoch) return;
+    const { event, ctx, prompt, epoch, turnIdentity, generation } = reviewItem;
+    if (
+      !enabled ||
+      !runtime.config.enabled ||
+      epoch !== lifecycleEpoch ||
+      generation !== runtime.generation ||
+      runtime.health === "paused" ||
+      runtime.health === "quota" ||
+      runtime.health === "halted"
+    ) return;
+
     const startedAt = Date.now();
     const model = resolveAdvisorModel(runtime.config, ctx);
     if (!model) {
-      publishUsage(runtime, undefined, "skipped", startedAt);
-      ctx.ui.notify(
-        `${runtime.config.name} paused: model "${runtime.config.model ?? "primary"}" is unavailable.`,
+      setRuntimeHealth(
+        runtime,
+        ctx,
+        "paused",
+        `paused: model "${runtime.config.model ?? "primary"}" is unavailable.`,
         "warning",
+        generation,
       );
+      publishUsage(runtime, undefined, "skipped", startedAt);
       return;
     }
     if (!ctx.modelRegistry.hasConfiguredAuth(model)) {
-      publishUsage(runtime, model, "skipped", startedAt);
-      ctx.ui.notify(
-        `${runtime.config.name} paused: ${model.provider}/${model.id} has no configured authentication.`,
+      setRuntimeHealth(
+        runtime,
+        ctx,
+        "paused",
+        `paused: ${model.provider}/${model.id} has no configured authentication.`,
         "warning",
+        generation,
       );
+      publishUsage(runtime, model, "skipped", startedAt);
       return;
     }
 
     let captured: CapturedAdvice | undefined;
     const activeAgent = ensureAgent(runtime, ctx, model, (advice) => {
-      if (epoch === lifecycleEpoch) captured = advice;
+      if (epoch === lifecycleEpoch && generation === runtime.generation) {
+        captured = { ...advice, epoch, generation, turnIdentity };
+      }
     });
-    const messageOffset = activeAgent.state.messages.length;
-    let usageStatus = "completed";
-    runtime.guard.beginReview();
     const delta = serializeTurnDelta({
       prompt,
       message: event.message,
       toolResults: event.toolResults,
     });
-    updateStatus(ctx, `${runtime.config.name}: reviewing`);
-    try {
-      await activeAgent.prompt(`Review this primary turn delta:\n${delta}`);
-      if (epoch !== lifecycleEpoch || !enabled || activeAgent !== runtime.agent) {
-        usageStatus = "aborted";
+    const advisorPrompt = `Review this primary turn delta:\n${delta}`;
+    runtime.quarantineSourceText = advisorPrompt;
+    const contextInput = {
+      incomingText: advisorPrompt,
+      model,
+      systemPrompt: activeAgent.state.systemPrompt,
+      tools: activeAgent.state.tools,
+    };
+    if (shouldResetAdvisorContext({
+      ...contextInput,
+      messages: activeAgent.state.messages,
+    })) {
+      activeAgent.reset();
+      runtime.guard.reset();
+      if (shouldResetAdvisorContext({ ...contextInput, messages: [] })) {
+        runtime.droppedReviews += 1;
+        setRuntimeHealth(runtime, ctx, "idle", undefined, "warning", generation);
+        ctx.ui.notify(
+          `${runtime.config.name} skipped one review because the update cannot fit its context window.`,
+          "warning",
+        );
+        publishUsage(runtime, model, "skipped", startedAt);
         return;
       }
-      const last = activeAgent.state.messages.at(-1) as
-        | { role?: string; stopReason?: string; errorMessage?: string }
-        | undefined;
-      if (
-        last?.role === "assistant" &&
-        (last.stopReason === "error" ||
-          last.stopReason === "aborted" ||
-          last.stopReason === "length")
-      ) {
-        throw new Error(last.errorMessage || `advisor review ended with ${last.stopReason}`);
+    }
+
+    const usageMessages: unknown[] = [];
+    let usageStatus = "completed";
+    runtime.guard.beginReview();
+    setRuntimeHealth(runtime, ctx, "running", undefined, "warning", generation);
+
+    try {
+      const attemptResult = await runBoundedAdvisorAttempts({
+        attempt: async () => {
+          captured = undefined;
+          runtime.quarantineReason = undefined;
+          const messageOffset = activeAgent.state.messages.length;
+          runtime.quarantineMessageOffset = messageOffset;
+          try {
+            await activeAgent.prompt(advisorPrompt);
+            if (
+              epoch !== lifecycleEpoch ||
+              generation !== runtime.generation ||
+              !enabled ||
+              activeAgent !== runtime.agent
+            ) {
+              throw new AdvisorLifecycleAbortedError();
+            }
+            const attemptMessages = activeAgent.state.messages.slice(messageOffset);
+            const last = activeAgent.state.messages.at(-1) as
+              | { role?: string; stopReason?: string; errorMessage?: string }
+              | undefined;
+            if (runtime.quarantineReason) throw new Error(runtime.quarantineReason);
+            if (activeAgent.state.errorMessage) {
+              throw new Error(activeAgent.state.errorMessage);
+            }
+            if (
+              last?.role === "assistant" &&
+              (last.stopReason === "error" ||
+                last.stopReason === "aborted" ||
+                last.stopReason === "length")
+            ) {
+              throw new Error(last.errorMessage || `advisor review ended with ${last.stopReason}`);
+            }
+            if (
+              attemptMessages.length > 0 &&
+              !attemptMessages.some((message) => (message as { role?: string }).role === "assistant")
+            ) {
+              throw new Error("advisor review ended without an assistant response");
+            }
+            return attemptMessages;
+          } catch (error) {
+            usageMessages.push(...activeAgent.state.messages.slice(messageOffset));
+            activeAgent.state.messages.splice(messageOffset);
+            throw error;
+          }
+        },
+        onContextReset: async () => {
+          activeAgent.reset();
+          runtime.guard.reset();
+          runtime.guard.beginReview();
+          return !shouldResetAdvisorContext({ ...contextInput, messages: [] });
+        },
+      });
+
+      if (!attemptResult.ok) {
+        usageStatus = attemptResult.failure === "aborted" ? "aborted" : "failed";
+        if (attemptResult.failure === "aborted") return;
+        if (attemptResult.failure === "quarantined") {
+          usageStatus = "quarantined";
+          activeAgent.reset();
+          runtime.guard.reset();
+          setRuntimeHealth(runtime, ctx, "idle", undefined, "warning", generation);
+          ctx.ui.notify(`${runtime.config.name} quarantined one unsafe response.`, "warning");
+          return;
+        }
+        if (attemptResult.failure === "context") {
+          usageStatus = "skipped";
+          activeAgent.reset();
+          runtime.guard.reset();
+          runtime.droppedReviews += 1;
+          setRuntimeHealth(runtime, ctx, "idle", undefined, "warning", generation);
+          ctx.ui.notify(
+            `${runtime.config.name} skipped one review after a fresh-context overflow.`,
+            "warning",
+          );
+          return;
+        }
+        runtime.queued = undefined;
+        const errorText = attemptResult.error instanceof Error
+          ? attemptResult.error.message
+          : String(attemptResult.error);
+        if (attemptResult.failure === "quota") {
+          setRuntimeHealth(
+            runtime,
+            ctx,
+            "quota",
+            "paused: provider quota or rate limit was exhausted.",
+            "warning",
+            generation,
+          );
+        } else if (attemptResult.failure === "permanent") {
+          setRuntimeHealth(
+            runtime,
+            ctx,
+            "halted",
+            `halted after a permanent provider rejection: ${errorText}`,
+            "error",
+            generation,
+          );
+        } else {
+          setRuntimeHealth(
+            runtime,
+            ctx,
+            "halted",
+            `halted after ${attemptResult.attempts} failed attempts: ${errorText}`,
+            "error",
+            generation,
+          );
+        }
+        return;
       }
-      if (captured && runtime.guard.accept(captured.note, captured.severity)) {
-        const delivery = ctx.isIdle() ? "aside" : "steer";
+      usageMessages.push(...attemptResult.value);
+
+      const admitted = captured === undefined
+        ? { accepted: false as const, reason: "silent" }
+        : admitAdvisorCandidate({
+            candidate: captured,
+            guard: runtime.guard,
+            expectedTurnIdentity: turnIdentity,
+            expectedGeneration: generation,
+            expectedEpoch: lifecycleEpoch,
+            stale: runtime.queued !== undefined || completedPrimaryTurns > turnIdentity,
+          });
+      if (admitted.accepted) {
+        const interruptImmuneTurnActive = isAdvisorInterruptImmuneTurnActive({
+          completedTurns: completedPrimaryTurns,
+          immuneTurnStart: interruptImmuneTurnStart,
+        });
+        const delivery = resolveAdvisorDelivery({
+          severity: admitted.candidate.severity,
+          idle: ctx.isIdle(),
+          interruptImmuneTurnActive,
+        });
         pi.sendMessage(
-          createAdvisory(captured.note, captured.severity, Date.now(), delivery, runtime.config),
+          createAdvisory(
+            admitted.candidate.note,
+            admitted.candidate.severity,
+            Date.now(),
+            delivery,
+            runtime.config,
+          ),
           {
             triggerTurn: false,
             ...(delivery === "steer" ? { deliverAs: "steer" as const } : {}),
           },
         );
+        if (delivery === "steer") interruptImmuneTurnStart = completedPrimaryTurns + 1;
       }
-      updateStatus(ctx);
-    } catch (error) {
-      usageStatus = epoch === lifecycleEpoch && enabled ? "failed" : "aborted";
-      if (usageStatus === "aborted") return;
-      ctx.ui.notify(
-        `${runtime.config.name} review failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-        "error",
-      );
-      updateStatus(ctx);
+      setRuntimeHealth(runtime, ctx, "idle", undefined, "warning", generation);
     } finally {
-      publishUsage(
-        runtime,
-        model,
-        usageStatus,
-        startedAt,
-        activeAgent.state.messages.slice(messageOffset),
-      );
+      if (runtime.generation === generation) {
+        runtime.quarantineSourceText = undefined;
+        runtime.quarantineMessageOffset = undefined;
+        runtime.quarantineReason = undefined;
+      }
+      publishUsage(runtime, model, usageStatus, startedAt, usageMessages);
     }
   };
 
   const scheduleRuntime = (runtime: Runtime, item: Review) => {
+    if (item.generation !== runtime.generation) return;
+    if (
+      runtime.health === "paused" ||
+      runtime.health === "quota" ||
+      runtime.health === "halted"
+    ) return;
     if (runtime.running) {
-      if (!runtime.queued) {
-        runtime.queued = item;
-        item.ctx.ui.notify(`${runtime.config.name} is busy; one review is queued.`, "warning");
-      } else {
-        item.ctx.ui.notify(`${runtime.config.name} backlog limit reached; review skipped.`, "warning");
-      }
+      queueLatestAdvisorReview(runtime, item);
+      updateStatus(item.ctx);
       return;
     }
-    runtime.running = true;
+
+    const runClaim = claimAdvisorRun(runtime, `advisor-run:${runtime.config.slug}`);
+    const runGeneration = runClaim.generation;
+    const ownsRun = () => ownsAdvisorRun(runtime, runClaim);
     const run = async () => {
       let next: Review | undefined = item;
-      while (next && enabled) {
+      while (
+        next &&
+        enabled &&
+        ownsRun() &&
+        runtime.health !== "paused" &&
+        runtime.health !== "quota" &&
+        runtime.health !== "halted"
+      ) {
         await review(runtime, next);
-        next = runtime.queued;
-        runtime.queued = undefined;
+        if (!ownsRun()) break;
+        const taken = takeQueuedAdvisorReview(runtime);
+        if (taken.expired) updateStatus(item.ctx);
+        next = taken.review;
       }
     };
     void run()
       .catch((error) => {
-        if (item.epoch === lifecycleEpoch && enabled) {
-          item.ctx.ui.notify(
-            `${runtime.config.name} review failed: ${
+        if (ownsRun() && item.epoch === lifecycleEpoch && enabled) {
+          runtime.queued = undefined;
+          setRuntimeHealth(
+            runtime,
+            item.ctx,
+            "halted",
+            `halted after an internal review failure: ${
               error instanceof Error ? error.message : String(error)
             }`,
             "error",
+            runGeneration,
           );
         }
       })
       .finally(() => {
+        if (!ownsRun()) return;
+        runtime.activeRunToken = undefined;
         runtime.running = false;
+        if (runtime.health === "running") {
+          setRuntimeHealth(runtime, item.ctx, "idle", undefined, "warning", runGeneration);
+        }
       });
   };
 
@@ -376,7 +658,11 @@ export default async function multiAdvisorExtension(pi: ExtensionAPI) {
         return;
       }
       enabled = requested;
-      if (!enabled) resetRuntimes();
+      if (!enabled) {
+        resetRuntimes();
+        completedPrimaryTurns = 0;
+        interruptImmuneTurnStart = undefined;
+      }
       updateStatus(ctx);
       ctx.ui.notify(`Advisors ${enabled ? "enabled" : "disabled"}.`, "info");
       publishCapabilities();
@@ -412,8 +698,19 @@ export default async function multiAdvisorExtension(pi: ExtensionAPI) {
     const prompt = pendingPrompt;
     pendingPrompt = "";
     const epoch = lifecycleEpoch;
+    completedPrimaryTurns += 1;
+    const turnIdentity = completedPrimaryTurns;
+    const queuedAt = Date.now();
     for (const runtime of enabledRuntimes()) {
-      scheduleRuntime(runtime, { event, ctx, prompt, epoch });
+      scheduleRuntime(runtime, {
+        event,
+        ctx,
+        prompt,
+        epoch,
+        turnIdentity,
+        queuedAt,
+        generation: runtime.generation,
+      });
     }
   });
   pi.on("model_select", (_event, ctx) => {
@@ -425,10 +722,19 @@ export default async function multiAdvisorExtension(pi: ExtensionAPI) {
         runtime.agent.state.thinkingLevel = (runtime.config.thinking ??
           pi.getThinkingLevel()) as any;
       }
+      if (
+        runtime.health === "paused" &&
+        model &&
+        ctx.modelRegistry.hasConfiguredAuth(model)
+      ) {
+        setRuntimeHealth(runtime, ctx, "idle");
+      }
     }
   });
   pi.on("session_start", async (_event, ctx) => {
     lastContext = ctx;
+    completedPrimaryTurns = 0;
+    interruptImmuneTurnStart = undefined;
     await reloadWatchdog(ctx);
     capabilityPublished = false;
     publishCapabilities();
@@ -440,6 +746,8 @@ export default async function multiAdvisorExtension(pi: ExtensionAPI) {
   });
   pi.on("session_shutdown", () => {
     resetRuntimes();
+    completedPrimaryTurns = 0;
+    interruptImmuneTurnStart = undefined;
     runtimes.clear();
     lastContext?.ui.setStatus(STATUS_KEY, undefined);
   });

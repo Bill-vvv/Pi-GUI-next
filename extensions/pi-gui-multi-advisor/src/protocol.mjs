@@ -1,3 +1,8 @@
+import {
+  ADVISOR_MAX_ADVICE_CHARS,
+  ADVISOR_MAX_DEDUPE_ENTRIES,
+} from "./resilience.mjs";
+
 export const PROTOCOL_VERSION = 2;
 export const STATE_VERSION = 1;
 export const CAPABILITY_TYPE = "pi-gui.multi-advisor/capabilities";
@@ -8,7 +13,45 @@ export const DELIVERIES = Object.freeze(["aside", "steer"]);
 export const READ_ONLY_TOOLS = Object.freeze(["read", "grep", "find", "ls"]);
 export const OPTIONAL_TOOLS = Object.freeze(["edit", "write"]);
 
-const SEVERITY_RANK = Object.freeze({ nit: 0, concern: 1, blocker: 2 });
+const CONTENT_FREE_NOTES = new Set([
+  "stop",
+  "stop here",
+  "stop now",
+  "halt",
+  "abort",
+  "done",
+  "task done",
+  "task complete",
+  "complete",
+  "finished",
+  "ok",
+  "okay",
+  "ok done",
+  "no issue",
+  "no issues",
+  "no issue continue",
+  "no concerns",
+  "no concern",
+  "nothing to add",
+  "nothing to flag",
+  "nothing to report",
+  "no notes",
+  "no further input",
+  "no further input needed",
+  "no further input required",
+  "no further watcher input",
+  "no further watcher input needed",
+  "no further advice",
+  "no further advice needed",
+  "lgtm",
+  "looks good",
+  "all good",
+  "agent is on track",
+  "agent on track",
+  "on track",
+  "continue",
+  "carry on",
+]);
 
 export function parseState(value) {
   if (
@@ -35,11 +78,16 @@ export function parseStateText(text) {
 }
 
 export function normalizeNote(note) {
-  return note.trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
+  return note
+    .normalize("NFKC")
+    .toLocaleLowerCase("en-US")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
 }
 
 export function createEmissionGuard() {
-  const highestByNote = new Map();
+  const acceptedNotes = new Set();
+  const acceptedOrder = [];
   let emittedThisReview = false;
 
   return {
@@ -48,20 +96,22 @@ export function createEmissionGuard() {
     },
     accept(note, severity) {
       if (emittedThisReview) return false;
-      if (typeof note !== "string" || normalizeNote(note).length === 0) return false;
-      if (!(severity in SEVERITY_RANK)) return false;
-
+      if (typeof note !== "string" || !SEVERITIES.includes(severity)) return false;
       const normalized = normalizeNote(note);
-      const previous = highestByNote.get(normalized);
-      const next = SEVERITY_RANK[severity];
-      if (previous !== undefined && next <= previous) return false;
+      if (normalized.length === 0 || CONTENT_FREE_NOTES.has(normalized)) return false;
+      if (acceptedNotes.has(normalized)) return false;
 
-      highestByNote.set(normalized, next);
+      acceptedNotes.add(normalized);
+      acceptedOrder.push(normalized);
+      if (acceptedOrder.length > ADVISOR_MAX_DEDUPE_ENTRIES) {
+        acceptedNotes.delete(acceptedOrder.shift());
+      }
       emittedThisReview = true;
       return true;
     },
     reset() {
-      highestByNote.clear();
+      acceptedNotes.clear();
+      acceptedOrder.length = 0;
       emittedThisReview = false;
     },
   };
@@ -83,8 +133,13 @@ export function createAdvisory(
   delivery = "aside",
   advisor = { slug: "default-advisor", name: "Default Advisor" },
 ) {
-  if (typeof note !== "string" || note.trim().length === 0) {
-    throw new Error("Advisory note must be non-empty");
+  if (
+    typeof note !== "string" ||
+    note.trim().length === 0 ||
+    note.length > ADVISOR_MAX_ADVICE_CHARS ||
+    note.includes("\0")
+  ) {
+    throw new Error(`Advisory note must contain 1-${ADVISOR_MAX_ADVICE_CHARS} safe characters`);
   }
   if (!SEVERITIES.includes(severity)) {
     throw new Error(`Unsupported advisory severity: ${severity}`);
@@ -120,7 +175,7 @@ export function createCapabilities(enabled) {
   return {
     protocolVersion: PROTOCOL_VERSION,
     identity: "pi-gui-multi-advisor",
-    version: "0.2.0",
+    version: "0.3.0",
     enabled,
     multiAdvisor: true,
     liveToggle: true,
