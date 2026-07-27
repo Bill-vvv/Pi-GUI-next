@@ -9498,3 +9498,332 @@ test('getToolImage reads historical toolResult and rejects invalid identity or c
     false
   )
 })
+
+test('hibernating an inactive ready session stops only that runtime and preserves the pointer', async () => {
+  const activePointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/active-session.jsonl',
+    sessionId: 'active-session',
+    sessionName: 'Active session'
+  }
+  const hibernatePointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/hibernate-session.jsonl',
+    sessionId: 'hibernate-session',
+    sessionName: 'Hibernate session'
+  }
+  const activeRuntime = new FakeRuntimeHost(
+    {
+      sessionId: activePointer.sessionId,
+      sessionFile: activePointer.sessionFile,
+      sessionName: activePointer.sessionName ?? undefined
+    },
+    [{ role: 'assistant', content: [{ type: 'text', text: 'Active history' }], timestamp: 10 }]
+  )
+  const hibernateRuntime = new FakeRuntimeHost(
+    {
+      sessionId: hibernatePointer.sessionId,
+      sessionFile: hibernatePointer.sessionFile,
+      sessionName: hibernatePointer.sessionName ?? undefined
+    },
+    [{ role: 'assistant', content: [{ type: 'text', text: 'Hibernate history' }], timestamp: 20 }]
+  )
+  const runtimes = [hibernateRuntime, activeRuntime]
+  const archived: Array<{ projectPath: string, sessionKey: string }> = []
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(null, [], [], [], undefined, archived),
+      sessionRegistry: {
+        sessions: [activePointer, hibernatePointer],
+        activeSessionKey: hibernatePointer.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(hibernatePointer.sessionFile)
+  await kernel.activateSession(activePointer.sessionFile)
+  const before = kernel.getState()
+  assert.equal(
+    before.sessions.find(({ key }) => key === hibernatePointer.sessionFile)?.runtimeStatus,
+    'ready'
+  )
+
+  await kernel.hibernateSession(hibernatePointer.sessionFile)
+
+  const after = kernel.getState()
+  assert.equal(hibernateRuntime.stopCalls, 1)
+  assert.equal(activeRuntime.stopCalls, 0)
+  assert.deepEqual(archived, [])
+  assert.equal(after.activeSessionKey, activePointer.sessionFile)
+  assert.deepEqual(after.runtime, before.runtime)
+  assert.deepEqual(after.session, before.session)
+  assert.deepEqual(after.conversation, before.conversation)
+  assert.deepEqual(
+    after.sessions.map(({ key, id, name, runtimeStatus }) => ({ key, id, name, runtimeStatus })),
+    [
+      {
+        key: activePointer.sessionFile,
+        id: activePointer.sessionId,
+        name: activePointer.sessionName,
+        runtimeStatus: 'ready'
+      },
+      {
+        key: hibernatePointer.sessionFile,
+        id: hibernatePointer.sessionId,
+        name: hibernatePointer.sessionName,
+        runtimeStatus: 'stopped'
+      }
+    ]
+  )
+
+  // Idempotent when the registered Session is already not managed.
+  await kernel.hibernateSession(hibernatePointer.sessionFile)
+  assert.equal(hibernateRuntime.stopCalls, 1)
+  assert.deepEqual(archived, [])
+})
+
+test('reactivating a hibernated session relaunches the same identity from the transcript', async () => {
+  const activePointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/active-session.jsonl',
+    sessionId: 'active-session',
+    sessionName: 'Active session'
+  }
+  const hibernatePointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/hibernate-session.jsonl',
+    sessionId: 'hibernate-session',
+    sessionName: 'Hibernate session'
+  }
+  const activeRuntime = new FakeRuntimeHost({
+    sessionId: activePointer.sessionId,
+    sessionFile: activePointer.sessionFile,
+    sessionName: activePointer.sessionName ?? undefined
+  })
+  const firstHibernateRuntime = new FakeRuntimeHost(
+    {
+      sessionId: hibernatePointer.sessionId,
+      sessionFile: hibernatePointer.sessionFile,
+      sessionName: hibernatePointer.sessionName ?? undefined
+    },
+    [{ role: 'assistant', content: [{ type: 'text', text: 'Before hibernate' }], timestamp: 11 }]
+  )
+  const relaunchedRuntime = new FakeRuntimeHost(
+    {
+      sessionId: hibernatePointer.sessionId,
+      sessionFile: hibernatePointer.sessionFile,
+      sessionName: hibernatePointer.sessionName ?? undefined
+    },
+    [{ role: 'assistant', content: [{ type: 'text', text: 'After relaunch' }], timestamp: 22 }]
+  )
+  const runtimes = [firstHibernateRuntime, activeRuntime, relaunchedRuntime]
+  const launches: Array<{ sessionFile?: string }> = []
+  const kernel = new WorkbenchKernel(
+    (_project, launchOptions) => {
+      launches.push(launchOptions)
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [activePointer, hibernatePointer],
+        activeSessionKey: hibernatePointer.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(hibernatePointer.sessionFile)
+  await kernel.activateSession(activePointer.sessionFile)
+  await kernel.hibernateSession(hibernatePointer.sessionFile)
+  assert.equal(firstHibernateRuntime.stopCalls, 1)
+
+  await kernel.activateSession(hibernatePointer.sessionFile)
+
+  const state = kernel.getState()
+  assert.equal(firstHibernateRuntime.startCalls, 1)
+  assert.equal(relaunchedRuntime.startCalls, 1)
+  assert.equal(activeRuntime.stopCalls, 0)
+  assert.equal(state.activeSessionKey, hibernatePointer.sessionFile)
+  assert.equal(state.session.id, hibernatePointer.sessionId)
+  assert.equal(state.runtime.status, 'ready')
+  const recovered = state.conversation.entries[0]
+  assert.equal(recovered?.kind === 'message' ? recovered.text : null, 'After relaunch')
+  assert.equal(
+    state.sessions.find(({ key }) => key === hibernatePointer.sessionFile)?.runtimeStatus,
+    'ready'
+  )
+  assert.deepEqual(
+    launches.map(({ sessionFile }) => sessionFile),
+    [
+      hibernatePointer.sessionFile,
+      activePointer.sessionFile,
+      hibernatePointer.sessionFile
+    ]
+  )
+})
+
+test('hibernateSession rejects active, busy, compacting, provisional, and unregistered targets', async () => {
+  const activePointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/active-session.jsonl',
+    sessionId: 'active-session',
+    sessionName: 'Active session'
+  }
+  const backgroundPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/background-session.jsonl',
+    sessionId: 'background-session',
+    sessionName: 'Background session'
+  }
+  const compactPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/compact-session.jsonl',
+    sessionId: 'compact-session',
+    sessionName: 'Compact session'
+  }
+  const activeRuntime = new FakeRuntimeHost({
+    sessionId: activePointer.sessionId,
+    sessionFile: activePointer.sessionFile,
+    sessionName: activePointer.sessionName ?? undefined
+  })
+  const backgroundRuntime = new FakeRuntimeHost({
+    sessionId: backgroundPointer.sessionId,
+    sessionFile: backgroundPointer.sessionFile,
+    sessionName: backgroundPointer.sessionName ?? undefined
+  })
+  const compactRuntime = new FakeRuntimeHost({
+    sessionId: compactPointer.sessionId,
+    sessionFile: compactPointer.sessionFile,
+    sessionName: compactPointer.sessionName ?? undefined
+  })
+  const startingRuntime = new DelayedStartRuntimeHost({
+    sessionId: 'starting-session',
+    sessionFile: '/tmp/starting-session.jsonl',
+    sessionName: 'Starting session'
+  })
+  const startingPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/starting-session.jsonl',
+    sessionId: 'starting-session',
+    sessionName: 'Starting session'
+  }
+  const runtimes: RuntimeHost[] = [
+    backgroundRuntime,
+    compactRuntime,
+    activeRuntime,
+    startingRuntime
+  ]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [activePointer, backgroundPointer, compactPointer, startingPointer],
+        activeSessionKey: backgroundPointer.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(backgroundPointer.sessionFile)
+  await kernel.activateSession(compactPointer.sessionFile)
+  await kernel.activateSession(activePointer.sessionFile)
+
+  await assert.rejects(
+    kernel.hibernateSession(activePointer.sessionFile),
+    /active foreground session/
+  )
+  assert.equal(activeRuntime.stopCalls, 0)
+
+  backgroundRuntime.emit({ type: 'activity-started' })
+  await assert.rejects(
+    kernel.hibernateSession(backgroundPointer.sessionFile),
+    /runtime is running/
+  )
+  assert.equal(backgroundRuntime.stopCalls, 0)
+  backgroundRuntime.emit({ type: 'activity-settled' })
+
+  compactRuntime.emit({ type: 'pi-event', event: { type: 'compaction_start', reason: 'manual' } })
+  await assert.rejects(
+    kernel.hibernateSession(compactPointer.sessionFile),
+    /compaction is in progress/
+  )
+  assert.equal(compactRuntime.stopCalls, 0)
+  compactRuntime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'compaction_end',
+      reason: 'manual',
+      result: { summary: 'Compacted', firstKeptEntryId: 'kept', tokensBefore: 100 },
+      aborted: false,
+      willRetry: false
+    }
+  })
+
+  const starting = kernel.activateSession(startingPointer.sessionFile)
+  await startingRuntime.startEntered
+  // Launch single-flight fail-closes hibernation of a Session that is still starting.
+  await assert.rejects(
+    kernel.hibernateSession(startingPointer.sessionFile),
+    /runtime launch is already in progress/
+  )
+  startingRuntime.releaseStart()
+  await starting
+  // Starting target became the active foreground once committed.
+  await assert.rejects(
+    kernel.hibernateSession(startingPointer.sessionFile),
+    /active foreground session/
+  )
+  assert.equal(startingRuntime.stopCalls, 0)
+
+  await assert.rejects(
+    kernel.hibernateSession('/tmp/unregistered-session.jsonl'),
+    /Session is not registered for the active project/
+  )
+  await assert.rejects(
+    kernel.hibernateSession('relative-session.jsonl'),
+    /Session key must be absolute/
+  )
+
+  // Provisional new-session Runtime is not registered in the durable pointer index.
+  const provisionalRuntime = new FakeRuntimeHost({
+    sessionId: 'provisional-session',
+    sessionFile: '/tmp/hibernate-provisional.jsonl',
+    sessionName: 'Provisional session'
+  })
+  const provisionalKernel = new WorkbenchKernel(
+    () => provisionalRuntime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      validateSession: async () => {
+        throw fileError('ENOENT', 'session file not written yet')
+      }
+    }
+  )
+  await provisionalKernel.start()
+  const provisionalKey = provisionalKernel.getState().activeSessionKey
+  assert.ok(typeof provisionalKey === 'string')
+  assert.equal(
+    provisionalKernel.getState().sessions.find(({ key }) => key === provisionalKey)?.provisional,
+    true
+  )
+  await assert.rejects(
+    provisionalKernel.hibernateSession(provisionalKey),
+    /Session is not registered for the active project/
+  )
+  assert.equal(provisionalRuntime.stopCalls, 0)
+})

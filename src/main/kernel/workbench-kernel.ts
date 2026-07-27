@@ -1067,6 +1067,33 @@ export class WorkbenchKernel {
     return result
   }
 
+  /**
+   * Explicit Runtime hibernation for a managed, persisted, inactive Session.
+   * Stops and removes only that RuntimeContext while preserving the durable
+   * Session pointer and navigation identity. Later activateSession relaunches
+   * from the Pi transcript. Not-managed registered targets are idempotent.
+   */
+  async hibernateSession(sessionKey: string): Promise<void> {
+    if (!isAbsolute(sessionKey)) throw new Error(`Session key must be absolute: ${sessionKey}`)
+    const project = configuredProject(this.state)
+    const pointer = this.sessionPointers.find((candidate) =>
+      candidate.projectPath === project.path && candidate.sessionFile === sessionKey
+    )
+    if (pointer === undefined) {
+      throw new Error(`Session is not registered for the active project: ${sessionKey}`)
+    }
+
+    // Serialize with activate/reload/start so a target cannot be loaded or replaced
+    // while hibernation is stopping it. Registered-but-unmanaged targets are no-ops.
+    await this.beginLaunch(async () => {
+      const targetContext = this.contextBySessionKey.get(contextKey(project.path, sessionKey))
+      if (targetContext === undefined) return
+
+      this.assertHibernateTarget(project.path, sessionKey, targetContext)
+      await this.stopContext(targetContext)
+    })
+  }
+
   async archiveSession(sessionKey: string): Promise<KernelArchiveReceipt> {
     if (!isAbsolute(sessionKey)) throw new Error(`Session key must be absolute: ${sessionKey}`)
     const project = configuredProject(this.state)
@@ -1263,6 +1290,50 @@ export class WorkbenchKernel {
       (context.compactionLifecycle !== null && !context.compactionLifecycle.settled)
     ) {
       throw new Error(`${operation} is unavailable while compaction is in progress.`)
+    }
+  }
+
+  private assertHibernateTarget(
+    projectPath: string,
+    sessionKey: string,
+    context: RuntimeContext
+  ): void {
+    if (context.projectPath !== projectPath) {
+      throw new Error('Cannot hibernate a session that is not owned by the active project.')
+    }
+    if (this.activeContext === context || this.state.activeSessionKey === sessionKey) {
+      throw new Error('Cannot hibernate the active foreground session.')
+    }
+    if (
+      context.provisionalSession !== null ||
+      context.provisionalCommit !== null ||
+      context.state.activeSessionKey === null ||
+      context.state.sessions.some((summary) =>
+        summary.key === sessionKey && summary.provisional === true
+      )
+    ) {
+      throw new Error('Cannot hibernate a provisional session.')
+    }
+    const runtimeStatus = context.state.runtime.status
+    if (
+      runtimeStatus === 'starting' ||
+      runtimeStatus === 'running' ||
+      runtimeStatus === 'stopping'
+    ) {
+      throw new Error(`Cannot hibernate a session while runtime is ${runtimeStatus}.`)
+    }
+    if (!context.state.session.settled) {
+      throw new Error('Cannot hibernate a session that is not settled.')
+    }
+    this.assertContextNotCompacting(context, 'Hibernate')
+    if (context.launchCommitting) {
+      throw new Error('Cannot hibernate a session while launch is committing.')
+    }
+    if (context.deferredEvents !== null) {
+      throw new Error('Cannot hibernate a session while a deferred identity commit is in progress.')
+    }
+    if (context.sessionNameOperation !== null || context.pendingSessionName !== null) {
+      throw new Error('Cannot hibernate a session while session naming is in progress.')
     }
   }
 
