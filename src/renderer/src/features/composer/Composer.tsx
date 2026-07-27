@@ -21,6 +21,7 @@ import {
   formatTokenCount,
   normalizeContextPercent
 } from '../../usage-formatters'
+import { TIMELINE_LAYOUT_CHANGE_EVENT } from '../chat/timeline-scroll-stability'
 import {
   filterSlashCommands,
   parseSlashCommandToken,
@@ -242,21 +243,19 @@ export function Composer({
     const composer = composerRef.current
     const mainChat = composer?.closest<HTMLElement>('.main-chat')
     if (!composer || !mainChat) return
-    let scrollFrame: number | null = null
+    let measuredHeight = -1
 
+    const notifyTimelineLayoutChange = (): void => {
+      mainChat.querySelector<HTMLElement>('.conversation-surface')?.dispatchEvent(
+        new Event(TIMELINE_LAYOUT_CHANGE_EVENT)
+      )
+    }
     const updateClearance = (): void => {
-      const conversation = mainChat.querySelector<HTMLElement>('.conversation-surface')
-      const followsOutput = conversation !== null &&
-        conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 120
       const height = Math.ceil(composer.getBoundingClientRect().height)
+      if (height === measuredHeight) return
+      measuredHeight = height
       mainChat.style.setProperty('--composer-measured-clearance', `${height}px`)
-      if (followsOutput && conversation !== null) {
-        if (scrollFrame !== null) cancelAnimationFrame(scrollFrame)
-        scrollFrame = requestAnimationFrame(() => {
-          conversation.scrollTop = conversation.scrollHeight
-          scrollFrame = null
-        })
-      }
+      notifyTimelineLayoutChange()
     }
 
     updateClearance()
@@ -265,8 +264,8 @@ export function Composer({
 
     return () => {
       resizeObserver.disconnect()
-      if (scrollFrame !== null) cancelAnimationFrame(scrollFrame)
       mainChat.style.removeProperty('--composer-measured-clearance')
+      notifyTimelineLayoutChange()
     }
   }, [])
 

@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
@@ -64,6 +65,7 @@ import {
 import { useSettingsWorkspace } from '../features/settings/settings-workspace'
 import { Timeline } from '../features/chat/Timeline'
 import { SubagentTaskDetail } from '../features/chat/SubagentTaskDetail'
+import { TIMELINE_LAYOUT_CHANGE_EVENT } from '../features/chat/timeline-scroll-stability'
 import {
   matchesSubagentTaskTrigger,
   reconcileSubagentTaskSelection,
@@ -457,6 +459,11 @@ export function Workbench({
   const selectedSubagentTaskKey = reconciledSubagentTaskSelection === null
     ? null
     : subagentTaskSelectionKey(reconciledSubagentTaskSelection)
+  useLayoutEffect(() => {
+    mainChatRef.current
+      ?.querySelector<HTMLElement>('.conversation-surface')
+      ?.dispatchEvent(new Event(TIMELINE_LAYOUT_CHANGE_EVENT))
+  }, [selectedSubagentTaskKey, sidebarCollapsed])
   const openSubagentTaskDetail = useCallback((
     target: SubagentTaskTarget,
     _trigger: HTMLButtonElement

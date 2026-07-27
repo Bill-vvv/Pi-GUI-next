@@ -16,6 +16,13 @@ import {
 } from './SubagentTaskDetail'
 import type { SubagentTaskSelection } from './subagent-task-detail-model'
 import {
+  anchoredTimelineScrollTop,
+  isTimelineViewportMeasurable,
+  TIMELINE_LAYOUT_CHANGE_EVENT,
+  timelineScrollModeAfterScroll,
+  type TimelineScrollMode
+} from './timeline-scroll-stability'
+import {
   CompletedTurn,
   groupConversationTurns,
   hasCurrentRunningEntry,
@@ -56,6 +63,17 @@ type PromptNavigationItem = {
   turnId: string
   prompt: KernelMessageEntry
   ordinal: number
+}
+
+type TimelineReadingAnchorTarget =
+  | { kind: 'text'; node: Text; offset: number }
+  | { kind: 'element'; element: HTMLElement }
+
+type TimelineReadingAnchor = {
+  target: TimelineReadingAnchorTarget
+  viewportOffset: number
+  fallbackElement: HTMLElement
+  fallbackViewportOffset: number
 }
 
 const COMPLETED_TURN_WINDOW_SIZE = 60
@@ -99,7 +117,9 @@ export function Timeline({
   const messageListRef = useRef<HTMLDivElement>(null)
   const outputEndRef = useRef<HTMLDivElement>(null)
   const scrollTailRef = useRef<HTMLDivElement>(null)
-  const followOutputRef = useRef(true)
+  const scrollModeRef = useRef<TimelineScrollMode>('following')
+  const viewportScrollTopRef = useRef(0)
+  const readingAnchorRef = useRef<TimelineReadingAnchor | null>(null)
   const activePromptFrameRef = useRef<number | null>(null)
   const readingLineOffsetRef = useRef<number | null>(null)
   const activePromptTurnIdRef = useRef<string | null>(null)
@@ -240,6 +260,52 @@ export function Timeline({
       updateActivePromptTurn()
     })
   }, [updateActivePromptTurn])
+  const setScrollMode = useCallback((mode: TimelineScrollMode) => {
+    scrollModeRef.current = mode
+    const viewport = viewportRef.current
+    if (viewport !== null) viewport.dataset.scrollMode = mode
+    if (mode === 'following') readingAnchorRef.current = null
+  }, [])
+  const setViewportScrollTop = useCallback((viewport: HTMLElement, nextScrollTop: number) => {
+    viewport.scrollTop = Math.max(0, nextScrollTop)
+    viewportScrollTopRef.current = viewport.scrollTop
+  }, [])
+  const captureReadingAnchor = useCallback(() => {
+    if (scrollModeRef.current !== 'reading') return
+    const viewport = viewportRef.current
+    const messageList = messageListRef.current
+    if (viewport === null || messageList === null) return
+    const viewportRect = viewport.getBoundingClientRect()
+    if (!isTimelineViewportMeasurable({
+      width: viewportRect.width,
+      height: viewportRect.height
+    })) return
+    readingAnchorRef.current = captureTimelineReadingAnchor(
+      viewport,
+      messageList,
+      readingLineOffsetRef.current ?? 0
+    )
+  }, [])
+  const restoreReadingAnchor = useCallback(() => {
+    if (scrollModeRef.current !== 'reading') return
+    const viewport = viewportRef.current
+    const anchor = readingAnchorRef.current
+    if (viewport === null || anchor === null) return
+    const viewportRect = viewport.getBoundingClientRect()
+    if (!isTimelineViewportMeasurable({
+      width: viewportRect.width,
+      height: viewportRect.height
+    })) return
+    const anchorOffsets = readingAnchorViewportOffsets(anchor, viewportRect.top)
+    if (anchorOffsets !== null) {
+      setViewportScrollTop(viewport, anchoredTimelineScrollTop({
+        scrollTop: viewport.scrollTop,
+        previousAnchorViewportOffset: anchorOffsets.previous,
+        currentAnchorViewportOffset: anchorOffsets.current
+      }))
+    }
+    captureReadingAnchor()
+  }, [captureReadingAnchor, setViewportScrollTop])
   const outputEndScrollTop = useCallback((): number | null => {
     const viewport = viewportRef.current
     const outputEnd = outputEndRef.current
@@ -258,13 +324,18 @@ export function Timeline({
     const viewport = viewportRef.current
     const targetTop = outputEndScrollTop()
     if (viewport === null || targetTop === null) return
-    viewport.scrollTop = targetTop
-  }, [outputEndScrollTop])
+    setViewportScrollTop(viewport, targetTop)
+  }, [outputEndScrollTop, setViewportScrollTop])
   const updateScrollTail = useCallback(() => {
     const viewport = viewportRef.current
     const outputEnd = outputEndRef.current
     const scrollTail = scrollTailRef.current
     if (viewport === null || outputEnd === null || scrollTail === null) return
+    const viewportRect = viewport.getBoundingClientRect()
+    if (!isTimelineViewportMeasurable({
+      width: viewportRect.width,
+      height: viewportRect.height
+    })) return
     const turns = viewport.querySelectorAll<HTMLElement>('[data-conversation-turn-id]')
     const lastTurn = turns.item(turns.length - 1)
     if (lastTurn === null) {
@@ -272,7 +343,6 @@ export function Timeline({
       return
     }
 
-    const viewportRect = viewport.getBoundingClientRect()
     const outputEndRect = outputEnd.getBoundingClientRect()
     const lastTurnRect = lastTurn.getBoundingClientRect()
     const readingLineOffset = readingLineOffsetRef.current ?? 0
@@ -293,6 +363,24 @@ export function Timeline({
       scrollTail.style.height = `${requiredTailHeight}px`
     }
   }, [])
+  const stabilizeTimelineLayout = useCallback(() => {
+    const viewport = viewportRef.current
+    if (viewport === null) return
+    const viewportRect = viewport.getBoundingClientRect()
+    if (!isTimelineViewportMeasurable({
+      width: viewportRect.width,
+      height: viewportRect.height
+    })) return
+    updateScrollTail()
+    if (scrollModeRef.current === 'following') scrollToOutputEnd()
+    else restoreReadingAnchor()
+    scheduleActivePromptTurnUpdate()
+  }, [
+    restoreReadingAnchor,
+    scheduleActivePromptTurnUpdate,
+    scrollToOutputEnd,
+    updateScrollTail
+  ])
   const scrollToMountedPrompt = useCallback((turnId: string): boolean => {
     const viewport = viewportRef.current
     if (viewport === null) return false
@@ -308,14 +396,17 @@ export function Timeline({
       0,
       viewport.scrollTop + turnRect.top - viewportRect.top - readingLineOffset
     )
-    followOutputRef.current = false
-    viewport.scrollTo({
-      top: targetTop,
-      behavior: 'auto'
-    })
+    setScrollMode('reading')
+    setViewportScrollTop(viewport, targetTop)
+    captureReadingAnchor()
     scheduleActivePromptTurnUpdate()
     return true
-  }, [scheduleActivePromptTurnUpdate])
+  }, [
+    captureReadingAnchor,
+    scheduleActivePromptTurnUpdate,
+    setScrollMode,
+    setViewportScrollTop
+  ])
   const navigateToPrompt = useCallback((turnId: string) => {
     if (scrollToMountedPrompt(turnId)) return
     const completedIndex = completedTurns.findIndex((turn) => turn.id === turnId)
@@ -339,6 +430,8 @@ export function Timeline({
     const topClearance = Number.parseFloat(window.getComputedStyle(viewport).paddingTop)
     readingLineOffsetRef.current =
       (Number.isFinite(topClearance) ? topClearance : 0) + 8
+    viewport.dataset.scrollMode = scrollModeRef.current
+    viewportScrollTopRef.current = viewport.scrollTop
     activePromptScrollTopRef.current = viewport.scrollTop
   }, [])
 
@@ -348,58 +441,61 @@ export function Timeline({
     if (shell === null || viewport === null) return
     const chrome = chromeRef.current
     const updateChromeHeight = (): void => {
-      const previousTopClearance = Number.parseFloat(window.getComputedStyle(viewport).paddingTop)
       shell.style.setProperty(
         '--conversation-chrome-height',
         `${chrome?.getBoundingClientRect().height ?? 0}px`
       )
-      const nextTopClearance = Number.parseFloat(window.getComputedStyle(viewport).paddingTop)
-      if (
-        Number.isFinite(previousTopClearance) &&
-        Number.isFinite(nextTopClearance) &&
-        Math.abs(nextTopClearance - previousTopClearance) > 0.5
-      ) {
-        viewport.scrollTop += nextTopClearance - previousTopClearance
-        activePromptScrollTopRef.current = viewport.scrollTop
-      }
-      updateScrollTail()
-      scheduleActivePromptTurnUpdate()
+      const topClearance = Number.parseFloat(window.getComputedStyle(viewport).paddingTop)
+      readingLineOffsetRef.current =
+        (Number.isFinite(topClearance) ? topClearance : 0) + 8
+      stabilizeTimelineLayout()
     }
     updateChromeHeight()
     if (chrome === null) return
     const observer = new ResizeObserver(updateChromeHeight)
     observer.observe(chrome)
     return () => observer.disconnect()
-  }, [
-    scheduleActivePromptTurnUpdate,
-    title,
-    updateScrollTail,
-    warning
-  ])
+  }, [stabilizeTimelineLayout, title, warning])
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current
     const messageList = messageListRef.current
-    updateScrollTail()
+    stabilizeTimelineLayout()
     if (viewport === null || messageList === null) return
-    const observer = new ResizeObserver(updateScrollTail)
+    const handleLayoutChange = (): void => stabilizeTimelineLayout()
+    const observer = new ResizeObserver(handleLayoutChange)
     observer.observe(viewport)
     observer.observe(messageList)
-    return () => observer.disconnect()
+    viewport.addEventListener(TIMELINE_LAYOUT_CHANGE_EVENT, handleLayoutChange)
+    window.addEventListener('resize', handleLayoutChange)
+    return () => {
+      observer.disconnect()
+      viewport.removeEventListener(TIMELINE_LAYOUT_CHANGE_EVENT, handleLayoutChange)
+      window.removeEventListener('resize', handleLayoutChange)
+    }
   }, [
     compactionActive,
     hasVisibleContent,
     runtimeStatus,
-    updateScrollTail
+    stabilizeTimelineLayout
   ])
 
   useLayoutEffect(() => {
-    updateScrollTail()
-  }, [activeRunStartIndex, completedTurnWindow, entries, updateScrollTail])
-
-  useLayoutEffect(() => {
-    updateActivePromptTurn()
-  }, [activeRunStartIndex, completedTurnWindow, entries, updateActivePromptTurn])
+    if (
+      revealScrollHeightRef.current !== null ||
+      pendingPromptNavigationTargetRef.current !== null
+    ) {
+      updateScrollTail()
+      return
+    }
+    stabilizeTimelineLayout()
+  }, [
+    activeRunStartIndex,
+    completedTurnWindow,
+    entries,
+    stabilizeTimelineLayout,
+    updateScrollTail
+  ])
 
   useLayoutEffect(() => {
     const now = Date.now()
@@ -446,17 +542,23 @@ export function Timeline({
   }, [activeRunStartIndex, activeTurns, entries])
 
   useLayoutEffect(() => {
-    if (followOutputRef.current) scrollToOutputEnd()
-  }, [entries, activeRunStartIndex, scrollToOutputEnd])
-
-  useLayoutEffect(() => {
     const viewport = viewportRef.current
     const previousScrollHeight = revealScrollHeightRef.current
     if (!viewport || previousScrollHeight === null) return
-    viewport.scrollTop += viewport.scrollHeight - previousScrollHeight
+    setViewportScrollTop(
+      viewport,
+      viewport.scrollTop + viewport.scrollHeight - previousScrollHeight
+    )
     activePromptScrollTopRef.current = viewport.scrollTop
     revealScrollHeightRef.current = null
-  }, [completedTurnWindow])
+    captureReadingAnchor()
+    scheduleActivePromptTurnUpdate()
+  }, [
+    captureReadingAnchor,
+    completedTurnWindow,
+    scheduleActivePromptTurnUpdate,
+    setViewportScrollTop
+  ])
 
   useLayoutEffect(() => {
     const pendingTurnId = pendingPromptNavigationTargetRef.current
@@ -491,9 +593,19 @@ export function Timeline({
         tabIndex={0}
         onScroll={(event) => {
           const target = event.currentTarget
-          const targetTop = outputEndScrollTop()
-          followOutputRef.current =
-            targetTop !== null && Math.abs(target.scrollTop - targetTop) < 120
+          const previousScrollTop = viewportScrollTopRef.current
+          const scrollTop = target.scrollTop
+          const suppressUserIntent = Math.abs(scrollTop - previousScrollTop) <= 0.5
+          const nextMode = timelineScrollModeAfterScroll({
+            currentMode: scrollModeRef.current,
+            previousScrollTop,
+            scrollTop,
+            outputEndScrollTop: outputEndScrollTop(),
+            suppressUserIntent
+          })
+          setScrollMode(nextMode)
+          viewportScrollTopRef.current = scrollTop
+          if (nextMode === 'reading') captureReadingAnchor()
           scheduleActivePromptTurnUpdate()
         }}
       >
@@ -511,7 +623,11 @@ export function Timeline({
                   type="button"
                   onClick={() => {
                     const viewport = viewportRef.current
-                    if (viewport) revealScrollHeightRef.current = viewport.scrollHeight
+                    setScrollMode('reading')
+                    if (viewport) {
+                      revealScrollHeightRef.current = viewport.scrollHeight
+                      captureReadingAnchor()
+                    }
                     setCompletedTurnWindow((count) => count + COMPLETED_TURN_WINDOW_SIZE)
                   }}
                 >
@@ -839,6 +955,141 @@ function PromptNavigationPreview({
     </div>,
     document.body
   )
+}
+
+function captureTimelineReadingAnchor(
+  viewport: HTMLElement,
+  messageList: HTMLElement,
+  readingLineOffset: number
+): TimelineReadingAnchor | null {
+  const viewportRect = viewport.getBoundingClientRect()
+  const readingY = Math.max(
+    viewportRect.top + 1,
+    Math.min(viewportRect.bottom - 1, viewportRect.top + readingLineOffset)
+  )
+  const readingXPositions = [0.5, 0.35, 0.65].map(
+    (ratio) => viewportRect.left + viewportRect.width * ratio
+  )
+  for (const readingX of readingXPositions) {
+    const pointElement = readingAnchorElementAtPoint(
+      messageList,
+      readingX,
+      readingY
+    )
+    if (pointElement === null) continue
+    const fallbackElement =
+      pointElement.closest<HTMLElement>('[data-conversation-turn-id]') ?? pointElement
+    const caretTarget = readingCaretTargetAtPoint(
+      messageList,
+      readingX,
+      readingY
+    )
+    const target = caretTarget ?? { kind: 'element', element: fallbackElement } as const
+    const viewportOffset = readingTargetViewportOffset(target, viewportRect.top)
+    if (viewportOffset === null) continue
+    return {
+      target,
+      viewportOffset,
+      fallbackElement,
+      fallbackViewportOffset: fallbackElement.getBoundingClientRect().top - viewportRect.top
+    }
+  }
+
+  const turns = Array.from(
+    messageList.querySelectorAll<HTMLElement>('[data-conversation-turn-id]')
+  )
+  const fallbackElement = turns.findLast(
+    (turn) => turn.getBoundingClientRect().top <= readingY
+  ) ?? turns[0] ?? null
+  if (fallbackElement === null) return null
+  const viewportOffset = fallbackElement.getBoundingClientRect().top - viewportRect.top
+  return {
+    target: { kind: 'element', element: fallbackElement },
+    viewportOffset,
+    fallbackElement,
+    fallbackViewportOffset: viewportOffset
+  }
+}
+
+function readingAnchorViewportOffsets(
+  anchor: TimelineReadingAnchor,
+  viewportTop: number
+): { previous: number; current: number } | null {
+  const currentTargetOffset = readingTargetViewportOffset(anchor.target, viewportTop)
+  if (currentTargetOffset !== null) {
+    return { previous: anchor.viewportOffset, current: currentTargetOffset }
+  }
+  if (!anchor.fallbackElement.isConnected) return null
+  return {
+    previous: anchor.fallbackViewportOffset,
+    current: anchor.fallbackElement.getBoundingClientRect().top - viewportTop
+  }
+}
+
+function readingTargetViewportOffset(
+  target: TimelineReadingAnchorTarget,
+  viewportTop: number
+): number | null {
+  let rect: DOMRect
+  if (target.kind === 'element') {
+    if (!target.element.isConnected) return null
+    rect = target.element.getBoundingClientRect()
+  } else {
+    if (!target.node.isConnected) return null
+    const range = target.node.ownerDocument.createRange()
+    const offset = Math.max(0, Math.min(target.node.data.length, target.offset))
+    range.setStart(target.node, offset)
+    range.collapse(true)
+    rect = range.getBoundingClientRect()
+    if (rect.height <= 0 && target.node.data.length > 0) {
+      const characterStart = Math.min(offset, target.node.data.length - 1)
+      range.setStart(target.node, characterStart)
+      range.setEnd(target.node, characterStart + 1)
+      rect = range.getBoundingClientRect()
+    }
+  }
+  return Number.isFinite(rect.top) && rect.height > 0
+    ? rect.top - viewportTop
+    : null
+}
+
+function readingAnchorElementAtPoint(
+  messageList: HTMLElement,
+  x: number,
+  y: number
+): HTMLElement | null {
+  return messageList.ownerDocument.elementsFromPoint(x, y).find(
+    (element): element is HTMLElement =>
+      element instanceof HTMLElement &&
+      element !== messageList &&
+      messageList.contains(element)
+  ) ?? null
+}
+
+function readingCaretTargetAtPoint(
+  messageList: HTMLElement,
+  x: number,
+  y: number
+): TimelineReadingAnchorTarget | null {
+  type CaretDocument = Document & {
+    caretPositionFromPoint?: (
+      x: number,
+      y: number
+    ) => { offsetNode: Node; offset: number } | null
+    caretRangeFromPoint?: (x: number, y: number) => Range | null
+  }
+  const documentWithCaret = messageList.ownerDocument as CaretDocument
+  const position = documentWithCaret.caretPositionFromPoint?.(x, y)
+  const legacyRange = position === undefined || position === null
+    ? documentWithCaret.caretRangeFromPoint?.(x, y) ?? null
+    : null
+  const node = position?.offsetNode ?? legacyRange?.startContainer ?? null
+  const offset = position?.offset ?? legacyRange?.startOffset ?? 0
+  const parent = node instanceof Text ? node.parentElement : node
+  if (!(parent instanceof HTMLElement) || !messageList.contains(parent)) return null
+  return node instanceof Text
+    ? { kind: 'text', node, offset }
+    : { kind: 'element', element: parent }
 }
 
 function promptNavigationLabel(entry: KernelMessageEntry): string {

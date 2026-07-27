@@ -1,10 +1,10 @@
 # Pi GUI 开发计划
 
 > 当前阶段：P2 — Workbench Foundation
-> 计划版本：8.3
+> 计划版本：8.4
 > 最后更新：2026-07-28
 > 总体状态：In Progress
-> 当前 Slice：S18-4 — Advisor 交付与韧性（In Progress）
+> 当前 Slice：S21-1 — Settings Information Architecture（In Progress）
 
 ## 1. 计划用途
 
@@ -465,8 +465,8 @@ P2 先用一个短 Slice 固定结构，再实现基础功能，随后在真实�
 | S17.1 | Magic Context 可选适配 | `Complete` | 拓展页增加固定 `@cortexkit/pi-magic-context` 安装与 Extension resource 启停；Package 状态不冒充配置健康，setup/doctor 继续由上游 CLI 负责，运行态复用 Pi 命令目录中的 `/ctx-status`；不解析私有 SQLite、不内嵌配置器或伪造缓存指标 |
 | S18 | OMP 多 Advisor Extension 与 GUI 适配 | `Paused` | S18-1 至 S18-4 已完成 Package、真实 Provider、GUI 投影/控制、多 roster 与交付韧性；S18-5 可观测性与发布继续保持 Pending，按 P2.1 顺序暂停到后续统一收敛 |
 | S19 | Subagent 任务详情侧栏 | `Complete` | Canonical clean commit `b9562b4` 的正式 `pnpm verify:linux` 已通过完整 P1/P2 回归与 S19：3 路并行 worker 同时 running、运行中选择、Escape 优先级、live→completed、宽屏第三列、窄屏替换、关闭/返回/Escape 焦点恢复和 reduced-motion。AppImage SHA-256 为 `4bbe45a505f601966c75ba8c3b4074f793ee88a7aff88e83bf00af03f039c29d`，证据位于 `release/evidence/2026-07-27T16-45-59-798Z-b9562b4ca6c3/` |
-| S20 | 动效与交互基础 | `In Progress` | S20-1 Motion Contract 已完成，当前进入 S20-2 Timeline/Composer 阅读锚点，随后统一跨 Navigator/Settings/任务详情的 Escape、外点与焦点恢复规则；动效不推动正文，不成为唯一状态表达，并以 reduced-motion 静态替代为完成门槛 |
-| S21 | Settings Workspace 2.0 | `Planned` | 设置导航按“应用 / 模型 / Agent / 生态”分组，增加收起、真实设置搜索和应用内 deep link；统一作用域、事实来源、生效时间及 saved/loaded 差异，不建立通用设置 registry，不静默 reload Runtime |
+| S20 | 动效与交互基础 | `Paused` | S20-1 Motion Contract 与 S20-2 Timeline/Composer 阅读稳定已完成；按 P2.1 顺序先实施 S21-1，再恢复 S20-3 统一跨 Navigator/Settings/任务详情的 Escape、外点与焦点规则；动效不推动正文，不成为唯一状态表达，并以 reduced-motion 静态替代为完成门槛 |
+| S21 | Settings Workspace 2.0 | `In Progress` | S21-1 当前实施设置导航“应用 / 模型 / Agent / 生态”分组、收起和窄屏信息架构；后续增加真实设置搜索、应用内 deep link 以及作用域/事实来源/生效时间，不建立通用设置 registry，不静默 reload Runtime |
 | S22 | Personalization v1 | `Planned` | 第一批只增加用户级的对话阅读宽度、Navigator 密度和动效偏好；使用有限语义枚举与统一 token，窄窗口、触控命中和 OS reduced-motion 继续拥有更高约束，不提供任意 CSS、像素或颜色编辑 |
 | S23 | Subagent Effective State 与任务一致性 | `Planned` | Main 投影 effective Agent definition、覆盖来源、最终启停/depth、Package/Extension/当前 Runtime 加载及 reload 状态；任务详情补同 run participant 切换、汇总和实时→历史恢复一致性，不读取 child transcript/artifact，不提前加入 GUI 运行控制 |
 | S24 | Magic Context 状态可见性 | `Planned` | 安装/启停继续留在拓展页，独立 Context 页只读展示 Package、Extension、当前 Session loaded、真实 `/ctx-status`、状态时间与过期语义，并提供复制 setup/doctor 命令和上游文档入口；不解析 SQLite 或把“已开启”冒充健康 |
@@ -566,7 +566,7 @@ P2.1 在现有工作台能力基本完整后，集中处理三条体验线：动
 | 阶段 | 状态 | 范围 | 完成门槛 |
 | --- | --- | --- | --- |
 | S20-1 Motion Contract | `Complete` | feedback/reveal 继续使用既有 duration/easing token，持续 activity 保留 feature-local 周期；Workbench 列宽与 Todo 托盘 measured clearance 不再插值 intrinsic grid geometry，状态动画在 OS reduced-motion 下显式静止且保留文字、ARIA、形状或颜色语义；未加入 S22 motionPreference | 新增 5 项静态 contract tests；clean `600d186` + S20 patch 隔离 worktree 的 typecheck、生产 build、446 项 core tests 与 diff check 通过。合成 browser preview 验证浅/深根 token、侧栏切换 1084→1416px 一次提交且 240ms 后不漂移，以及 loading/Todo/thinking/Project/Session 五类 activity 的 computed animation 全为 none |
-| S20-2 Timeline & Composer Stability | `In Progress` | 明确 following-bottom 与 reading-history 两种阅读状态；Composer、Todo、附件、队列、streaming 和任务详情变化保持真实测量 clearance 与阅读锚点 | 用户上滚后不被后台输出拉回；底部跟随保持；宽/窄窗口详情返回恢复原 trigger、focus 和阅读位置，不依赖固定 timeout |
+| S20-2 Timeline & Composer Stability | `Complete` | 明确 `following` 与 `reading` 两种用户意图；任何有效上滚立即进入 reading，只有用户回到 canonical output-end 才恢复 following；entries、streaming、Composer clearance、窗口/sidebar/detail reflow 共用同步稳定器，reading 以 caret/turn anchor 抵消布局变化，following 只对齐 output sentinel 而不滚入 navigation tail；窄屏 0×0 隐藏期间不测量，Workbench layout effect 在 focus rAF 前恢复 | clean `991c0e4` + S20-2 patch 隔离候选的 typecheck、生产 build、457 项 core、11 项 contract tests 与 diff check 通过；Electron preview 实测 30px 上滚退出 following，宽/窄 detail 与隐藏期间上方新增 180px 后 reading caret 均保持 122.98px，Composer/streaming 后 output-end 误差 0.48px 且保留 447px tail；独立 review 无 blocker/high，唯一 chrome offset Medium 已修复 |
 | S20-3 Interaction Consistency | `Pending` | 统一最内层 popover → 局部 editor/detail → workspace 的 Escape 层级，以及外点、返回、focus restoration、disabled 和触摸语义；窄窗口任务详情允许在同一 run participant 间切换 | Keyboard、pointer、touch、dirty draft、Project hover/action 互斥和异步双提交场景通过定向测试；不抽象无证据的万能 menu/popover |
 
 S20 明确不以“更多动画”为目标，不让位移或 pulse 成为 running/error 的唯一表达，也不通过延时猜测 DOM 已稳定。
@@ -575,7 +575,7 @@ S20 明确不以“更多动画”为目标，不让位移或 pulse 成为 runni
 
 | 阶段 | 状态 | 范围 | 完成门槛 |
 | --- | --- | --- | --- |
-| S21-1 Information Architecture | `Pending` | 导航分为“应用：常规/外观/快捷键”“模型：模型/凭证”“Agent：Subagent/Advisor/Context”“生态：Package/拓展/技能”；自动对话命名并入常规，删除单项偏好分类；导航可收起 | 既有功能和 dirty draft 保护无回退；窄窗口使用可访问的单页/覆盖式导航；Context 只有在 S24 有真实内容时出现 |
+| S21-1 Information Architecture | `In Progress` | 导航分为“应用：常规/外观/快捷键”“模型：模型/凭证”“Agent：Subagent/Advisor/Context”“生态：Package/拓展/技能”；自动对话命名并入常规，删除单项偏好分类；导航可收起 | 既有功能和 dirty draft 保护无回退；窄窗口使用可访问的单页/覆盖式导航；Context 只有在 S24 有真实内容时出现 |
 | S21-2 Search & Deep Link | `Pending` | 扩展窄 typed section/group metadata，索引真实设置名称、组和人工同义词；搜索结果跳到稳定应用内目标 | 不索引 credential、endpoint、Agent prompt 或日志；Enter/Escape、焦点恢复和无结果状态通过；不注册 OS URL protocol，不建立插件 registry |
 | S21-3 Scope, Source & Activation | `Pending` | 为重要设置表达 application/user/project/session 作用域、GUI/Pi/Extension 事实来源与 immediate/next-session/reload 生效时机；区分 saved config 与当前 Runtime loaded config | Package installed、Extension enabled、当前 Session loaded、健康 verified 四层状态不混淆；设置保存不静默重启，reload 失败不伪装已应用 |
 
@@ -925,6 +925,7 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-28 | S19 Complete / S18-4 Resume | Canonical clean commit `b9562b4` 的 AppImage 正式通过 `pnpm verify:linux` 全部 18 步；P1/P2 回归、三路 worker 同时 running、Escape 优先级、live→completed、宽/窄任务详情、三种焦点恢复和 reduced-motion 全部通过。Gate 期间修复 crashed Context 显式恢复、managed Session active pointer 持久化、live completion notice 去重，并将官方 verifier 对齐当前 typed contract 和 DOM identity | S19 标记 Complete；S18 恢复 In Progress，S18-4 成为当前唯一实施阶段；正式证据位于 `release/evidence/2026-07-27T16-45-59-798Z-b9562b4ca6c3/` |
 | 2026-07-28 | S18-4 Complete / S20-1 Start | `pi-gui-multi-advisor` 升级为 0.3.0：严重度驱动 aside/steer，真实 steer 后三轮禁止连续中断；每 Advisor backlog 只保留最新一项并在 30 秒过期；generation + run token 隔离 reset/compact 后旧 completion；context 预算包含 system/tools/provider usage，最多 fresh reset 一次；assistant `message_end` 在工具 dispatch 前 quarantine 未授权工具和无当前来源的危险输出；session dedupe、content-free 抑制、三次 transient 上限与 quota/permanent/paused 状态均有界 | 29 项 Extension 测试、独立 typecheck、453 项 core tests、0.3.0 pack dry-run 与隔离真实 Pi RPC 双轮 smoke 通过；根级 typecheck 被并行 Navigator `completionRevision` contract 修改阻断，非 Advisor 路径。S18 暂停并保留 S18-5 Pending；S20 进入 In Progress，S20-1 成为当前唯一实施阶段 |
 | 2026-07-28 | S20-1 Motion Contract Complete | 复用现有四档 duration 与两类 easing；普通 transition 不允许 raw timing；移除 Workbench `grid-template-columns` 和 Todo `grid-template-rows` 插值，避免 Timeline 宽度与 measured Composer clearance 在动效窗口内持续重排；全局 loading 补显式静态 reduced-motion，Todo reduced 状态改为 transition none；持续 activity 保持 feature-local 周期并要求静态状态语义 | 5 项 motion contract tests、clean isolated typecheck/build、446 项 core tests、diff check 和隔离 browser preview 通过；侧栏切换后主区宽度一次提交并稳定，浅/深语义 token 可区分，五类 activity 在 reduced-motion 下 animation 均为 none。S20-2 成为当前唯一 In Progress |
+| 2026-07-28 | S20-2 Timeline & Composer Stability Complete / S21-1 Start | Timeline 用显式 `following`/`reading` 用户意图区分底部跟随与历史阅读；统一 entries、streaming、Composer、窗口、sidebar 与任务详情 reflow 的同步稳定器，使用 caret/turn anchor 恢复 reading，使用 output sentinel 恢复 following；移除 Composer 自行滚动与 scrollHeight 底部猜测，窄屏隐藏期间不测量，detail close 在 focus 前恢复布局 | clean isolated typecheck/build、457 项 core、11 项 contract tests、diff check 与 Electron 宽/窄/Composer/streaming probe 通过；独立 review 无 blocker/high，修复 chrome reading-line 与 stale programmatic marker。S20 暂停于 S20-3，S21-1 成为唯一 In Progress |
 
 ## 17. 计划变更记录
 
@@ -1013,3 +1014,4 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 | 2026-07-27 | 8.1 | Subagent supervisor 通知改为结构化内部协作生命周期 | 实际使用中同一请求重复展示 attention、request、reply 与 wait，且把主 Agent 可自行处理的事项误报为用户警报 | 新增 D-046；稳定 request identity、同目标语义合并、成功 reply 原地 handled、管理工具简洁文案。缺少结构化 details 的旧消息仅兼容显示，不靠 Markdown 猜关联 |
 | 2026-07-27 | 8.2 | 增加 P2.1 Experience Refinement 与 S20–S25 | 用户确认下一阶段的三条主线及四项产品决策，需要在继续实现前固定依赖、范围、非目标和完成门槛 | S19 仍是唯一 In Progress，完成后恢复 S18-4，再进入 S20；Settings 分组和三个有限定制项、Subagent effective state、Magic Context 只读状态与后续结构化协议分别进入 Planned/Research |
 | 2026-07-28 | 8.3 | S19 通过 canonical AppImage 正式 gate，并恢复 S18-4 | Source snapshot 只能提前发现交互问题；最终完成必须绑定 clean commit、真实 AppImage、完整 P1/P2 回归和 S19 专项摘要 | S19 标记 Complete；S18/S18-4 恢复 In Progress。证据绑定 `b9562b4`、AppImage SHA-256 和脱敏报告目录，S20 继续等待 S18-4 完成 |
+| 2026-07-28 | 8.4 | 完成 S18-4、S20-1 与 S20-2，并按交错顺序进入 S21-1 | 体验基础必须先消除 Advisor delivery、intrinsic layout 动画与 Timeline 阅读位置的不稳定，再重构 Settings 信息架构；S20-3 按批准顺序在 S21-1 后恢复 | S18-4、S20-1、S20-2 标记 Complete；S18 与 S20 Paused；S21/S21-1 成为唯一 In Progress |
