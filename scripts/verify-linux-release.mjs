@@ -341,9 +341,8 @@ async function exerciseUi() {
     }
   })
 
-  await runStep('thinking_level', async () => {
-    const availableThinkingLevel = await availableThinkingLevelFromGui(activeCdp)
-    await selectThinkingLevelFromGui(activeCdp, availableThinkingLevel)
+  await runStep('high_thinking', async () => {
+    await selectThinkingLevelFromGui(activeCdp, 'high')
   })
 
   await runStep('tool_turn', async () => {
@@ -1440,7 +1439,7 @@ async function availableThinkingLevelFromGui(cdp) {
       return Array.from(document.querySelectorAll('#model-picker-popover .model-picker-thinking-list .model-picker-item:not(:disabled)'))
         .map((button) => labelToLevel[button.querySelector('.model-picker-option-label')?.textContent?.trim() ?? ''])
         .find((value) =>
-          ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(value) &&
+          ['low', 'medium', 'high', 'xhigh', 'max'].includes(value) &&
           value !== state.session.thinkingLevel
         ) ?? null
     })`
@@ -1808,7 +1807,7 @@ async function readRecentSessionPointer(projectPath) {
   if (
     typeof state !== 'object' ||
     state === null ||
-    state.version !== 4 ||
+    state.version !== 6 ||
     !Array.isArray(state.sessions) ||
     !Array.isArray(state.activeSessionKeys) ||
     !Array.isArray(state.archivedSessionKeys)
