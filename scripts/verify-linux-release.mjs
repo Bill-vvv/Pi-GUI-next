@@ -914,12 +914,12 @@ async function exerciseUi() {
           participant.status === 'completed' && participant.hasFinalOutput
         )
     }, TIMEOUT.turn, 'E_S19_COMPLETION')
-    const completedFirstSelector = subagentParticipantSelector(first)
+    const completedFirstLookup = subagentParticipantLookupExpression(first)
     await waitForExpression(
       activeCdp,
       `document.querySelector('.subagent-task-detail') !== null &&
        document.querySelectorAll('.subagent-run-chip[aria-pressed="true"]').length === 1 &&
-       document.querySelector(${JSON.stringify(completedFirstSelector)})?.getAttribute('aria-pressed') === 'true'`,
+       (${completedFirstLookup})?.getAttribute('aria-pressed') === 'true'`,
       TIMEOUT.page,
       'E_S19_COMPLETED_DETAIL'
     )
@@ -1315,30 +1315,42 @@ async function latestParallelSubagentRun(cdp) {
   )
 }
 
-function subagentParticipantSelector(locator) {
-  return `.subagent-run-chip[data-subagent-tool-call-id=${JSON.stringify(locator.toolCallId)}][data-subagent-participant-index=${JSON.stringify(String(locator.participantIndex))}]`
+function subagentParticipantLookupExpression(locator) {
+  return `Array.from(document.querySelectorAll('button.subagent-run-chip')).find((candidate) =>
+    candidate.getAttribute('data-subagent-tool-call-id') === ${JSON.stringify(locator.toolCallId)} &&
+    candidate.getAttribute('data-subagent-participant-index') === ${JSON.stringify(String(locator.participantIndex))}
+  )`
 }
 
 async function openSubagentParticipant(cdp, locator) {
-  const selector = subagentParticipantSelector(locator)
-  await waitForSelector(cdp, selector, TIMEOUT.page)
-  await clickSelector(cdp, selector)
+  const lookup = subagentParticipantLookupExpression(locator)
+  await waitForExpression(cdp, `(${lookup}) !== undefined`, TIMEOUT.page, 'E_S19_CAPSULE_IDENTITY')
+  const clicked = await evaluateValue(
+    cdp,
+    `(() => {
+      const element = ${lookup}
+      if (!(element instanceof HTMLButtonElement) || element.disabled) return false
+      element.click()
+      return true
+    })()`
+  )
+  if (!clicked) fail('E_S19_CAPSULE_CLICK')
   await waitForExpression(
     cdp,
     `document.querySelector('.subagent-task-detail') !== null &&
-     document.querySelector(${JSON.stringify(selector)})?.getAttribute('aria-pressed') === 'true'`,
+     (${lookup})?.getAttribute('aria-pressed') === 'true'`,
     TIMEOUT.page,
     'E_S19_DETAIL_OPEN'
   )
 }
 
 async function waitForSubagentFocus(cdp, locator, code) {
-  const selector = subagentParticipantSelector(locator)
+  const lookup = subagentParticipantLookupExpression(locator)
   await waitForExpression(
     cdp,
     `(() => {
       const active = document.activeElement
-      return active instanceof HTMLButtonElement && active.matches(${JSON.stringify(selector)})
+      return active instanceof HTMLButtonElement && active === (${lookup})
     })()`,
     TIMEOUT.page,
     code
