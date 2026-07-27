@@ -53,13 +53,13 @@ At the end of that window, the Renderer mapping breakdown was approximately:
 
 ## 3. Isolated AppImage diagnostic gate
 
-Diagnostic source commit:
+The same AppImage scenario was run twice. The second run is bound to the durable implementation commit:
 
 ```text
-e2aeb73cea10d67994d69497935ecc86471f466f
+981282e2c5649dd3e976721ab81b697abdc4c1ac
 ```
 
-AppImage SHA-256:
+AppImage SHA-256 for both runs:
 
 ```text
 b8f489e1f05fd9c300c9f10af85f3a9fcd79ad6681bcc37ff49ab173d8309da0
@@ -69,22 +69,23 @@ Evidence:
 
 ```text
 release/evidence/2026-07-27T17-24-06-418Z-e2aeb73cea10/report.json
+release/evidence/2026-07-27T17-31-22-250Z-981282e2c564/report.json
 ```
 
-This was a diagnostic run from an isolated clean worktree while unrelated canonical work was still in progress. It passed all 18 verifier steps, but it is **not** a replacement for a canonical release acceptance run.
+Both diagnostic runs came from an isolated clean worktree while unrelated canonical work was still in progress. Both passed all 18 verifier steps, but neither replaces a canonical release acceptance run.
 
 ### 3.1 Process and state samples
 
 | Sample | Total PSS | Renderer PSS | Top-level Pi | Pi PSS | Nested Pi | Nested Pi PSS | Full state events | Patch events |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Single Runtime ready | 729 MiB | 70 MiB | 1 | 230 MiB | 0 | 0 | 1 | 1 |
-| Tool turn settled | 925 MiB | 88 MiB | 1 | 400 MiB | 0 | 0 | 41 | 19 |
-| Reopened Runtime ready | 727 MiB | 72 MiB | 1 | 230 MiB | 0 | 0 | 2 | 1 |
-| Two Project Runtimes ready | 967 MiB | 82 MiB | 2 | 461 MiB | 0 | 0 | 6 | 2 |
-| Three Session Runtimes ready | 1,378 MiB | 93 MiB | 3 | 859 MiB | 0 | 0 | 17 | 15 |
-| Three Subagents running | 2,334 MiB | 131 MiB | 3 | 1,021 MiB | 3 | 787 MiB | 280 | 27 |
-| Three Subagents completed | 1,252 MiB | 105 MiB | 3 | 755 MiB | 0 | 0 | 317 | 33 |
-| Before final close | 1,261 MiB | 114 MiB | 3 | 755 MiB | 0 | 0 | 317 | 33 |
+| Single Runtime ready | 729–732 MiB | 70 MiB | 1 | 230–239 MiB | 0 | 0 | 1 | 1 |
+| Tool turn settled | 920–925 MiB | 87–88 MiB | 1 | 400–404 MiB | 0 | 0 | 41 | 19–21 |
+| Reopened Runtime ready | 727–744 MiB | 72–74 MiB | 1 | 230–242 MiB | 0 | 0 | 2 | 1 |
+| Two Project Runtimes ready | 967–980 MiB | 80–82 MiB | 2 | 461–473 MiB | 0 | 0 | 6 | 2 |
+| Three Session Runtimes ready | 1,375–1,378 MiB | 90–93 MiB | 3 | 858–859 MiB | 0 | 0 | 17–18 | 14–15 |
+| Three Subagents running | 2,334–2,486 MiB | 128–131 MiB | 3 | 1,015–1,021 MiB | 3 | 787–948 MiB | 251–280 | 26–27 |
+| Three Subagents completed | 1,245–1,252 MiB | 103–105 MiB | 3 | 749–755 MiB | 0 | 0 | 305–317 | 31–33 |
+| Before final close | 1,255–1,261 MiB | 111–114 MiB | 3 | 749–755 MiB | 0 | 0 | 305–317 | 31–33 |
 
 The isolated Conversation was intentionally small:
 
@@ -94,13 +95,13 @@ The isolated Conversation was intentionally small:
 
 ### 3.2 Full-state amplification
 
-During the approximately 80-second three-Subagent step, the Renderer received:
+Across the repeated approximately 80-second three-Subagent step, the Renderer received:
 
-- 317 complete `kernel.state-changed` events;
-- 33 `kernel.state-patched` events;
-- 9 inserted entries;
-- about 1,433 appended text/output characters;
-- about 1,394 characters in inserted payloads.
+- 305–317 complete `kernel.state-changed` events;
+- 31–33 `kernel.state-patched` events;
+- 9 inserted entries in the first run;
+- about 1,433 appended text/output characters in the first run;
+- about 1,394 characters in inserted payloads in the first run.
 
 The update stream therefore copied complete state hundreds of times to communicate only a few KiB of new textual payload plus participant/status metadata.
 
