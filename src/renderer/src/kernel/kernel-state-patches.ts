@@ -80,7 +80,20 @@ export function applyStatePatches(
             current.output.length !== change.expectedOutputLength ||
             !sameProjectedValue(currentMetadata, change.expected)
           ) continue
-          entries[change.index] = { ...current, ...change.metadata }
+          entries[change.index] = {
+            ...current,
+            ...change.metadata,
+            ...(change.metadata.todos === undefined
+              ? {}
+              : { todos: change.metadata.todos.map((todo) => ({ ...todo })) }),
+            ...(change.metadata.attachments === undefined
+              ? {}
+              : {
+                  attachments: change.metadata.attachments.map((attachment) => ({
+                    ...attachment
+                  }))
+                })
+          }
           continue
         }
         const output = appendProjectedText(current.output, change.from, change.output)

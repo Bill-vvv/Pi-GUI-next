@@ -390,6 +390,148 @@ function subagentTool(
   }
 }
 
+test('todo metadata add/status/clear applies with defensive isolation', () => {
+  const running: Extract<KernelConversationEntry, { kind: 'tool' }> = {
+    id: 'tool:todo',
+    kind: 'tool',
+    toolCallId: 'todo-call',
+    name: 'todowrite',
+    status: 'running',
+    args: '',
+    output: '',
+    details: '',
+    truncated: false,
+    timestamp: 1,
+    durationMs: null,
+    subagent: null,
+    todos: [{ id: 'a', content: 'First', status: 'pending', priority: 'high' }]
+  }
+  const expected = toolMetadata(running)
+  const withStatus: KernelToolEntryPatchMetadata = {
+    ...expected,
+    todos: [
+      { id: 'a', content: 'First', status: 'completed', priority: 'high' },
+      { id: 'b', content: 'Second', status: 'in_progress', priority: null }
+    ]
+  }
+  const state = kernelState([running])
+  const next = applyStatePatches(state, [{
+    projectKey: state.activeProjectKey,
+    sessionKey: state.activeSessionKey,
+    conversation: {
+      entries: [{
+        type: 'replace-tool-metadata',
+        index: 0,
+        toolCallId: running.toolCallId,
+        expectedOutputLength: 0,
+        expected,
+        metadata: withStatus
+      }]
+    }
+  }])
+  const patched = next.conversation.entries[0]
+  assert.equal(patched?.kind === 'tool' ? patched.todos?.[0]?.status : null, 'completed')
+  assert.equal(patched?.kind === 'tool' ? patched.todos?.[1]?.content : null, 'Second')
+  if (patched?.kind === 'tool' && patched.todos) {
+    patched.todos[0] = { ...patched.todos[0]!, content: 'mutated' }
+  }
+  assert.equal(withStatus.todos?.[0]?.content, 'First')
+
+  const cleared = applyStatePatches(next, [{
+    projectKey: state.activeProjectKey,
+    sessionKey: state.activeSessionKey,
+    conversation: {
+      entries: [{
+        type: 'replace-tool-metadata',
+        index: 0,
+        toolCallId: running.toolCallId,
+        expectedOutputLength: 0,
+        expected: toolMetadata(patched as Extract<KernelConversationEntry, { kind: 'tool' }>),
+        metadata: { ...toolMetadata(patched as Extract<KernelConversationEntry, { kind: 'tool' }>), todos: [] }
+      }]
+    }
+  }])
+  assert.deepEqual(
+    cleared.conversation.entries[0]?.kind === 'tool'
+      ? cleared.conversation.entries[0].todos
+      : null,
+    []
+  )
+})
+
+test('attachment metadata add/clear applies with defensive isolation', () => {
+  const running: Extract<KernelConversationEntry, { kind: 'tool' }> = {
+    id: 'tool:img',
+    kind: 'tool',
+    toolCallId: 'img-call',
+    name: 'generate_image',
+    status: 'running',
+    args: '',
+    output: 'draft',
+    details: '',
+    truncated: false,
+    timestamp: 1,
+    durationMs: null,
+    subagent: null
+  }
+  const expected = toolMetadata(running)
+  const withAttachment: KernelToolEntryPatchMetadata = {
+    ...expected,
+    attachments: [{ type: 'image', name: 'image.png', mimeType: 'image/png', byteLength: 12, contentIndex: 1 }]
+  }
+  const state = kernelState([running])
+  const next = applyStatePatches(state, [{
+    projectKey: state.activeProjectKey,
+    sessionKey: state.activeSessionKey,
+    conversation: {
+      entries: [{
+        type: 'replace-tool-metadata',
+        index: 0,
+        toolCallId: running.toolCallId,
+        expectedOutputLength: 'draft'.length,
+        expected,
+        metadata: withAttachment
+      }]
+    }
+  }])
+  const patched = next.conversation.entries[0]
+  assert.equal(patched?.kind === 'tool' ? patched.attachments?.[0]?.contentIndex : null, 1)
+  const emittedAttachment = withAttachment.attachments?.[0]
+  assert.ok(emittedAttachment)
+  if (patched?.kind === 'tool' && patched.attachments) {
+    patched.attachments[0] = { ...patched.attachments[0]!, contentIndex: 99 }
+  }
+  // Mutating the applied entry must not write through to the emitted patch payload.
+  assert.equal(emittedAttachment.contentIndex, 1)
+
+  const current = next.conversation.entries[0]
+  assert.ok(current?.kind === 'tool')
+  const cleared = applyStatePatches(next, [{
+    projectKey: state.activeProjectKey,
+    sessionKey: state.activeSessionKey,
+    conversation: {
+      entries: [{
+        type: 'replace-tool-metadata',
+        index: 0,
+        toolCallId: running.toolCallId,
+        expectedOutputLength: 'draft'.length,
+        expected: toolMetadata(current),
+        metadata: {
+          ...toolMetadata(current),
+          attachments: undefined
+        }
+      }]
+    }
+  }])
+  assert.equal(
+    cleared.conversation.entries[0]?.kind === 'tool'
+      ? cleared.conversation.entries[0].attachments
+      : 'missing',
+    undefined
+  )
+})
+
+
 function toolMetadata(
   entry: Extract<KernelConversationEntry, { kind: 'tool' }>
 ): KernelToolEntryPatchMetadata {

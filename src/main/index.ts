@@ -245,7 +245,7 @@ async function startApplication(): Promise<void> {
     }
     switch (command.type) {
       case 'kernel.get-state':
-        return kernel.getState()
+        return kernel.getSnapshot()
       case 'kernel.list-system-fonts':
         return listSystemFonts()
       case 'kernel.add-project': {

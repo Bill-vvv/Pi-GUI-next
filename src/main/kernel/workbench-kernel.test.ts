@@ -740,10 +740,10 @@ test('mutation acknowledgements track published revisions without cloning Kernel
   assert.equal('projects' in ack, false)
   assert.equal('conversation' in ack, false)
   assert.equal('runtime' in ack, false)
-  assert.equal(
-    events.filter((event) => event.type === 'kernel.state-changed').length,
-    1
-  )
+  const changed = events.filter((event) => event.type === 'kernel.state-changed')
+  assert.equal(changed.length, 1)
+  assert.equal(changed[0]?.type === 'kernel.state-changed' ? changed[0].revision : null, 1)
+  assert.equal(kernel.getSnapshot().revision, 1)
   assert.equal(kernel.getState().appearance.theme, 'dark')
 
   // No-op settings must not publish another full state or bump revision.
@@ -761,6 +761,10 @@ test('mutation acknowledgements track published revisions without cloning Kernel
     events.filter((event) => event.type === 'kernel.state-changed').length,
     1
   )
+  assert.deepEqual(kernel.getSnapshot(), {
+    revision: 1,
+    state: kernel.getState()
+  })
 })
 
 test('normal start and stop follows the lifecycle', async () => {
@@ -8017,7 +8021,12 @@ test('Stage 2B inactive host/lifecycle/metadata never swaps and preserves exact 
     sessionFile: pointerB.sessionFile,
     sessionName: pointerB.sessionName ?? undefined
   })
-  const runtimes = [runtimeA, runtimeB]
+  const runtimeARelaunch = new FakeRuntimeHost({
+    sessionId: pointerA.sessionId,
+    sessionFile: pointerA.sessionFile,
+    sessionName: 'Renamed A'
+  })
+  const runtimes = [runtimeA, runtimeB, runtimeARelaunch]
   const kernel = new WorkbenchKernel(
     () => {
       const runtime = runtimes.shift()
@@ -8226,22 +8235,18 @@ test('Stage 2B inactive host/lifecycle/metadata never swaps and preserves exact 
     spies.restore()
   }
 
-  // Activation of A reveals context-local results: settled queues cleared, rename, custom entry,
-  // and crash/exit evidence.
+  // Inactive crash remains visible in navigation before activation.
+  assert.equal(
+    kernel.getState().sessions.find((session) => session.key === pointerA.sessionFile)?.runtimeStatus,
+    'crashed'
+  )
+  // Activating any managed crashed context retries cleanup and relaunches instead of loading it.
   await kernel.activateSession(pointerA.sessionFile)
   const activated = kernel.getState()
   assert.equal(activated.session.id, pointerA.sessionId)
-  assert.equal(activated.session.name, 'Renamed A')
-  assert.equal(activated.session.pendingMessageCount, 0)
-  assert.deepEqual(activated.session.pendingSteeringMessages, [])
-  assert.deepEqual(activated.session.pendingFollowUpMessages, [])
-  assert.equal(activated.runtime.status, 'crashed')
-  // process-exit after a process diagnostic preserves the exit evidence and final crash reason.
-  assert.equal(activated.runtime.lastError, 'Pi RPC process exited with code 17.')
-  assert.equal(activated.runtime.exitCode, 17)
-  assert.equal(activated.conversation.entries.some((entry) =>
-    entry.kind === 'error' && entry.message === 'background extension fault'
-  ), true)
+  assert.equal(activated.runtime.status, 'ready')
+  assert.equal(runtimeARelaunch.startCalls, 1)
+  assert.equal(activated.runtime.lastError, null)
 })
 
 test('Stage 2B inactive process-exit crashes only the owning context', async () => {
@@ -8267,7 +8272,12 @@ test('Stage 2B inactive process-exit crashes only the owning context', async () 
     sessionFile: pointerB.sessionFile,
     sessionName: pointerB.sessionName ?? undefined
   })
-  const runtimes = [runtimeA, runtimeB]
+  const runtimeARelaunch = new FakeRuntimeHost({
+    sessionId: pointerA.sessionId,
+    sessionFile: pointerA.sessionFile,
+    sessionName: pointerA.sessionName ?? undefined
+  })
+  const runtimes = [runtimeA, runtimeB, runtimeARelaunch]
   const kernel = new WorkbenchKernel(
     () => {
       const runtime = runtimes.shift()
@@ -8314,12 +8324,9 @@ test('Stage 2B inactive process-exit crashes only the owning context', async () 
   }
 
   await kernel.activateSession(pointerA.sessionFile)
-  assert.equal(kernel.getState().runtime.status, 'crashed')
-  assert.equal(
-    kernel.getState().runtime.lastError,
-    'Pi RPC process exited with code 9.'
-  )
-  assert.equal(kernel.getState().runtime.exitCode, 9)
+  assert.equal(kernel.getState().runtime.status, 'ready')
+  assert.equal(runtimeARelaunch.startCalls, 1)
+  assert.equal(kernel.getState().runtime.lastError, null)
 })
 
 test('Stage 2B inactive session_info_changed isolates cross-project pointer maps', async () => {
@@ -8969,7 +8976,12 @@ test('Stage 2B process diagnostic during inactive compaction fails only that lif
     sessionFile: pointerB.sessionFile,
     sessionName: pointerB.sessionName ?? undefined
   })
-  const runtimes = [runtimeA, runtimeB]
+  const runtimeARelaunch = new FakeRuntimeHost({
+    sessionId: pointerA.sessionId,
+    sessionFile: pointerA.sessionFile,
+    sessionName: pointerA.sessionName ?? undefined
+  })
+  const runtimes = [runtimeA, runtimeB, runtimeARelaunch]
   const kernel = new WorkbenchKernel(
     () => {
       const runtime = runtimes.shift()
@@ -9015,7 +9027,8 @@ test('Stage 2B process diagnostic during inactive compaction fails only that lif
   assert.equal(kernel.getState().session.compaction, null)
 
   await kernel.activateSession(pointerA.sessionFile)
-  assert.equal(kernel.getState().runtime.status, 'crashed')
+  assert.equal(kernel.getState().runtime.status, 'ready')
+  assert.equal(runtimeARelaunch.startCalls, 1)
   assert.equal(kernel.getState().session.compaction, null)
 })
 
@@ -9826,4 +9839,520 @@ test('hibernateSession rejects active, busy, compacting, provisional, and unregi
     /Session is not registered for the active project/
   )
   assert.equal(provisionalRuntime.stopCalls, 0)
+})
+
+
+test('stopContext retains ownership on stop failure and allows hibernate retry', async () => {
+  const activePointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/active-session.jsonl',
+    sessionId: 'active-session',
+    sessionName: 'Active session'
+  }
+  const hibernatePointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/hibernate-session.jsonl',
+    sessionId: 'hibernate-session',
+    sessionName: 'Hibernate session'
+  }
+  const activeRuntime = new FakeRuntimeHost({
+    sessionId: activePointer.sessionId,
+    sessionFile: activePointer.sessionFile,
+    sessionName: activePointer.sessionName ?? undefined
+  })
+  class StopFailsOnceRuntimeHost extends FakeRuntimeHost {
+    override async stop(): Promise<void> {
+      this.stopCalls += 1
+      if (this.stopCalls === 1) throw new Error('stop failed')
+    }
+  }
+  const hibernateRuntime = new StopFailsOnceRuntimeHost({
+    sessionId: hibernatePointer.sessionId,
+    sessionFile: hibernatePointer.sessionFile,
+    sessionName: hibernatePointer.sessionName ?? undefined
+  })
+  const runtimes: RuntimeHost[] = [hibernateRuntime, activeRuntime]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [activePointer, hibernatePointer],
+        activeSessionKey: hibernatePointer.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(hibernatePointer.sessionFile)
+  await kernel.activateSession(activePointer.sessionFile)
+
+  await assert.rejects(kernel.hibernateSession(hibernatePointer.sessionFile), /stop failed/)
+  assert.equal(hibernateRuntime.stopCalls, 1)
+  assert.equal(
+    kernel.getState().sessions.find(({ key }) => key === hibernatePointer.sessionFile)?.runtimeStatus,
+    'crashed'
+  )
+
+  await kernel.hibernateSession(hibernatePointer.sessionFile)
+  assert.equal(hibernateRuntime.stopCalls, 2)
+  assert.equal(
+    kernel.getState().sessions.find(({ key }) => key === hibernatePointer.sessionFile)?.runtimeStatus,
+    'stopped'
+  )
+})
+
+test('activating a managed crashed inactive session cleans up and relaunches', async () => {
+  const activePointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/active-session.jsonl',
+    sessionId: 'active-session',
+    sessionName: 'Active session'
+  }
+  const crashedPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/crashed-session.jsonl',
+    sessionId: 'crashed-session',
+    sessionName: 'Crashed session'
+  }
+  const activeRuntime = new FakeRuntimeHost({
+    sessionId: activePointer.sessionId,
+    sessionFile: activePointer.sessionFile,
+    sessionName: activePointer.sessionName ?? undefined
+  })
+  class StopFailsOnceRuntimeHost extends FakeRuntimeHost {
+    override async stop(): Promise<void> {
+      this.stopCalls += 1
+      if (this.stopCalls === 1) throw new Error('stop failed')
+    }
+  }
+  const crashedRuntime = new StopFailsOnceRuntimeHost({
+    sessionId: crashedPointer.sessionId,
+    sessionFile: crashedPointer.sessionFile,
+    sessionName: crashedPointer.sessionName ?? undefined
+  })
+  const relaunchedRuntime = new FakeRuntimeHost(
+    {
+      sessionId: crashedPointer.sessionId,
+      sessionFile: crashedPointer.sessionFile,
+      sessionName: crashedPointer.sessionName ?? undefined
+    },
+    [{ role: 'assistant', content: [{ type: 'text', text: 'Relaunched' }], timestamp: 40 }]
+  )
+  const runtimes: RuntimeHost[] = [crashedRuntime, activeRuntime, relaunchedRuntime]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [activePointer, crashedPointer],
+        activeSessionKey: crashedPointer.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(crashedPointer.sessionFile)
+  await kernel.activateSession(activePointer.sessionFile)
+  await assert.rejects(kernel.hibernateSession(crashedPointer.sessionFile), /stop failed/)
+
+  await kernel.activateSession(crashedPointer.sessionFile)
+  assert.equal(crashedRuntime.stopCalls, 2)
+  assert.equal(relaunchedRuntime.startCalls, 1)
+  assert.equal(kernel.getState().activeSessionKey, crashedPointer.sessionFile)
+  assert.equal(kernel.getState().runtime.status, 'ready')
+  const recovered = kernel.getState().conversation.entries[0]
+  assert.equal(recovered?.kind === 'message' ? recovered.text : null, 'Relaunched')
+})
+
+test('hibernateSession rejects queued messages, usage refresh, and stop-in-progress targets', async () => {
+  const activePointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/active-session.jsonl',
+    sessionId: 'active-session',
+    sessionName: 'Active session'
+  }
+  const backgroundPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/background-session.jsonl',
+    sessionId: 'background-session',
+    sessionName: 'Background session'
+  }
+  const activeRuntime = new FakeRuntimeHost({
+    sessionId: activePointer.sessionId,
+    sessionFile: activePointer.sessionFile,
+    sessionName: activePointer.sessionName ?? undefined
+  })
+  const backgroundRuntime = new FakeRuntimeHost({
+    sessionId: backgroundPointer.sessionId,
+    sessionFile: backgroundPointer.sessionFile,
+    sessionName: backgroundPointer.sessionName ?? undefined
+  })
+  const runtimes: RuntimeHost[] = [backgroundRuntime, activeRuntime]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [activePointer, backgroundPointer],
+        activeSessionKey: backgroundPointer.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(backgroundPointer.sessionFile)
+  await kernel.activateSession(activePointer.sessionFile)
+
+  backgroundRuntime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'queue_update',
+      steering: ['steer later'],
+      followUp: []
+    }
+  })
+  await assert.rejects(
+    kernel.hibernateSession(backgroundPointer.sessionFile),
+    /messages are queued/
+  )
+  assert.equal(backgroundRuntime.stopCalls, 0)
+
+  backgroundRuntime.emit({
+    type: 'pi-event',
+    event: { type: 'queue_update', steering: [], followUp: [] }
+  })
+
+  const internals = kernel as unknown as {
+    contextBySessionKey: Map<string, {
+      sessionUsageRefreshInFlight: boolean
+      sessionUsageRefreshRequested: boolean
+      stopRequested: boolean
+    }>
+  }
+  const inactive = [...internals.contextBySessionKey.entries()].find(([key]) =>
+    key.includes('background-session')
+  )?.[1]
+  assert.ok(inactive)
+
+  inactive.sessionUsageRefreshRequested = true
+  await assert.rejects(
+    kernel.hibernateSession(backgroundPointer.sessionFile),
+    /session usage refresh is in progress/
+  )
+  inactive.sessionUsageRefreshRequested = false
+  inactive.sessionUsageRefreshInFlight = true
+  await assert.rejects(
+    kernel.hibernateSession(backgroundPointer.sessionFile),
+    /session usage refresh is in progress/
+  )
+  inactive.sessionUsageRefreshInFlight = false
+  inactive.stopRequested = true
+  await assert.rejects(
+    kernel.hibernateSession(backgroundPointer.sessionFile),
+    /stop is in progress/
+  )
+  inactive.stopRequested = false
+  assert.equal(backgroundRuntime.stopCalls, 0)
+})
+
+test('delayed inactive hibernate stop publishes stopping and serializes competing launches', async () => {
+  const activePointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/active-session.jsonl',
+    sessionId: 'active-session',
+    sessionName: 'Active session'
+  }
+  const hibernatePointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/hibernate-session.jsonl',
+    sessionId: 'hibernate-session',
+    sessionName: 'Hibernate session'
+  }
+  const activeRuntime = new FakeRuntimeHost({
+    sessionId: activePointer.sessionId,
+    sessionFile: activePointer.sessionFile,
+    sessionName: activePointer.sessionName ?? undefined
+  })
+  class DelayedSessionStopRuntimeHost extends FakeRuntimeHost {
+    readonly stopEntered: Promise<void>
+    private readonly markStopEntered: () => void
+    private readonly stopGate: Promise<void>
+    private readonly releaseStopGate: () => void
+
+    constructor(sessionState: ConstructorParameters<typeof FakeRuntimeHost>[0]) {
+      super(sessionState)
+      let markStopEntered!: () => void
+      let releaseStopGate!: () => void
+      this.stopEntered = new Promise((resolve) => {
+        markStopEntered = resolve
+      })
+      this.stopGate = new Promise((resolve) => {
+        releaseStopGate = resolve
+      })
+      this.markStopEntered = markStopEntered
+      this.releaseStopGate = releaseStopGate
+    }
+
+    override async stop(): Promise<void> {
+      this.stopCalls += 1
+      this.markStopEntered()
+      await this.stopGate
+    }
+
+    releaseStop(): void {
+      this.releaseStopGate()
+    }
+  }
+  const hibernateRuntime = new DelayedSessionStopRuntimeHost({
+    sessionId: hibernatePointer.sessionId,
+    sessionFile: hibernatePointer.sessionFile,
+    sessionName: hibernatePointer.sessionName ?? undefined
+  })
+  const runtimes: RuntimeHost[] = [hibernateRuntime, activeRuntime]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [activePointer, hibernatePointer],
+        activeSessionKey: hibernatePointer.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(hibernatePointer.sessionFile)
+  await kernel.activateSession(activePointer.sessionFile)
+  const before = kernel.getState()
+
+  const hibernatePromise = kernel.hibernateSession(hibernatePointer.sessionFile)
+  await hibernateRuntime.stopEntered
+  const stopping = kernel.getState()
+  assert.equal(
+    stopping.sessions.find(({ key }) => key === hibernatePointer.sessionFile)?.runtimeStatus,
+    'stopping'
+  )
+  assert.deepEqual(stopping.runtime, before.runtime)
+  assert.deepEqual(stopping.session, before.session)
+  assert.deepEqual(stopping.conversation, before.conversation)
+
+  await assert.rejects(
+    kernel.activateSession(hibernatePointer.sessionFile),
+    /runtime launch is already in progress/
+  )
+  await assert.rejects(
+    kernel.hibernateSession(hibernatePointer.sessionFile),
+    /runtime launch is already in progress/
+  )
+
+  hibernateRuntime.releaseStop()
+  await hibernatePromise
+  const after = kernel.getState()
+  assert.equal(
+    after.sessions.find(({ key }) => key === hibernatePointer.sessionFile)?.runtimeStatus,
+    'stopped'
+  )
+  assert.deepEqual(after.runtime, before.runtime)
+  assert.deepEqual(after.session, before.session)
+  assert.deepEqual(after.conversation, before.conversation)
+  assert.equal(
+    after.sessions.some(({ key }) => key === hibernatePointer.sessionFile),
+    true
+  )
+})
+
+test('todo metadata add/status/clear patches without full state and isolates mutations', async () => {
+  const runtime = new FakeRuntimeHost()
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  await kernel.start()
+  const events: KernelEvent[] = []
+  kernel.subscribe((event) => events.push(event))
+
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_start',
+      toolCallId: 'todo-1',
+      toolName: 'todowrite',
+      args: {
+        todos: [{ id: 'a', content: 'First', status: 'pending', priority: 'high' }]
+      }
+    }
+  })
+  events.length = 0
+
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_update',
+      toolCallId: 'todo-1',
+      toolName: 'todowrite',
+      args: {
+        todos: [
+          { id: 'a', content: 'First', status: 'completed', priority: 'high' },
+          { id: 'b', content: 'Second', status: 'in_progress' }
+        ]
+      },
+      partialResult: { content: [{ type: 'text', text: '' }] }
+    }
+  })
+  const statusEvent = events.at(-1)
+  assert.equal(statusEvent?.type, 'kernel.state-patched')
+  const statusPatch = statusEvent?.type === 'kernel.state-patched'
+    ? statusEvent.patch.conversation?.entries?.[0]
+    : undefined
+  assert.equal(statusPatch?.type, 'replace-tool-metadata')
+  if (statusPatch?.type === 'replace-tool-metadata') {
+    assert.equal(statusPatch.metadata.todos?.[0]?.status, 'completed')
+    assert.equal(statusPatch.metadata.todos?.[1]?.content, 'Second')
+    const todo = statusPatch.metadata.todos?.[0]
+    assert.ok(todo)
+    todo.content = 'mutated externally'
+    const stored = kernel.getState().conversation.entries[0]
+    assert.equal(stored?.kind === 'tool' ? stored.todos?.[0]?.content : null, 'First')
+  }
+
+  events.length = 0
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_update',
+      toolCallId: 'todo-1',
+      toolName: 'todowrite',
+      args: { todos: [] },
+      partialResult: { content: [{ type: 'text', text: '' }] }
+    }
+  })
+  const clearEvent = events.at(-1)
+  assert.equal(clearEvent?.type, 'kernel.state-patched')
+  const clearPatch = clearEvent?.type === 'kernel.state-patched'
+    ? clearEvent.patch.conversation?.entries?.[0]
+    : undefined
+  assert.equal(clearPatch?.type, 'replace-tool-metadata')
+  if (clearPatch?.type === 'replace-tool-metadata') {
+    assert.deepEqual(clearPatch.metadata.todos, [])
+  }
+})
+
+test('tool attachment metadata add/clear patches isolate copies; mixed growth falls back', async () => {
+  const runtime = new FakeRuntimeHost()
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  await kernel.start()
+  const events: KernelEvent[] = []
+  kernel.subscribe((event) => events.push(event))
+
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_start',
+      toolCallId: 'img-meta-1',
+      toolName: 'generate_image',
+      args: { prompt: 'cat' }
+    }
+  })
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_update',
+      toolCallId: 'img-meta-1',
+      toolName: 'generate_image',
+      args: { prompt: 'cat' },
+      partialResult: { content: [{ type: 'text', text: 'draft' }] }
+    }
+  })
+  events.length = 0
+
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_update',
+      toolCallId: 'img-meta-1',
+      toolName: 'generate_image',
+      args: { prompt: 'cat' },
+      partialResult: {
+        content: [
+          { type: 'text', text: 'draft' },
+          { type: 'image', mimeType: 'image/png', data: LIVE_TOOL_PNG }
+        ]
+      }
+    }
+  })
+  // Output unchanged + attachment added => metadata patch path.
+  const addEvent = events.at(-1)
+  assert.equal(addEvent?.type, 'kernel.state-patched')
+  const addPatch = addEvent?.type === 'kernel.state-patched'
+    ? addEvent.patch.conversation?.entries?.[0]
+    : undefined
+  assert.equal(addPatch?.type, 'replace-tool-metadata')
+  if (addPatch?.type === 'replace-tool-metadata') {
+    assert.equal(addPatch.metadata.attachments?.[0]?.contentIndex, 1)
+    const attachment = addPatch.metadata.attachments?.[0]
+    assert.ok(attachment)
+    attachment.contentIndex = 99
+    const stored = kernel.getState().conversation.entries[0]
+    assert.equal(stored?.kind === 'tool' ? stored.attachments?.[0]?.contentIndex : null, 1)
+  }
+
+  events.length = 0
+  // Mixed output growth + attachment change is outside metadata-only scope this milestone.
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_update',
+      toolCallId: 'img-meta-1',
+      toolName: 'generate_image',
+      args: { prompt: 'cat' },
+      partialResult: {
+        content: [
+          { type: 'text', text: 'draft more' },
+          { type: 'image', mimeType: 'image/png', data: LIVE_TOOL_PNG },
+          { type: 'image', mimeType: 'image/png', data: LIVE_TOOL_PNG }
+        ]
+      }
+    }
+  })
+  assert.equal(events.at(-1)?.type, 'kernel.state-changed')
+
+  events.length = 0
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_end',
+      toolCallId: 'img-meta-1',
+      toolName: 'generate_image',
+      isError: false,
+      result: {
+        content: [{ type: 'text', text: 'draft more' }]
+      }
+    }
+  })
+  // Terminal clear of attachments with possible metadata-only if output stable...
+  // output same length prefix - text unchanged; attachments cleared via content present empty images.
+  const endEvent = events.at(-1)
+  assert.ok(endEvent?.type === 'kernel.state-patched' || endEvent?.type === 'kernel.state-changed')
 })

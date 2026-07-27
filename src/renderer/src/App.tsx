@@ -11,7 +11,6 @@ import {
   type KernelProjectTrustChoice,
   type KernelPromptAttachment,
   type KernelSessionPreview,
-  type KernelStatePatch,
   type KernelState,
   type SessionNamingSettings,
   type SubagentSettings,
@@ -22,6 +21,7 @@ import { Workbench } from './composition/Workbench'
 import { useSessionRuntimeController } from './composition/useSessionRuntimeController'
 import type { ComposerDraftRequest } from './features/composer/Composer'
 import { applyStatePatches } from './kernel/kernel-state-patches'
+import { KernelRevisionBarrier } from './kernel/kernel-revision-barrier'
 import { unknownErrorMessage as errorMessage } from './unknown-error-message'
 
 /** Dwell before starting a stopped historical Session after the last click. */
@@ -64,12 +64,29 @@ export function App(): React.JSX.Element {
   } | null>(null)
   const [connectionAttempt, setConnectionAttempt] = useState(0)
   const kernelStateRef = useRef<KernelState | null>(null)
+  const revisionBarrierRef = useRef<KernelRevisionBarrier | null>(null)
   const pendingActionRef = useRef<string | null>(null)
   const coldStartHandledRef = useRef(false)
-  const eventRevision = useRef(0)
   const actionPresentationRevision = useRef(0)
   const forkRequestRevision = useRef(0)
   const composerDraftRevision = useRef(0)
+
+  async function awaitMutationAck<T>(operation: () => Promise<T>): Promise<T> {
+    const result = await operation()
+    const barrier = revisionBarrierRef.current
+    // Package-list helpers and void wrappers are not revision acks; only settle on ack shapes.
+    if (
+      barrier !== null &&
+      typeof result === 'object' &&
+      result !== null &&
+      'revision' in result &&
+      typeof (result as { revision: unknown }).revision === 'number'
+    ) {
+      await barrier.waitForRevision((result as { revision: number }).revision)
+    }
+    return result
+  }
+
   const {
     sessionViewTarget,
     sessionPreview,
@@ -86,8 +103,9 @@ export function App(): React.JSX.Element {
   } = useSessionRuntimeController({
     settleMs: SESSION_RUNTIME_SETTLE_MS,
     getKernelState: () => kernelStateRef.current,
-    startSession: () => window.piGui.startSession(),
-    activateSession: (sessionKey) => window.piGui.activateSession(sessionKey),
+    startSession: () => awaitMutationAck(() => window.piGui.startSession()),
+    activateSession: (sessionKey) =>
+      awaitMutationAck(() => window.piGui.activateSession(sessionKey)),
     previewSession: (sessionKey) => window.piGui.previewSession(sessionKey),
     beginActionPresentation: () => {
       actionPresentationRevision.current += 1
@@ -172,51 +190,28 @@ export function App(): React.JSX.Element {
 
   useEffect(() => {
     let active = true
-    let pendingPatches: KernelStatePatch[] = []
-    let framePatches: KernelStatePatch[] = []
-    let renderFrame: number | null = null
     let unsubscribe = (): void => undefined
 
-    const commitImmediately = (state: KernelState): void => {
-      const initializing = kernelStateRef.current === null
-      if (renderFrame !== null) {
-        cancelAnimationFrame(renderFrame)
-        renderFrame = null
-      }
-      framePatches = []
-      kernelStateRef.current = state
-      setKernelState(state)
-      reconcileKernelState(state, initializing)
-    }
-
-    const schedulePatch = (patch: KernelStatePatch): void => {
-      framePatches.push(patch)
-      if (renderFrame !== null) return
-      renderFrame = requestAnimationFrame(() => {
-        renderFrame = null
-        const state = kernelStateRef.current
-        const patches = framePatches
-        framePatches = []
-        if (!active || state === null) return
-        const nextState = applyStatePatches(state, patches)
-        kernelStateRef.current = nextState
-        setKernelState(nextState)
-      })
-    }
+    const barrier = new KernelRevisionBarrier({
+      applyState: (state, meta) => {
+        if (!active) return
+        kernelStateRef.current = state
+        setKernelState(state)
+        reconcileKernelState(state, meta.initializing)
+      },
+      applyPatches: (state, patches) =>
+        applyStatePatches(state, patches.map((entry) => entry.patch)),
+      fetchSnapshot: () => window.piGui.getState(),
+      scheduleFrame: (callback) => requestAnimationFrame(callback),
+      cancelFrame: (handle) => cancelAnimationFrame(handle as number)
+    })
+    revisionBarrierRef.current = barrier
 
     try {
       unsubscribe = window.piGui.subscribe((event) => {
         if (!active) return
-        if (event.type === 'kernel.state-changed') {
-          eventRevision.current += 1
-          pendingPatches = []
-          commitImmediately(event.state)
-        } else if (event.type === 'kernel.state-patched') {
-          eventRevision.current += 1
-          const state = kernelStateRef.current
-          if (state === null) pendingPatches.push(event.patch)
-          else schedulePatch(event.patch)
-        } else if (
+        barrier.handleEvent(event)
+        if (
           event.type === 'kernel.compaction-ended' &&
           event.outcome !== 'retrying'
         ) {
@@ -233,12 +228,9 @@ export function App(): React.JSX.Element {
       })
 
       void window.piGui.getState().then(
-        (state) => {
+        (snapshot) => {
           if (!active) return
-          if (kernelStateRef.current !== null) return
-          const initialized = applyStatePatches(state, pendingPatches)
-          pendingPatches = []
-          commitImmediately(initialized)
+          barrier.handleSnapshot(snapshot)
           setIpcError(null)
         },
         (error: unknown) => {
@@ -252,7 +244,8 @@ export function App(): React.JSX.Element {
 
     return () => {
       active = false
-      if (renderFrame !== null) cancelAnimationFrame(renderFrame)
+      if (revisionBarrierRef.current === barrier) revisionBarrierRef.current = null
+      barrier.dispose()
       unsubscribe()
     }
   }, [connectionAttempt])
@@ -278,9 +271,8 @@ export function App(): React.JSX.Element {
     setActionError(null)
     let succeeded = false
     try {
-      // Mutating invokes return a narrow ack. Kernel state is applied only from
-      // kernel.state-changed / kernel.state-patched events (before or after reply).
-      await operation()
+      // Mutating invokes return a narrow ack. Settle only after the ack revision is applied.
+      await awaitMutationAck(operation)
       succeeded = true
     } catch (error) {
       if (actionPresentationRevision.current === presentationRevision) {
@@ -358,12 +350,12 @@ export function App(): React.JSX.Element {
     setForkError(null)
     setActionError(null)
     try {
-      const result = await window.piGui.forkSession(entryId)
+      const result = await awaitMutationAck(() => window.piGui.forkSession(entryId))
       if (result.cancelled) {
         closeForkDialog()
         return
       }
-      // State arrives via kernel events; ack carries only revision + domain fields.
+      // Domain draft is safe once the ack revision has been applied to Kernel state.
       clearSessionView()
       composerDraftRevision.current += 1
       setComposerDraftRequest({
@@ -477,7 +469,7 @@ export function App(): React.JSX.Element {
     let succeeded = false
     try {
       await waitForRuntimeEnsureIdle()
-      const result = await window.piGui.archiveSession(sessionKey)
+      const result = await awaitMutationAck(() => window.piGui.archiveSession(sessionKey))
       const expiresAt = Date.now() + result.receipt.durationMs
       setArchiveNotifications((current) => [
         ...current.filter(({ receipt }) => receipt.token !== result.receipt.token),

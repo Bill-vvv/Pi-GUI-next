@@ -671,6 +671,12 @@ export type KernelMutationAck = {
   revision: number
 }
 
+/** Atomic initial/resync envelope: state paired with the Kernel publish revision. */
+export type KernelSnapshot = {
+  revision: number
+  state: KernelState
+}
+
 export type KernelForkResult = KernelMutationAck & {
   draft: string
   cancelled: boolean
@@ -686,6 +692,29 @@ export type KernelArchiveReceipt = {
 
 export type KernelArchiveResult = KernelMutationAck & {
   receipt: KernelArchiveReceipt
+}
+
+/** Fail-fast wire check for mutation invoke results (and fork/archive supersets). */
+export function isKernelMutationAck(value: unknown): value is KernelMutationAck {
+  if (!isPlainObject(value)) return false
+  if (!isNonNegativeInteger(value.revision)) return false
+  return true
+}
+
+/** Fail-fast wire check for snapshot envelopes from get-state / resync. */
+export function isKernelSnapshot(value: unknown): value is KernelSnapshot {
+  if (!isPlainObject(value)) return false
+  if (!isNonNegativeInteger(value.revision)) return false
+  if (!isPlainObject(value.state)) return false
+  return true
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
 }
 
 export type KernelSessionExportResult = {
@@ -957,10 +986,12 @@ export type KernelCommand =
 export type KernelEvent =
   | {
       type: 'kernel.state-changed'
+      revision: number
       state: KernelState
     }
   | {
       type: 'kernel.state-patched'
+      revision: number
       patch: KernelStatePatch
     }
   | {
@@ -980,7 +1011,7 @@ export type KernelEvent =
 
 export type KernelApi = {
   getPathForFile: (file: File) => string
-  getState: () => Promise<KernelState>
+  getState: () => Promise<KernelSnapshot>
   listSystemFonts: () => Promise<string[]>
   addProject: () => Promise<KernelMutationAck>
   activateProject: (projectKey: string) => Promise<KernelMutationAck>

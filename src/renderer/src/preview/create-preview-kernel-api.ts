@@ -5,6 +5,7 @@ import {
   type KernelAdvisorDefinition,
   type KernelApi,
   type KernelMutationAck,
+  type KernelSnapshot,
   type KernelEvent,
   type KernelProviderCredential,
   type KernelProviderConfig,
@@ -743,11 +744,16 @@ export function createPreviewKernelApi(): KernelApi {
     state = next
     stateRevision += 1
     const snapshot = structuredClone(state)
-    for (const listener of listeners) listener({ type: 'kernel.state-changed', state: snapshot })
+    for (const listener of listeners) {
+      listener({ type: 'kernel.state-changed', revision: stateRevision, state: snapshot })
+    }
     return Promise.resolve(acknowledge())
   }
 
-  const current = (): Promise<KernelState> => Promise.resolve(structuredClone(state))
+  const current = (): Promise<KernelSnapshot> => Promise.resolve({
+    revision: stateRevision,
+    state: structuredClone(state)
+  })
   const currentAck = (): Promise<KernelMutationAck> => Promise.resolve(acknowledge())
 
   const activateSelection = (projectKey: PreviewProjectKey, sessionKey?: string) => {

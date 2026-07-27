@@ -23,6 +23,7 @@ import {
   type KernelPiDevCatalog,
   type KernelMessageImage,
   type KernelMutationAck,
+  type KernelSnapshot,
   type KernelPromptAttachment,
   type KernelProjectPathSearchResult,
   type KernelProviderConfig,
@@ -31,7 +32,6 @@ import {
   type KernelProviderTestResult,
   type KernelSessionExportResult,
   type KernelSessionPreview,
-  type KernelState,
   type KernelSubagentDefinition
 } from '../shared/kernel-contract'
 
@@ -40,7 +40,7 @@ const kernelApi: KernelApi = {
   getState: () => {
     const command: KernelCommand = { type: 'kernel.get-state' }
 
-    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelSnapshot>
   },
   listSystemFonts: () => {
     const command: KernelCommand = { type: 'kernel.list-system-fonts' }

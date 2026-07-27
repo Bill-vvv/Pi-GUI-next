@@ -380,7 +380,7 @@ async function exerciseUi() {
     ;({ app: activeApp, cdp: activeCdp } = await launchApp())
     await waitForExpression(
       activeCdp,
-      `window.piGui.getState().then((state) =>
+      `window.piGui.getState().then((snapshot) => snapshot.state).then((state) =>
         state.runtime.status !== 'stopped' || document.querySelector('.composer-start-action') !== null
       )`,
       TIMEOUT.page,
@@ -402,7 +402,7 @@ async function exerciseUi() {
   await runStep('project_cwd', async () => {
     const projectState = await evaluateValue(
       activeCdp,
-      `window.piGui.getState().then((state) => ({
+      `window.piGui.getState().then((snapshot) => snapshot.state).then((state) => ({
         activeProjectKey: state.activeProjectKey,
         projects: state.projects.map((project) => project.path)
       }))`
@@ -427,7 +427,7 @@ async function exerciseUi() {
     await waitForRuntime(activeCdp, 'ready', TIMEOUT.ready)
     const runtimeIdentity = await evaluateValue(
       activeCdp,
-      `window.piGui.getState().then((state) => ({
+      `window.piGui.getState().then((snapshot) => snapshot.state).then((state) => ({
         status: state.runtime.status,
         executable: state.runtime.executable,
         version: state.runtime.version
@@ -525,7 +525,7 @@ async function exerciseUi() {
     process.kill(piPid, 'SIGKILL')
     await waitForExpression(
       activeCdp,
-      `window.piGui.getState().then((state) =>
+      `window.piGui.getState().then((snapshot) => snapshot.state).then((state) =>
         state.runtime.status === 'crashed' &&
         Array.from(document.querySelectorAll('.composer-start-action')).some((button) => button.textContent?.includes('重启并恢复'))
       )`,
@@ -534,7 +534,7 @@ async function exerciseUi() {
     )
     const crashDiagnostic = await evaluateValue(
       activeCdp,
-      `window.piGui.getState().then((state) => ({
+      `window.piGui.getState().then((snapshot) => snapshot.state).then((state) => ({
         status: state.runtime.status,
         exitCode: state.runtime.exitCode,
         exitSignal: state.runtime.exitSignal
@@ -646,7 +646,7 @@ async function exerciseUi() {
     )
     const primaryReady = await evaluateValue(
       activeCdp,
-      `window.piGui.getState().then((state) => state.runtime.status === 'ready')`
+      `window.piGui.getState().then((snapshot) => snapshot.state).then((state) => state.runtime.status === 'ready')`
     )
     if (!primaryReady) {
       await clickButtonText(activeCdp, '.composer-start-action', '恢复对话')
@@ -760,7 +760,7 @@ async function exerciseUi() {
 
     const completionBaseline = await evaluateValue(
       activeCdp,
-      `window.piGui.getState().then((state) => ({
+      `window.piGui.getState().then((snapshot) => snapshot.state).then((state) => ({
         activeSessionKey: state.activeSessionKey,
         sessionKeys: state.sessions.map((session) => session.key),
         conversationEntries: state.conversation.entries.length,
@@ -779,7 +779,7 @@ async function exerciseUi() {
     )
     const afterTabCompletion = await evaluateValue(
       activeCdp,
-      `window.piGui.getState().then((state) => ({
+      `window.piGui.getState().then((snapshot) => snapshot.state).then((state) => ({
         activeSessionKey: state.activeSessionKey,
         sessionKeys: state.sessions.map((session) => session.key),
         conversationEntries: state.conversation.entries.length,
@@ -804,7 +804,7 @@ async function exerciseUi() {
     )
     const afterEnterCompletion = await evaluateValue(
       activeCdp,
-      `window.piGui.getState().then((state) => ({
+      `window.piGui.getState().then((snapshot) => snapshot.state).then((state) => ({
         activeSessionKey: state.activeSessionKey,
         sessionKeys: state.sessions.map((session) => session.key),
         conversationEntries: state.conversation.entries.length,
@@ -848,7 +848,7 @@ async function exerciseUi() {
     )
     const afterRequiredArgumentRejection = await evaluateValue(
       activeCdp,
-      `window.piGui.getState().then((state) => ({
+      `window.piGui.getState().then((snapshot) => snapshot.state).then((state) => ({
         activeSessionKey: state.activeSessionKey,
         sessionKeys: state.sessions.map((session) => session.key),
         conversationEntries: state.conversation.entries.length,
@@ -875,7 +875,7 @@ async function exerciseUi() {
     )
     await waitForExpression(
       activeCdp,
-      `window.piGui.getState().then((state) => state.session.thinkingLevel === ${JSON.stringify(availableThinkingLevel)})`,
+      `window.piGui.getState().then((snapshot) => snapshot.state).then((state) => state.session.thinkingLevel === ${JSON.stringify(availableThinkingLevel)})`,
       TIMEOUT.ready,
       'E_P2_TYPED_COMMAND_RESULT'
     )
@@ -1013,7 +1013,7 @@ async function exerciseUi() {
     await waitForSubagentFocus(activeCdp, first, 'E_S19_ESCAPE_FOCUS')
     const afterEscape = await evaluateValue(
       activeCdp,
-      `window.piGui.getState().then((state) => ({
+      `window.piGui.getState().then((snapshot) => snapshot.state).then((state) => ({
         runtime: state.runtime.status,
         aborted: state.conversation.entries.filter((entry) =>
           entry.kind === 'message' && entry.stopReason === 'aborted'
@@ -1395,7 +1395,7 @@ async function waitForTitledSelection(cdp, selector, title, timeoutMs, code) {
     : 'activeSessionKey'
   await waitForExpression(
     cdp,
-    `window.piGui.getState().then((state) =>
+    `window.piGui.getState().then((snapshot) => snapshot.state).then((state) =>
       state[${JSON.stringify(stateIdentityField)}] === ${JSON.stringify(title)} &&
       Array.from(document.querySelectorAll(${JSON.stringify(selector)})).some((element) =>
         element.getAttribute(${JSON.stringify(identityAttribute)}) === ${JSON.stringify(title)} &&
@@ -1419,7 +1419,7 @@ async function selectedTitledButton(cdp, selector) {
 async function latestParallelSubagentRun(cdp) {
   return evaluateValue(
     cdp,
-    `window.piGui.getState().then((state) => {
+    `window.piGui.getState().then((snapshot) => snapshot.state).then((state) => {
       const runs = state.conversation.entries
         .filter((entry) => entry.kind === 'tool' && entry.name === 'subagent' && entry.subagent?.mode === 'parallel')
         .map((entry) => ({
@@ -1604,7 +1604,7 @@ async function availableThinkingLevelFromGui(cdp) {
   await openThinkingOptions(cdp)
   const level = await evaluateValue(
     cdp,
-    `window.piGui.getState().then((state) => {
+    `window.piGui.getState().then((snapshot) => snapshot.state).then((state) => {
       const labelToLevel = Object.fromEntries(
         Object.entries(${JSON.stringify(THINKING_LEVEL_LABELS)})
           .map(([thinkingLevel, label]) => [label, thinkingLevel])
@@ -1642,7 +1642,7 @@ async function selectThinkingLevelFromGui(cdp, level) {
   if (!selected) fail('E_P2_TYPED_COMMAND_PRECONDITION')
   await waitForExpression(
     cdp,
-    `window.piGui.getState().then((state) => state.session.thinkingLevel === ${JSON.stringify(level)})`,
+    `window.piGui.getState().then((snapshot) => snapshot.state).then((state) => state.session.thinkingLevel === ${JSON.stringify(level)})`,
     TIMEOUT.page,
     'E_THINKING_LEVEL'
   )
@@ -1688,7 +1688,7 @@ async function submitPrompt(cdp, prompt) {
 async function conversationCounts(cdp) {
   return evaluateValue(
     cdp,
-    `window.piGui.getState().then((state) => ({
+    `window.piGui.getState().then((snapshot) => snapshot.state).then((state) => ({
       messages: state.conversation.entries.filter((entry) => entry.kind === 'message').length,
       assistant: state.conversation.entries.filter((entry) => entry.kind === 'message' && entry.role === 'assistant' && !entry.streaming).length,
       thinking: state.conversation.entries.filter((entry) => entry.kind === 'thinking').length,
@@ -1709,7 +1709,7 @@ async function waitForRuntime(cdp, status, timeoutMs) {
     : ''
   await waitForExpression(
     cdp,
-    `window.piGui.getState().then((state) =>
+    `window.piGui.getState().then((snapshot) => snapshot.state).then((state) =>
       state.runtime.status === ${JSON.stringify(status)}${editableCondition}
     )`,
     timeoutMs,
@@ -1720,7 +1720,7 @@ async function waitForRuntime(cdp, status, timeoutMs) {
 async function waitForAssistantSettled(cdp, baseline, timeoutMs) {
   await waitForCondition(
     async () => (
-      await evaluateValue(cdp, `window.piGui.getState().then((state) => state.runtime.status === 'ready')`)
+      await evaluateValue(cdp, `window.piGui.getState().then((snapshot) => snapshot.state).then((state) => state.runtime.status === 'ready')`)
     ) && (await conversationCounts(cdp)).assistant > baseline,
     timeoutMs,
     'E_ASSISTANT_SETTLED'
@@ -2007,7 +2007,7 @@ async function captureMemorySample(label) {
   const [rendererState, rendererHeap, rendererDom, rendererEvents] = await Promise.all([
     evaluateValue(
       activeCdp,
-      `window.piGui.getState().then((state) => {
+      `window.piGui.getState().then((snapshot) => snapshot.state).then((state) => {
         const utf8Bytes = (text) => {
           let bytes = 0
           for (let index = 0; index < text.length; index += 1) {

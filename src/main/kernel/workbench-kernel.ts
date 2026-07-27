@@ -16,6 +16,7 @@ import type {
   KernelMessageImage,
   KernelModelState,
   KernelMutationAck,
+  KernelSnapshot,
   KernelProjectState,
   KernelPromptAttachment,
   KernelProjectTrustChoice,
@@ -417,6 +418,17 @@ export class WorkbenchKernel {
   }
 
   /**
+   * Atomic snapshot for Renderer initialization/resync. Pairs the deep-copied
+   * KernelState with the current publish revision so clients never guess counters.
+   */
+  getSnapshot(): KernelSnapshot {
+    return {
+      revision: this.stateRevision,
+      state: this.getState()
+    }
+  }
+
+  /**
    * Narrow acknowledgement for mutating IPC. Carries the latest published revision
    * without deep-cloning KernelState for the invoke return path.
    */
@@ -684,8 +696,9 @@ export class WorkbenchKernel {
       const storedPointer = this.sessionPointers.find(
         (pointer) => pointer.projectPath === project.path && pointer.sessionFile === sessionKey
       )
+      // Any managed crashed context must retry cleanup/relaunch — including inactive
+      // ones retained after a failed stop — rather than loading a crashed projection.
       const restartManaged = managed !== undefined &&
-        managed === this.activeContext &&
         managed.state.runtime.status === 'crashed'
       if (managed !== undefined && !restartManaged) {
         if (storedPointer !== undefined) {
@@ -1334,6 +1347,20 @@ export class WorkbenchKernel {
     }
     if (context.sessionNameOperation !== null || context.pendingSessionName !== null) {
       throw new Error('Cannot hibernate a session while session naming is in progress.')
+    }
+    if (context.stopRequested) {
+      throw new Error('Cannot hibernate a session while stop is in progress.')
+    }
+    if (context.sessionUsageRefreshInFlight || context.sessionUsageRefreshRequested) {
+      throw new Error('Cannot hibernate a session while session usage refresh is in progress.')
+    }
+    const session = context.state.session
+    if (
+      session.pendingMessageCount > 0 ||
+      session.pendingSteeringMessages.length > 0 ||
+      session.pendingFollowUpMessages.length > 0
+    ) {
+      throw new Error('Cannot hibernate a session while messages are queued.')
     }
   }
 
@@ -2175,11 +2202,24 @@ export class WorkbenchKernel {
       // Inactive stop: only the stopping navigation transition is visible.
       this.publishContextNavigationChange(context, navigationBeforeStopping)
     }
-    let stopError: unknown = null
     try {
       await context.runtime.stop()
     } catch (error) {
-      stopError = error
+      // Retain ownership when stop fails so a potentially live process stays tracked.
+      // Publish crashed navigation, clear the in-progress stop flag for retry, and throw.
+      const navigationBeforeCrash = this.projectNavigationState(context.projectPath)
+      context.stopRequested = false
+      context.state = {
+        ...context.state,
+        runtime: toKernelRuntime('crashed', context.runtime.getState(), errorMessage(error))
+      }
+      if (wasActive) {
+        this.state = context.state
+        this.emitState()
+      } else {
+        this.publishContextNavigationChange(context, navigationBeforeCrash)
+      }
+      throw error
     }
     context.unsubscribeRuntime?.()
     context.unsubscribeRuntime = null
@@ -2189,11 +2229,7 @@ export class WorkbenchKernel {
       ...context.state,
       commands: createCommandCatalog(),
       advisor: { ...UNAVAILABLE_ADVISOR_STATE },
-      runtime: toKernelRuntime(
-        stopError === null ? 'stopped' : 'crashed',
-        context.runtime.getState(),
-        stopError === null ? undefined : errorMessage(stopError)
-      )
+      runtime: toKernelRuntime('stopped', context.runtime.getState())
     }
     this.contexts.delete(context)
     this.contextByRuntime.delete(context.runtime)
@@ -2219,7 +2255,6 @@ export class WorkbenchKernel {
       // Context is gone; project-map navigation only (no inactive Conversation).
       this.publishProjectNavigationChange(context.projectPath, navigationBeforeRemoval)
     }
-    if (stopError !== null) throw stopError
   }
 
   private assertStartActive(runtime: RuntimeHost): void {
@@ -4370,13 +4405,21 @@ export class WorkbenchKernel {
   private emitState(): void {
     this.captureActiveContext()
     this.stateRevision += 1
-    this.notifyListeners({ type: 'kernel.state-changed', state: this.getState() })
+    this.notifyListeners({
+      type: 'kernel.state-changed',
+      revision: this.stateRevision,
+      state: this.getState()
+    })
   }
 
   private emitPatch(patch: KernelStatePatch): void {
     this.captureActiveContext()
     this.stateRevision += 1
-    this.notifyListeners({ type: 'kernel.state-patched', patch: copyPatch(patch) })
+    this.notifyListeners({
+      type: 'kernel.state-patched',
+      revision: this.stateRevision,
+      patch: copyPatch(patch)
+    })
   }
 }
 
