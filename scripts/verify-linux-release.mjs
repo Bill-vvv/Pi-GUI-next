@@ -797,36 +797,37 @@ async function exerciseUi() {
     s19Summary.agents = [...new Set(liveRun.participants.map((participant) => participant.agent))]
     s19Summary.observedLive = true
 
-    await waitForSelector(
+    const capsulesAlreadyVisible = await evaluateValue(
       activeCdp,
-      '.live-process-status-summary .process-step-expand',
-      TIMEOUT.page
+      `document.querySelectorAll('button.subagent-run-chip').length >= 3`
     )
-    const hasLiveProcessDisclosure = await evaluateValue(
-      activeCdp,
-      `document.querySelector('.live-process-status-summary') !== null`
-    )
-    if (hasLiveProcessDisclosure) {
-      await clickSelector(activeCdp, '.live-process-status-summary')
-      await waitForExpression(
+    if (!capsulesAlreadyVisible) {
+      const hasLiveProcessDisclosure = await evaluateValue(
         activeCdp,
-        `document.querySelector('.live-process-status[open]') !== null`,
-        TIMEOUT.page,
-        'E_S19_LIVE_PROCESS_EXPAND'
+        `document.querySelector('.live-process-status-summary') !== null`
       )
-    }
-    const compactToolGroup = await evaluateValue(
-      activeCdp,
-      `document.querySelector('.tool-group-summary-row') !== null && document.querySelectorAll('button.subagent-run-chip').length < 3`
-    )
-    if (compactToolGroup) {
-      await clickSelector(activeCdp, '.tool-group-summary-row')
-      await waitForExpression(
+      if (hasLiveProcessDisclosure) {
+        await clickSelector(activeCdp, '.live-process-status-summary')
+        await waitForExpression(
+          activeCdp,
+          `document.querySelector('.live-process-status[open]') !== null`,
+          TIMEOUT.page,
+          'E_S19_LIVE_PROCESS_EXPAND'
+        )
+      }
+      const compactToolGroup = await evaluateValue(
         activeCdp,
-        `document.querySelector('.tool-group-details[open]') !== null`,
-        TIMEOUT.page,
-        'E_S19_TOOL_GROUP_EXPAND'
+        `document.querySelector('.tool-group-summary-row') !== null && document.querySelectorAll('button.subagent-run-chip').length < 3`
       )
+      if (compactToolGroup) {
+        await clickSelector(activeCdp, '.tool-group-summary-row')
+        await waitForExpression(
+          activeCdp,
+          `document.querySelector('.tool-group-details[open]') !== null`,
+          TIMEOUT.page,
+          'E_S19_TOOL_GROUP_EXPAND'
+        )
+      }
     }
     await waitForExpression(
       activeCdp,
