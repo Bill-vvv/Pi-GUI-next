@@ -697,17 +697,17 @@ async function exerciseUi() {
     p2Summary.commands.completionSideEffectFree = true
 
     await clearComposer(activeCdp)
-    await insertText(activeCdp, '/thi')
+    await insertText(activeCdp, '/thinking')
     await waitForExpression(
       activeCdp,
       `(() => {
-        const options = Array.from(document.querySelectorAll('.slash-command-option'))
-        return options.length === 1 && options[0]?.querySelector('.slash-command-source')?.textContent?.trim() === 'Pi RPC'
+        const option = document.getElementById('slash-command-pi-rpc.set-thinking-level')
+        return option?.getAttribute('aria-selected') === 'true' &&
+          option.querySelector('.slash-command-source')?.textContent?.trim() === 'Pi RPC'
       })()`,
       TIMEOUT.page,
       'E_P2_COMMAND_SOURCE'
     )
-    await dispatchKey(activeCdp, 'ArrowDown', 'ArrowDown')
     await dispatchKey(activeCdp, 'Tab', 'Tab')
     await waitForExpression(
       activeCdp,
