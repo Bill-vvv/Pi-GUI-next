@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi-gui.local/schemas/omp-watchdog-667111575ebba136dadfd6989379e7f67e0d40d9.json",
+  "title": "Pi GUI Multi Advisor WATCHDOG configuration",
+  "description": "WATCHDOG.yml configuration based on OMP commit 667111575ebba136dadfd6989379e7f67e0d40d9 and implemented by S18-3. Runtime slugs are derived from advisor names by lowercasing, replacing each run of non-alphanumeric characters with one hyphen, and trimming leading/trailing hyphens; an empty result falls back to advisor. Unknown legal fields are preserved by the GUI for forward compatibility.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "instructions": {
+      "type": "string"
+    },
+    "advisors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thinking": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "off",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              null
+            ]
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}

@@ -20,7 +20,6 @@
   --panel-float-gap: 12px;
   --chat-header-top-offset: var(--panel-float-gap);
   --composer-bottom-offset: var(--panel-float-gap);
-  --edge-fade-height: clamp(4.75rem, 12vh, 5rem);
   --composer-reserved-space: clamp(7.25rem, 18vh, 9rem);
   --composer-meta-control-height: 32px;
 
@@ -70,21 +69,16 @@
   --color-surface-sidebar: rgb(36 36 35 / calc(100% - var(--surface-transparency)));
   --color-surface-input: #2b2b2a;
   --color-surface-input-focus: #323231;
-  --color-surface-dark: rgb(20 20 19 / 46%);
   --color-surface-inset: rgb(20 20 19 / 42%);
   --color-surface-popover: rgb(43 43 41 / 96%);
   --color-surface-tooltip: var(--color-surface-popover);
   --color-surface-subtle: rgb(255 255 255 / 3%);
   --color-surface-subtle-strong: rgb(255 255 255 / 7%);
-  --color-code-bg: rgb(13 13 13 / 56%);
-  --color-composer-panel-bg: var(--color-surface-panel);
   --color-composer-input-bg: var(--color-surface-input);
   --color-text-primary: #f1eee8;
   --color-text-body: #f0ece4;
   --color-text-soft: #c9c3b8;
   --color-text-muted: #969087;
-  --color-text-faint: var(--color-text-muted);
-  --color-text-subtle: color-mix(in srgb, var(--color-text-muted) 72%, transparent);
   --color-border: #55514b;
   --color-border-hover: #66605a;
   --color-border-input: #44413d;
@@ -103,7 +97,6 @@
   --color-error-bg-subtle: rgb(61 32 28 / 44%);
   --color-error-text: #f1b6a7;
   --color-warning-text: #e6c981;
-  --color-warning-border: color-mix(in srgb, var(--color-warning-text) 28%, transparent);
   --color-status-success: #80c99a;
   --color-status-warning: #d9a94d;
   --color-status-error: #df7a65;
@@ -112,8 +105,6 @@
   --color-context-ring-track: var(--color-border-panel);
   --color-scrollbar-track: transparent;
   --color-scrollbar-thumb: rgb(181 170 156 / 28%);
-  --color-scrollbar-thumb-hover: rgb(181 170 156 / 40%);
-  --color-thinking-glint: rgb(241 238 232 / 38%);
   --background-noise-opacity: 0.075;
   --background-noise-size: 128px;
 
@@ -132,7 +123,7 @@
   --radius-composer: 22px;
   --radius-pill: 999px;
   --shadow-sidebar: none;
-  --shadow-composer: 0 18px 48px rgb(0 0 0 / 24%), 0 4px 14px rgb(0 0 0 / 16%), inset 0 1px 0 rgb(255 255 255 / 4%);
+  --shadow-composer: none;
   --shadow-popover: none;
   --shadow-tooltip: var(--shadow-popover);
 
@@ -152,12 +143,10 @@
   --color-surface-sidebar: rgb(242 242 239 / calc(100% - var(--surface-transparency)));
   --color-surface-input: #f0f0ed;
   --color-surface-input-focus: #fafaf8;
-  --color-surface-dark: rgb(214 214 209 / 62%);
   --color-surface-inset: rgb(220 220 215 / 72%);
   --color-surface-popover: rgb(250 250 248 / 98%);
   --color-surface-subtle: rgb(31 31 29 / 3%);
   --color-surface-subtle-strong: rgb(31 31 29 / 7%);
-  --color-code-bg: rgb(225 225 220 / 78%);
   --color-text-primary: #20201e;
   --color-text-body: #282825;
   --color-text-soft: #53534e;
@@ -183,10 +172,7 @@
   --color-status-error: #ae4834;
   --color-accent-primary: #8c6417;
   --color-scrollbar-thumb: rgb(55 55 50 / 24%);
-  --color-scrollbar-thumb-hover: rgb(55 55 50 / 36%);
-  --color-thinking-glint: rgb(32 32 30 / 28%);
   --background-noise-opacity: 0.03;
-  --shadow-composer: 0 18px 48px rgb(52 52 48 / 13%), 0 4px 14px rgb(52 52 48 / 8%), inset 0 1px 0 rgb(255 255 255 / 72%);
 }
 
 :root[data-accent='blue'] {

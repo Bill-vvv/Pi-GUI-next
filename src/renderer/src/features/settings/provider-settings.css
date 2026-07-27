@@ -88,6 +88,13 @@
 
 .provider-card {
   gap: 15px;
+  border-radius: var(--radius-panel);
+  padding: 18px;
+  background: var(--color-surface-subtle);
+}
+
+.provider-card + .provider-card {
+  border-top: 0;
 }
 
 .provider-card-title,
@@ -117,8 +124,9 @@
   grid-template-columns: minmax(0, 2fr) repeat(2, minmax(100px, 1fr));
   gap: 12px;
   margin: 0;
-  border-block: 1px solid var(--color-border-divider);
-  padding-block: 13px;
+  border-radius: var(--radius-control);
+  padding: 13px;
+  background: var(--color-surface-subtle-strong);
 }
 
 .provider-card-details div {
@@ -144,6 +152,7 @@
 .provider-model-list {
   display: flex;
   flex-direction: column;
+  gap: 2px;
 }
 
 .provider-model-row {
@@ -155,7 +164,7 @@
 }
 
 .provider-model-item + .provider-model-item {
-  border-top: 1px solid var(--color-border-divider);
+  border-top: 0;
 }
 
 .provider-model-disclosure {
@@ -240,6 +249,9 @@
 
 .provider-form {
   gap: 18px;
+  border-radius: var(--radius-panel);
+  padding: 18px;
+  background: var(--color-surface-subtle);
 }
 
 .provider-form-grid {

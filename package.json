@@ -15,7 +15,7 @@
     "dev": "electron-vite dev",
     "preview:browser": "vite --config vite.browser-preview.config.ts",
     "typecheck": "tsc --noEmit",
-    "test:core": "node --test src/main/extension/*.test.ts src/main/pi-rpc/*.test.ts src/main/runtime/*.test.ts src/main/kernel/*.test.ts src/main/project/*.test.ts src/main/provider/*.test.ts src/main/security/*.test.ts src/renderer/src/features/chat/streaming-markdown.test.ts src/renderer/src/features/composer/*.test.ts src/shared/*.test.ts",
+    "test:core": "node --test src/main/advisor/*.test.ts src/main/export/*.test.ts src/main/extension/*.test.ts src/main/pi-rpc/*.test.ts src/main/runtime/*.test.ts src/main/kernel/*.test.ts src/main/project/*.test.ts src/main/provider/*.test.ts src/main/security/*.test.ts src/main/subagent/*.test.ts src/renderer/src/*.test.ts src/renderer/src/composition/*.test.ts src/renderer/src/features/chat/*.test.ts src/renderer/src/features/composer/*.test.ts src/shared/*.test.ts",
     "bench:markdown": "node scripts/benchmark-streaming-markdown.ts",
     "smoke:pi": "pnpm build && PI_GUI_PROBE_ONLY=1 electron .",
     "build": "electron-vite build",
@@ -56,7 +56,8 @@
     "react-markdown": "10.1.0",
     "remark-gfm": "4.0.1",
     "remark-parse": "11.0.0",
-    "unified": "11.0.5"
+    "unified": "11.0.5",
+    "yaml": "2.8.1"
   },
   "devDependencies": {
     "@types/node": "26.1.1",

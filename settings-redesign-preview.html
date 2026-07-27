@@ -1,0 +1,1635 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark" data-accent="amber">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pi GUI 设置 · 交互预览</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, "Segoe UI Variable", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif;
+    --font-display: var(--font-ui);
+    --font-code: "SF Mono", "Geist Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --text-root: 15px;
+    --text-page-title: 28px;
+    --text-section-title: 1rem;
+    --text-body: 1rem;
+    --text-body-sm: .95rem;
+    --text-control: .9rem;
+    --text-list-item: .84rem;
+    --text-meta: .82rem;
+    --text-caption: .74rem;
+    --line-title: 1.2;
+    --line-heading: 1.28;
+    --line-body-sm: 1.55;
+    --line-control: 1.35;
+    --line-meta: 1.45;
+    --weight-normal: 400;
+    --weight-medium: 500;
+    --weight-semibold: 620;
+    --tracking-tight: -.01em;
+    --tracking-label: .08em;
+    --color-bg-app: #1b1b1a;
+    --color-surface: #343433;
+    --color-surface-hover: #44413d;
+    --color-surface-panel: rgb(45 45 43 / calc(100% - var(--surface-transparency)));
+    --color-surface-sidebar: rgb(36 36 35 / calc(100% - var(--surface-transparency)));
+    --color-surface-input: #2b2b2a;
+    --color-surface-input-focus: #323231;
+    --color-surface-popover: rgb(43 43 41 / 98%);
+    --color-surface-subtle: rgb(255 255 255 / 3%);
+    --color-surface-subtle-strong: rgb(255 255 255 / 7%);
+    --color-text-primary: #f1eee8;
+    --color-text-soft: #c9c3b8;
+    --color-text-muted: #969087;
+    --color-border: #55514b;
+    --color-border-hover: #66605a;
+    --color-border-input: #44413d;
+    --color-border-subtle: rgb(181 170 156 / 13%);
+    --color-border-panel: rgb(181 170 156 / 16%);
+    --color-border-focus: rgb(181 170 156 / 22%);
+    --color-border-divider: rgb(181 170 156 / 10%);
+    --color-hover-subtle: rgb(181 170 156 / 9%);
+    --color-status-success: #80c99a;
+    --color-status-warning: #d9a94d;
+    --color-status-error: #df7a65;
+    --color-accent-primary: #d9a94d;
+    --surface-transparency: 20%;
+    --shadow-popover: none;
+    --radius-sm: 6px;
+    --radius-control: 10px;
+    --radius-popover: 12px;
+    --radius-panel: 16px;
+    --radius-pill: 999px;
+    --motion-duration-fast: 120ms;
+    --motion-duration-control: 140ms;
+    --motion-easing-standard: ease;
+    --setting-row-min-height: 70px;
+    --setting-row-padding: 14px;
+    --resource-row-min-height: 69px;
+    --resource-row-padding: 13px;
+    font-size: var(--text-root);
+    font-family: var(--font-ui);
+  }
+
+  :root[data-theme='light'] {
+    color-scheme: light;
+    --color-bg-app: #f4f4f2;
+    --color-surface: #e8e8e5;
+    --color-surface-hover: #deded9;
+    --color-surface-panel: rgb(235 235 232 / calc(100% - var(--surface-transparency)));
+    --color-surface-sidebar: rgb(242 242 239 / calc(100% - var(--surface-transparency)));
+    --color-surface-input: #f0f0ed;
+    --color-surface-input-focus: #fafaf8;
+    --color-surface-popover: rgb(250 250 248 / 99%);
+    --color-surface-subtle: rgb(31 31 29 / 3%);
+    --color-surface-subtle-strong: rgb(31 31 29 / 7%);
+    --color-text-primary: #20201e;
+    --color-text-soft: #53534e;
+    --color-text-muted: #7c7c75;
+    --color-border: #c8c8c1;
+    --color-border-hover: #b6b6ae;
+    --color-border-input: #d2d2cc;
+    --color-border-subtle: rgb(55 55 50 / 12%);
+    --color-border-panel: rgb(55 55 50 / 16%);
+    --color-border-focus: rgb(55 55 50 / 25%);
+    --color-border-divider: rgb(55 55 50 / 10%);
+    --color-hover-subtle: rgb(55 55 50 / 8%);
+    --color-status-success: #2d7c49;
+    --color-status-warning: #8c6417;
+    --color-status-error: #ae4834;
+    --color-accent-primary: #8c6417;
+  }
+  :root[data-accent='blue'] { --color-accent-primary: #7aa7ff; }
+  :root[data-accent='green'] { --color-accent-primary: #74c991; }
+  :root[data-accent='purple'] { --color-accent-primary: #b09aee; }
+  :root[data-accent='rose'] { --color-accent-primary: #e38b9c; }
+  :root[data-theme='light'][data-accent='blue'] { --color-accent-primary: #285fbd; }
+  :root[data-theme='light'][data-accent='green'] { --color-accent-primary: #267344; }
+  :root[data-theme='light'][data-accent='purple'] { --color-accent-primary: #6745a5; }
+  :root[data-theme='light'][data-accent='rose'] { --color-accent-primary: #a43e58; }
+  :root[data-text-size='small'] { --text-root: 14px; }
+  :root[data-text-size='large'] { --text-root: 16px; }
+
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { width: 100%; height: 100%; }
+  body { margin: 0; overflow: hidden; color: var(--color-text-primary); background: var(--color-bg-app); }
+  button, input { font: inherit; }
+  button { cursor: pointer; }
+  button:disabled { cursor: default; opacity: .55; }
+  button:focus-visible, input:focus-visible {
+    outline: 2px solid var(--color-border-focus);
+    outline-offset: 2px;
+  }
+
+  .shell {
+    height: 100vh;
+    display: grid;
+    grid-template-columns: 246px minmax(0, 1fr);
+    transition: grid-template-columns var(--motion-duration-control) var(--motion-easing-standard);
+  }
+  .shell.rail-collapsed { grid-template-columns: 48px minmax(0, 1fr); }
+  .shell.rail-collapsed .settings-rail { padding-inline: 7px; }
+  .shell.rail-collapsed .rail-back,
+  .shell.rail-collapsed .settings-search,
+  .shell.rail-collapsed .rail-scroll,
+  .shell.rail-collapsed .rail-footer { display: none; }
+  .shell.rail-collapsed .rail-topline { justify-content: center; padding: 0; }
+
+  /* Navigation: deliberately quieter than the first preview. */
+  .settings-rail {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--color-border-subtle);
+    padding: 18px 14px 14px;
+    background: var(--color-surface-sidebar);
+  }
+  .rail-topline {
+    min-height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 0 6px;
+  }
+  .rail-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    border: 0;
+    border-radius: var(--radius-control);
+    padding: 6px 7px;
+    color: var(--color-text-soft);
+    background: transparent;
+    font-size: var(--text-control);
+  }
+  .rail-back:hover { color: var(--color-text-primary); background: var(--color-hover-subtle); }
+  .rail-toggle {
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: var(--radius-control);
+    padding: 0;
+    color: var(--color-text-muted);
+    background: transparent;
+    font-size: 18px;
+  }
+  .rail-toggle:hover { color: var(--color-text-primary); background: var(--color-hover-subtle); }
+
+  .settings-search {
+    position: relative;
+    margin: 13px 4px 17px;
+  }
+  .settings-search svg {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    width: 15px;
+    height: 15px;
+    transform: translateY(-50%);
+    color: var(--color-text-muted);
+    pointer-events: none;
+  }
+  .settings-search input {
+    width: 100%;
+    height: 36px;
+    border: 1px solid var(--color-border-input);
+    border-radius: var(--radius-control);
+    padding: 7px 31px 7px 32px;
+    outline: none;
+    color: var(--color-text-primary);
+    background: var(--color-surface-input);
+    font-size: var(--text-control);
+  }
+  .settings-search input:hover { border-color: var(--color-border-hover); }
+  .settings-search input:focus { border-color: var(--color-border-focus); background: var(--color-surface-input-focus); }
+  .settings-search input::placeholder { color: var(--color-text-muted); }
+  .search-clear {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    display: none;
+    width: 24px;
+    height: 24px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    transform: translateY(-50%);
+    color: var(--color-text-muted);
+    background: transparent;
+    font-size: 12px;
+  }
+  .settings-search.has-value .search-clear { display: grid; place-items: center; }
+  .search-clear:hover { color: var(--color-text-primary); background: var(--color-hover-subtle); }
+
+  .rail-scroll { min-height: 0; flex: 1; overflow-y: auto; scrollbar-width: thin; }
+  .rail-group { display: grid; gap: 2px; margin-bottom: 16px; }
+  .rail-group-label {
+    padding: 0 10px 5px;
+    color: var(--color-text-muted);
+    font-size: var(--text-caption);
+    font-weight: var(--weight-medium);
+    letter-spacing: .035em;
+  }
+  .rail-item {
+    position: relative;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    border: 0;
+    border-radius: var(--radius-control);
+    padding: 8px 10px;
+    color: var(--color-text-soft);
+    background: transparent;
+    font-size: var(--text-control);
+    line-height: var(--line-control);
+    text-align: left;
+  }
+  .rail-item::before {
+    content: '';
+    width: 4px;
+    height: 4px;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    background: transparent;
+  }
+  .rail-item > span:first-of-type { flex: 1; }
+  .rail-item:hover { color: var(--color-text-primary); background: var(--color-hover-subtle); }
+  .rail-item[aria-current='page'] { color: var(--color-text-primary); background: var(--color-surface-subtle-strong); }
+  .rail-item[aria-current='page']::before { background: var(--color-accent-primary); }
+  .rail-item small { color: var(--color-text-muted); font-size: var(--text-caption); }
+  .rail-footer {
+    margin: 8px 5px 0;
+    border-top: 1px solid var(--color-border-divider);
+    padding: 11px 7px 0;
+    color: var(--color-text-muted);
+    font-size: var(--text-caption);
+    line-height: 1.5;
+  }
+
+  /* Content: editorial split sections, not stacked cards. */
+  .settings-main { min-width: 0; min-height: 0; overflow-y: auto; }
+  .settings-page {
+    width: min(970px, 100%);
+    min-height: 100%;
+    display: none;
+    margin: 0 auto;
+    padding: 44px 44px 72px;
+  }
+  .settings-page.active { display: block; }
+  .page-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 28px;
+    margin-bottom: 41px;
+  }
+  .page-heading-copy { min-width: 0; }
+  .page-heading h1 {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: var(--text-page-title);
+    font-weight: var(--weight-semibold);
+    line-height: var(--line-title);
+    letter-spacing: var(--tracking-tight);
+  }
+  .page-heading p {
+    max-width: 620px;
+    margin: 8px 0 0;
+    color: var(--color-text-muted);
+    font-size: var(--text-body-sm);
+    line-height: var(--line-body-sm);
+  }
+  .page-heading-action { flex: 0 0 auto; margin-top: 18px; }
+
+  .context-strip {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: -15px 0 39px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-control);
+    padding: 10px 12px;
+    background: var(--color-surface-panel);
+    color: var(--color-text-soft);
+    font-size: var(--text-meta);
+    line-height: var(--line-meta);
+  }
+  .status-dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--color-status-success); }
+  .context-strip code { font-family: var(--font-code); color: var(--color-text-primary); }
+  .context-strip .push { margin-left: auto; color: var(--color-text-muted); }
+
+  .settings-section {
+    display: grid;
+    grid-template-columns: 172px minmax(0, 1fr);
+    gap: 34px;
+    padding: 0 0 34px;
+  }
+  .settings-section + .settings-section { padding-top: 10px; }
+  .section-intro h2 {
+    margin: 1px 0 0;
+    color: var(--color-text-primary);
+    font-size: var(--text-section-title);
+    font-weight: var(--weight-medium);
+    line-height: var(--line-heading);
+  }
+  .section-intro p {
+    margin: 6px 0 0;
+    color: var(--color-text-muted);
+    font-size: var(--text-meta);
+    line-height: var(--line-meta);
+  }
+  .section-body { min-width: 0; border-top: 1px solid var(--color-border-divider); }
+  .setting-row {
+    min-width: 0;
+    min-height: var(--setting-row-min-height);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 28px;
+    border-bottom: 1px solid var(--color-border-divider);
+    padding: var(--setting-row-padding) 0;
+    transition: background var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+  .setting-row:hover, .setting-row:focus-within {
+    margin-inline: -12px;
+    border-radius: var(--radius-control);
+    padding-inline: 12px;
+    background: var(--color-surface-subtle);
+  }
+  .setting-row[data-highlight='true'] {
+    margin-inline: -12px;
+    border-radius: var(--radius-control);
+    padding-inline: 12px;
+    background: var(--color-surface-subtle-strong);
+  }
+  .setting-row:focus-visible,
+  .resource-item:focus-visible,
+  .manager-shell:focus-visible {
+    outline: 2px solid var(--color-border-focus);
+    outline-offset: 2px;
+  }
+  .setting-copy { min-width: 0; }
+  .setting-title-line { display: flex; align-items: center; gap: 8px; }
+  .setting-copy h3 {
+    margin: 0;
+    color: var(--color-text-primary);
+    font-size: var(--text-body);
+    font-weight: var(--weight-medium);
+    line-height: var(--line-heading);
+  }
+  .setting-copy p {
+    margin: 4px 0 0;
+    color: var(--color-text-muted);
+    font-size: var(--text-body-sm);
+    line-height: var(--line-body-sm);
+  }
+  .setting-control {
+    width: min(290px, 44%);
+    min-width: 132px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 7px;
+  }
+  .setting-control.fit { width: auto; min-width: 0; }
+
+  .badge {
+    border-radius: var(--radius-pill);
+    padding: 2px 7px;
+    font-size: var(--text-caption);
+    font-weight: var(--weight-medium);
+    line-height: 1.45;
+    white-space: nowrap;
+  }
+  .badge.success { color: var(--color-status-success); background: color-mix(in srgb, var(--color-status-success) 12%, transparent); }
+  .badge.warning { color: var(--color-status-warning); background: color-mix(in srgb, var(--color-status-warning) 12%, transparent); }
+  .badge.error { color: var(--color-status-error); background: color-mix(in srgb, var(--color-status-error) 12%, transparent); }
+  .badge.neutral { color: var(--color-text-soft); background: var(--color-surface-subtle-strong); }
+
+  .button {
+    min-height: 34px;
+    border: 1px solid var(--color-border-input);
+    border-radius: var(--radius-control);
+    padding: 7px 11px;
+    color: var(--color-text-primary);
+    background: var(--color-surface-input);
+    font-size: var(--text-control);
+    line-height: var(--line-control);
+  }
+  .button:hover:not(:disabled) { border-color: var(--color-border-hover); background: var(--color-surface-input-focus); }
+  .button.ghost { border-color: transparent; color: var(--color-text-soft); background: transparent; }
+  .button.ghost:hover:not(:disabled) { color: var(--color-text-primary); background: var(--color-hover-subtle); }
+  .button.danger { border-color: transparent; color: var(--color-status-error); background: transparent; }
+  .button.danger:hover:not(:disabled) { border-color: color-mix(in srgb, var(--color-status-error) 36%, transparent); background: var(--color-hover-subtle); }
+
+  .switch {
+    position: relative;
+    width: 38px;
+    height: 22px;
+    flex: 0 0 auto;
+    border: 1px solid var(--color-border-input);
+    border-radius: var(--radius-pill);
+    padding: 0;
+    background: var(--color-surface-input);
+    transition: background var(--motion-duration-control) var(--motion-easing-standard), border-color var(--motion-duration-control) var(--motion-easing-standard);
+  }
+  .switch::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--color-text-muted);
+    transition: transform var(--motion-duration-control) var(--motion-easing-standard), background var(--motion-duration-control) var(--motion-easing-standard);
+  }
+  .switch[aria-checked='true'] { border-color: var(--color-accent-primary); background: var(--color-accent-primary); }
+  .switch[aria-checked='true']::after { transform: translateX(16px); background: var(--color-bg-app); }
+
+  .segmented {
+    display: inline-flex;
+    gap: 2px;
+    border: 1px solid var(--color-border-input);
+    border-radius: var(--radius-control);
+    padding: 2px;
+    background: var(--color-surface-input);
+  }
+  .segmented button {
+    min-height: 30px;
+    border: 0;
+    border-radius: 8px;
+    padding: 5px 11px;
+    color: var(--color-text-soft);
+    background: transparent;
+    font-size: var(--text-control);
+  }
+  .segmented button:hover { color: var(--color-text-primary); }
+  .segmented button[aria-pressed='true'] { color: var(--color-text-primary); background: var(--color-surface); }
+
+  .accent-options { display: flex; align-items: center; gap: 7px; }
+  .accent-options button {
+    position: relative;
+    width: 25px;
+    height: 25px;
+    border: 0;
+    border-radius: 50%;
+    padding: 0;
+    background: var(--swatch);
+  }
+  .accent-options button::after {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border: 1px solid transparent;
+    border-radius: 50%;
+  }
+  .accent-options button[aria-pressed='true']::after { border-color: var(--color-text-soft); }
+  .accent-options .amber { --swatch: #d9a94d; }
+  .accent-options .blue { --swatch: #7aa7ff; }
+  .accent-options .green { --swatch: #74c991; }
+  .accent-options .purple { --swatch: #b09aee; }
+  .accent-options .rose { --swatch: #e38b9c; }
+  .recording-shortcut { color: var(--color-accent-primary); }
+
+  .density-preview {
+    margin: 10px 0 0;
+    border-left: 2px solid var(--color-accent-primary);
+    border-radius: 0 var(--radius-control) var(--radius-control) 0;
+    padding: 7px 12px;
+    background: var(--color-surface-panel);
+    color: var(--color-text-muted);
+    font-size: var(--text-meta);
+    line-height: var(--line-meta);
+  }
+  .density-preview strong { color: var(--color-text-soft); font-weight: var(--weight-medium); }
+  .density-preview p { margin: 5px 0 0; }
+  .density-preview .density-tool {
+    margin-top: 7px;
+    font-family: var(--font-code);
+    color: var(--color-text-soft);
+  }
+  .density-preview .density-detail { margin: 4px 0 0; color: var(--color-text-muted); }
+  .density-preview[data-mode='compact'] p,
+  .density-preview[data-mode='compact'] .density-tool,
+  .density-preview[data-mode='compact'] .density-detail,
+  .density-preview:not([data-mode='detailed']) .density-detail { display: none; }
+
+  .range-control { width: 220px; display: grid; gap: 5px; }
+  .range-control input { width: 100%; margin: 0; accent-color: var(--color-accent-primary); }
+  .range-labels { display: flex; justify-content: space-between; color: var(--color-text-muted); font-size: var(--text-caption); }
+
+  /* Custom listbox: mirrors the project Select and inherits its popover shadow token (currently none). */
+  .listbox { position: relative; width: 100%; }
+  .listbox-trigger {
+    width: 100%;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    border: 1px solid var(--color-border-input);
+    border-radius: var(--radius-control);
+    padding: 9px 10px 9px 12px;
+    color: var(--color-text-primary);
+    background: var(--color-surface-input);
+    font-size: var(--text-control);
+    line-height: var(--line-control);
+    text-align: left;
+  }
+  .listbox-trigger:hover { border-color: var(--color-border-hover); background: var(--color-surface-input-focus); }
+  .listbox-trigger[aria-expanded='true'] { border-color: var(--color-border-focus); background: var(--color-surface-input-focus); }
+  .listbox-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .listbox-chevron {
+    width: 15px;
+    height: 15px;
+    flex: 0 0 auto;
+    color: var(--color-text-muted);
+    transition: transform var(--motion-duration-control) var(--motion-easing-standard);
+  }
+  .listbox-trigger[aria-expanded='true'] .listbox-chevron { transform: rotate(180deg); }
+  .listbox-popover {
+    position: fixed;
+    z-index: 50;
+    display: none;
+    overflow: auto;
+    border: 1px solid var(--color-border-panel);
+    border-radius: var(--radius-popover);
+    padding: 6px;
+    background: var(--color-surface-popover);
+    box-shadow: var(--shadow-popover);
+  }
+  .listbox-popover.open { display: block; }
+  .listbox-group + .listbox-group { margin-top: 5px; border-top: 1px solid var(--color-border-divider); padding-top: 5px; }
+  .listbox-group-label {
+    padding: 5px 9px 6px;
+    color: var(--color-text-muted);
+    font-size: var(--text-caption);
+    font-weight: 700;
+    letter-spacing: var(--tracking-label);
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+  .listbox-option {
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    border: 0;
+    border-radius: var(--radius-control);
+    padding: 9px;
+    color: var(--color-text-soft);
+    background: transparent;
+    font-size: var(--text-list-item);
+    line-height: var(--line-control);
+    text-align: left;
+  }
+  .listbox-option:hover, .listbox-option[data-active='true'] { color: var(--color-text-primary); background: var(--color-hover-subtle); }
+  .listbox-option[aria-selected='true'] { color: var(--color-text-primary); font-weight: var(--weight-medium); }
+  .listbox-option:disabled { color: var(--color-text-muted); cursor: default; opacity: .62; }
+  .listbox-check { width: 15px; color: var(--color-text-soft); text-align: center; }
+
+  .model-picker .listbox-trigger {
+    min-height: 54px;
+    align-items: center;
+  }
+  .model-picker .listbox-value,
+  .model-option-copy {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+  .model-picker .listbox-value strong,
+  .model-option-copy strong {
+    overflow: hidden;
+    color: var(--color-text-primary);
+    font-size: var(--text-control);
+    font-weight: var(--weight-medium);
+    line-height: var(--line-control);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .model-picker .listbox-value small,
+  .model-option-copy small {
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-family: var(--font-code);
+    font-size: var(--text-caption);
+    font-weight: var(--weight-normal);
+    line-height: var(--line-meta);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .model-picker .listbox-option { align-items: start; }
+
+  .font-picker .listbox-popover { padding: 8px; }
+  .font-picker-search {
+    width: 100%;
+    height: 34px;
+    border: 1px solid var(--color-border-input);
+    border-radius: var(--radius-control);
+    padding: 0 10px;
+    color: var(--color-text-primary);
+    background: var(--color-surface-input);
+  }
+  .font-picker-preview {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    margin: 7px 0;
+    border-block: 1px solid var(--color-border-divider);
+    padding: 8px 7px;
+    color: var(--color-text-soft);
+    font-size: var(--text-body-sm);
+  }
+
+  .manager-shell {
+    min-height: 420px;
+    display: grid;
+    grid-template-columns: 210px minmax(0, 1fr);
+    overflow: hidden;
+    border: 1px solid var(--color-border-panel);
+    border-radius: var(--radius-panel);
+    background: var(--color-surface-panel);
+  }
+  .manager-browser {
+    min-width: 0;
+    border-right: 1px solid var(--color-border-divider);
+  }
+  .manager-browser-header {
+    border-bottom: 1px solid var(--color-border-divider);
+    padding: 11px;
+  }
+  .manager-browser-header input,
+  .manager-field input,
+  .manager-field textarea {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid var(--color-border-input);
+    border-radius: var(--radius-control);
+    padding: 8px 10px;
+    outline: none;
+    color: var(--color-text-primary);
+    background: var(--color-surface-input);
+    font: inherit;
+    font-size: var(--text-control);
+    line-height: var(--line-control);
+  }
+  .manager-browser-header input:focus,
+  .manager-field input:focus,
+  .manager-field textarea:focus {
+    border-color: var(--color-border-focus);
+    background: var(--color-surface-input-focus);
+  }
+  .manager-agent {
+    width: 100%;
+    display: grid;
+    gap: 3px;
+    border: 0;
+    border-bottom: 1px solid var(--color-border-divider);
+    padding: 11px 13px;
+    color: var(--color-text-soft);
+    background: transparent;
+    text-align: left;
+  }
+  .manager-agent:hover { color: var(--color-text-primary); background: var(--color-hover-subtle); }
+  .manager-agent[aria-pressed='true'] {
+    border-left: 2px solid var(--color-accent-primary);
+    padding-left: 11px;
+    color: var(--color-text-primary);
+    background: var(--color-surface-subtle-strong);
+  }
+  .manager-agent strong { font-size: var(--text-list-item); font-weight: var(--weight-medium); }
+  .manager-agent span { color: var(--color-text-muted); font-size: var(--text-caption); }
+  .manager-editor { min-width: 0; display: flex; flex-direction: column; }
+  .manager-editor-header {
+    min-height: 58px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    border-bottom: 1px solid var(--color-border-divider);
+    padding: 12px 15px;
+  }
+  .manager-editor-header h3 { margin: 0; font-size: var(--text-section-title); font-weight: var(--weight-medium); }
+  .manager-tabs { display: flex; gap: 3px; border-bottom: 1px solid var(--color-border-divider); padding: 6px 15px 0; }
+  .manager-tabs button {
+    border: 0;
+    border-bottom: 2px solid transparent;
+    padding: 7px 9px 8px;
+    color: var(--color-text-muted);
+    background: transparent;
+    font-size: var(--text-control);
+  }
+  .manager-tabs button[aria-selected='true'] { color: var(--color-text-primary); border-bottom-color: var(--color-accent-primary); }
+  .manager-panel[hidden] { display: none; }
+  .manager-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; padding: 15px; }
+  .manager-field { min-width: 0; display: grid; gap: 6px; }
+  .manager-field.full { grid-column: 1 / -1; }
+  .manager-field label { color: var(--color-text-soft); font-size: var(--text-meta); font-weight: var(--weight-medium); }
+  .manager-field textarea { resize: vertical; line-height: var(--line-body-sm); }
+  .manager-editor-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: auto;
+    border-top: 1px solid var(--color-border-divider);
+    padding: 12px 15px;
+  }
+
+  .resource-list { min-width: 0; border-top: 1px solid var(--color-border-divider); }
+  .resource-item {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 24px;
+    min-height: var(--resource-row-min-height);
+    border-bottom: 1px solid var(--color-border-divider);
+    padding: var(--resource-row-padding) 0;
+  }
+  .resource-item:hover, .resource-item:focus-within {
+    margin-inline: -12px;
+    border-radius: var(--radius-control);
+    padding-inline: 12px;
+    background: var(--color-surface-subtle);
+  }
+  .resource-copy { min-width: 0; }
+  .resource-copy h3 { margin: 0; color: var(--color-text-primary); font-size: var(--text-body); font-weight: var(--weight-medium); }
+  .resource-copy code { font-family: var(--font-code); color: var(--color-text-primary); font-size: var(--text-body-sm); }
+  .resource-copy p {
+    margin: 4px 0 0;
+    color: var(--color-text-muted);
+    font-size: var(--text-body-sm);
+    line-height: var(--line-body-sm);
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  .resource-actions { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
+
+  .catalog-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    border-top: 1px solid var(--color-border-divider);
+    border-bottom: 1px solid var(--color-border-divider);
+    padding: 12px 0;
+  }
+  .catalog-toolbar input {
+    min-width: 0;
+    height: 38px;
+    border: 1px solid var(--color-border-input);
+    border-radius: var(--radius-control);
+    padding: 8px 11px;
+    outline: none;
+    color: var(--color-text-primary);
+    background: var(--color-surface-input);
+    font-size: var(--text-control);
+  }
+  .catalog-toolbar input:focus { border-color: var(--color-border-focus); background: var(--color-surface-input-focus); }
+
+  .shortcut-key {
+    min-width: 25px;
+    display: inline-grid;
+    place-items: center;
+    border: 1px solid var(--color-border-input);
+    border-bottom-color: var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 3px 7px;
+    color: var(--color-text-soft);
+    background: var(--color-surface-input);
+    font-size: var(--text-meta);
+    line-height: 1.35;
+  }
+
+  .search-result-group { margin-bottom: 24px; }
+  .search-result-group h2 { margin: 0 0 5px; color: var(--color-text-muted); font-size: var(--text-caption); font-weight: var(--weight-medium); letter-spacing: .05em; text-transform: uppercase; }
+  .search-result {
+    width: 100%;
+    display: grid;
+    gap: 3px;
+    border: 0;
+    border-radius: var(--radius-control);
+    padding: 11px 12px;
+    color: var(--color-text-primary);
+    background: transparent;
+    text-align: left;
+  }
+  .search-result:hover { background: var(--color-surface-subtle-strong); }
+  .search-result strong { font-size: var(--text-body); font-weight: var(--weight-medium); }
+  .search-result span { color: var(--color-text-muted); font-size: var(--text-body-sm); line-height: var(--line-body-sm); }
+  .search-empty { padding: 80px 0; color: var(--color-text-muted); text-align: center; }
+
+  @media (max-width: 900px) {
+    .shell { grid-template-columns: 210px minmax(0, 1fr); }
+    .shell.rail-collapsed { grid-template-columns: 48px minmax(0, 1fr); }
+    .settings-page { padding: 34px 28px 60px; }
+    .settings-section { grid-template-columns: minmax(0, 1fr); gap: 9px; }
+    .section-intro p { max-width: 520px; }
+    .manager-shell { grid-template-columns: 1fr; }
+    .manager-browser { border-right: 0; border-bottom: 1px solid var(--color-border-divider); }
+    .manager-form { grid-template-columns: 1fr; }
+    .manager-field.full { grid-column: 1; }
+  }
+  @media (max-width: 800px) {
+    .setting-row { min-height: 0; align-items: stretch; flex-direction: column; gap: 11px; }
+    .setting-control, .setting-control.fit { width: 100%; justify-content: flex-start; }
+    .resource-item { grid-template-columns: 1fr; gap: 8px; }
+    .resource-actions { justify-content: flex-start; }
+  }
+  @media (max-width: 680px) {
+    .shell { grid-template-columns: 176px minmax(0, 1fr); }
+    .settings-rail { padding-inline: 9px; }
+    .settings-page { padding: 28px 20px 50px; }
+    .page-heading { flex-direction: column; gap: 14px; }
+    .page-heading-action { margin-top: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .switch, .switch::after, .listbox-chevron, .setting-row { transition: none; }
+  }
+</style>
+</head>
+<body>
+<div class="shell" id="settings-shell">
+  <aside class="settings-rail" id="settings-rail" aria-label="设置导航">
+    <div class="rail-topline">
+      <button class="rail-back" type="button"><span aria-hidden="true">←</span><span>工作台</span></button>
+      <button class="rail-toggle" id="rail-toggle" type="button" aria-label="收起设置导航" title="收起设置导航" aria-expanded="true" aria-controls="settings-rail">‹</button>
+    </div>
+
+    <div class="settings-search" id="settings-search-wrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="settings-search" type="search" placeholder="搜索设置" aria-label="搜索设置" aria-controls="search-results" autocomplete="off" spellcheck="false">
+      <button class="search-clear" type="button" aria-label="清除搜索">✕</button>
+    </div>
+
+    <div class="rail-scroll">
+      <nav aria-label="设置分类">
+        <div class="rail-group">
+          <div class="rail-group-label">应用</div>
+          <button class="rail-item" type="button" data-page="general" aria-current="page"><span>常规</span></button>
+          <button class="rail-item" type="button" data-page="appearance"><span>外观</span></button>
+          <button class="rail-item" type="button" data-page="shortcuts"><span>快捷键</span></button>
+        </div>
+        <div class="rail-group">
+          <div class="rail-group-label">模型与认证</div>
+          <button class="rail-item" type="button" data-page="models"><span>模型</span><small>Terra</small></button>
+          <button class="rail-item" type="button" data-page="credentials"><span>凭证</span><small>2</small></button>
+        </div>
+        <div class="rail-group">
+          <div class="rail-group-label">Agent 系统</div>
+          <button class="rail-item" type="button" data-page="subagent"><span>Subagent</span></button>
+          <button class="rail-item" type="button" data-page="advisor"><span>Advisor</span></button>
+          <button class="rail-item" type="button" data-page="skills"><span>技能</span><small>12</small></button>
+        </div>
+        <div class="rail-group">
+          <div class="rail-group-label">生态</div>
+          <button class="rail-item" type="button" data-page="extensions"><span>拓展</span></button>
+          <button class="rail-item" type="button" data-page="packages"><span>Package</span></button>
+        </div>
+      </nav>
+    </div>
+    <div class="rail-footer">安装、认证和设置都只显示真实状态；需要重载时明确提示。</div>
+  </aside>
+
+  <main class="settings-main" id="settings-main">
+    <section class="settings-page active" id="page-general" data-title="常规">
+      <header class="page-heading">
+        <div class="page-heading-copy">
+          <h1>常规</h1>
+          <p>管理应用启动方式、窗口行为与新对话命名。</p>
+        </div>
+      </header>
+
+      <section class="settings-section" data-section="启动">
+        <div class="section-intro"><h2>启动</h2><p>应用打开时的默认落点。</p></div>
+        <div class="section-body">
+          <div class="setting-row" data-keywords="启动后显示 恢复 上次 项目 对话">
+            <div class="setting-copy"><h3>启动后显示</h3><p>自动回到上次使用的项目和对话</p></div>
+            <div class="setting-control">
+              <div class="listbox" data-value="restore">
+                <button class="listbox-trigger" type="button" aria-haspopup="listbox"><span class="listbox-value">继续上次使用</span><svg class="listbox-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7 9 5 5 5-5"/></svg></button>
+                <div class="listbox-popover" role="listbox"><div class="listbox-group"><button class="listbox-option" type="button" role="option" data-value="restore" aria-selected="true"><span>继续上次使用</span><span class="listbox-check">✓</span></button><button class="listbox-option" type="button" role="option" data-value="none" aria-selected="false"><span>不自动打开项目</span><span class="listbox-check"></span></button></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-section" data-section="对话">
+        <div class="section-intro"><h2>对话</h2><p>新对话的命名方式。</p></div>
+        <div class="section-body">
+          <div class="setting-row" data-keywords="自动对话命名 标题 会话 低成本模型">
+            <div class="setting-copy"><h3>自动对话命名</h3><p>自动模式只从当前已授权 Provider 中选择低成本模型</p></div>
+            <div class="setting-control">
+              <div class="listbox" data-value="auto">
+                <button class="listbox-trigger" type="button" aria-haspopup="listbox"><span class="listbox-value">自动（推荐）</span><svg class="listbox-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7 9 5 5 5-5"/></svg></button>
+                <div class="listbox-popover" role="listbox"><div class="listbox-group"><button class="listbox-option" type="button" role="option" data-value="auto" aria-selected="true"><span>自动（推荐）</span><span class="listbox-check">✓</span></button><button class="listbox-option" type="button" role="option" data-value="off" aria-selected="false"><span>关闭</span><span class="listbox-check"></span></button></div><div class="listbox-group"><div class="listbox-group-label">指定已授权模型</div><button class="listbox-option" type="button" role="option" data-value="luna" aria-selected="false"><span>vvqq-cpa / GPT-5.6 Luna</span><span class="listbox-check"></span></button></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-section" data-section="窗口">
+        <div class="section-intro"><h2>窗口</h2><p>桌面窗口行为。</p></div>
+        <div class="section-body">
+          <div class="setting-row" data-keywords="双击边框最大化 窗口 F11">
+            <div class="setting-copy"><h3>双击边框最大化</h3><p>双击窗口四周边框时切换最大化；独占全屏使用 F11</p></div>
+            <div class="setting-control fit"><button class="switch" type="button" role="switch" aria-checked="true" aria-label="双击边框最大化"></button></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-section" data-section="实验性">
+        <div class="section-intro"><h2>实验性</h2><p>可能改变或移除的能力。</p></div>
+        <div class="section-body">
+          <div class="setting-row" data-keywords="拓展启动加速 实验性 并行导入">
+            <div class="setting-copy"><div class="setting-title-line"><h3>拓展启动加速</h3><span class="badge warning">实验性</span></div><p>优先原生导入已编译 JS，并行加载多个拓展；仅影响新建或显式重载 Session</p></div>
+            <div class="setting-control fit"><button class="switch" type="button" role="switch" aria-checked="false" aria-label="拓展启动加速"></button></div>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <section class="settings-page" id="page-appearance" data-title="外观">
+      <header class="page-heading"><div class="page-heading-copy"><h1>外观</h1><p>调整主题、强调色、字体和工作过程密度，保持深浅主题都清晰可辨。</p></div></header>
+
+      <section class="settings-section" data-section="主题">
+        <div class="section-intro"><h2>主题</h2><p>整体界面和面板层级。</p></div>
+        <div class="section-body">
+          <div class="setting-row" data-keywords="界面主题 跟随系统 深色 浅色">
+            <div class="setting-copy"><h3>界面主题</h3><p>跟随系统，或固定使用深色 / 浅色</p></div>
+            <div class="setting-control fit"><div class="segmented" id="theme-control" role="group" aria-label="界面主题" data-control="theme"><button type="button" data-value="system" aria-pressed="false">系统</button><button type="button" data-value="dark" aria-pressed="true">深色</button><button type="button" data-value="light" aria-pressed="false">浅色</button></div></div>
+          </div>
+          <div class="setting-row" data-keywords="强调色 链接 选中 状态 颜色">
+            <div class="setting-copy"><h3>强调色</h3><p>用于链接、当前选择和重点提示</p></div>
+            <div class="setting-control fit"><div class="accent-options" id="accent-control" role="group" aria-label="强调色"><button class="amber" type="button" data-value="amber" aria-pressed="true" aria-label="琥珀色"></button><button class="blue" type="button" data-value="blue" aria-pressed="false" aria-label="蓝色"></button><button class="green" type="button" data-value="green" aria-pressed="false" aria-label="绿色"></button><button class="purple" type="button" data-value="purple" aria-pressed="false" aria-label="紫色"></button><button class="rose" type="button" data-value="rose" aria-pressed="false" aria-label="玫红色"></button></div></div>
+          </div>
+          <div class="setting-row" data-keywords="面板透明度 侧栏 Composer 通透">
+            <div class="setting-copy"><h3>面板透明度</h3><p>只调整侧栏与面板表面，不降低文字清晰度</p></div>
+            <div class="setting-control"><div class="range-control"><input id="transparency-control" type="range" min="0" max="40" step="10" value="20" aria-label="面板透明度"><div class="range-labels"><span>不透明</span><span id="transparency-value">当前 20%</span><span>40%</span></div></div></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-section" data-section="Agent 对话">
+        <div class="section-intro"><h2>Agent 对话</h2><p>思考与工具过程的呈现。</p></div>
+        <div class="section-body">
+          <div class="setting-row" data-keywords="工作过程密度 紧凑 标准 详细 思考 工具">
+            <div class="setting-copy"><h3>工作过程密度</h3><p>紧凑只显示状态；标准展示过程正文；详细显示完整工具卡片</p></div>
+            <div class="setting-control fit"><div class="segmented" role="group" aria-label="工作过程密度" data-control="density"><button type="button" data-value="compact" aria-pressed="false">紧凑</button><button type="button" data-value="standard" aria-pressed="true">标准</button><button type="button" data-value="detailed" aria-pressed="false">详细</button></div></div>
+          </div>
+          <div class="density-preview" id="density-preview" data-mode="standard" aria-live="polite"><strong>思考完成 · 2 个工具</strong><p>先检查设置组件与 Kernel 状态，再应用最小范围修改。</p><div class="density-tool">read · SettingsPanel.tsx</div><div class="density-detail">读取 184 行 · 展开完整工具输入与输出</div></div>
+        </div>
+      </section>
+
+      <section class="settings-section" data-section="字体">
+        <div class="section-intro"><h2>字体</h2><p>阅读和代码展示。</p></div>
+        <div class="section-body">
+          <div class="setting-row" data-keywords="字号大小 小 默认 大">
+            <div class="setting-copy"><h3>字号大小</h3><p>同步调整界面与对话文字</p></div>
+            <div class="setting-control fit"><div class="segmented" role="group" aria-label="字号大小" data-control="text-size"><button type="button" data-value="small" aria-pressed="false">小</button><button type="button" data-value="standard" aria-pressed="true">默认</button><button type="button" data-value="large" aria-pressed="false">大</button></div></div>
+          </div>
+          <div class="setting-row" data-keywords="界面字体 系统字体 Inter">
+            <div class="setting-copy"><h3>界面字体</h3><p>用于界面和对话正文</p></div>
+            <div class="setting-control">
+              <div class="listbox font-picker" data-value="system" data-font-target="ui"><button class="listbox-trigger" type="button" aria-haspopup="listbox"><span class="listbox-value">系统字体</span><svg class="listbox-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7 9 5 5 5-5"/></svg></button><div class="listbox-popover"><input class="font-picker-search" type="search" placeholder="搜索字体" aria-label="搜索界面字体"><div class="font-picker-preview" aria-live="polite">Pi Workbench 字体预览　你好，Aa 123</div><div class="listbox-group" role="listbox" aria-label="界面字体"><button class="listbox-option" type="button" role="option" data-value="system" aria-selected="true"><span>系统字体</span><span class="listbox-check">✓</span></button><button class="listbox-option" type="button" role="option" data-value="inter" aria-selected="false"><span>Inter</span><span class="listbox-check"></span></button><button class="listbox-option" type="button" role="option" data-value="sf-pro" aria-selected="false"><span>SF Pro Text</span><span class="listbox-check"></span></button><button class="listbox-option" type="button" role="option" data-value="noto-sans" aria-selected="false"><span>Noto Sans CJK SC</span><span class="listbox-check"></span></button></div></div></div>
+            </div>
+          </div>
+          <div class="setting-row" data-keywords="代码字体 等宽 JetBrains Mono">
+            <div class="setting-copy"><h3>代码字体</h3><p>用于代码、命令和文件路径</p></div>
+            <div class="setting-control">
+              <div class="listbox font-picker" data-value="system-mono" data-font-target="code"><button class="listbox-trigger" type="button" aria-haspopup="listbox"><span class="listbox-value">系统等宽字体</span><svg class="listbox-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7 9 5 5 5-5"/></svg></button><div class="listbox-popover"><input class="font-picker-search" type="search" placeholder="搜索字体" aria-label="搜索代码字体"><div class="font-picker-preview" aria-live="polite"><code>const message = "你好，Pi"; // Aa 123</code></div><div class="listbox-group" role="listbox" aria-label="代码字体"><button class="listbox-option" type="button" role="option" data-value="system-mono" aria-selected="true"><span>系统等宽字体</span><span class="listbox-check">✓</span></button><button class="listbox-option" type="button" role="option" data-value="jetbrains" aria-selected="false"><span>JetBrains Mono</span><span class="listbox-check"></span></button><button class="listbox-option" type="button" role="option" data-value="geist-mono" aria-selected="false"><span>Geist Mono</span><span class="listbox-check"></span></button><button class="listbox-option" type="button" role="option" data-value="cascadia" aria-selected="false"><span>Cascadia Code</span><span class="listbox-check"></span></button></div></div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <section class="settings-page" id="page-shortcuts" data-title="快捷键">
+      <header class="page-heading"><div class="page-heading-copy"><h1>快捷键</h1><p>窗口内应用动作。点击当前组合后直接录入；Escape 取消，冲突和保留组合会被拒绝。</p></div><button class="button ghost page-heading-action" type="button">恢复默认</button></header>
+      <section class="settings-section" data-section="应用快捷键">
+        <div class="section-intro"><h2>应用快捷键</h2><p>不覆盖文本编辑和系统组合。</p></div>
+        <div class="section-body">
+          <div class="setting-row" data-keywords="新建对话 快捷键"><div class="setting-copy"><h3>新建对话</h3></div><div class="setting-control fit"><button class="button ghost" type="button"><span class="shortcut-key">Ctrl</span> <span class="shortcut-key">N</span></button><button class="button ghost" type="button" aria-label="清除新建对话快捷键">✕</button></div></div>
+          <div class="setting-row" data-keywords="聚焦 Composer 快捷键"><div class="setting-copy"><h3>聚焦 Composer</h3></div><div class="setting-control fit"><button class="button ghost" type="button"><span class="shortcut-key">Ctrl</span> <span class="shortcut-key">L</span></button><button class="button ghost" type="button" aria-label="清除聚焦 Composer 快捷键">✕</button></div></div>
+          <div class="setting-row" data-keywords="打开设置 快捷键"><div class="setting-copy"><h3>打开设置</h3></div><div class="setting-control fit"><button class="button ghost" type="button"><span class="shortcut-key">Ctrl</span> <span class="shortcut-key">,</span></button><button class="button ghost" type="button" aria-label="清除打开设置快捷键">✕</button></div></div>
+          <div class="setting-row" data-keywords="打开模型选择器 快捷键"><div class="setting-copy"><h3>打开模型选择器</h3><p>正在录入；按 Escape 取消</p></div><div class="setting-control fit"><button class="button ghost recording-shortcut" type="button">请按下一组快捷键…</button></div></div>
+          <div class="setting-row" data-keywords="归档当前对话 快捷键"><div class="setting-copy"><h3>归档当前对话</h3></div><div class="setting-control fit"><button class="button ghost" type="button">录入</button></div></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="settings-page" id="page-models" data-title="模型">
+      <header class="page-heading"><div class="page-heading-copy"><h1>模型</h1><p>直接选择当前对话要使用的模型；Provider 只是模型分组，不再要求先完成一次技术性的前置选择。</p></div></header>
+      <div class="context-strip" aria-live="polite"><span class="status-dot"></span><span>Runtime 已就绪</span><code id="current-model-summary">vvqq-cpa / gpt-5.6-terra</code><span class="push">当前 Session</span></div>
+      <section class="settings-section" data-section="当前对话">
+        <div class="section-intro"><h2>当前对话</h2><p>只影响当前 Session；其他对话保持各自的模型选择。</p></div>
+        <div class="section-body">
+          <div class="setting-row" data-keywords="Model 模型 Provider Terra Sol Luna GPT 5.6 当前对话">
+            <div class="setting-copy"><h3 id="current-model-label">当前模型</h3><p>按 Provider 分组；切换后用于当前对话的下一次请求</p></div>
+            <div class="setting-control">
+              <div class="listbox model-picker" data-value="vvqq-cpa/terra">
+                <button class="listbox-trigger" type="button" aria-haspopup="listbox" aria-labelledby="current-model-label current-model-value">
+                  <span class="listbox-value" id="current-model-value"><strong>GPT-5.6 Terra</strong><small>vvqq-cpa · gpt-5.6-terra</small></span>
+                  <svg class="listbox-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7 9 5 5 5-5"/></svg>
+                </button>
+                <div class="listbox-popover" role="listbox" aria-labelledby="current-model-label">
+                  <div class="listbox-group" role="group" aria-label="vvqq-cpa">
+                    <div class="listbox-group-label">vvqq-cpa</div>
+                    <button class="listbox-option" type="button" role="option" data-value="vvqq-cpa/terra" data-label="GPT-5.6 Terra" data-detail="vvqq-cpa · gpt-5.6-terra" aria-selected="true"><span class="model-option-copy"><strong>GPT-5.6 Terra</strong><small>gpt-5.6-terra</small></span><span class="listbox-check">✓</span></button>
+                    <button class="listbox-option" type="button" role="option" data-value="vvqq-cpa/sol" data-label="GPT-5.6 Sol" data-detail="vvqq-cpa · gpt-5.6-sol" aria-selected="false"><span class="model-option-copy"><strong>GPT-5.6 Sol</strong><small>gpt-5.6-sol</small></span><span class="listbox-check"></span></button>
+                    <button class="listbox-option" type="button" role="option" data-value="vvqq-cpa/luna" data-label="GPT-5.6 Luna" data-detail="vvqq-cpa · gpt-5.6-luna" aria-selected="false"><span class="model-option-copy"><strong>GPT-5.6 Luna</strong><small>gpt-5.6-luna</small></span><span class="listbox-check"></span></button>
+                  </div>
+                  <div class="listbox-group" role="group" aria-label="anthropic">
+                    <div class="listbox-group-label">anthropic</div>
+                    <button class="listbox-option" type="button" role="option" data-value="anthropic/sonnet" data-label="Claude Sonnet 4.5" data-detail="anthropic · claude-sonnet-4-5" aria-selected="false"><span class="model-option-copy"><strong>Claude Sonnet 4.5</strong><small>claude-sonnet-4-5</small></span><span class="listbox-check"></span></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <section class="settings-page" id="page-credentials" data-title="凭证">
+      <header class="page-heading"><div class="page-heading-copy"><h1>凭证</h1><p>Provider 登录状态与自定义 Provider 配置。已有密钥始终由 Pi 管理，界面不回读。</p></div></header>
+      <section class="settings-section" data-section="Provider 凭证">
+        <div class="section-intro"><h2>Provider 凭证</h2><p>OAuth、设备码与 API Key。</p></div>
+        <div class="resource-list">
+          <article class="resource-item" data-keywords="Anthropic OAuth 登录 凭证"><div class="resource-copy"><div class="setting-title-line"><h3>Anthropic</h3><span class="badge success">已登录</span></div><p>OAuth · Pi 已保存凭证</p></div><div class="resource-actions"><button class="button ghost" type="button">重新登录</button><button class="button ghost" type="button">退出登录</button></div></article>
+          <article class="resource-item" data-keywords="OpenAI API Key 登录 凭证"><div class="resource-copy"><div class="setting-title-line"><h3>OpenAI</h3><span class="badge neutral">未登录</span></div><p>支持 API Key</p></div><div class="resource-actions"><button class="button" type="button">输入 API Key</button></div></article>
+        </div>
+      </section>
+      <section class="settings-section" data-section="自定义 Provider">
+        <div class="section-intro"><h2>自定义 Provider</h2><p>Pi 官方 models.json 配置。</p></div>
+        <div class="resource-list"><article class="resource-item" data-keywords="自定义 Provider cpa-proxy models json"><div class="resource-copy"><h3>cpa-proxy</h3><p>openai-completions · 3 个模型 · https://proxy.example.com/v1</p></div><div class="resource-actions"><button class="button ghost" type="button">测试</button><button class="button ghost" type="button">编辑</button><button class="button danger" type="button">删除</button></div></article></div>
+      </section>
+    </section>
+
+    <section class="settings-page" id="page-subagent" data-title="Subagent">
+      <header class="page-heading"><div class="page-heading-copy"><h1>Subagent</h1><p>管理真实 Agent definition 和运行默认值。安装与 Extension 启停仍由「拓展」页唯一负责。</p></div><button class="button page-heading-action" type="button">新建 Agent</button></header>
+      <div class="context-strip"><span class="status-dot"></span><span>pi-subagents 已安装并开启</span><span class="push">新建或重载后应用定义变化</span></div>
+      <section class="settings-section" data-section="Agent 定义">
+        <div class="section-intro"><h2>Agent 定义</h2><p>浏览、编辑并启停用户级、项目级和内置定义。</p></div>
+        <div class="manager-shell" data-search-title="Agent 定义" data-search-description="名称、作用域、用途、System prompt 与高级运行边界" data-keywords="Subagent reviewer Agent 定义 编辑器 名称 作用域 用途 System prompt 基础设置 高级设置 工具 Skills">
+          <div class="manager-browser">
+            <div class="manager-browser-header"><input type="search" placeholder="搜索 Agent" aria-label="搜索 Agent"></div>
+            <button class="manager-agent" type="button" aria-pressed="true" aria-controls="manager-panel-basic manager-panel-advanced" data-name="reviewer" data-scope="用户级" data-purpose="Review and fix specialist" data-prompt="Review the requested surface, report evidence-backed findings, and apply only approved fixes."><strong>reviewer</strong><span>用户级覆盖 · 已启用</span></button>
+            <button class="manager-agent" type="button" aria-pressed="false" aria-controls="manager-panel-basic manager-panel-advanced" data-name="scout" data-scope="Package 内置" data-purpose="Fast codebase reconnaissance" data-prompt="Inspect the requested codebase surface and return concise, evidence-backed context."><strong>scout</strong><span>Package 内置 · 已启用</span></button>
+            <button class="manager-agent" type="button" aria-pressed="false" aria-controls="manager-panel-basic manager-panel-advanced" data-name="oracle" data-scope="Package 内置" data-purpose="Decision-consistency advisor" data-prompt="Review inherited decisions, identify drift, and recommend the safest next direction."><strong>oracle</strong><span>Package 内置 · 已启用</span></button>
+          </div>
+          <div class="manager-editor">
+            <div class="manager-editor-header"><h3 id="manager-agent-heading">reviewer</h3><span class="badge success">已启用</span></div>
+            <div class="manager-tabs" role="tablist" aria-label="Agent 设置"><button id="manager-tab-basic" type="button" role="tab" aria-selected="true" aria-controls="manager-panel-basic" tabindex="0">基础设置</button><button id="manager-tab-advanced" type="button" role="tab" aria-selected="false" aria-controls="manager-panel-advanced" tabindex="-1">高级设置</button></div>
+            <div class="manager-panel" id="manager-panel-basic" role="tabpanel" aria-labelledby="manager-tab-basic">
+              <div class="manager-form">
+                <div class="manager-field"><label for="agent-name">名称</label><input id="agent-name" value="reviewer"></div>
+                <div class="manager-field"><label for="agent-scope">作用域</label><input id="agent-scope" value="用户级" readonly></div>
+                <div class="manager-field full"><label for="agent-purpose">用途</label><input id="agent-purpose" value="Review and fix specialist"></div>
+                <div class="manager-field full"><label for="agent-prompt">System prompt</label><textarea id="agent-prompt" rows="5">Review the requested surface, report evidence-backed findings, and apply only approved fixes.</textarea></div>
+              </div>
+            </div>
+            <div class="manager-panel" id="manager-panel-advanced" role="tabpanel" aria-labelledby="manager-tab-advanced" hidden>
+              <div class="manager-form">
+                <div class="manager-field"><label for="agent-model">模型</label><input id="agent-model" value="继承默认模型"></div>
+                <div class="manager-field"><label for="agent-thinking">推理强度</label><input id="agent-thinking" value="继承"></div>
+                <div class="manager-field full"><label for="agent-tools">工具</label><input id="agent-tools" value="read, bash, edit"></div>
+                <div class="manager-field full"><label for="agent-skills">Skills</label><input id="agent-skills" value="按定义加载"></div>
+              </div>
+            </div>
+            <div class="manager-editor-actions"><button class="button danger" type="button">删除覆盖</button><div><button class="button ghost" type="button">恢复</button> <button class="button" type="button">保存</button></div></div>
+          </div>
+        </div>
+      </section>
+      <section class="settings-section" data-section="运行默认值">
+        <div class="section-intro"><h2>运行默认值</h2><p>只控制已接通的真实设置。</p></div>
+        <div class="section-body"><div class="setting-row" data-keywords="Subagent 最大嵌套层数 depth PI_SUBAGENT_MAX_DEPTH"><div class="setting-copy"><h3>最大嵌套层数</h3><p>限制 Subagent 继续派发下一层任务的深度</p></div><div class="setting-control"><div class="listbox" data-value="2"><button class="listbox-trigger" type="button" aria-haspopup="listbox"><span class="listbox-value">2</span><svg class="listbox-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7 9 5 5 5-5"/></svg></button><div class="listbox-popover" role="listbox"><div class="listbox-group"><button class="listbox-option" type="button" role="option" data-value="1" aria-selected="false"><span>1</span><span class="listbox-check"></span></button><button class="listbox-option" type="button" role="option" data-value="2" aria-selected="true"><span>2</span><span class="listbox-check">✓</span></button><button class="listbox-option" type="button" role="option" data-value="3" aria-selected="false"><span>3</span><span class="listbox-check"></span></button></div></div></div></div></div></div>
+      </section>
+    </section>
+
+    <section class="settings-page" id="page-advisor" data-title="Advisor">
+      <header class="page-heading"><div class="page-heading-copy"><h1>Advisor</h1><p>独立模型对 Agent 工作过程进行实时审查。系统状态、Extension 状态与单个 Advisor 启停保持可区分。</p></div></header>
+      <div class="context-strip"><span class="status-dot"></span><span>Advisor 系统可用</span><code>gpt-5.6-sol · medium</code><span class="push">当前 Session</span></div>
+      <section class="settings-section" data-section="系统">
+        <div class="section-intro"><h2>系统</h2><p>当前 Session 的审查总开关。</p></div>
+        <div class="section-body"><div class="setting-row" data-keywords="Advisor 系统 启用 审查"><div class="setting-copy"><h3>启用 Advisor 系统</h3><p>关闭后停止新的审查；Extension 仍保持已安装状态</p></div><div class="setting-control fit"><button class="switch" type="button" role="switch" aria-checked="true" aria-label="启用 Advisor 系统"></button></div></div></div>
+      </section>
+      <section class="settings-section" data-section="Roster">
+        <div class="section-intro"><h2>Roster</h2><p>已发现的独立审查者。</p></div>
+        <div class="resource-list"><article class="resource-item" data-keywords="Advisor reviewer blocker"><div class="resource-copy"><div class="setting-title-line"><h3>system-reviewer</h3><span class="badge success">已启用</span></div><p>只读 · blocker / warning / info · gpt-5.6-sol</p></div><div class="resource-actions"><button class="button ghost" type="button">编辑</button></div></article></div>
+      </section>
+    </section>
+
+    <section class="settings-page" id="page-skills" data-title="技能">
+      <header class="page-heading"><div class="page-heading-copy"><h1>技能</h1><p>Pi 当前发现的 Skill 命令。新建技能仍由 Pi 展示完整文件并等待确认后写入。</p></div><button class="button page-heading-action" type="button">新建技能</button></header>
+      <section class="settings-section" data-section="已发现">
+        <div class="section-intro"><h2>已发现</h2><p>12 个技能，来自用户、项目和 Package。</p></div>
+        <div>
+          <div class="catalog-toolbar"><input type="search" placeholder="搜索名称或用途" aria-label="搜索技能"><button class="button ghost" type="button">筛选</button></div>
+          <div class="resource-list">
+            <article class="resource-item" data-keywords="技能 code-review"><div class="resource-copy"><h3><code>/code-review</code></h3><p>对当前分支执行结构化代码审查</p></div><div class="resource-actions"><span class="badge neutral">用户级</span><span class="badge neutral">独立</span></div></article>
+            <article class="resource-item" data-keywords="技能 pi-gui-frontend taste 前端"><div class="resource-copy"><h3><code>/pi-gui-frontend</code></h3><p>应用 Pi GUI 前端规范进行实现与评审</p></div><div class="resource-actions"><span class="badge neutral">当前项目</span><span class="badge neutral">独立</span></div></article>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <section class="settings-page" id="page-extensions" data-title="拓展">
+      <header class="page-heading"><div class="page-heading-copy"><h1>拓展</h1><p>Extension 本体的安装、启停与本地路径。状态变化只在新建或显式重载 Session 后生效。</p></div></header>
+      <section class="settings-section" data-section="已适配">
+        <div class="section-intro"><h2>已适配</h2><p>具有专用 GUI 的固定拓展。</p></div>
+        <div class="resource-list">
+          <article class="resource-item" data-keywords="pi-subagents 拓展 Extension"><div class="resource-copy"><div class="setting-title-line"><h3>pi-subagents</h3><span class="badge success">已开启</span></div><p>为 Pi 提供可委派的 Subagent Extension</p></div><div class="resource-actions"><button class="button ghost" type="button">详情</button><button class="switch" type="button" role="switch" aria-checked="true" aria-label="启用 pi-subagents"></button></div></article>
+          <article class="resource-item" data-keywords="Magic Context 上下文 记忆"><div class="resource-copy"><div class="setting-title-line"><h3>Magic Context</h3><span class="badge neutral">未安装</span></div><p>后台上下文压缩与跨会话记忆；安装后仍需运行 setup</p></div><div class="resource-actions"><button class="button ghost" type="button">详情</button><button class="button" type="button">安装</button></div></article>
+          <article class="resource-item" data-keywords="Advisor Extension pi-gui-multi-advisor"><div class="resource-copy"><div class="setting-title-line"><h3>pi-gui-multi-advisor</h3><span class="badge success">已开启</span></div><p>Advisor 审查系统的 Extension 载体</p></div><div class="resource-actions"><button class="switch" type="button" role="switch" aria-checked="true" aria-label="启用 Advisor Extension"></button></div></article>
+        </div>
+      </section>
+      <section class="settings-section" data-section="pi.dev">
+        <div class="section-intro"><h2>pi.dev</h2><p>Extension 类型 Package 目录。</p></div>
+        <div><div class="catalog-toolbar"><input type="search" placeholder="搜索 Extension Package" aria-label="搜索 Extension Package"><button class="button" type="button">搜索</button></div><div class="resource-list"><article class="resource-item" data-keywords="pi.dev extension catalog"><div class="resource-copy"><h3>example-extension</h3><p>当前目录最多展示 3 项结果，可从外部目录查看完整列表</p></div><div class="resource-actions"><button class="button ghost" type="button">详情</button><button class="button" type="button">安装</button></div></article></div></div>
+      </section>
+      <section class="settings-section" data-section="本地路径">
+        <div class="section-intro"><h2>本地路径</h2><p>直接维护 Pi settings.json extensions。</p></div>
+        <div class="section-body"><div class="setting-row" data-keywords="安装本地拓展 文件 目录"><div class="setting-copy"><h3>安装本地拓展</h3><p>第三方拓展拥有完整系统权限；卸载仅移除配置，不删除源码</p></div><div class="setting-control fit"><button class="button" type="button">选择文件</button><button class="button" type="button">选择目录</button></div></div></div>
+      </section>
+    </section>
+
+    <section class="settings-page" id="page-packages" data-title="Package">
+      <header class="page-heading"><div class="page-heading-copy"><h1>Package</h1><p>Pi 用户级 Package 的安装、更新和卸载。Package 是分发单位，与 Extension 类型保持清楚区分。</p></div><button class="button ghost page-heading-action" type="button">全部更新</button></header>
+      <section class="settings-section" data-section="已安装">
+        <div class="section-intro"><h2>已安装</h2><p>用户级 Package 和资源过滤状态。</p></div>
+        <div class="resource-list"><article class="resource-item" data-keywords="Package npm pi-subagents 已安装"><div class="resource-copy"><h3><code>npm:pi-subagents</code></h3><p>部分资源已配置</p></div><div class="resource-actions"><button class="button ghost" type="button">更新</button><button class="button danger" type="button">卸载</button></div></article></div>
+      </section>
+      <section class="settings-section" data-section="pi.dev">
+        <div class="section-intro"><h2>pi.dev</h2><p>完整 Package 目录。</p></div>
+        <div><div class="catalog-toolbar"><input type="search" placeholder="搜索 Package 名称、说明或作者" aria-label="搜索 Package"><button class="button" type="button">搜索</button></div><div class="resource-list"><article class="resource-item"><div class="resource-copy"><h3>example-package</h3><p>来自当前 pi.dev 目录的 Package 结果</p></div><div class="resource-actions"><button class="button ghost" type="button">详情</button><button class="button" type="button">安装</button></div></article></div></div>
+      </section>
+    </section>
+
+    <section class="settings-page" id="page-search" data-title="搜索结果">
+      <header class="page-heading"><div class="page-heading-copy"><h1>搜索设置</h1><p id="search-summary" role="status" aria-live="polite">输入关键词查找设置。</p></div></header>
+      <div id="search-results" role="region" aria-label="设置搜索结果"></div>
+    </section>
+  </main>
+</div>
+
+<script>
+  const main = document.getElementById('settings-main');
+  const pages = [...document.querySelectorAll('.settings-page')];
+  const navItems = [...document.querySelectorAll('.rail-item')];
+  const searchInput = document.getElementById('settings-search');
+  const searchWrap = document.getElementById('settings-search-wrap');
+  const searchResults = document.getElementById('search-results');
+  const searchSummary = document.getElementById('search-summary');
+  const settingsShell = document.getElementById('settings-shell');
+  const railToggle = document.getElementById('rail-toggle');
+  const systemTheme = window.matchMedia('(prefers-color-scheme: light)');
+  let activePage = 'page-general';
+  let searchReturnPage = 'page-general';
+  let searchReturnScroll = 0;
+  let highlightTimer = null;
+
+  railToggle.addEventListener('click', () => {
+    const collapsed = settingsShell.classList.toggle('rail-collapsed');
+    railToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    const label = collapsed ? '展开设置导航' : '收起设置导航';
+    railToggle.setAttribute('aria-label', label);
+    railToggle.title = label;
+    railToggle.textContent = collapsed ? '›' : '‹';
+  });
+
+  function closeAllListboxes(except = null, restoreFocus = false) {
+    document.querySelectorAll('.listbox').forEach(root => {
+      if (root === except) return;
+      const trigger = root.querySelector('.listbox-trigger');
+      const popover = root.querySelector('.listbox-popover');
+      if (!popover.classList.contains('open')) return;
+      trigger.setAttribute('aria-expanded', 'false');
+      popover.classList.remove('open');
+      popover.querySelectorAll('.listbox-option').forEach(option => option.dataset.active = 'false');
+      if (restoreFocus) trigger.focus();
+    });
+  }
+
+  function showPage(pageId, preserveNav = false, scrollTop = 0) {
+    closeAllListboxes();
+    activePage = pageId;
+    pages.forEach(page => page.classList.toggle('active', page.id === pageId));
+    if (!preserveNav) {
+      navItems.forEach(item => {
+        const selected = `page-${item.dataset.page}` === pageId;
+        if (selected) item.setAttribute('aria-current', 'page');
+        else item.removeAttribute('aria-current');
+      });
+    }
+    main.scrollTop = scrollTop;
+  }
+
+  navItems.forEach(item => item.addEventListener('click', () => {
+    searchInput.value = '';
+    searchWrap.classList.remove('has-value');
+    showPage(`page-${item.dataset.page}`);
+  }));
+
+  document.querySelectorAll('.switch').forEach(control => {
+    control.dataset.initialChecked = control.getAttribute('aria-checked');
+    const resourceBadge = control.closest('.resource-item')?.querySelector('.badge');
+    if (resourceBadge) {
+      resourceBadge.dataset.initialText = resourceBadge.textContent;
+      resourceBadge.dataset.initialClass = resourceBadge.className;
+    }
+    control.addEventListener('click', () => {
+      const nextChecked = control.getAttribute('aria-checked') !== 'true';
+      control.setAttribute('aria-checked', nextChecked ? 'true' : 'false');
+      if (resourceBadge) {
+        const pending = String(nextChecked) !== control.dataset.initialChecked;
+        resourceBadge.className = pending ? 'badge warning' : resourceBadge.dataset.initialClass;
+        resourceBadge.textContent = pending ? '待重载' : resourceBadge.dataset.initialText;
+      }
+      if (control.getAttribute('aria-label') === '启用 Advisor 系统') {
+        const status = document.querySelector('#page-advisor .context-strip span:nth-child(2)');
+        status.textContent = nextChecked ? 'Advisor 系统可用' : 'Advisor 系统已关闭';
+      }
+    });
+  });
+
+  function selectedSegmentValue(group) {
+    return group.querySelector('[aria-pressed="true"]')?.dataset.value ?? 'standard';
+  }
+  function applyTheme(value) {
+    document.documentElement.dataset.theme = value === 'system' ? (systemTheme.matches ? 'light' : 'dark') : value;
+  }
+  document.querySelectorAll('.segmented').forEach(group => {
+    group.querySelectorAll('button').forEach(button => button.addEventListener('click', () => {
+      group.querySelectorAll('button').forEach(peer => peer.setAttribute('aria-pressed', peer === button ? 'true' : 'false'));
+      if (group.dataset.control === 'theme') applyTheme(button.dataset.value);
+      if (group.dataset.control === 'text-size') document.documentElement.dataset.textSize = button.dataset.value;
+      if (group.dataset.control === 'density') document.getElementById('density-preview').dataset.mode = button.dataset.value;
+    }));
+  });
+  systemTheme.addEventListener('change', () => {
+    const themeControl = document.getElementById('theme-control');
+    if (selectedSegmentValue(themeControl) === 'system') applyTheme('system');
+  });
+
+  const transparencyControl = document.getElementById('transparency-control');
+  const transparencyValue = document.getElementById('transparency-value');
+  transparencyControl.addEventListener('input', () => {
+    document.documentElement.style.setProperty('--surface-transparency', `${transparencyControl.value}%`);
+    transparencyValue.textContent = `当前 ${transparencyControl.value}%`;
+  });
+
+  document.querySelectorAll('#accent-control button').forEach(button => button.addEventListener('click', () => {
+    button.parentElement.querySelectorAll('button').forEach(peer => peer.setAttribute('aria-pressed', peer === button ? 'true' : 'false'));
+    document.documentElement.dataset.accent = button.dataset.value;
+  }));
+
+  const managerHeading = document.getElementById('manager-agent-heading');
+  const managerName = document.getElementById('agent-name');
+  const managerScope = document.getElementById('agent-scope');
+  const managerPurpose = document.getElementById('agent-purpose');
+  const managerPrompt = document.getElementById('agent-prompt');
+  const managerAgents = [...document.querySelectorAll('.manager-agent')];
+  managerAgents.forEach(button => button.addEventListener('click', () => {
+    button.parentElement.querySelectorAll('.manager-agent').forEach(peer => peer.setAttribute('aria-pressed', peer === button ? 'true' : 'false'));
+    managerHeading.textContent = button.dataset.name;
+    managerName.value = button.dataset.name;
+    managerScope.value = button.dataset.scope;
+    managerPurpose.value = button.dataset.purpose;
+    managerPrompt.value = button.dataset.prompt;
+  }));
+  document.querySelector('.manager-browser input[type="search"]').addEventListener('input', event => {
+    const query = event.currentTarget.value.trim().toLocaleLowerCase();
+    managerAgents.forEach(button => {
+      button.hidden = !button.textContent.toLocaleLowerCase().includes(query);
+    });
+  });
+  document.querySelectorAll('.manager-tabs').forEach(tabs => {
+    const tabButtons = [...tabs.querySelectorAll('[role="tab"]')];
+    function selectTab(button, moveFocus = false) {
+      tabButtons.forEach(peer => {
+        const selected = peer === button;
+        peer.setAttribute('aria-selected', selected ? 'true' : 'false');
+        peer.tabIndex = selected ? 0 : -1;
+        document.getElementById(peer.getAttribute('aria-controls')).hidden = !selected;
+      });
+      if (moveFocus) button.focus();
+    }
+    tabButtons.forEach((button, index) => {
+      button.addEventListener('click', () => selectTab(button));
+      button.addEventListener('keydown', event => {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'Home' && event.key !== 'End') return;
+        event.preventDefault();
+        let nextIndex = index;
+        if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabButtons.length) % tabButtons.length;
+        if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabButtons.length;
+        if (event.key === 'Home') nextIndex = 0;
+        if (event.key === 'End') nextIndex = tabButtons.length - 1;
+        selectTab(tabButtons[nextIndex], true);
+      });
+    });
+  });
+
+  // Project-aligned custom listbox semantics: outside click, viewport flip, arrows,
+  // Home/End, Enter/Space, Escape, Tab, focus restoration, and no overlay.
+  document.querySelectorAll('.listbox').forEach((root, index) => {
+    const trigger = root.querySelector('.listbox-trigger');
+    const popover = root.querySelector('.listbox-popover');
+    const options = [...popover.querySelectorAll('.listbox-option')];
+    const fontSearch = root.querySelector('.font-picker-search');
+    const fontPreview = root.querySelector('.font-picker-preview');
+    const enabled = () => options.filter(option => !option.disabled && !option.hidden);
+    const popoverId = `preview-listbox-${index}`;
+    popover.id = popoverId;
+    trigger.id ||= `${popoverId}-trigger`;
+    trigger.setAttribute('aria-expanded', 'false');
+    const semanticListbox = root.classList.contains('font-picker') ? popover.querySelector('[role="listbox"]') : popover;
+    semanticListbox.id ||= `${popoverId}-options`;
+    trigger.setAttribute('aria-controls', semanticListbox.id);
+    if (!semanticListbox.hasAttribute('aria-label') && !semanticListbox.hasAttribute('aria-labelledby')) semanticListbox.setAttribute('aria-labelledby', trigger.id);
+    if (fontSearch) fontSearch.setAttribute('aria-controls', semanticListbox.id);
+    options.forEach((option, optionIndex) => { option.id ||= `${popoverId}-option-${optionIndex}`; });
+    root.querySelectorAll('.listbox-chevron, .listbox-check').forEach(node => node.setAttribute('aria-hidden', 'true'));
+    root.querySelectorAll('.listbox-group').forEach(group => {
+      const label = group.querySelector('.listbox-group-label');
+      if (label) {
+        group.setAttribute('role', 'group');
+        group.setAttribute('aria-label', label.textContent.trim());
+      }
+    });
+
+    function selectedOption() { return options.find(option => option.getAttribute('aria-selected') === 'true') ?? null; }
+    function activeOption() { return options.find(option => option.dataset.active === 'true') ?? null; }
+    function previewFont(option) {
+      if (!fontPreview || !option) return;
+      const label = option.querySelector('span')?.textContent ?? '';
+      const fallback = root.dataset.fontTarget === 'code' ? 'var(--font-code)' : 'var(--font-ui)';
+      fontPreview.style.fontFamily = option.dataset.value.startsWith('system') ? fallback : `"${label}", ${fallback}`;
+    }
+    function setActive(option, focus = true) {
+      options.forEach(peer => peer.dataset.active = peer === option ? 'true' : 'false');
+      if (fontSearch) {
+        if (option) fontSearch.setAttribute('aria-activedescendant', option.id);
+        else fontSearch.removeAttribute('aria-activedescendant');
+      }
+      previewFont(option);
+      if (focus && option) option.focus();
+    }
+    function position() {
+      const rect = trigger.getBoundingClientRect();
+      const margin = 10;
+      const gap = 6;
+      const minimumWidth = root.classList.contains('font-picker') ? 390 : root.classList.contains('model-picker') ? 380 : 220;
+      const width = Math.min(Math.max(rect.width, minimumWidth), window.innerWidth - margin * 2);
+      const roomBelow = window.innerHeight - rect.bottom - margin - gap;
+      const roomAbove = rect.top - margin - gap;
+      const openBelow = roomBelow >= Math.min(280, popover.scrollHeight) || roomBelow >= roomAbove;
+      const availableHeight = Math.max(0, openBelow ? roomBelow : roomAbove);
+      popover.style.width = `${width}px`;
+      popover.style.maxHeight = `${availableHeight}px`;
+      popover.style.left = `${Math.max(margin, Math.min(rect.left, window.innerWidth - width - margin))}px`;
+      const renderedHeight = Math.min(popover.scrollHeight, availableHeight);
+      popover.style.top = `${openBelow ? rect.bottom + gap : Math.max(margin, rect.top - renderedHeight - gap)}px`;
+    }
+    function open(preferLast = false) {
+      closeAllListboxes(root);
+      trigger.setAttribute('aria-expanded', 'true');
+      if (fontSearch) {
+        fontSearch.value = '';
+        options.forEach(option => { option.hidden = false; });
+      }
+      popover.classList.add('open');
+      position();
+      const choices = enabled();
+      const selected = selectedOption();
+      const initial = selected && !selected.disabled ? selected : (preferLast ? choices.at(-1) : choices[0]);
+      setActive(initial, !fontSearch);
+      if (fontSearch) fontSearch.focus();
+    }
+    function close(restoreFocus = false) {
+      trigger.setAttribute('aria-expanded', 'false');
+      popover.classList.remove('open');
+      options.forEach(option => option.dataset.active = 'false');
+      if (restoreFocus) trigger.focus();
+    }
+    function choose(option) {
+      if (!option || option.disabled) return;
+      root.dataset.value = option.dataset.value;
+      options.forEach(peer => {
+        const selected = peer === option;
+        peer.setAttribute('aria-selected', selected ? 'true' : 'false');
+        peer.querySelector('.listbox-check').textContent = selected ? '✓' : '';
+      });
+      const value = trigger.querySelector('.listbox-value');
+      if (root.classList.contains('model-picker')) {
+        value.querySelector('strong').textContent = option.dataset.label;
+        value.querySelector('small').textContent = option.dataset.detail;
+        const [provider, modelId] = option.dataset.detail.split(' · ');
+        document.getElementById('current-model-summary').textContent = `${provider} / ${modelId}`;
+        document.querySelector('[data-page="models"] small').textContent = option.dataset.label.startsWith('GPT-5.6 ') ? option.dataset.label.split(' ').at(-1) : 'Sonnet';
+      } else {
+        value.textContent = option.querySelector('span').textContent;
+      }
+      if (root.dataset.fontTarget === 'ui') {
+        const label = option.querySelector('span').textContent;
+        const family = option.dataset.value === 'system' ? '-apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, "Segoe UI", sans-serif' : `"${label}", ui-sans-serif, system-ui, sans-serif`;
+        document.documentElement.style.setProperty('--font-ui', family);
+      }
+      if (root.dataset.fontTarget === 'code') {
+        const label = option.querySelector('span').textContent;
+        const family = option.dataset.value === 'system-mono' ? '"SF Mono", "JetBrains Mono", Consolas, monospace' : `"${label}", ui-monospace, monospace`;
+        document.documentElement.style.setProperty('--font-code', family);
+      }
+      close(true);
+    }
+    function move(delta) {
+      const choices = enabled();
+      if (!choices.length) return;
+      const current = activeOption();
+      const currentIndex = choices.indexOf(current);
+      const next = currentIndex < 0 ? (delta > 0 ? 0 : choices.length - 1) : (currentIndex + delta + choices.length) % choices.length;
+      setActive(choices[next], document.activeElement !== fontSearch);
+    }
+
+    if (fontSearch) {
+      fontSearch.addEventListener('input', () => {
+        const query = fontSearch.value.trim().toLocaleLowerCase();
+        options.forEach((option, optionIndex) => {
+          const label = option.querySelector('span')?.textContent?.toLocaleLowerCase() ?? '';
+          option.hidden = optionIndex !== 0 && !label.includes(query);
+        });
+        const choices = enabled();
+        const matchingFont = query.length > 0 ? choices.find(option => options.indexOf(option) !== 0) : selectedOption();
+        setActive(matchingFont ?? choices[0] ?? null, false);
+      });
+    }
+
+    trigger.addEventListener('click', () => popover.classList.contains('open') ? close() : open());
+    trigger.addEventListener('keydown', event => {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        if (!popover.classList.contains('open')) open(event.key === 'ArrowUp');
+        else move(event.key === 'ArrowDown' ? 1 : -1);
+      }
+    });
+    options.forEach(option => {
+      option.tabIndex = -1;
+      option.addEventListener('pointermove', () => { if (!option.disabled) setActive(option, false); });
+      option.addEventListener('click', () => choose(option));
+    });
+    root.addEventListener('keydown', event => {
+      if (!popover.classList.contains('open')) return;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); move(event.key === 'ArrowDown' ? 1 : -1); }
+      else if ((event.key === 'Home' || event.key === 'End') && event.target !== fontSearch) { event.preventDefault(); setActive(event.key === 'Home' ? enabled()[0] : enabled().at(-1)); }
+      else if ((event.key === 'Enter' || (event.key === ' ' && event.target !== fontSearch)) && activeOption()) { event.preventDefault(); choose(activeOption()); }
+      else if (event.key === 'Escape') { event.preventDefault(); close(true); }
+      else if (event.key === 'Tab') close();
+    });
+    const repositionIfOpen = () => { if (popover.classList.contains('open')) position(); };
+    window.addEventListener('resize', repositionIfOpen);
+    window.addEventListener('scroll', repositionIfOpen, { capture: true, passive: true });
+    if ('ResizeObserver' in window) new ResizeObserver(repositionIfOpen).observe(trigger);
+  });
+
+  document.addEventListener('pointerdown', event => {
+    if (!(event.target instanceof Node)) return;
+    const inside = [...document.querySelectorAll('.listbox')].some(root => root.contains(event.target));
+    if (!inside) closeAllListboxes();
+  }, true);
+
+  const searchIndex = [];
+  pages.forEach(page => {
+    if (page.id === 'page-search') return;
+    const pageTitle = page.dataset.title;
+    page.querySelectorAll('.setting-row, .resource-item, .manager-shell').forEach(node => {
+      const title = node.dataset.searchTitle ?? node.querySelector('h3')?.textContent?.trim() ?? '';
+      const description = node.dataset.searchDescription ?? node.querySelector('p')?.textContent?.trim() ?? '';
+      const section = node.closest('.settings-section')?.dataset.section ?? '';
+      const keywords = node.dataset.keywords ?? '';
+      searchIndex.push({ pageId: page.id, pageTitle, section, title, description, keywords, node });
+    });
+  });
+
+  function jumpTo(entry) {
+    searchInput.value = '';
+    searchWrap.classList.remove('has-value');
+    showPage(entry.pageId);
+    entry.node.tabIndex = -1;
+    entry.node.dataset.highlight = 'true';
+    entry.node.scrollIntoView({ block: 'center' });
+    entry.node.focus({ preventScroll: true });
+    clearTimeout(highlightTimer);
+    highlightTimer = setTimeout(() => {
+      delete entry.node.dataset.highlight;
+      entry.node.removeAttribute('tabindex');
+    }, 1800);
+  }
+
+  function restoreFromSearch() {
+    searchInput.value = '';
+    searchWrap.classList.remove('has-value');
+    showPage(searchReturnPage, false, searchReturnScroll);
+    searchInput.focus();
+  }
+
+  function runSearch(rawQuery) {
+    const query = rawQuery.trim();
+    const terms = query.toLocaleLowerCase().split(/\s+/u).filter(Boolean);
+    if (!terms.length) { restoreFromSearch(); return; }
+    if (activePage !== 'page-search') {
+      searchReturnPage = activePage;
+      searchReturnScroll = main.scrollTop;
+    }
+    const matches = searchIndex.filter(entry => {
+      const haystack = [entry.pageTitle, entry.section, entry.title, entry.description, entry.keywords].join(' ').toLocaleLowerCase();
+      return terms.every(term => haystack.includes(term));
+    });
+    const grouped = new Map();
+    matches.forEach(match => {
+      if (!grouped.has(match.pageTitle)) grouped.set(match.pageTitle, []);
+      grouped.get(match.pageTitle).push(match);
+    });
+    searchResults.innerHTML = '';
+    if (!matches.length) {
+      searchResults.innerHTML = '<div class="search-empty">没有匹配的设置。尝试“模型”“重载”“字体”或“快捷键”。</div>';
+    } else {
+      grouped.forEach((entries, groupName) => {
+        const group = document.createElement('section');
+        group.className = 'search-result-group';
+        const heading = document.createElement('h2');
+        heading.textContent = groupName;
+        group.appendChild(heading);
+        entries.forEach(entry => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'search-result';
+          const title = document.createElement('strong');
+          title.textContent = entry.title;
+          const description = document.createElement('span');
+          description.textContent = `${entry.section} · ${entry.description}`;
+          button.append(title, description);
+          button.addEventListener('click', () => jumpTo(entry));
+          group.appendChild(button);
+        });
+        searchResults.appendChild(group);
+      });
+    }
+    searchSummary.textContent = `“${query}” · ${matches.length} 个匹配设置`;
+    showPage('page-search', true);
+    navItems.forEach(item => item.removeAttribute('aria-current'));
+  }
+
+  searchInput.addEventListener('input', () => {
+    searchWrap.classList.toggle('has-value', searchInput.value.length > 0);
+    runSearch(searchInput.value);
+  });
+  searchInput.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && searchInput.value.length > 0) {
+      event.preventDefault();
+      searchInput.value = '';
+      searchWrap.classList.remove('has-value');
+      restoreFromSearch();
+      return;
+    }
+    if (event.key === 'ArrowDown') {
+      const firstResult = searchResults.querySelector('.search-result');
+      if (firstResult) {
+        event.preventDefault();
+        firstResult.focus();
+      }
+    }
+  });
+  searchResults.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      restoreFromSearch();
+      return;
+    }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    const results = [...searchResults.querySelectorAll('.search-result')];
+    const currentIndex = results.indexOf(document.activeElement);
+    if (currentIndex < 0 || results.length === 0) return;
+    event.preventDefault();
+    const nextIndex = (currentIndex + (event.key === 'ArrowDown' ? 1 : -1) + results.length) % results.length;
+    results[nextIndex].focus();
+  });
+  document.querySelector('.search-clear').addEventListener('click', () => {
+    restoreFromSearch();
+  });
+</script>
+</body>
+</html>

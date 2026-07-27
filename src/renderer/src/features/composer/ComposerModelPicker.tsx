@@ -4,16 +4,11 @@ import { createPortal } from 'react-dom'
 import type { KernelState, ThinkingLevel } from '../../../../shared/kernel-contract'
 import { Icon } from '../../components/Icon'
 import { useViewportPopoverPosition } from '../../components/useViewportPopoverPosition'
-
-const THINKING_LEVELS: ThinkingLevel[] = [
-  'off',
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max'
-]
+import {
+  localizedThinkingLevelLabel,
+  technicalThinkingLevelLabel,
+  THINKING_LEVELS
+} from '../../thinking-level'
 
 type ComposerModelPickerProps = {
   model: KernelState['session']['model']
@@ -40,8 +35,10 @@ export function ComposerModelPicker({
 }: ComposerModelPickerProps): React.JSX.Element {
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
+  const [activeModelKey, setActiveModelKey] = useState<string | null>(null)
   const modelPickerRef = useRef<HTMLDetailsElement>(null)
   const modelMenuTriggerRef = useRef<HTMLButtonElement>(null)
+  const modelItemRefs = useRef(new Map<string, HTMLButtonElement>())
   const handledOpenRequestIdRef = useRef<number | null>(null)
   const { popoverRef: modelPickerPopoverRef, position: modelPickerPosition } =
     useViewportPopoverPosition(modelPickerOpen, modelPickerRef, 420, {
@@ -59,6 +56,10 @@ export function ComposerModelPicker({
   const availableThinkingLevels = model?.reasoning === true
     ? THINKING_LEVELS.filter((level) => isThinkingLevelAvailable(level, thinkingLevelMap))
     : []
+  const enabledModelKeys = busy || runtimeStatus !== 'ready'
+    ? []
+    : availableModels.map((availableModel) => modelKey(availableModel.provider, availableModel.id))
+  const selectedModelKey = model === null ? null : modelKey(model.provider, model.id)
 
   useEffect(() => {
     if (openRequestId === null) {
@@ -120,16 +121,12 @@ export function ComposerModelPicker({
   }, [modelMenuOpen, modelPickerOpen])
 
   useEffect(() => {
-    if (!modelMenuOpen || !modelMenuPlaced) return
+    if (!modelMenuOpen || !modelMenuPlaced || activeModelKey === null) return
     const focusFrame = requestAnimationFrame(() => {
-      const popover = modelMenuPopoverRef.current
-      const preferredTarget =
-        popover?.querySelector<HTMLElement>('.model-picker-item.selected:not(:disabled)') ??
-        popover?.querySelector<HTMLElement>('.model-picker-item:not(:disabled)')
-      preferredTarget?.focus()
+      modelItemRefs.current.get(activeModelKey)?.focus()
     })
     return () => cancelAnimationFrame(focusFrame)
-  }, [modelMenuOpen, modelMenuPlaced])
+  }, [activeModelKey, modelMenuOpen, modelMenuPlaced])
 
   useEffect(() => {
     if (runtimeStatus === 'ready' || runtimeStatus === 'running') return
@@ -141,6 +138,48 @@ export function ComposerModelPicker({
     setModelPickerOpen(false)
     setModelMenuOpen(false)
   }, [contextKey])
+
+  function openModelMenu(preference: 'selected-or-first' | 'last' = 'selected-or-first'): void {
+    const nextKey = preference === 'last'
+      ? enabledModelKeys.at(-1) ?? null
+      : selectedModelKey !== null && enabledModelKeys.includes(selectedModelKey)
+        ? selectedModelKey
+        : enabledModelKeys[0] ?? null
+    setActiveModelKey(nextKey)
+    setModelMenuOpen(true)
+  }
+
+  function focusModelAt(key: string): void {
+    setActiveModelKey(key)
+    requestAnimationFrame(() => modelItemRefs.current.get(key)?.focus())
+  }
+
+  function moveModelFocus(direction: 1 | -1): void {
+    if (enabledModelKeys.length === 0) return
+    const currentIndex = activeModelKey === null ? -1 : enabledModelKeys.indexOf(activeModelKey)
+    const nextIndex = currentIndex < 0
+      ? direction > 0 ? 0 : enabledModelKeys.length - 1
+      : (currentIndex + direction + enabledModelKeys.length) % enabledModelKeys.length
+    const nextKey = enabledModelKeys[nextIndex]
+    if (nextKey !== undefined) focusModelAt(nextKey)
+  }
+
+  function closeModelPickerAndContinueTab(backward: boolean): void {
+    const picker = modelPickerRef.current
+    const summary = picker?.querySelector<HTMLElement>('summary') ?? null
+    const target = summary === null
+      ? null
+      : findAdjacentTabTarget(
+          summary,
+          [picker, modelPickerPopoverRef.current, modelMenuPopoverRef.current],
+          backward
+        )
+    setModelMenuOpen(false)
+    setModelPickerOpen(false)
+    requestAnimationFrame(() => {
+      if (target !== null && target.isConnected) target.focus()
+    })
+  }
 
   function closeModelPickerAndRestoreFocus(): void {
     setModelPickerOpen(false)
@@ -177,7 +216,7 @@ export function ComposerModelPicker({
         </span>
         {thinkingLevel !== null ? (
           <span className="model-summary-meta">
-            {thinkingOptionLabel(thinkingLevel)}
+            {technicalThinkingLevelLabel(thinkingLevel)}
           </span>
         ) : null}
       </summary>
@@ -223,10 +262,10 @@ export function ComposerModelPicker({
                           >
                             <span className="model-picker-option-copy">
                               <span className="model-picker-option-label">
-                                {thinkingOptionLabel(level)}
+                                {technicalThinkingLevelLabel(level)}
                               </span>
                               <span className="model-picker-option-meta">
-                                {thinkingLabel(level)}
+                                {localizedThinkingLevelLabel(level)}
                               </span>
                             </span>
                             {selected
@@ -249,7 +288,21 @@ export function ComposerModelPicker({
                     aria-expanded={modelMenuOpen}
                     aria-controls={modelMenuOpen ? 'model-picker-model-popover' : undefined}
                     data-placement={modelMenuPosition?.placement ?? 'right'}
-                    onClick={() => setModelMenuOpen((open) => !open)}
+                    onClick={() => {
+                      if (modelMenuOpen) setModelMenuOpen(false)
+                      else openModelMenu()
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Tab' && modelMenuOpen) {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        closeModelPickerAndContinueTab(event.shiftKey)
+                        return
+                      }
+                      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+                      event.preventDefault()
+                      openModelMenu(event.key === 'ArrowUp' ? 'last' : 'selected-or-first')
+                    }}
                   >
                     <span className="model-picker-option-copy">
                       <span className="model-picker-heading-label">模型</span>
@@ -269,21 +322,61 @@ export function ComposerModelPicker({
                           aria-label="选择模型"
                           data-placement={modelMenuPosition.placement}
                           style={modelMenuPosition.style}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Tab') {
+                              event.preventDefault()
+                              event.stopPropagation()
+                              closeModelPickerAndContinueTab(event.shiftKey)
+                              return
+                            }
+                            if (event.key === 'ArrowDown') {
+                              event.preventDefault()
+                              moveModelFocus(1)
+                              return
+                            }
+                            if (event.key === 'ArrowUp') {
+                              event.preventDefault()
+                              moveModelFocus(-1)
+                              return
+                            }
+                            if (event.key === 'Home') {
+                              event.preventDefault()
+                              const firstKey = enabledModelKeys[0]
+                              if (firstKey !== undefined) focusModelAt(firstKey)
+                              return
+                            }
+                            if (event.key === 'End') {
+                              event.preventDefault()
+                              const lastKey = enabledModelKeys.at(-1)
+                              if (lastKey !== undefined) focusModelAt(lastKey)
+                            }
+                          }}
                         >
                           {availableModels.length > 0 ? (
                             <div className="model-picker-model-list">
                               {availableModels.map((availableModel) => {
+                                const key = modelKey(availableModel.provider, availableModel.id)
                                 const selected =
                                   model?.provider === availableModel.provider &&
                                   model.id === availableModel.id
+                                const disabled = busy || runtimeStatus !== 'ready'
                                 return (
                                   <button
+                                    ref={(element) => {
+                                      if (element === null) modelItemRefs.current.delete(key)
+                                      else modelItemRefs.current.set(key, element)
+                                    }}
                                     className={`picker-option model-picker-item${selected ? ' selected' : ''}`}
                                     type="button"
                                     role="menuitemradio"
-                                    key={`${availableModel.provider}:${availableModel.id}`}
+                                    key={key}
                                     aria-checked={selected}
-                                    disabled={busy || runtimeStatus !== 'ready'}
+                                    tabIndex={!disabled && activeModelKey === key ? 0 : -1}
+                                    disabled={disabled}
+                                    onFocus={() => setActiveModelKey(key)}
+                                    onPointerEnter={() => {
+                                      if (!disabled) setActiveModelKey(key)
+                                    }}
                                     onClick={() => {
                                       closeModelPickerAndRestoreFocus()
                                       if (!selected) {
@@ -326,28 +419,42 @@ export function ComposerModelPicker({
   )
 }
 
-function thinkingLabel(level: ThinkingLevel): string {
-  return {
-    off: '关闭',
-    minimal: '最小',
-    low: '低',
-    medium: '中',
-    high: '高',
-    xhigh: '极高',
-    max: '最高'
-  }[level]
+function modelKey(provider: string, modelId: string): string {
+  return `${provider}\u0000${modelId}`
 }
 
-function thinkingOptionLabel(level: ThinkingLevel): string {
-  return {
-    off: 'Off',
-    minimal: 'Minimal',
-    low: 'Low',
-    medium: 'Medium',
-    high: 'High',
-    xhigh: 'Extra High',
-    max: 'Max'
-  }[level]
+function findAdjacentTabTarget(
+  origin: HTMLElement,
+  excludedRoots: Array<HTMLElement | null>,
+  backward: boolean
+): HTMLElement | null {
+  const tabbable = Array.from(document.querySelectorAll<HTMLElement>([
+    'a[href]',
+    'button',
+    'input',
+    'select',
+    'textarea',
+    'summary',
+    '[contenteditable="true"]',
+    '[tabindex]'
+  ].join(','))).filter(isTabbable)
+  const originIndex = tabbable.indexOf(origin)
+  if (originIndex < 0 || tabbable.length < 2) return null
+  const direction = backward ? -1 : 1
+  for (let offset = 1; offset < tabbable.length; offset += 1) {
+    const index = (originIndex + direction * offset + tabbable.length) % tabbable.length
+    const candidate = tabbable[index]
+    if (candidate !== undefined && !excludedRoots.some((root) => root?.contains(candidate) === true)) {
+      return candidate
+    }
+  }
+  return null
+}
+
+function isTabbable(element: HTMLElement): boolean {
+  if (element.tabIndex < 0 || element.matches(':disabled')) return false
+  if (element.closest('[inert], [aria-hidden="true"]') !== null) return false
+  return element.getClientRects().length > 0
 }
 
 function isThinkingLevelAvailable(

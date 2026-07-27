@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import type { SessionPointer } from './session-pointer.ts'
-import { readSessionMessages } from './session-transcript.ts'
+import { readSessionActivityAt, readSessionMessages } from './session-transcript.ts'
 
 test('reads messages from a linear session branch', async (t) => {
   const { pointer, write } = await sessionFixture(t)
@@ -45,6 +45,32 @@ test('walks through a non-message metadata leaf', async (t) => {
   ])
 
   assert.deepEqual(await readSessionMessages(pointer), [message])
+})
+
+test('activity time follows messages and ignores later runtime-load metadata', async (t) => {
+  const { pointer, write } = await sessionFixture(t)
+  await write([
+    header(pointer.sessionId),
+    entry('user', null, 'message', { role: 'user', content: 'hello' }, {
+      timestamp: '2026-07-22T01:00:00.000Z'
+    }),
+    entry('assistant', 'user', 'message', { role: 'assistant', content: 'done' }, {
+      timestamp: '2026-07-22T01:01:00.000Z'
+    }),
+    entry('session-info', 'assistant', 'session_info', undefined, {
+      timestamp: '2026-07-22T02:00:00.000Z',
+      name: 'Renamed'
+    }),
+    entry('capabilities', 'session-info', 'custom', undefined, {
+      timestamp: '2026-07-22T03:00:00.000Z',
+      customType: 'pi-gui.multi-advisor/capabilities'
+    })
+  ])
+
+  assert.equal(
+    await readSessionActivityAt(pointer),
+    Date.parse('2026-07-22T01:01:00.000Z')
+  )
 })
 
 test('rejects an invalid header or mismatched session ID', async (t) => {

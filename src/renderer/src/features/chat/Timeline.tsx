@@ -6,19 +6,27 @@ import type {
   KernelMessageEntry,
   RuntimeStatus
 } from '../../../../shared/kernel-contract'
-import { MarkdownMessage } from './MarkdownMessage'
 import { IconButton } from '../../components/IconButton'
 import { useViewportPopoverPosition } from '../../components/useViewportPopoverPosition'
+import { isTodoWriteToolEntry } from '../../todo-state'
 import type { ToolDisplayDensity } from '../../tool-display-density'
+import {
+  SubagentTaskInteractionContext,
+  type SubagentTaskInteraction
+} from './SubagentTaskDetail'
+import type { SubagentTaskSelection } from './subagent-task-detail-model'
 import {
   CompletedTurn,
   groupConversationTurns,
   hasCurrentRunningEntry,
   isProcessEntry,
+  latestThinkingSummaryLabel,
   LiveTurn,
-  MessageAttachments,
   splitTurn,
-  ThinkingStatus
+  ThinkingStatus,
+  TimelineSessionKeyContext,
+  turnFinalAnswerText,
+  turnForkUserText
 } from './TimelineTurns'
 
 type TimelineProps = {
@@ -28,15 +36,18 @@ type TimelineProps = {
   compactionActive: boolean
   showPromptNavigation: boolean
   toolDisplayDensity: ToolDisplayDensity
-  canCopyLastAnswer: boolean
+  sessionKey: string | null
+  canCopyAnswers: boolean
   canExportSession: boolean
   canForkSession: boolean
   conversationActionBusy: boolean
   conversationActionStatus: string | null
   conversationActionError: string | null
-  onCopyLastAnswer: () => Promise<void>
+  onCopyAnswer: (text: string) => Promise<void>
   onExportSession: () => Promise<void>
-  onForkSession: () => void
+  onForkTurn: (userText: string) => void
+  subagentTaskSelection: SubagentTaskSelection | null
+  onOpenSubagentTask: SubagentTaskInteraction['onOpen']
   title?: string
   warning: string | null
 }
@@ -48,8 +59,9 @@ type PromptNavigationItem = {
 }
 
 const COMPLETED_TURN_WINDOW_SIZE = 60
-const PINNED_PROMPT_SWITCH_GAP = 8
+const ACTIVE_PROMPT_SWITCH_GAP = 8
 const PROMPT_NAVIGATION_PREVIEW_DELAY_MS = 360
+const MAGIC_CONTEXT_LIVE_STATUS_ID = 'extension-status:magic-context'
 const EMPTY_STATE_SLOGANS = [
   '从一个想法开始。',
   '把复杂的事，一步一步做成。',
@@ -66,15 +78,18 @@ export function Timeline({
   compactionActive,
   showPromptNavigation,
   toolDisplayDensity,
-  canCopyLastAnswer,
+  sessionKey,
+  canCopyAnswers,
   canExportSession,
   canForkSession,
   conversationActionBusy,
   conversationActionStatus,
   conversationActionError,
-  onCopyLastAnswer,
+  onCopyAnswer,
   onExportSession,
-  onForkSession,
+  onForkTurn,
+  subagentTaskSelection,
+  onOpenSubagentTask,
   title,
   warning
 }: TimelineProps): React.JSX.Element {
@@ -85,18 +100,18 @@ export function Timeline({
   const outputEndRef = useRef<HTMLDivElement>(null)
   const scrollTailRef = useRef<HTMLDivElement>(null)
   const followOutputRef = useRef(true)
-  const pinnedPromptFrameRef = useRef<number | null>(null)
-  const pinnedPromptReadingLineOffsetRef = useRef<number | null>(null)
-  const pinnedPromptTurnIdRef = useRef<string | null>(null)
-  const pinnedPromptScrollTopRef = useRef(0)
+  const activePromptFrameRef = useRef<number | null>(null)
+  const readingLineOffsetRef = useRef<number | null>(null)
+  const activePromptTurnIdRef = useRef<string | null>(null)
+  const activePromptScrollTopRef = useRef(0)
   const pendingPromptNavigationTargetRef = useRef<string | null>(null)
   const revealScrollHeightRef = useRef<number | null>(null)
   const observedRunRef = useRef<{ startedAt: number; turnId: string | null } | null>(null)
   const observedThinkingStartsRef = useRef(new Map<string, number>())
   const [completedTurnWindow, setCompletedTurnWindow] = useState(COMPLETED_TURN_WINDOW_SIZE)
-  const [pinnedPrompt, setPinnedPrompt] = useState<KernelMessageEntry | null>(null)
+  const [actionTurnId, setActionTurnId] = useState<string | null>(null)
+  const [actionFeedbackTurnId, setActionFeedbackTurnId] = useState<string | null>(null)
   const [activePromptTurnId, setActivePromptTurnId] = useState<string | null>(null)
-  const [expandedPinnedPromptId, setExpandedPinnedPromptId] = useState<string | null>(null)
   const [runElapsedByTurnId, setRunElapsedByTurnId] = useState<ReadonlyMap<string, number>>(
     () => new Map()
   )
@@ -106,8 +121,6 @@ export function Timeline({
   const [emptyStateSlogan] = useState(
     () => EMPTY_STATE_SLOGANS[Math.floor(Math.random() * EMPTY_STATE_SLOGANS.length)]
   )
-  const pinnedPromptExpanded =
-    pinnedPrompt !== null && expandedPinnedPromptId === pinnedPrompt.id
   const {
     completedTurns,
     activeEntries,
@@ -119,8 +132,16 @@ export function Timeline({
     const boundary = activeRunStartIndex === null
       ? entries.length
       : Math.max(0, Math.min(activeRunStartIndex, entries.length))
-    const nextActiveEntries = activeRunStartIndex === null ? [] : entries.slice(boundary)
-    const nextCompletedTurns = groupConversationTurns(entries.slice(0, boundary))
+    const nextActiveEntries = activeRunStartIndex === null
+      ? []
+      : entries
+          .slice(boundary)
+          .filter(isTimelineEntryVisible)
+    const nextCompletedTurns = groupConversationTurns(
+      entries
+        .slice(0, boundary)
+        .filter(isTimelineEntryVisible)
+    )
     const nextActiveTurns = groupConversationTurns(nextActiveEntries)
     return {
       completedTurns: nextCompletedTurns,
@@ -136,14 +157,24 @@ export function Timeline({
     [completedTurnWindow, completedTurns]
   )
   const hiddenCompletedTurnCount = completedTurns.length - visibleCompletedTurns.length
-  const promptByTurnId = useMemo(() => {
-    const prompts = new Map<string, KernelMessageEntry>()
-    for (const turn of [...visibleCompletedTurns, ...activeTurns]) {
-      const { user } = splitTurn(turn)
-      if (user !== null) prompts.set(turn.id, user)
-    }
-    return prompts
-  }, [activeTurns, visibleCompletedTurns])
+  const subagentTaskInteraction = useMemo<SubagentTaskInteraction>(() => ({
+    selection: subagentTaskSelection,
+    onOpen: onOpenSubagentTask
+  }), [onOpenSubagentTask, subagentTaskSelection])
+  useEffect(() => {
+    if (actionTurnId === null) return
+    if (visibleCompletedTurns.some((turn) => turn.id === actionTurnId)) return
+    setActionTurnId(null)
+  }, [actionTurnId, visibleCompletedTurns])
+  useEffect(() => {
+    if (actionFeedbackTurnId === null) return
+    if (visibleCompletedTurns.some((turn) => turn.id === actionFeedbackTurnId)) return
+    setActionFeedbackTurnId(null)
+  }, [actionFeedbackTurnId, visibleCompletedTurns])
+  useEffect(() => {
+    if (conversationActionStatus !== null || conversationActionError !== null) return
+    setActionFeedbackTurnId(null)
+  }, [conversationActionError, conversationActionStatus])
   const promptNavigationItems = useMemo(() => {
     const items: PromptNavigationItem[] = []
     for (const turn of [...completedTurns, ...activeTurns]) {
@@ -153,73 +184,62 @@ export function Timeline({
     }
     return items
   }, [activeTurns, completedTurns])
-  const updatePinnedPrompt = useCallback(() => {
+  const updateActivePromptTurn = useCallback(() => {
     const viewport = viewportRef.current
     if (viewport === null) return
     const viewportRect = viewport.getBoundingClientRect()
-    const readingLineOffset = pinnedPromptReadingLineOffsetRef.current ?? 0
+    const readingLineOffset = readingLineOffsetRef.current ?? 0
     const readingLine = viewportRect.top + readingLineOffset
-    const pinnedPromptSwitchLine = Math.max(
+    const activePromptSwitchLine = Math.max(
       readingLine,
       (chromeRef.current?.getBoundingClientRect().bottom ?? readingLine) +
-        PINNED_PROMPT_SWITCH_GAP
+        ACTIVE_PROMPT_SWITCH_GAP
     )
     const turnElements = viewport.querySelectorAll<HTMLElement>('[data-conversation-turn-id]')
     const turns = Array.from(turnElements, (element) => ({
-      element,
       id: element.dataset.conversationTurnId ?? '',
       top: element.getBoundingClientRect().top
     })).filter((turn) => turn.id.length > 0)
     if (turns.length === 0) {
-      pinnedPromptTurnIdRef.current = null
+      activePromptTurnIdRef.current = null
       setActivePromptTurnId(null)
-      setPinnedPrompt(null)
       return
     }
 
     const scrollTop = viewport.scrollTop
-    const scrollDelta = scrollTop - pinnedPromptScrollTopRef.current
-    pinnedPromptScrollTopRef.current = scrollTop
-    let currentIndex = turns.findIndex((turn) => turn.id === pinnedPromptTurnIdRef.current)
+    const scrollDelta = scrollTop - activePromptScrollTopRef.current
+    activePromptScrollTopRef.current = scrollTop
+    let currentIndex = turns.findIndex((turn) => turn.id === activePromptTurnIdRef.current)
     if (currentIndex < 0) {
       currentIndex = turns.findLastIndex((turn) => turn.top <= readingLine)
       if (currentIndex < 0) currentIndex = 0
     } else if (scrollDelta >= -0.5) {
       while (
         currentIndex < turns.length - 1 &&
-        turns[currentIndex + 1]!.top <= pinnedPromptSwitchLine
+        turns[currentIndex + 1]!.top <= activePromptSwitchLine
       ) {
         currentIndex += 1
       }
     } else if (scrollDelta < -0.5) {
       while (
         currentIndex > 0 &&
-        turns[currentIndex]!.top >= readingLine + PINNED_PROMPT_SWITCH_GAP
+        turns[currentIndex]!.top >= readingLine + ACTIVE_PROMPT_SWITCH_GAP
       ) {
         currentIndex -= 1
       }
     }
 
     const currentTurn = turns[currentIndex]!
-    pinnedPromptTurnIdRef.current = currentTurn.id
+    activePromptTurnIdRef.current = currentTurn.id
     setActivePromptTurnId((previous) => previous === currentTurn.id ? previous : currentTurn.id)
-    const nextPrompt = promptByTurnId.get(currentTurn.id) ?? null
-    const promptElement = currentTurn.element.querySelector<HTMLElement>('[data-user-prompt="true"]')
-    const promptStillAtReadingLine = promptElement !== null &&
-      promptElement.getBoundingClientRect().bottom > readingLine
-    const visiblePrompt = promptStillAtReadingLine ? null : nextPrompt
-    setPinnedPrompt((previous) => {
-      if (previous?.id === visiblePrompt?.id) return previous === visiblePrompt ? previous : visiblePrompt
-      return visiblePrompt
+  }, [])
+  const scheduleActivePromptTurnUpdate = useCallback(() => {
+    if (activePromptFrameRef.current !== null) return
+    activePromptFrameRef.current = requestAnimationFrame(() => {
+      activePromptFrameRef.current = null
+      updateActivePromptTurn()
     })
-  }, [promptByTurnId])
-  const schedulePinnedPromptUpdate = useCallback(() => {
-    if (pinnedPromptFrameRef.current !== null) return
-    pinnedPromptFrameRef.current = requestAnimationFrame(() => {
-      pinnedPromptFrameRef.current = null
-      updatePinnedPrompt()
-    })
-  }, [updatePinnedPrompt])
+  }, [updateActivePromptTurn])
   const outputEndScrollTop = useCallback((): number | null => {
     const viewport = viewportRef.current
     const outputEnd = outputEndRef.current
@@ -255,7 +275,7 @@ export function Timeline({
     const viewportRect = viewport.getBoundingClientRect()
     const outputEndRect = outputEnd.getBoundingClientRect()
     const lastTurnRect = lastTurn.getBoundingClientRect()
-    const readingLineOffset = pinnedPromptReadingLineOffsetRef.current ?? 0
+    const readingLineOffset = readingLineOffsetRef.current ?? 0
     const bottomClearance = Number.parseFloat(window.getComputedStyle(viewport).paddingBottom)
     const outputEndOffset =
       viewport.scrollTop + outputEndRect.bottom - viewportRect.top
@@ -283,7 +303,7 @@ export function Timeline({
 
     const viewportRect = viewport.getBoundingClientRect()
     const turnRect = turn.getBoundingClientRect()
-    const readingLineOffset = pinnedPromptReadingLineOffsetRef.current ?? 0
+    const readingLineOffset = readingLineOffsetRef.current ?? 0
     const targetTop = Math.max(
       0,
       viewport.scrollTop + turnRect.top - viewportRect.top - readingLineOffset
@@ -293,9 +313,9 @@ export function Timeline({
       top: targetTop,
       behavior: 'auto'
     })
-    schedulePinnedPromptUpdate()
+    scheduleActivePromptTurnUpdate()
     return true
-  }, [schedulePinnedPromptUpdate])
+  }, [scheduleActivePromptTurnUpdate])
   const navigateToPrompt = useCallback((turnId: string) => {
     if (scrollToMountedPrompt(turnId)) return
     const completedIndex = completedTurns.findIndex((turn) => turn.id === turnId)
@@ -308,8 +328,8 @@ export function Timeline({
   }, [completedTurns, scrollToMountedPrompt])
 
   useLayoutEffect(() => () => {
-    if (pinnedPromptFrameRef.current !== null) {
-      cancelAnimationFrame(pinnedPromptFrameRef.current)
+    if (activePromptFrameRef.current !== null) {
+      cancelAnimationFrame(activePromptFrameRef.current)
     }
   }, [])
 
@@ -317,19 +337,10 @@ export function Timeline({
     const viewport = viewportRef.current
     if (viewport === null) return
     const topClearance = Number.parseFloat(window.getComputedStyle(viewport).paddingTop)
-    pinnedPromptReadingLineOffsetRef.current =
+    readingLineOffsetRef.current =
       (Number.isFinite(topClearance) ? topClearance : 0) + 8
-    pinnedPromptScrollTopRef.current = viewport.scrollTop
+    activePromptScrollTopRef.current = viewport.scrollTop
   }, [])
-
-  useLayoutEffect(() => {
-    if (
-      expandedPinnedPromptId !== null &&
-      expandedPinnedPromptId !== pinnedPrompt?.id
-    ) {
-      setExpandedPinnedPromptId(null)
-    }
-  }, [expandedPinnedPromptId, pinnedPrompt?.id])
 
   useLayoutEffect(() => {
     const shell = shellRef.current
@@ -349,10 +360,10 @@ export function Timeline({
         Math.abs(nextTopClearance - previousTopClearance) > 0.5
       ) {
         viewport.scrollTop += nextTopClearance - previousTopClearance
-        pinnedPromptScrollTopRef.current = viewport.scrollTop
+        activePromptScrollTopRef.current = viewport.scrollTop
       }
       updateScrollTail()
-      schedulePinnedPromptUpdate()
+      scheduleActivePromptTurnUpdate()
     }
     updateChromeHeight()
     if (chrome === null) return
@@ -360,9 +371,7 @@ export function Timeline({
     observer.observe(chrome)
     return () => observer.disconnect()
   }, [
-    pinnedPrompt?.id,
-    pinnedPromptExpanded,
-    schedulePinnedPromptUpdate,
+    scheduleActivePromptTurnUpdate,
     title,
     updateScrollTail,
     warning
@@ -389,8 +398,8 @@ export function Timeline({
   }, [activeRunStartIndex, completedTurnWindow, entries, updateScrollTail])
 
   useLayoutEffect(() => {
-    updatePinnedPrompt()
-  }, [activeRunStartIndex, completedTurnWindow, entries, pinnedPrompt?.id, pinnedPromptExpanded, updatePinnedPrompt])
+    updateActivePromptTurn()
+  }, [activeRunStartIndex, completedTurnWindow, entries, updateActivePromptTurn])
 
   useLayoutEffect(() => {
     const now = Date.now()
@@ -445,7 +454,7 @@ export function Timeline({
     const previousScrollHeight = revealScrollHeightRef.current
     if (!viewport || previousScrollHeight === null) return
     viewport.scrollTop += viewport.scrollHeight - previousScrollHeight
-    pinnedPromptScrollTopRef.current = viewport.scrollTop
+    activePromptScrollTopRef.current = viewport.scrollTop
     revealScrollHeightRef.current = null
   }, [completedTurnWindow])
 
@@ -456,23 +465,15 @@ export function Timeline({
   }, [completedTurnWindow, scrollToMountedPrompt])
 
   return (
+    <TimelineSessionKeyContext.Provider value={sessionKey}>
+    <SubagentTaskInteractionContext.Provider value={subagentTaskInteraction}>
     <div className="conversation-shell" ref={shellRef}>
-      {title || warning || pinnedPrompt ? (
+      {title || warning ? (
         <div className="conversation-chrome" ref={chromeRef}>
-          {title || warning ? (
-            <div className="conversation-header">
-              {title ? <strong data-tooltip={title}>{title}</strong> : null}
-              {warning ? <small className="connection-status-warning">{warning}</small> : null}
-            </div>
-          ) : null}
-          {pinnedPrompt ? (
-            <PinnedPrompt
-              entry={pinnedPrompt}
-              expanded={pinnedPromptExpanded}
-              onExpandedChange={(expanded) =>
-                setExpandedPinnedPromptId(expanded ? pinnedPrompt.id : null)}
-            />
-          ) : null}
+          <div className="conversation-header">
+            {title ? <strong data-tooltip={title}>{title}</strong> : null}
+            {warning ? <small className="connection-status-warning">{warning}</small> : null}
+          </div>
         </div>
       ) : null}
 
@@ -493,7 +494,7 @@ export function Timeline({
           const targetTop = outputEndScrollTop()
           followOutputRef.current =
             targetTop !== null && Math.abs(target.scrollTop - targetTop) < 120
-          schedulePinnedPromptUpdate()
+          scheduleActivePromptTurnUpdate()
         }}
       >
         {hasVisibleContent || runtimeStatus === 'running' || compactionActive ? (
@@ -517,16 +518,105 @@ export function Timeline({
                   显示更早的 {Math.min(COMPLETED_TURN_WINDOW_SIZE, hiddenCompletedTurnCount)} 轮
                 </button>
               ) : null}
-              {visibleCompletedTurns.map((turn) => (
-                <div className="conversation-virtual-row" key={turn.id}>
-                  <CompletedTurn
-                    turn={turn}
-                    toolDisplayDensity={toolDisplayDensity}
-                    runElapsedMs={runElapsedByTurnId.get(turn.id) ?? null}
-                    thinkingElapsedByEntryId={thinkingElapsedByEntryId}
-                  />
-                </div>
-              ))}
+              {visibleCompletedTurns.map((turn) => {
+                const answerText = canCopyAnswers ? turnFinalAnswerText(turn) : null
+                const forkUserText = canForkSession ? turnForkUserText(turn) : null
+                const canCopyTurn = answerText !== null
+                const canForkTurn = forkUserText !== null
+                const canShowTurnActions = canCopyTurn || canForkTurn || canExportSession
+                const showTurnActions = actionTurnId === turn.id && canShowTurnActions
+                const showTurnFeedback = actionFeedbackTurnId === turn.id &&
+                  (conversationActionStatus !== null || conversationActionError !== null)
+                const showTurnActionSurface = showTurnActions || showTurnFeedback
+                return (
+                  <div
+                    className="conversation-virtual-row conversation-turn-shell"
+                    key={turn.id}
+                    onPointerEnter={() => {
+                      if (!canShowTurnActions) return
+                      setActionTurnId(turn.id)
+                    }}
+                    onPointerLeave={(event) => {
+                      const next = event.relatedTarget
+                      if (next instanceof Node && event.currentTarget.contains(next)) return
+                      setActionTurnId((current) => (current === turn.id ? null : current))
+                    }}
+                    onFocusCapture={() => {
+                      if (!canShowTurnActions) return
+                      setActionTurnId(turn.id)
+                    }}
+                    onBlurCapture={(event) => {
+                      const next = event.relatedTarget
+                      if (next instanceof Node && event.currentTarget.contains(next)) return
+                      setActionTurnId((current) => (current === turn.id ? null : current))
+                    }}
+                  >
+                    <CompletedTurn
+                      turn={turn}
+                      toolDisplayDensity={toolDisplayDensity}
+                      runElapsedMs={runElapsedByTurnId.get(turn.id) ?? null}
+                      thinkingElapsedByEntryId={thinkingElapsedByEntryId}
+                    />
+                    {canShowTurnActions ? (
+                      <div
+                        className={`conversation-turn-actions${showTurnActionSurface ? ' is-visible' : ''}`}
+                        aria-label="对话操作"
+                      >
+                        {canCopyTurn ? (
+                          <IconButton
+                            className="conversation-action-button"
+                            icon="copy"
+                            iconSize="sm"
+                            label="复制本轮回答的原始 Markdown"
+                            disabled={conversationActionBusy}
+                            onClick={() => {
+                              setActionFeedbackTurnId(turn.id)
+                              void onCopyAnswer(answerText).catch(() => undefined)
+                            }}
+                          />
+                        ) : null}
+                        {canExportSession ? (
+                          <IconButton
+                            className="conversation-action-button"
+                            icon="export"
+                            iconSize="sm"
+                            label="导出对话为 HTML"
+                            disabled={conversationActionBusy}
+                            onClick={() => {
+                              setActionFeedbackTurnId(turn.id)
+                              void onExportSession().catch(() => undefined)
+                            }}
+                          />
+                        ) : null}
+                        {canForkTurn ? (
+                          <IconButton
+                            className="conversation-action-button"
+                            icon="fork"
+                            iconSize="sm"
+                            label="从此轮用户消息分叉对话"
+                            disabled={conversationActionBusy}
+                            onClick={() => onForkTurn(forkUserText)}
+                          />
+                        ) : null}
+                        {showTurnFeedback && conversationActionStatus !== null ? (
+                          <span
+                            className="conversation-action-feedback"
+                            role="status"
+                            aria-live="polite"
+                          >
+                            {conversationActionStatus}
+                          </span>
+                        ) : null}
+                        {showTurnFeedback && conversationActionError !== null ? (
+                          <span className="conversation-action-feedback error" role="alert">
+                            {conversationActionError}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                )
+              })}
               {activeTurns.map((turn) => (
                 <div className="conversation-virtual-row" key={`active:${turn.id}`}>
                   <LiveTurn
@@ -536,38 +626,9 @@ export function Timeline({
                   />
                 </div>
               ))}
-              {canCopyLastAnswer || canExportSession || canForkSession ? (
-                <div className="conversation-actions" aria-label="对话操作">
-                  {canCopyLastAnswer ? (
-                    <IconButton
-                      className="conversation-action-button"
-                      icon="copy"
-                      iconSize="sm"
-                      label="复制最后一条回答的原始 Markdown"
-                      disabled={conversationActionBusy}
-                      onClick={() => void onCopyLastAnswer().catch(() => undefined)}
-                    />
-                  ) : null}
-                  {canExportSession ? (
-                    <IconButton
-                      className="conversation-action-button"
-                      icon="export"
-                      iconSize="sm"
-                      label="导出对话为 HTML"
-                      disabled={conversationActionBusy}
-                      onClick={() => void onExportSession().catch(() => undefined)}
-                    />
-                  ) : null}
-                  {canForkSession ? (
-                    <IconButton
-                      className="conversation-action-button"
-                      icon="fork"
-                      iconSize="sm"
-                      label="分叉对话"
-                      disabled={conversationActionBusy}
-                      onClick={onForkSession}
-                    />
-                  ) : null}
+              {actionFeedbackTurnId === null &&
+              (conversationActionStatus !== null || conversationActionError !== null) ? (
+                <div className="conversation-actions" aria-label="对话操作反馈">
                   {conversationActionStatus !== null ? (
                     <span className="conversation-action-feedback" role="status" aria-live="polite">
                       {conversationActionStatus}
@@ -595,7 +656,11 @@ export function Timeline({
                 (toolDisplayDensity === 'detailed' || !hasActiveProcess) ? (
                 <div className="conversation-virtual-row active-wait-row">
                   <article className="chat-message assistant streaming thinking-placeholder">
-                    <ThinkingStatus label={activeEntries.length === 0 ? '正在开始' : '正在继续'} />
+                    <ThinkingStatus
+                      label={activeEntries.length === 0
+                        ? '正在开始'
+                        : latestThinkingSummaryLabel(activeEntries) ?? '正在继续'}
+                    />
                   </article>
                 </div>
               ) : null}
@@ -614,6 +679,8 @@ export function Timeline({
         )}
       </div>
     </div>
+    </SubagentTaskInteractionContext.Provider>
+    </TimelineSessionKeyContext.Provider>
   )
 }
 
@@ -774,57 +841,15 @@ function PromptNavigationPreview({
   )
 }
 
-function PinnedPrompt({
-  entry,
-  expanded,
-  onExpandedChange
-}: {
-  entry: KernelMessageEntry
-  expanded: boolean
-  onExpandedChange: (expanded: boolean) => void
-}): React.JSX.Element {
-  const attachments = entry.attachments ?? []
-  const canExpand = entry.text.length > 180 || entry.text.split('\n').length > 3 || attachments.length > 2
-  return (
-    <section
-      className={`pinned-prompt${expanded ? ' expanded' : ''}${canExpand ? ' collapsible' : ''}`}
-      aria-label={canExpand ? '当前轮次的提示词，悬浮或聚焦时展开' : '当前轮次的提示词'}
-      tabIndex={canExpand ? 0 : undefined}
-      onPointerEnter={() => {
-        if (canExpand) onExpandedChange(true)
-      }}
-      onPointerLeave={(event) => {
-        if (canExpand && !event.currentTarget.matches(':focus-within')) {
-          onExpandedChange(false)
-        }
-      }}
-      onFocus={() => {
-        if (canExpand) onExpandedChange(true)
-      }}
-      onBlur={(event) => {
-        if (
-          canExpand &&
-          !event.currentTarget.contains(event.relatedTarget) &&
-          !event.currentTarget.matches(':hover')
-        ) {
-          onExpandedChange(false)
-        }
-      }}
-    >
-      <div className="pinned-prompt-content stealth-scroll" id="pinned-prompt-content">
-        <MessageAttachments attachments={attachments} role="user" label="当前提示词附件" />
-        {entry.text.trim().length > 0 ? (
-          <article className="chat-message user">
-            <MarkdownMessage text={entry.text} streaming={false} />
-          </article>
-        ) : null}
-      </div>
-    </section>
-  )
-}
 function promptNavigationLabel(entry: KernelMessageEntry): string {
   const text = entry.text.replace(/\s+/g, ' ').trim()
   if (text.length > 0) return text.length > 72 ? `${text.slice(0, 71)}…` : text
   const attachmentNames = (entry.attachments ?? []).map((attachment) => attachment.name)
   return attachmentNames.length > 0 ? `附件：${attachmentNames.join('、')}` : '空提示词'
+}
+
+export function isTimelineEntryVisible(entry: KernelConversationEntry): boolean {
+  if (isTodoWriteToolEntry(entry)) return false
+  if (entry.kind !== 'extension-status' || entry.id !== MAGIC_CONTEXT_LIVE_STATUS_ID) return true
+  return entry.level === 'warning' || entry.level === 'error'
 }

@@ -70,10 +70,18 @@ export type KernelSessionSummary = {
   lastActivityAt: number | null
   runtimeStatus: RuntimeStatus
   requiresReload?: boolean
+  /** In-memory new Session before Pi JSONL materializes; not present in XDG index. */
+  provisional?: true
   statistics: KernelSessionStatistics | null
 }
 
 export type KernelCommandSource = 'gui' | 'pi-rpc' | 'extension' | 'prompt' | 'skill'
+
+export type KernelCommandSourceInfo = {
+  source: string
+  scope: 'user' | 'project' | 'temporary'
+  origin: 'package' | 'top-level'
+}
 
 export type KernelCommandDescriptor = {
   id: string
@@ -81,6 +89,7 @@ export type KernelCommandDescriptor = {
   description: string
   source: KernelCommandSource
   argumentHint: string | null
+  sourceInfo: KernelCommandSourceInfo | null
 }
 
 export type KernelExtensionDescriptor = {
@@ -350,23 +359,58 @@ export type GeneralSettings = {
   startupWorkspaceRestore: 'restore' | 'none'
   /** Double-click window border toggles maximize/restore. Exclusive fullscreen uses F11. */
   doubleClickBorderMaximize: boolean
+  fastExtensionLoading: boolean
 }
 
 export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   startupWorkspaceRestore: 'restore',
-  doubleClickBorderMaximize: true
+  doubleClickBorderMaximize: true,
+  fastExtensionLoading: false
 }
 
-export const SUBAGENT_PACKAGE_NAME = '@mjakl/pi-subagent'
+export const SUBAGENT_PACKAGE_NAME = 'pi-subagents'
+export const MAGIC_CONTEXT_PACKAGE_NAME = '@cortexkit/pi-magic-context'
 
 export type SubagentSettings = {
   maxDepth: 1 | 2 | 3
-  preventCycles: boolean
 }
 
 export const DEFAULT_SUBAGENT_SETTINGS: SubagentSettings = {
-  maxDepth: 3,
-  preventCycles: true
+  maxDepth: 3
+}
+
+export type KernelSubagentDefinitionScope = 'builtin' | 'user' | 'project'
+export type KernelSubagentEditableScope = Exclude<KernelSubagentDefinitionScope, 'builtin'>
+
+export type KernelSubagentDefinition = {
+  id: string
+  scope: KernelSubagentDefinitionScope
+  editable: boolean
+  enabled: boolean
+  name: string
+  description: string
+  systemPrompt: string
+  model: string | null
+  fallbackModels: string[] | null
+  thinking: ThinkingLevel | null
+  systemPromptMode: 'replace' | 'append'
+  inheritProjectContext: boolean
+  inheritSkills: boolean
+  defaultContext: 'fresh' | 'fork' | null
+  tools: string[] | null
+  skills: string[] | null
+  defaultAsync: boolean | null
+  timeoutMs: number | null
+  maxTurns: number | null
+  maxSubagentDepth: number | null
+}
+
+export type KernelSubagentDefinitionInput = Omit<
+  KernelSubagentDefinition,
+  'id' | 'editable' | 'enabled' | 'scope'
+> & {
+  originalId: string | null
+  scope: KernelSubagentEditableScope
 }
 
 export type KernelSessionState = {
@@ -441,6 +485,68 @@ export type KernelThinkingEntry = {
   streaming: boolean
 }
 
+export type KernelAdvisorEntry = {
+  id: string
+  kind: 'advisor'
+  advisorSlug: string
+  advisorName: string
+  severity: 'nit' | 'concern' | 'blocker'
+  guidance: string
+  content: string
+  delivery: 'aside' | 'steer'
+  timestamp: number
+}
+
+export type KernelSubagentStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'paused'
+  | 'detached'
+
+export type KernelSubagentParticipant = {
+  index: number
+  agent: string
+  status: KernelSubagentStatus
+  task: string
+  currentTool: string | null
+  currentPath: string | null
+  toolCount: number
+  turnCount: number
+  tokens: number
+  durationMs: number
+  error: string | null
+  finalOutput: string | null
+}
+
+export type KernelSubagentRun = {
+  mode: 'single' | 'parallel' | 'chain'
+  runId: string | null
+  asyncId: string | null
+  participants: KernelSubagentParticipant[]
+}
+
+export type KernelTodoStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
+export type KernelTodoPriority = 'high' | 'medium' | 'low'
+
+export type KernelTodoItem = {
+  id: string | null
+  content: string
+  status: KernelTodoStatus
+  priority: KernelTodoPriority | null
+}
+
+/** Metadata-only tool result image; base64 stays in Pi transcript / on-demand IPC. */
+export type KernelToolImageAttachment = {
+  type: 'image'
+  name: string
+  mimeType: string
+  byteLength: number
+  /** Stable index into the original Pi toolResult content array. */
+  contentIndex: number
+}
+
 export type KernelToolEntry = {
   id: string
   kind: 'tool'
@@ -453,6 +559,49 @@ export type KernelToolEntry = {
   truncated: boolean
   timestamp: number
   durationMs: number | null
+  subagent: KernelSubagentRun | null
+  todos?: KernelTodoItem[]
+  /** Metadata-only image attachments from toolResult content; never includes base64. */
+  attachments?: KernelToolImageAttachment[]
+}
+
+export type KernelSubagentCoordination = {
+  runId: string
+  agent: string
+  participantIndex: number | null
+  requestId: string | null
+  reason: string | null
+  requiresReply: boolean
+  status: 'pending' | 'handled'
+  resolvedAt: number | null
+}
+
+export type KernelSubagentNoticeEntry = {
+  id: string
+  kind: 'subagent-notice'
+  noticeType:
+    | 'completion'
+    | 'control'
+    | 'steering'
+    | 'request'
+    | 'admin'
+    | 'command'
+    | 'watchdog-concern'
+    | 'watchdog-blocker'
+  text: string
+  timestamp: number
+  completion?: KernelSubagentParticipant
+  coordination?: KernelSubagentCoordination
+}
+
+export type KernelExtensionStatusEntry = {
+  id: string
+  kind: 'extension-status'
+  source: 'magic-context'
+  title: string
+  text: string
+  level: 'info' | 'success' | 'warning' | 'error'
+  timestamp: number
 }
 
 export type KernelErrorEntry = {
@@ -464,10 +613,26 @@ export type KernelErrorEntry = {
   timestamp: number
 }
 
+/** Local GUI projection only; never written into the Pi session file. */
+export type KernelCommandEntry = {
+  id: string
+  kind: 'command'
+  commandId: string
+  name: string
+  argument: string
+  source: KernelCommandSource
+  text: string
+  timestamp: number
+}
+
 export type KernelConversationEntry =
   | KernelMessageEntry
   | KernelThinkingEntry
+  | KernelAdvisorEntry
   | KernelToolEntry
+  | KernelSubagentNoticeEntry
+  | KernelExtensionStatusEntry
+  | KernelCommandEntry
   | KernelErrorEntry
 
 export type KernelConversationState = {
@@ -512,6 +677,13 @@ export type KernelSessionExportResult = {
   saved: boolean
 }
 
+export type KernelMessageImage = {
+  mimeType: string
+  data: string
+  name: string
+  path: string
+}
+
 export type KernelProjectPathMatch = {
   path: string
   kind: 'file' | 'directory'
@@ -527,6 +699,78 @@ export const FORK_SESSION_COMMAND_ID = 'builtin:fork'
 export const EXPORT_SESSION_COMMAND_ID = 'builtin:export'
 export const COPY_LAST_ANSWER_COMMAND_ID = 'builtin:copy'
 
+export type KernelAdvisorState = {
+  compatibility: 'unavailable' | 'ready' | 'incompatible'
+  extensionVersion: string | null
+  systemEnabled: boolean | null
+  liveToggle: boolean
+  multiAdvisor: boolean
+  roster: boolean
+  error: string | null
+}
+
+export const ADVISOR_TOOL_NAMES = [
+  'read',
+  'grep',
+  'find',
+  'ls',
+  'edit',
+  'write'
+] as const
+
+export type KernelAdvisorToolName = (typeof ADVISOR_TOOL_NAMES)[number]
+export type KernelAdvisorDefinitionScope = 'builtin' | 'user' | 'inherited' | 'project'
+export type KernelAdvisorEditableScope = Extract<
+  KernelAdvisorDefinitionScope,
+  'user' | 'project'
+>
+
+export type KernelAdvisorDefinition = {
+  id: string
+  slug: string
+  scope: KernelAdvisorDefinitionScope
+  sourcePath: string | null
+  sourceOrder: number
+  editable: boolean
+  name: string
+  enabled: boolean
+  model: string | null
+  thinking: ThinkingLevel | null
+  tools: KernelAdvisorToolName[]
+  instructions: string
+}
+
+export type KernelAdvisorSource = {
+  id: string
+  scope: KernelAdvisorDefinitionScope
+  path: string | null
+  sourceOrder: number
+  editable: boolean
+  instructions: string
+}
+
+export type KernelAdvisorDiagnostic = {
+  sourcePath: string
+  message: string
+}
+
+export type KernelAdvisorConfiguration = {
+  definitions: KernelAdvisorDefinition[]
+  sources: KernelAdvisorSource[]
+  diagnostics: KernelAdvisorDiagnostic[]
+}
+
+export type KernelAdvisorDefinitionInput = {
+  originalSlug: string | null
+  scope: KernelAdvisorEditableScope
+  name: string
+  enabled: boolean
+  model: string | null
+  thinking: ThinkingLevel | null
+  tools: KernelAdvisorToolName[]
+  instructions: string
+}
+
 export type KernelState = {
   projects: KernelProjectState[]
   activeProjectKey: string | null
@@ -541,6 +785,7 @@ export type KernelState = {
   general: GeneralSettings
   subagent: SubagentSettings
   shortcuts: ShortcutSettings
+  advisor: KernelAdvisorState
   runtime: KernelRuntimeState
   session: KernelSessionState
   conversation: KernelConversationState
@@ -567,12 +812,14 @@ export type KernelConversationEntryPatch =
   | {
       type: 'append-tool-output'
       index: number
+      toolCallId: string
       from: number
       output: string
       status: KernelToolEntry['status']
       details: string
       truncated: boolean
       durationMs: number | null
+      subagent: KernelSubagentRun | null
     }
 
 export type KernelConversationPatch = {
@@ -608,6 +855,18 @@ export type KernelCommand =
   | { type: 'kernel.list-fork-candidates' }
   | { type: 'kernel.fork-session'; entryId: string }
   | { type: 'kernel.export-session' }
+  | {
+      type: 'kernel.get-message-image'
+      sessionKey: string
+      messageId: string
+      attachmentIndex: number
+    }
+  | {
+      type: 'kernel.get-tool-image'
+      sessionKey: string
+      toolCallId: string
+      contentIndex: number
+    }
   | { type: 'kernel.search-project-paths'; query: string }
   | { type: 'kernel.reorder-projects'; projectKeys: string[] }
   | { type: 'kernel.install-extension'; kind: KernelExtensionSelectionKind }
@@ -618,6 +877,25 @@ export type KernelCommand =
   | { type: 'kernel.install-pi-dev-package'; name: string }
   | { type: 'kernel.remove-pi-package'; source: string }
   | { type: 'kernel.set-subagent-enabled'; enabled: boolean }
+  | { type: 'kernel.set-magic-context-enabled'; enabled: boolean }
+  | { type: 'kernel.set-advisor-system-enabled'; enabled: boolean }
+  | { type: 'kernel.set-advisor-extension-enabled'; enabled: boolean }
+  | { type: 'kernel.list-advisor-definitions' }
+  | { type: 'kernel.save-advisor-definition'; definition: KernelAdvisorDefinitionInput }
+  | {
+      type: 'kernel.remove-advisor-definition'
+      slug: string
+      scope: KernelAdvisorEditableScope
+    }
+  | { type: 'kernel.list-subagent-definitions' }
+  | { type: 'kernel.save-subagent-definition'; definition: KernelSubagentDefinitionInput }
+  | {
+      type: 'kernel.set-subagent-definition-enabled'
+      id: string
+      scope: KernelSubagentEditableScope
+      enabled: boolean
+    }
+  | { type: 'kernel.remove-subagent-definition'; id: string }
   | { type: 'kernel.update-pi-package'; source: string }
   | { type: 'kernel.update-pi-packages' }
   | { type: 'kernel.list-providers' }
@@ -697,6 +975,16 @@ export type KernelApi = {
   listForkCandidates: () => Promise<KernelForkCandidate[]>
   forkSession: (entryId: string) => Promise<KernelForkResult>
   exportSession: () => Promise<KernelSessionExportResult>
+  getMessageImage: (
+    sessionKey: string,
+    messageId: string,
+    attachmentIndex: number
+  ) => Promise<KernelMessageImage>
+  getToolImage: (
+    sessionKey: string,
+    toolCallId: string,
+    contentIndex: number
+  ) => Promise<KernelMessageImage>
   searchProjectPaths: (query: string) => Promise<KernelProjectPathSearchResult>
   reorderProjects: (projectKeys: string[]) => Promise<KernelState>
   installExtension: (kind: KernelExtensionSelectionKind) => Promise<KernelState>
@@ -707,6 +995,27 @@ export type KernelApi = {
   installPiDevPackage: (name: string) => Promise<KernelState>
   removePiPackage: (source: string) => Promise<KernelState>
   setSubagentEnabled: (enabled: boolean) => Promise<KernelInstalledPackage[]>
+  setMagicContextEnabled: (enabled: boolean) => Promise<KernelInstalledPackage[]>
+  setAdvisorSystemEnabled: (enabled: boolean) => Promise<KernelState>
+  setAdvisorExtensionEnabled: (enabled: boolean) => Promise<KernelInstalledPackage[]>
+  listAdvisorDefinitions: () => Promise<KernelAdvisorConfiguration>
+  saveAdvisorDefinition: (
+    definition: KernelAdvisorDefinitionInput
+  ) => Promise<KernelAdvisorConfiguration>
+  removeAdvisorDefinition: (
+    slug: string,
+    scope: KernelAdvisorEditableScope
+  ) => Promise<KernelAdvisorConfiguration>
+  listSubagentDefinitions: () => Promise<KernelSubagentDefinition[]>
+  saveSubagentDefinition: (
+    definition: KernelSubagentDefinitionInput
+  ) => Promise<KernelSubagentDefinition[]>
+  setSubagentDefinitionEnabled: (
+    id: string,
+    scope: KernelSubagentEditableScope,
+    enabled: boolean
+  ) => Promise<KernelSubagentDefinition[]>
+  removeSubagentDefinition: (id: string) => Promise<KernelSubagentDefinition[]>
   updatePiPackage: (source: string) => Promise<KernelState>
   updatePiPackages: () => Promise<KernelState>
   listProviders: () => Promise<KernelProviderConfig[]>

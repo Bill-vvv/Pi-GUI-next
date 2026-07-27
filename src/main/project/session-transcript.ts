@@ -6,6 +6,7 @@ export type SessionTranscriptEntry = Record<string, unknown> & {
   type?: unknown
   id: string
   parentId: string | null
+  timestamp?: unknown
   message?: unknown
 }
 
@@ -49,6 +50,25 @@ export async function readSessionTranscript(pointer: SessionPointer): Promise<Se
 
   validateParentGraph(entries, entriesById)
   return entries
+}
+
+export async function readSessionActivityAt(pointer: SessionPointer): Promise<number | null> {
+  let entries: SessionTranscriptEntry[]
+  try {
+    entries = await readSessionTranscript(pointer)
+  } catch {
+    return null
+  }
+
+  let activityAt: number | null = null
+  for (const entry of entries) {
+    if (entry.type !== 'message') continue
+    const timestamp = sessionTimestamp(entry.timestamp)
+    if (timestamp !== null && (activityAt === null || timestamp > activityAt)) {
+      activityAt = timestamp
+    }
+  }
+  return activityAt
 }
 
 export async function readSessionMessages(pointer: SessionPointer): Promise<unknown[]> {
@@ -99,6 +119,13 @@ function validateParentGraph(
     }
     for (const id of path) visited.add(id)
   }
+}
+
+function sessionTimestamp(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value !== 'string') return null
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? timestamp : null
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

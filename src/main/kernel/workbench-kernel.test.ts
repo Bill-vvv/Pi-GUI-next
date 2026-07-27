@@ -5,6 +5,7 @@ import type {
   GeneralSettings,
   KernelEvent,
   KernelProjectState,
+  KernelSessionStatistics,
   RuntimeStatus,
   SessionNamingSettings,
   ShortcutSettings,
@@ -34,6 +35,7 @@ import {
   SET_THINKING_COMMAND_ID
 } from './command-catalog.ts'
 import { WorkbenchKernel } from './workbench-kernel.ts'
+import { isKernelCommand } from './kernel-command-validation.ts'
 import type {
   RuntimeCommand,
   RuntimeCommandResult,
@@ -55,6 +57,7 @@ class FakeRuntimeHost implements RuntimeHost {
   protected readonly messages: unknown[]
   protected readonly slashCommands: PiRpcSlashCommand[]
   protected readonly availableModels: PiRpcAvailableModel[]
+  protected readonly sessionEntries: unknown[]
   private sessionStats: PiRpcSessionStats | undefined
   private state: RuntimeHostState = {
     executable: '/usr/bin/pi',
@@ -84,13 +87,15 @@ class FakeRuntimeHost implements RuntimeHost {
       reasoning: true,
       contextWindow: 128000
     }],
-    sessionStats?: PiRpcSessionStats
+    sessionStats?: PiRpcSessionStats,
+    sessionEntries: unknown[] = []
   ) {
     this.sessionState = sessionState
     this.messages = messages
     this.slashCommands = slashCommands
     this.availableModels = availableModels
     this.sessionStats = sessionStats
+    this.sessionEntries = sessionEntries
   }
 
   async start(): Promise<void> {
@@ -129,6 +134,13 @@ class FakeRuntimeHost implements RuntimeHost {
     }
     if (command.type === 'get_messages') return { type: 'messages', messages: this.messages }
     if (command.type === 'get_commands') return { type: 'commands', commands: this.slashCommands }
+    if (command.type === 'get_entries') {
+      return {
+        type: 'entries',
+        entries: this.sessionEntries as PiRpcSessionEntry[],
+        leafId: null
+      }
+    }
     if (command.type === 'get_available_models') {
       return { type: 'available-models', models: this.availableModels }
     }
@@ -197,6 +209,94 @@ class FakeRuntimeHost implements RuntimeHost {
 
   setSessionStats(sessionStats: PiRpcSessionStats | undefined): void {
     this.sessionStats = sessionStats
+  }
+
+  replaceEntries(entries: unknown[]): void {
+    this.sessionEntries.splice(0, this.sessionEntries.length, ...entries)
+  }
+}
+
+class DeferredSessionStatsRuntimeHost extends FakeRuntimeHost {
+  private deferSessionStats = false
+  private readonly pendingSessionStats: Array<(result: RuntimeCommandResult) => void> = []
+
+  override async send(command: RuntimeCommand): Promise<RuntimeCommandResult> {
+    if (command.type !== 'get_session_stats' || !this.deferSessionStats) {
+      return super.send(command)
+    }
+    this.commands.push(command)
+    return new Promise<RuntimeCommandResult>((resolve) => {
+      this.pendingSessionStats.push(resolve)
+    })
+  }
+
+  beginDeferringSessionStats(): void {
+    this.deferSessionStats = true
+  }
+
+  pendingSessionStatsCount(): number {
+    return this.pendingSessionStats.length
+  }
+
+  resolveNextSessionStats(statistics: PiRpcSessionStats): void {
+    const resolve = this.pendingSessionStats.shift()
+    assert.ok(resolve)
+    resolve({ type: 'session-statistics', statistics })
+  }
+}
+
+function advisorCapabilities(enabled: boolean): unknown {
+  return {
+    type: 'custom',
+    customType: 'pi-gui.multi-advisor/capabilities',
+    data: {
+      protocolVersion: 2,
+      identity: 'pi-gui-multi-advisor',
+      version: '1.0.0',
+      enabled,
+      multiAdvisor: true,
+      liveToggle: true,
+      roster: true,
+      status: true,
+      usage: true,
+      dump: false,
+      subagents: false,
+      severities: ['nit', 'concern', 'blocker'],
+      deliveries: ['aside', 'steer'],
+      readOnlyTools: ['read', 'grep', 'find', 'ls'],
+      optionalTools: ['edit', 'write']
+    }
+  }
+}
+
+class AdvisorRuntimeHost extends FakeRuntimeHost {
+  private confirmToggle = true
+
+  constructor(enabled: boolean) {
+    super(undefined, [], [{
+      name: 'advisor',
+      source: 'extension',
+      sourceInfo: {
+        source: 'pi-gui-multi-advisor',
+        scope: 'project',
+        origin: 'package'
+      }
+    }], undefined, undefined, [advisorCapabilities(enabled)])
+  }
+
+  setConfirmToggle(confirmToggle: boolean): void {
+    this.confirmToggle = confirmToggle
+  }
+
+  override async send(command: RuntimeCommand): Promise<RuntimeCommandResult> {
+    if (
+      command.type === 'prompt' &&
+      this.confirmToggle &&
+      (command.message === '/advisor on' || command.message === '/advisor off')
+    ) {
+      this.replaceEntries([advisorCapabilities(command.message.endsWith('on'))])
+    }
+    return super.send(command)
   }
 }
 
@@ -551,6 +651,65 @@ function fileError(code: string, message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code })
 }
 
+test('advisor system toggle gates capability and refreshes the confirmed state', async () => {
+  const unavailableRuntime = new FakeRuntimeHost()
+  const unavailableKernel = new WorkbenchKernel(
+    () => unavailableRuntime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  await unavailableKernel.start()
+  assert.equal(unavailableKernel.getState().advisor.compatibility, 'unavailable')
+  await assert.rejects(
+    unavailableKernel.setAdvisorSystemEnabled(true),
+    /live toggle is unavailable/
+  )
+
+  const runtime = new AdvisorRuntimeHost(false)
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  await kernel.start()
+  assert.deepEqual(kernel.getState().advisor, {
+    compatibility: 'ready',
+    extensionVersion: '1.0.0',
+    systemEnabled: false,
+    liveToggle: true,
+    multiAdvisor: true,
+    roster: true,
+    error: null
+  })
+
+  await kernel.setAdvisorSystemEnabled(true)
+  assert.equal(kernel.getState().advisor.systemEnabled, true)
+  assert.deepEqual(runtime.commands.slice(-3), [
+    { type: 'prompt', message: '/advisor on' },
+    { type: 'get_state' },
+    { type: 'get_entries' }
+  ])
+
+  runtime.setConfirmToggle(false)
+  await assert.rejects(
+    kernel.setAdvisorSystemEnabled(false),
+    /did not confirm/
+  )
+  assert.equal(kernel.getState().advisor.systemEnabled, true)
+})
+
+test('advisor commands require strict boolean payloads', () => {
+  for (const type of [
+    'kernel.set-advisor-system-enabled',
+    'kernel.set-advisor-extension-enabled'
+  ] as const) {
+    assert.equal(isKernelCommand({ type, enabled: true }), true)
+    assert.equal(isKernelCommand({ type, enabled: false }), true)
+    assert.equal(isKernelCommand({ type, enabled: 'true' }), false)
+    assert.equal(isKernelCommand({ type, enabled: true, extra: true }), false)
+  }
+})
+
 test('normal start and stop follows the lifecycle', async () => {
   const runtime = new FakeRuntimeHost()
   const kernel = new WorkbenchKernel(() => runtime, { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' }, kernelOptions())
@@ -626,12 +785,32 @@ test('general settings default to restore and update only after persistence succ
     }
   )
 
-  assert.deepEqual(kernel.getState().general, { startupWorkspaceRestore: 'restore', doubleClickBorderMaximize: true })
-  await kernel.setGeneral({ startupWorkspaceRestore: 'none', doubleClickBorderMaximize: true })
-  assert.deepEqual(persisted, [{ startupWorkspaceRestore: 'none', doubleClickBorderMaximize: true }])
-  assert.deepEqual(kernel.getState().general, { startupWorkspaceRestore: 'none', doubleClickBorderMaximize: true })
+  assert.deepEqual(kernel.getState().general, {
+    startupWorkspaceRestore: 'restore',
+    doubleClickBorderMaximize: true,
+    fastExtensionLoading: false
+  })
+  await kernel.setGeneral({
+    startupWorkspaceRestore: 'none',
+    doubleClickBorderMaximize: true,
+    fastExtensionLoading: false
+  })
+  assert.deepEqual(persisted, [{
+    startupWorkspaceRestore: 'none',
+    doubleClickBorderMaximize: true,
+    fastExtensionLoading: false
+  }])
+  assert.deepEqual(kernel.getState().general, {
+    startupWorkspaceRestore: 'none',
+    doubleClickBorderMaximize: true,
+    fastExtensionLoading: false
+  })
   await assert.rejects(
-    kernel.setGeneral({ startupWorkspaceRestore: 'invalid', doubleClickBorderMaximize: true } as unknown as GeneralSettings),
+    kernel.setGeneral({
+      startupWorkspaceRestore: 'invalid',
+      doubleClickBorderMaximize: true,
+      fastExtensionLoading: false
+    } as unknown as GeneralSettings),
     /Invalid general settings/
   )
 })
@@ -651,13 +830,44 @@ test('general settings can toggle double-click border maximize', async () => {
 
   await kernel.setGeneral({
     startupWorkspaceRestore: 'restore',
-    doubleClickBorderMaximize: false
+    doubleClickBorderMaximize: false,
+    fastExtensionLoading: false
   })
   assert.deepEqual(persisted, [{
     startupWorkspaceRestore: 'restore',
-    doubleClickBorderMaximize: false
+    doubleClickBorderMaximize: false,
+    fastExtensionLoading: false
   }])
   assert.equal(kernel.getState().general.doubleClickBorderMaximize, false)
+})
+
+test('fast extension loading is snapshotted only when a runtime is created', async () => {
+  const runtimes = [
+    new FakeRuntimeHost(),
+    new FakeRuntimeHost({ sessionId: 'session-2', sessionFile: '/tmp/session-2.jsonl' })
+  ]
+  const launches: boolean[] = []
+  const kernel = new WorkbenchKernel(
+    (_project, launchOptions) => {
+      launches.push(launchOptions.fastExtensionLoading)
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+
+  await kernel.start()
+  await kernel.setGeneral({
+    startupWorkspaceRestore: 'restore',
+    doubleClickBorderMaximize: true,
+    fastExtensionLoading: true
+  })
+  assert.deepEqual(launches, [false])
+
+  await kernel.start()
+  assert.deepEqual(launches, [false, true])
 })
 
 test('subagent settings update only after strict persistence succeeds', async () => {
@@ -676,17 +886,17 @@ test('subagent settings update only after strict persistence succeeds', async ()
   )
 
   assert.deepEqual(kernel.getState().subagent, DEFAULT_SUBAGENT_SETTINGS)
-  await kernel.setSubagent({ maxDepth: 2, preventCycles: false })
-  assert.deepEqual(persisted, [{ maxDepth: 2, preventCycles: false }])
-  assert.deepEqual(kernel.getState().subagent, { maxDepth: 2, preventCycles: false })
+  await kernel.setSubagent({ maxDepth: 2 })
+  assert.deepEqual(persisted, [{ maxDepth: 2 }])
+  assert.deepEqual(kernel.getState().subagent, { maxDepth: 2 })
   rejectPersistence = true
   await assert.rejects(
-    kernel.setSubagent({ maxDepth: 1, preventCycles: true }),
+    kernel.setSubagent({ maxDepth: 1 }),
     /subagent persistence failed/u
   )
-  assert.deepEqual(kernel.getState().subagent, { maxDepth: 2, preventCycles: false })
+  assert.deepEqual(kernel.getState().subagent, { maxDepth: 2 })
   await assert.rejects(
-    kernel.setSubagent({ maxDepth: 4 as 1, preventCycles: true }),
+    kernel.setSubagent({ maxDepth: 4 as 1 }),
     /Invalid subagent settings/u
   )
 })
@@ -909,14 +1119,93 @@ test('refreshes session usage after an assistant message reports usage', async (
   })
 })
 
+test('coalesces overlapping session usage refreshes per runtime', async () => {
+  const initialStats: PiRpcSessionStats = {
+    sessionId: 'session-1',
+    sessionFile: '/tmp/session-1.jsonl',
+    userMessages: 0,
+    assistantMessages: 0,
+    toolCalls: 0,
+    toolResults: 0,
+    totalMessages: 0,
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    cost: 0
+  }
+  const runtime = new DeferredSessionStatsRuntimeHost(
+    undefined,
+    [],
+    [],
+    undefined,
+    initialStats
+  )
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  await kernel.start()
+  runtime.beginDeferringSessionStats()
+
+  for (const [timestamp, text] of [[1, 'First'], [2, 'Second']] as const) {
+    runtime.emit({
+      type: 'pi-event',
+      event: {
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text }],
+          timestamp,
+          usage: { input: timestamp, output: timestamp, cacheRead: 0, cacheWrite: 0 }
+        }
+      }
+    })
+  }
+  assert.equal(runtime.pendingSessionStatsCount(), 1)
+
+  runtime.resolveNextSessionStats({
+    ...initialStats,
+    assistantMessages: 1,
+    totalMessages: 2,
+    tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, total: 15 }
+  })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(runtime.pendingSessionStatsCount(), 1)
+
+  runtime.resolveNextSessionStats({
+    ...initialStats,
+    assistantMessages: 2,
+    totalMessages: 4,
+    tokens: { input: 20, output: 10, cacheRead: 0, cacheWrite: 0, total: 30 }
+  })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+
+  assert.equal(runtime.pendingSessionStatsCount(), 0)
+  assert.equal(kernel.getState().session.usage?.totalTokens, 30)
+  assert.equal(kernel.getState().sessions[0]?.statistics?.totalMessages, 4)
+})
+
 test('discovers the normalized command catalog and routes typed commands', async () => {
   const runtime = new FakeRuntimeHost(
     undefined,
     [],
     [
-      { name: 'review', description: 'Review changes', source: 'extension' },
-      { name: 'ship', description: 'Prepare release', source: 'prompt' },
-      { name: 'skill:verify', source: 'skill' }
+      {
+        name: 'review',
+        description: 'Review changes',
+        source: 'extension',
+        sourceInfo: { source: 'review-extension', scope: 'project', origin: 'top-level' }
+      },
+      {
+        name: 'ship',
+        description: 'Prepare release',
+        source: 'prompt',
+        sourceInfo: { source: 'ship', scope: 'project', origin: 'top-level' }
+      },
+      {
+        name: 'skill:verify',
+        source: 'skill',
+        sourceInfo: { source: 'verify', scope: 'project', origin: 'top-level' }
+      }
     ]
   )
   const kernel = new WorkbenchKernel(
@@ -954,6 +1243,17 @@ test('discovers the normalized command catalog and routes typed commands', async
     { type: 'set_session_name', name: 'Release planning' },
     { type: 'get_state' }
   ])
+  assert.deepEqual(
+    kernel.getState().conversation.entries
+      .filter((entry) => entry.kind === 'command')
+      .map((entry) => entry.kind === 'command' ? entry.text : null),
+    [
+      '/model openrouter/anthropic/claude-test',
+      '/thinking high',
+      '/compact Preserve decisions',
+      '/name Release planning'
+    ]
+  )
 })
 
 test('compact atomically rebuilds the conversation and preserves it when projection fails', async () => {
@@ -975,8 +1275,9 @@ test('compact atomically rebuilds the conversation and preserves it when project
   await kernel.invokeCommand(COMPACT_COMMAND_ID, '')
 
   let entries = kernel.getState().conversation.entries
-  assert.equal(entries.length, 1)
+  assert.equal(entries.length, 2)
   assert.equal(entries[0]?.kind === 'message' ? entries[0].text : null, 'Compacted summary')
+  assert.equal(entries[1]?.kind === 'command' ? entries[1].text : null, '/compact')
   assert.deepEqual(runtime.commands.slice(-4), [
     { type: 'compact' },
     { type: 'get_state' },
@@ -1068,6 +1369,185 @@ test('compaction lifecycle normalizes all reasons and rejects malformed reasons'
   await kernel.start()
   runtime.emit({ type: 'pi-event', event: { type: 'compaction_start', reason: 'unknown' } })
   assert.equal(kernel.getState().session.compaction, null)
+})
+
+test('compaction terminal settlement is atomic under reentrant lifecycle listeners', async () => {
+  const runtime = new FakeRuntimeHost()
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  await kernel.start()
+
+  type Lifecycle = {
+    revision: number
+    promise: Promise<void>
+    settled: boolean
+  }
+  const lifecycle = (): Lifecycle => {
+    const context = (kernel as unknown as {
+      activeContext: { compactionLifecycle: Lifecycle | null } | null
+    }).activeContext
+    assert.ok(context?.compactionLifecycle)
+    return context.compactionLifecycle
+  }
+
+  const events: KernelEvent[] = []
+  let reentered = false
+  let secondLifecycle: Lifecycle | null = null
+  kernel.subscribe((event) => {
+    if (
+      event.type !== 'kernel.compaction-started' &&
+      event.type !== 'kernel.compaction-ended'
+    ) return
+    events.push(event)
+    if (event.type === 'kernel.compaction-ended' && event.outcome === 'completed' && !reentered) {
+      reentered = true
+      runtime.emit({ type: 'pi-event', event: { type: 'compaction_start', reason: 'threshold' } })
+      secondLifecycle = lifecycle()
+      runtime.emit({
+        type: 'pi-event',
+        event: {
+          type: 'compaction_end',
+          reason: 'threshold',
+          result: null,
+          aborted: true,
+          willRetry: false
+        }
+      })
+    }
+  })
+
+  runtime.emit({ type: 'pi-event', event: { type: 'compaction_start', reason: 'manual' } })
+  const firstLifecycle = lifecycle()
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'compaction_end',
+      reason: 'manual',
+      result: { summary: 'Compacted', firstKeptEntryId: 'kept', tokensBefore: 100 },
+      aborted: false,
+      willRetry: false
+    }
+  })
+
+  await firstLifecycle.promise
+  const observedSecondLifecycle = secondLifecycle as Lifecycle | null
+  assert.ok(observedSecondLifecycle)
+  await assert.rejects(observedSecondLifecycle.promise, /cancelled/)
+  assert.notEqual(observedSecondLifecycle, firstLifecycle)
+  assert.equal(observedSecondLifecycle.revision, firstLifecycle.revision + 1)
+  assert.deepEqual(events, [
+    {
+      type: 'kernel.compaction-started',
+      projectKey: '/tmp/project',
+      sessionKey: '/tmp/session-1.jsonl',
+      reason: 'manual'
+    },
+    {
+      type: 'kernel.compaction-ended',
+      projectKey: '/tmp/project',
+      sessionKey: '/tmp/session-1.jsonl',
+      reason: 'manual',
+      outcome: 'completed',
+      willRetry: false
+    },
+    {
+      type: 'kernel.compaction-started',
+      projectKey: '/tmp/project',
+      sessionKey: '/tmp/session-1.jsonl',
+      reason: 'threshold'
+    },
+    {
+      type: 'kernel.compaction-ended',
+      projectKey: '/tmp/project',
+      sessionKey: '/tmp/session-1.jsonl',
+      reason: 'threshold',
+      outcome: 'cancelled',
+      willRetry: false
+    }
+  ])
+})
+
+test('duplicate compaction starts are idempotent and conflicting starts fail the open lifecycle', async () => {
+  const runtime = new FakeRuntimeHost()
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  await kernel.start()
+
+  type Lifecycle = { promise: Promise<void>, settled: boolean }
+  const currentLifecycle = (): Lifecycle => {
+    const context = (kernel as unknown as {
+      activeContext: { compactionLifecycle: Lifecycle | null } | null
+    }).activeContext
+    assert.ok(context?.compactionLifecycle)
+    return context.compactionLifecycle
+  }
+  const events: KernelEvent[] = []
+  kernel.subscribe((event) => {
+    if (
+      event.type === 'kernel.compaction-started' ||
+      event.type === 'kernel.compaction-ended'
+    ) events.push(event)
+  })
+
+  runtime.emit({ type: 'pi-event', event: { type: 'compaction_start', reason: 'manual' } })
+  const first = currentLifecycle()
+  runtime.emit({ type: 'pi-event', event: { type: 'compaction_start', reason: 'manual' } })
+  assert.equal(currentLifecycle(), first)
+  assert.equal(events.filter((event) => event.type === 'kernel.compaction-started').length, 1)
+
+  runtime.emit({ type: 'pi-event', event: { type: 'compaction_start', reason: 'threshold' } })
+  await assert.rejects(first.promise, /conflicting compaction start/)
+  assert.equal(first.settled, true)
+  assert.equal(kernel.getState().session.compaction, null)
+  assert.deepEqual(events, [
+    {
+      type: 'kernel.compaction-started',
+      projectKey: '/tmp/project',
+      sessionKey: '/tmp/session-1.jsonl',
+      reason: 'manual'
+    },
+    {
+      type: 'kernel.compaction-ended',
+      projectKey: '/tmp/project',
+      sessionKey: '/tmp/session-1.jsonl',
+      reason: 'manual',
+      outcome: 'failed',
+      willRetry: false
+    }
+  ])
+})
+
+test('fork operations fail before RPC while compaction is in progress', async () => {
+  const runtime = new FakeRuntimeHost()
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  await kernel.start()
+  runtime.emit({ type: 'pi-event', event: { type: 'compaction_start', reason: 'manual' } })
+  const commandsBefore = runtime.commands.length
+
+  await assert.rejects(kernel.listForkCandidates(), /Fork is unavailable while compaction is in progress/)
+  await assert.rejects(kernel.forkSession('entry-1'), /Fork is unavailable while compaction is in progress/)
+  assert.equal(runtime.commands.length, commandsBefore)
+
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'compaction_end',
+      reason: 'manual',
+      result: null,
+      aborted: true,
+      willRetry: false
+    }
+  })
 })
 
 test('overflow compaction accepts nullable wire results and preserves willRetry', async () => {
@@ -1596,8 +2076,25 @@ test('invokes catalog prompt commands without passing unknown slash text through
     undefined,
     [],
     [
-      { name: 'review', source: 'extension' },
-      { name: 'ship', source: 'prompt' }
+      {
+        name: 'review',
+        source: 'extension',
+        sourceInfo: { source: 'review-extension', scope: 'project', origin: 'top-level' }
+      },
+      {
+        name: 'ship',
+        source: 'prompt',
+        sourceInfo: { source: 'ship', scope: 'project', origin: 'top-level' }
+      },
+      {
+        name: 'ctx-status',
+        source: 'extension',
+        sourceInfo: {
+          source: '@cortexkit/pi-magic-context',
+          scope: 'user',
+          origin: 'package'
+        }
+      }
     ]
   )
   const kernel = new WorkbenchKernel(
@@ -1609,8 +2106,10 @@ test('invokes catalog prompt commands without passing unknown slash text through
   await kernel.start()
   const extension = kernel.getState().commands.find(({ name }) => name === 'review')
   const prompt = kernel.getState().commands.find(({ name }) => name === 'ship')
+  const magicStatus = kernel.getState().commands.find(({ name }) => name === 'ctx-status')
   assert.ok(extension)
   assert.ok(prompt)
+  assert.ok(magicStatus)
 
   await kernel.invokeCommand(extension.id, 'current diff')
   assert.equal(kernel.getState().runtime.status, 'ready')
@@ -1618,6 +2117,13 @@ test('invokes catalog prompt commands without passing unknown slash text through
     { type: 'prompt', message: '/review current diff' },
     { type: 'get_state' }
   ])
+  const commandEcho = kernel.getState().conversation.entries.find(
+    (entry) => entry.kind === 'command'
+  )
+  assert.equal(
+    commandEcho?.kind === 'command' ? commandEcho.text : null,
+    '/review current diff'
+  )
 
   runtime.setStreaming(true)
   await kernel.invokeCommand(prompt.id, '')
@@ -1629,6 +2135,26 @@ test('invokes catalog prompt commands without passing unknown slash text through
   runtime.setStreaming(false)
   runtime.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
   assert.equal(kernel.getState().runtime.status, 'ready')
+
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'extension_ui_request',
+      method: 'setStatus',
+      statusKey: 'magic-context',
+      statusText: 'mc: 8.2k (13%) · idle'
+    }
+  })
+  await kernel.invokeCommand(magicStatus.id, '')
+  const magicEntries = kernel.getState().conversation.entries.filter(
+    (entry) => entry.kind === 'extension-status'
+  )
+  assert.deepEqual(magicEntries.map((entry) => entry.kind === 'extension-status'
+    ? { title: entry.title, text: entry.text, level: entry.level }
+    : null), [
+    { title: 'Magic Context', text: 'mc: 8.2k (13%) · idle', level: 'info' },
+    { title: 'Magic Context 状态', text: 'mc: 8.2k (13%) · idle', level: 'info' }
+  ])
 
   await assert.rejects(kernel.invokeCommand('missing-command', ''), /not available/)
   await assert.rejects(kernel.invokeCommand(SET_MODEL_COMMAND_ID, 'missing-provider'), /provider\/model/)
@@ -2300,6 +2826,7 @@ test('Pi patches append tool output and falls back for a non-prefix message rewr
     : undefined
   assert.equal(toolPatch?.type, 'append-tool-output')
   if (toolPatch?.type === 'append-tool-output') {
+    assert.equal(toolPatch.toolCallId, 'tool-1')
     assert.equal(toolPatch.from, 0)
     assert.equal(toolPatch.output, 'abcdef')
   }
@@ -2324,6 +2851,279 @@ test('Pi patches append tool output and falls back for a non-prefix message rewr
   if (rewrittenEvent?.type === 'kernel.state-changed') {
     const rewrittenEntry = rewrittenEvent.state.conversation.entries.at(-1)
     assert.equal(rewrittenEntry?.kind === 'message' ? rewrittenEntry.text : null, 'Rewritten')
+  }
+})
+
+test('Subagent metadata-only tool changes use full state while output growth stays atomic', async () => {
+  const runtime = new FakeRuntimeHost()
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  await kernel.start()
+  const events: KernelEvent[] = []
+  kernel.subscribe((event) => events.push(event))
+  const args = { agent: 'reviewer', task: 'Review renderer' }
+
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_start',
+      toolCallId: 'subagent-1',
+      toolName: 'subagent',
+      args
+    }
+  })
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_update',
+      toolCallId: 'subagent-1',
+      toolName: 'subagent',
+      args,
+      partialResult: {
+        content: [{ type: 'text', text: 'working' }],
+        details: {
+          mode: 'single',
+          runId: 'run-1',
+          progress: [{
+            index: 0,
+            agent: 'reviewer',
+            task: 'Review renderer',
+            status: 'running',
+            currentTool: 'read',
+            toolCount: 1,
+            turnCount: 1,
+            tokens: 100,
+            durationMs: 500
+          }]
+        }
+      }
+    }
+  })
+
+  const growthEvent = events.at(-1)
+  assert.equal(growthEvent?.type, 'kernel.state-patched')
+  const growthPatch = growthEvent?.type === 'kernel.state-patched'
+    ? growthEvent.patch.conversation?.entries?.[0]
+    : undefined
+  assert.equal(growthPatch?.type, 'append-tool-output')
+  if (growthPatch?.type === 'append-tool-output') {
+    assert.equal(growthPatch.toolCallId, 'subagent-1')
+    assert.equal(growthPatch.output, 'working')
+    assert.equal(growthPatch.status, 'running')
+    assert.equal(growthPatch.subagent?.participants[0]?.currentTool, 'read')
+    assert.equal(growthPatch.subagent?.participants[0]?.tokens, 100)
+    const participant = growthPatch.subagent?.participants[0]
+    assert.ok(participant)
+    participant.currentTool = 'mutated externally'
+    const storedTool = kernel.getState().conversation.entries[0]
+    assert.equal(
+      storedTool?.kind === 'tool' ? storedTool.subagent?.participants[0]?.currentTool : null,
+      'read'
+    )
+  }
+
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_update',
+      toolCallId: 'subagent-1',
+      toolName: 'subagent',
+      args,
+      partialResult: {
+        content: [{ type: 'text', text: 'working' }],
+        details: {
+          mode: 'single',
+          runId: 'run-1',
+          progress: [{
+            index: 0,
+            agent: 'reviewer',
+            task: 'Review renderer',
+            status: 'running',
+            currentTool: 'grep',
+            toolCount: 2,
+            turnCount: 2,
+            tokens: 250,
+            durationMs: 900
+          }]
+        }
+      }
+    }
+  })
+
+  const metadataEvent = events.at(-1)
+  assert.equal(metadataEvent?.type, 'kernel.state-changed')
+  if (metadataEvent?.type === 'kernel.state-changed') {
+    const tool = metadataEvent.state.conversation.entries[0]
+    assert.equal(tool?.kind === 'tool' ? tool.output : null, 'working')
+    assert.equal(tool?.kind === 'tool' ? tool.subagent?.participants[0]?.currentTool : null, 'grep')
+    assert.equal(tool?.kind === 'tool' ? tool.subagent?.participants[0]?.tokens : null, 250)
+  }
+
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_end',
+      toolCallId: 'subagent-1',
+      toolName: 'subagent',
+      result: {
+        content: [{ type: 'text', text: 'working' }],
+        details: {
+          mode: 'single',
+          runId: 'run-1',
+          progress: [{
+            index: 0,
+            agent: 'reviewer',
+            task: 'Review renderer',
+            status: 'completed',
+            toolCount: 2,
+            turnCount: 2,
+            tokens: 250,
+            durationMs: 1200
+          }],
+          results: [{
+            index: 0,
+            agent: 'reviewer',
+            status: 'completed',
+            finalOutput: 'Review complete.'
+          }]
+        }
+      },
+      isError: false
+    }
+  })
+
+  const terminalEvent = events.at(-1)
+  assert.equal(terminalEvent?.type, 'kernel.state-changed')
+  if (terminalEvent?.type === 'kernel.state-changed') {
+    const tool = terminalEvent.state.conversation.entries[0]
+    assert.equal(tool?.kind === 'tool' ? tool.status : null, 'success')
+    assert.equal(tool?.kind === 'tool' ? tool.output : null, 'working')
+    assert.equal(tool?.kind === 'tool' ? tool.subagent?.participants[0]?.status : null, 'completed')
+    assert.equal(
+      tool?.kind === 'tool' ? tool.subagent?.participants[0]?.finalOutput : null,
+      'Review complete.'
+    )
+  }
+})
+
+test('a successful supervisor reply publishes the handled request through full state', async () => {
+  const runtime = new FakeRuntimeHost()
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  await kernel.start()
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_end',
+      message: {
+        role: 'custom',
+        customType: 'subagent_supervisor_request',
+        content: '请提供当前 Git 状态。',
+        display: true,
+        details: {
+          id: 'request-1',
+          reason: 'need_decision',
+          expectsReply: true,
+          runId: 'run-1',
+          agent: 'explorer',
+          childIndex: 0
+        },
+        timestamp: 40
+      }
+    }
+  })
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_start',
+      toolCallId: 'supervisor-reply-1',
+      toolName: 'subagent_supervisor',
+      args: {
+        action: 'reply',
+        replyTo: 'request-1',
+        message: '状态已提供。'
+      }
+    }
+  })
+  const events: KernelEvent[] = []
+  kernel.subscribe((event) => events.push(event))
+
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_end',
+      toolCallId: 'supervisor-reply-1',
+      toolName: 'subagent_supervisor',
+      result: { content: [{ type: 'text', text: 'Replied.' }] },
+      isError: false
+    }
+  })
+
+  const event = events.at(-1)
+  assert.equal(event?.type, 'kernel.state-changed')
+  if (event?.type === 'kernel.state-changed') {
+    const notice = event.state.conversation.entries.find((entry) =>
+      entry.kind === 'subagent-notice' && entry.noticeType === 'request'
+    )
+    assert.equal(notice?.kind === 'subagent-notice' ? notice.coordination?.status : null, 'handled')
+    assert.ok(notice?.kind === 'subagent-notice' && notice.coordination !== undefined)
+    notice.coordination.status = 'pending'
+    const storedNotice = kernel.getState().conversation.entries.find((entry) =>
+      entry.kind === 'subagent-notice' && entry.noticeType === 'request'
+    )
+    assert.equal(
+      storedNotice?.kind === 'subagent-notice' ? storedNotice.coordination?.status : null,
+      'handled'
+    )
+  }
+})
+
+test('message and thinking metadata-only settlement uses the full-state fallback', async () => {
+  const runtime = new FakeRuntimeHost()
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  await kernel.start()
+  const events: KernelEvent[] = []
+  kernel.subscribe((event) => events.push(event))
+  const message = {
+    role: 'assistant' as const,
+    content: [
+      { type: 'thinking' as const, thinking: 'Stable reasoning.' },
+      { type: 'text' as const, text: 'Stable answer.' }
+    ],
+    timestamp: 31
+  }
+
+  runtime.emit({
+    type: 'pi-event',
+    event: { type: 'message_update', message }
+  })
+  events.length = 0
+  runtime.emit({
+    type: 'pi-event',
+    event: { type: 'message_end', message }
+  })
+
+  const settledEvent = events.at(-1)
+  assert.equal(settledEvent?.type, 'kernel.state-changed')
+  if (settledEvent?.type === 'kernel.state-changed') {
+    const projectedMessage = settledEvent.state.conversation.entries.find(
+      (entry) => entry.kind === 'message' && entry.role === 'assistant'
+    )
+    const projectedThinking = settledEvent.state.conversation.entries.find(
+      (entry) => entry.kind === 'thinking'
+    )
+    assert.equal(projectedMessage?.kind === 'message' ? projectedMessage.streaming : null, false)
+    assert.equal(projectedThinking?.kind === 'thinking' ? projectedThinking.streaming : null, false)
   }
 })
 
@@ -2729,25 +3529,88 @@ test('a new session whose JSONL is not written yet starts as an unregistered pro
     }
   )
 
+  const activityWindowStart = Date.now()
   await kernel.start()
+  const activityWindowEnd = Date.now()
 
   const state = kernel.getState()
   assert.equal(state.runtime.status, 'ready')
   assert.equal(state.session.id, 'provisional-session')
   assert.equal(state.session.resumeAvailable, false)
-  assert.equal(state.activeSessionKey, null)
-  assert.deepEqual(state.sessions, [{
-    key: existingPointer.sessionFile,
-    id: existingPointer.sessionId,
-    name: existingPointer.sessionName,
-    lastActivityAt: null,
-    runtimeStatus: 'stopped',
-    statistics: null
-  }])
+  assert.equal(state.activeSessionKey, '/tmp/provisional-session.jsonl')
+  assert.equal(state.sessions.length, 2)
+  assert.deepEqual(
+    state.sessions.map(({ lastActivityAt: _lastActivityAt, ...summary }) => summary),
+    [
+      {
+        key: '/tmp/provisional-session.jsonl',
+        id: 'provisional-session',
+        name: 'Provisional session',
+        runtimeStatus: 'ready',
+        provisional: true,
+        statistics: null
+      },
+      {
+        key: existingPointer.sessionFile,
+        id: existingPointer.sessionId,
+        name: existingPointer.sessionName,
+        runtimeStatus: 'stopped',
+        statistics: null
+      }
+    ]
+  )
+  const provisionalActivityAt = state.sessions[0]?.lastActivityAt
+  assert.equal(typeof provisionalActivityAt, 'number')
+  assert.ok(provisionalActivityAt !== null && provisionalActivityAt !== undefined)
+  assert.ok(provisionalActivityAt >= activityWindowStart)
+  assert.ok(provisionalActivityAt <= activityWindowEnd)
   assert.deepEqual(persisted, [])
 
   await kernel.prompt('Write the first turn')
   assert.deepEqual(runtime.commands.at(-1), { type: 'prompt', message: 'Write the first turn' })
+})
+
+test('repeated starts reuse the active empty provisional session until it receives a prompt', async () => {
+  const runtimes = [
+    new FakeRuntimeHost({
+      sessionId: 'empty-provisional',
+      sessionFile: '/tmp/empty-provisional.jsonl',
+      isStreaming: false
+    }),
+    new FakeRuntimeHost({
+      sessionId: 'next-provisional',
+      sessionFile: '/tmp/next-provisional.jsonl',
+      isStreaming: false
+    })
+  ]
+  let createCalls = 0
+  const kernel = new WorkbenchKernel(
+    () => runtimes[createCalls++]!,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      validateSession: async () => {
+        throw fileError('ENOENT', 'session file not written yet')
+      }
+    }
+  )
+
+  await kernel.start()
+  await kernel.start()
+
+  assert.equal(createCalls, 1)
+  assert.equal(runtimes[0].startCalls, 1)
+  assert.deepEqual(kernel.getState().sessions.map(({ id }) => id), ['empty-provisional'])
+
+  await kernel.prompt('Begin the first conversation')
+  await kernel.start()
+
+  assert.equal(createCalls, 2)
+  assert.equal(runtimes[1].startCalls, 1)
+  assert.deepEqual(
+    new Set(kernel.getState().sessions.map(({ id }) => id)),
+    new Set(['empty-provisional', 'next-provisional'])
+  )
 })
 
 test('the settled first turn uses a low-cost model to generate and persist a purpose-based session name', async () => {
@@ -2968,7 +3831,8 @@ test('the first assistant message materializes a provisional session before sett
   await entered
 
   assert.equal(kernel.getState().runtime.status, 'running')
-  assert.equal(kernel.getState().activeSessionKey, null)
+  assert.equal(kernel.getState().activeSessionKey, '/tmp/provisional-session.jsonl')
+  assert.equal(kernel.getState().sessions[0]?.provisional, true)
   const committed = new Promise<void>((resolve) => {
     const unsubscribe = kernel.subscribe(() => {
       const state = kernel.getState()
@@ -3114,6 +3978,7 @@ test('a non-ENOENT provisional commit failure crashes without registering a ghos
   assert.equal(state.runtime.status, 'crashed')
   assert.match(state.runtime.lastError ?? '', /unreadable/)
   assert.equal(state.activeSessionKey, null)
+  assert.equal(state.sessions.some((summary) => summary.provisional === true), false)
   assert.deepEqual(state.sessions, [])
   assert.deepEqual(persisted, [])
 })
@@ -3202,8 +4067,16 @@ test('activating a registered session preserves and reuses managed runtimes', as
 
   assert.equal(firstRuntime.stopCalls, 0)
   assert.deepEqual(launches, [
-    { sessionFile: firstPointer.sessionFile, subagent: DEFAULT_SUBAGENT_SETTINGS },
-    { sessionFile: secondPointer.sessionFile, subagent: DEFAULT_SUBAGENT_SETTINGS }
+    {
+      sessionFile: firstPointer.sessionFile,
+      subagent: DEFAULT_SUBAGENT_SETTINGS,
+      fastExtensionLoading: false
+    },
+    {
+      sessionFile: secondPointer.sessionFile,
+      subagent: DEFAULT_SUBAGENT_SETTINGS,
+      fastExtensionLoading: false
+    }
   ])
   assert.equal(kernel.getState().activeSessionKey, secondPointer.sessionFile)
   assert.equal(kernel.getState().session.id, secondPointer.sessionId)
@@ -3813,7 +4686,10 @@ test('explicit resume after a crash reuses the managed crashed runtime', async (
   await kernel.resumeSession()
 
   assert.equal(kernel.getState().runtime.status, 'crashed')
-  assert.deepEqual(launches, [{ subagent: DEFAULT_SUBAGENT_SETTINGS }])
+  assert.deepEqual(launches, [{
+    subagent: DEFAULT_SUBAGENT_SETTINGS,
+    fastExtensionLoading: false
+  }])
   assert.equal(resumedRuntime.startCalls, 0)
 })
 
@@ -3845,7 +4721,8 @@ test('a stored pointer is resumable from a stopped kernel relaunch', async () =>
 
   assert.deepEqual(launches, [{
     sessionFile: pointer.sessionFile,
-    subagent: DEFAULT_SUBAGENT_SETTINGS
+    subagent: DEFAULT_SUBAGENT_SETTINGS,
+    fastExtensionLoading: false
   }])
   assert.equal(kernel.getState().runtime.status, 'ready')
 })
@@ -4307,13 +5184,58 @@ test('managed sessions keep independent runtimes and projections across active s
 
   assert.equal(runtimeA.stopCalls, 0)
   assert.equal(kernel.getState().session.id, 'session-b')
+  const backgroundEvents: KernelEvent[] = []
+  const unsubscribeBackgroundEvents = kernel.subscribe((event) => backgroundEvents.push(event))
+  for (const text of ['A', 'A background']) {
+    runtimeA.emit({
+      type: 'pi-event',
+      event: {
+        type: 'message_update',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: `Thinking about ${text}` },
+            { type: 'text', text }
+          ],
+          timestamp: 10
+        }
+      }
+    })
+  }
   runtimeA.emit({
     type: 'pi-event',
     event: {
-      type: 'message_update',
-      message: { role: 'assistant', content: [{ type: 'text', text: 'A background' }], timestamp: 10 }
+      type: 'tool_execution_start',
+      toolCallId: 'background-tool',
+      toolName: 'read',
+      args: { path: 'package.json' }
     }
   })
+  runtimeA.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_update',
+      toolCallId: 'background-tool',
+      toolName: 'read',
+      args: { path: 'package.json' },
+      partialResult: { content: [{ type: 'text', text: '{"name"' }] }
+    }
+  })
+  runtimeA.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'A background' }],
+        timestamp: 10,
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+      }
+    }
+  })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  unsubscribeBackgroundEvents()
+  assert.deepEqual(backgroundEvents, [])
   runtimeB.emit({
     type: 'pi-event',
     event: {
@@ -4331,7 +5253,9 @@ test('managed sessions keep independent runtimes and projections across active s
   await kernel.activateSession(firstPointer.sessionFile)
   assert.equal(runtimeA.startCalls, 1)
   assert.equal(kernel.getState().runtime.status, 'running')
-  const backgroundEntry = kernel.getState().conversation.entries[0]
+  const backgroundEntry = kernel.getState().conversation.entries.find(
+    (entry) => entry.kind === 'message'
+  )
   assert.equal(backgroundEntry?.kind === 'message' ? backgroundEntry.text : null, 'A background')
 
   await kernel.activateSession('/tmp/session-b.jsonl')
@@ -4528,6 +5452,7 @@ test('a background provisional session materializes without changing the foregro
     sessionFile: '/tmp/session-b.jsonl'
   })
   let validationCalls = 0
+  let now = 0
   const persisted: SessionPointer[] = []
   const kernel = new WorkbenchKernel(
     (() => {
@@ -4545,13 +5470,29 @@ test('a background provisional session materializes without changing the foregro
         validationCalls += 1
         if (validationCalls === 1) throw fileError('ENOENT', 'not written')
         return { ...pointer, sessionFile: '/tmp/materialized-a.jsonl' }
-      }
+      },
+      now: () => ++now
     }
   )
 
   await kernel.start()
   await kernel.prompt('Materialize A')
   await kernel.start()
+
+  const backgroundEvents: KernelEvent[] = []
+  const unsubscribeBackgroundEvents = kernel.subscribe((event) => backgroundEvents.push(event))
+  for (const text of ['A', 'A remains provisional']) {
+    provisionalRuntime.emit({
+      type: 'pi-event',
+      event: {
+        type: 'message_update',
+        message: { role: 'assistant', content: [{ type: 'text', text }], timestamp: 9 }
+      }
+    })
+  }
+  unsubscribeBackgroundEvents()
+  assert.deepEqual(backgroundEvents, [])
+
   provisionalRuntime.emit({
     type: 'pi-event',
     event: {
@@ -4574,6 +5515,214 @@ test('a background provisional session materializes without changing the foregro
   await kernel.activateSession('/tmp/materialized-a.jsonl')
   assert.equal(kernel.getState().session.id, 'provisional-a')
   assert.equal(kernel.getState().session.resumeAvailable, true)
+})
+
+test('background provisional materialization preserves concurrent session metadata and emits once', async () => {
+  const provisionalRuntime = new FakeRuntimeHost({
+    sessionId: 'provisional-race-a',
+    sessionFile: '/tmp/provisional-race-a.jsonl'
+  })
+  const foregroundRuntime = new FakeRuntimeHost({
+    sessionId: 'provisional-race-b',
+    sessionFile: '/tmp/provisional-race-b.jsonl'
+  })
+  const foregroundStats: PiRpcSessionStats = {
+    sessionId: 'provisional-race-b',
+    sessionFile: '/tmp/provisional-race-b.jsonl',
+    userMessages: 1,
+    assistantMessages: 1,
+    toolCalls: 0,
+    toolResults: 0,
+    totalMessages: 2,
+    tokens: { input: 31, output: 17, cacheRead: 0, cacheWrite: 0, total: 48 },
+    cost: 0.02
+  }
+  const provisionalStats: KernelSessionStatistics = {
+    userMessages: 1,
+    assistantMessages: 1,
+    toolCalls: 0,
+    toolResults: 0,
+    totalMessages: 2,
+    inputTokens: 13,
+    outputTokens: 8,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    totalTokens: 21,
+    cost: 0.01
+  }
+  let firstProvisionalValidation = true
+  let metadataReadEntered!: () => void
+  let releaseMetadataRead!: () => void
+  const metadataReadStarted = new Promise<void>((resolve) => {
+    metadataReadEntered = resolve
+  })
+  const metadataReadGate = new Promise<void>((resolve) => {
+    releaseMetadataRead = resolve
+  })
+  const kernel = new WorkbenchKernel(
+    (() => {
+      const runtimes = [provisionalRuntime, foregroundRuntime]
+      return () => {
+        const runtime = runtimes.shift()
+        assert.ok(runtime)
+        return runtime
+      }
+    })(),
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      validateSession: async (pointer) => {
+        if (pointer.sessionId !== 'provisional-race-a') return pointer
+        if (firstProvisionalValidation) {
+          firstProvisionalValidation = false
+          throw fileError('ENOENT', 'not written')
+        }
+        return { ...pointer, sessionFile: '/tmp/materialized-race-a.jsonl' }
+      },
+      readSessionActivityAt: async (pointer) => {
+        if (pointer.sessionId === 'provisional-race-a') {
+          metadataReadEntered()
+          await metadataReadGate
+        }
+        return pointer.sessionId === 'provisional-race-a' ? 200 : 100
+      },
+      readSessionStatistics: async () => provisionalStats
+    }
+  )
+
+  await kernel.start()
+  await kernel.prompt('Materialize A without losing B metadata')
+  await kernel.start()
+  provisionalRuntime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'A is written' }],
+        timestamp: 10
+      }
+    }
+  })
+  await metadataReadStarted
+
+  foregroundRuntime.setSessionStats(foregroundStats)
+  foregroundRuntime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'B updates while A waits' }],
+        timestamp: 11,
+        usage: { input: 31, output: 17, cacheRead: 0, cacheWrite: 0 }
+      }
+    }
+  })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(
+    kernel.getState().sessions.find(({ id }) => id === 'provisional-race-b')?.statistics?.totalTokens,
+    48
+  )
+
+  const foregroundBefore = kernel.getState().conversation.entries
+  const events: KernelEvent[] = []
+  const unsubscribe = kernel.subscribe((event) => events.push(event))
+  releaseMetadataRead()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  unsubscribe()
+
+  const stateChanged = events.filter((event) => event.type === 'kernel.state-changed')
+  assert.equal(stateChanged.length, 1)
+  if (stateChanged[0]?.type === 'kernel.state-changed') {
+    assert.equal(stateChanged[0].state.session.id, 'provisional-race-b')
+    assert.deepEqual(stateChanged[0].state.conversation.entries, foregroundBefore)
+  }
+  const state = kernel.getState()
+  assert.equal(
+    state.sessions.find(({ id }) => id === 'provisional-race-b')?.statistics?.totalTokens,
+    48
+  )
+  assert.equal(
+    state.sessions.find(({ id }) => id === 'provisional-race-a')?.statistics?.totalTokens,
+    21
+  )
+})
+
+test('background provisional materialization failure emits one foreground navigation snapshot', async () => {
+  const provisionalRuntime = new FakeRuntimeHost({
+    sessionId: 'provisional-failure-a',
+    sessionFile: '/tmp/provisional-failure-a.jsonl'
+  })
+  const foregroundRuntime = new FakeRuntimeHost({
+    sessionId: 'provisional-failure-b',
+    sessionFile: '/tmp/provisional-failure-b.jsonl'
+  })
+  let firstProvisionalValidation = true
+  let resolveFailureAttempted!: () => void
+  const failureAttempted = new Promise<void>((resolve) => {
+    resolveFailureAttempted = resolve
+  })
+  const kernel = new WorkbenchKernel(
+    (() => {
+      const runtimes = [provisionalRuntime, foregroundRuntime]
+      return () => {
+        const runtime = runtimes.shift()
+        assert.ok(runtime)
+        return runtime
+      }
+    })(),
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      validateSession: async (pointer) => {
+        if (pointer.sessionId !== 'provisional-failure-a') return pointer
+        if (firstProvisionalValidation) {
+          firstProvisionalValidation = false
+          throw fileError('ENOENT', 'not written')
+        }
+        resolveFailureAttempted()
+        throw new Error('background provisional validation failed')
+      },
+      now: () => 100
+    }
+  )
+
+  await kernel.start()
+  await kernel.prompt('Fail materialization without replacing B')
+  await kernel.start()
+  const foregroundBefore = kernel.getState().conversation.entries
+  const events: KernelEvent[] = []
+  const unsubscribe = kernel.subscribe((event) => events.push(event))
+  provisionalRuntime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'A fails to materialize' }],
+        timestamp: 10
+      }
+    }
+  })
+  await failureAttempted
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  unsubscribe()
+
+  const stateChanged = events.filter((event) => event.type === 'kernel.state-changed')
+  assert.equal(stateChanged.length, 1)
+  if (stateChanged[0]?.type === 'kernel.state-changed') {
+    assert.equal(stateChanged[0].state.session.id, 'provisional-failure-b')
+    assert.deepEqual(stateChanged[0].state.conversation.entries, foregroundBefore)
+  }
+  assert.equal(kernel.getState().session.id, 'provisional-failure-b')
+  assert.deepEqual(kernel.getState().conversation.entries, foregroundBefore)
+  assert.equal(
+    kernel.getState().sessions.some(({ id }) => id === 'provisional-failure-b'),
+    true
+  )
 })
 
 test('project trust choices gate runtime creation and separate persisted from one-shot decisions', async (t) => {
@@ -4620,8 +5769,12 @@ test('project trust choices gate runtime creation and separate persisted from on
 
       assert.deepEqual(launchOptions, [
         scenario.override === undefined
-          ? { subagent: DEFAULT_SUBAGENT_SETTINGS }
-          : { projectTrust: scenario.override, subagent: DEFAULT_SUBAGENT_SETTINGS }
+          ? { subagent: DEFAULT_SUBAGENT_SETTINGS, fastExtensionLoading: false }
+          : {
+              projectTrust: scenario.override,
+              subagent: DEFAULT_SUBAGENT_SETTINGS,
+              fastExtensionLoading: false
+            }
       ])
       assert.deepEqual(persisted, scenario.persisted)
       assert.equal(kernel.getState().projectTrustRequest, null)
@@ -4674,7 +5827,10 @@ test('persistent project trust decisions reject concurrent resolve and remain re
   await kernel.resolveProjectTrust(request.id, 'persist-trusted')
   await start
   assert.equal(persistCalls, 2)
-  assert.deepEqual(launches, [{ subagent: DEFAULT_SUBAGENT_SETTINGS }])
+  assert.deepEqual(launches, [{
+    subagent: DEFAULT_SUBAGENT_SETTINGS,
+    fastExtensionLoading: false
+  }])
   releasePersistence()
 })
 
@@ -4738,7 +5894,10 @@ test('stored or inherited project trust decisions skip prompting and overrides',
   )
 
   await kernel.start()
-  assert.deepEqual(launches, [{ subagent: DEFAULT_SUBAGENT_SETTINGS }])
+  assert.deepEqual(launches, [{
+    subagent: DEFAULT_SUBAGENT_SETTINGS,
+    fastExtensionLoading: false
+  }])
   assert.equal(kernel.getState().projectTrustRequest, null)
 })
 
@@ -4780,7 +5939,11 @@ test('reload replaces only the active settled persisted runtime after refreshing
       thinkingLevel: 'high'
     },
     [{ role: 'assistant', content: [{ type: 'text', text: 'Fresh A' }], timestamp: 20 }],
-    [{ name: 'fresh', source: 'extension' }],
+    [{
+      name: 'fresh',
+      source: 'extension',
+      sourceInfo: { source: 'fresh-extension', scope: 'project', origin: 'top-level' }
+    }],
     [{ id: 'fresh-model', provider: 'fresh-provider' }]
   )
   const runtimes = [runtimeA, runtimeB, reloadedA]
@@ -4837,8 +6000,8 @@ test('reload replaces only the active settled persisted runtime after refreshing
   const entry = state.conversation.entries[0]
   assert.equal(entry?.kind === 'message' ? entry.text : null, 'Fresh A')
   assert.deepEqual(
-    reloadedA.commands.slice(0, 4).map(({ type }) => type),
-    ['get_state', 'get_messages', 'get_commands', 'get_available_models']
+    reloadedA.commands.slice(0, 5).map(({ type }) => type),
+    ['get_state', 'get_messages', 'get_commands', 'get_entries', 'get_available_models']
   )
 })
 
@@ -4982,7 +6145,8 @@ test('reload rejects unsettled and provisional ready sessions before replacing a
     )
     await kernel.start()
     assert.equal(kernel.getState().runtime.status, 'ready')
-    assert.equal(kernel.getState().activeSessionKey, null)
+    assert.equal(kernel.getState().activeSessionKey, '/tmp/reload-provisional.jsonl')
+    assert.equal(kernel.getState().sessions[0]?.provisional, true)
     assert.equal(kernel.getState().commands.some(({ id }) => id === RELOAD_SESSION_COMMAND_ID), false)
     await assert.rejects(kernel.reloadSession(), /active persisted session/)
     assert.equal(createCalls, 1)
@@ -5111,9 +6275,155 @@ test('fork candidates follow the active entry path and fork migrates the same ru
     [
       { type: 'get_entries' },
       { type: 'get_entries' },
-      { type: 'fork', entryId: 'selected-user' }
+      { type: 'get_entries' },
+      { type: 'fork', entryId: 'selected-user' },
+      { type: 'get_entries' }
     ]
   )
+})
+
+test('fork buffers runtime events across persisted identity commit and replays them on the fork', async () => {
+  const original: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/fork-buffer-original.jsonl',
+    sessionId: 'fork-buffer-original',
+    sessionName: 'Original'
+  }
+  const forked: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/fork-buffer-result.jsonl',
+    sessionId: 'fork-buffer-result',
+    sessionName: 'Forked'
+  }
+  const entries: PiRpcSessionEntry[] = [{
+    id: 'selected-user',
+    parentId: null,
+    type: 'message',
+    timestamp: '2026-07-24T01:00:00.000Z',
+    message: { role: 'user', content: { text: 'Selected prompt', hasImage: false } }
+  }]
+  const runtime = new ForkingRuntimeHost(
+    {
+      sessionId: original.sessionId,
+      sessionFile: original.sessionFile,
+      sessionName: original.sessionName ?? undefined,
+      isStreaming: false
+    },
+    [{ role: 'assistant', content: [{ type: 'text', text: 'Original' }], timestamp: 1 }],
+    entries,
+    'selected-user',
+    {
+      sessionId: forked.sessionId,
+      sessionFile: forked.sessionFile,
+      sessionName: forked.sessionName ?? undefined,
+      isStreaming: false
+    },
+    [{ role: 'assistant', content: [{ type: 'text', text: 'Forked' }], timestamp: 2 }]
+  )
+  let resolvePersistEntered!: () => void
+  let releasePersist!: () => void
+  const persistEntered = new Promise<void>((resolve) => {
+    resolvePersistEntered = resolve
+  })
+  const persistGate = new Promise<void>((resolve) => {
+    releasePersist = resolve
+  })
+  const persisted: SessionPointer[] = []
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(original, persisted),
+      persistSession: async (pointer) => {
+        if (pointer.sessionId === forked.sessionId) {
+          resolvePersistEntered()
+          await persistGate
+        }
+        persisted.push({ ...pointer })
+      }
+    }
+  )
+  await kernel.activateSession(original.sessionFile)
+
+  const lifecycleEvents: KernelEvent[] = []
+  let reentered = false
+  kernel.subscribe(() => {
+    throw new Error('observer failure must stay outside the Kernel state machine')
+  })
+  kernel.subscribe((event) => {
+    if (
+      event.type !== 'kernel.compaction-started' &&
+      event.type !== 'kernel.compaction-ended'
+    ) return
+    lifecycleEvents.push(event)
+    if (event.type === 'kernel.compaction-started' && event.reason === 'manual' && !reentered) {
+      reentered = true
+      runtime.emit({ type: 'pi-event', event: { type: 'compaction_start', reason: 'threshold' } })
+      runtime.emit({
+        type: 'pi-event',
+        event: {
+          type: 'compaction_end',
+          reason: 'threshold',
+          result: null,
+          aborted: true,
+          willRetry: false
+        }
+      })
+    }
+  })
+  const forkPromise = kernel.forkSession('selected-user')
+  await persistEntered
+
+  runtime.emit({ type: 'pi-event', event: { type: 'compaction_start', reason: 'manual' } })
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'compaction_end',
+      reason: 'manual',
+      result: null,
+      aborted: true,
+      willRetry: false
+    }
+  })
+  assert.equal(kernel.getState().activeSessionKey, original.sessionFile)
+  assert.equal(kernel.getState().session.compaction, null)
+
+  releasePersist()
+  assert.deepEqual(await forkPromise, { draft: 'Selected prompt', cancelled: false })
+  assert.equal(kernel.getState().activeSessionKey, forked.sessionFile)
+  assert.equal(kernel.getState().session.id, forked.sessionId)
+  assert.equal(kernel.getState().session.compaction, null)
+  assert.deepEqual(lifecycleEvents, [
+    {
+      type: 'kernel.compaction-started',
+      projectKey: '/tmp/project',
+      sessionKey: forked.sessionFile,
+      reason: 'manual'
+    },
+    {
+      type: 'kernel.compaction-ended',
+      projectKey: '/tmp/project',
+      sessionKey: forked.sessionFile,
+      reason: 'manual',
+      outcome: 'cancelled',
+      willRetry: false
+    },
+    {
+      type: 'kernel.compaction-started',
+      projectKey: '/tmp/project',
+      sessionKey: forked.sessionFile,
+      reason: 'threshold'
+    },
+    {
+      type: 'kernel.compaction-ended',
+      projectKey: '/tmp/project',
+      sessionKey: forked.sessionFile,
+      reason: 'threshold',
+      outcome: 'cancelled',
+      willRetry: false
+    }
+  ])
+  assert.equal(persisted.some(({ sessionId }) => sessionId === forked.sessionId), true)
 })
 
 test('failed post-fork projection stops the rebound runtime and preserves old identity', async () => {
@@ -5155,7 +6465,11 @@ test('failed post-fork projection stops the rebound runtime and preserves old id
   )
   await kernel.activateSession(pointer.sessionFile)
 
+  const unsubscribeThrowingListener = kernel.subscribe(() => {
+    throw new Error('observer must not interrupt failed-fork cleanup')
+  })
   await assert.rejects(kernel.forkSession('selected-user'), /forked messages unavailable/)
+  unsubscribeThrowingListener()
 
   const state = kernel.getState()
   const firstEntry = state.conversation.entries[0]
@@ -5264,4 +6578,2794 @@ test('archived preview is runtime-free, expiring, and consumes its credential', 
   now = 5_000
   await assert.rejects(kernel.previewArchivedSession(expiredReceipt.token), /expired/)
   assert.equal(readCalls, 1)
+})
+
+test('getState conversation entries are defensive copies of kernel-owned state', async () => {
+  const runtime = new FakeRuntimeHost(
+    undefined,
+    [{
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Owned text' }],
+      timestamp: 1
+    }]
+  )
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  await kernel.start()
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_start',
+      toolCallId: 'tool-1',
+      toolName: 'read',
+      args: { path: 'package.json' }
+    }
+  })
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_end',
+      toolCallId: 'tool-1',
+      toolName: 'read',
+      result: { content: [{ type: 'text', text: 'ok' }] },
+      isError: false
+    }
+  })
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_start',
+      toolCallId: 'subagent-1',
+      toolName: 'subagent',
+      args: { agent: 'reviewer', task: 'Review ownership' }
+    }
+  })
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_update',
+      toolCallId: 'subagent-1',
+      toolName: 'subagent',
+      args: { agent: 'reviewer', task: 'Review ownership' },
+      partialResult: {
+        content: [{ type: 'text', text: 'working' }],
+        details: {
+          mode: 'single',
+          runId: 'run-1',
+          progress: [{
+            index: 0,
+            agent: 'reviewer',
+            task: 'Review ownership',
+            status: 'running',
+            currentTool: 'read',
+            toolCount: 1,
+            turnCount: 1,
+            tokens: 100,
+            durationMs: 500
+          }]
+        }
+      }
+    }
+  })
+
+  const snapshot = kernel.getState()
+  const message = snapshot.conversation.entries.find((entry) => entry.kind === 'message')
+  const tool = snapshot.conversation.entries.find(
+    (entry) => entry.kind === 'tool' && entry.name === 'read'
+  )
+  const subagentTool = snapshot.conversation.entries.find(
+    (entry) => entry.kind === 'tool' && entry.name === 'subagent'
+  )
+  assert.ok(message && message.kind === 'message')
+  assert.ok(tool && tool.kind === 'tool')
+  assert.ok(subagentTool && subagentTool.kind === 'tool')
+  const participant = subagentTool.subagent?.participants[0]
+  assert.ok(participant)
+  message.text = 'mutated externally'
+  tool.output = 'mutated tool output'
+  tool.details = 'mutated details'
+  participant.currentTool = 'mutated externally'
+
+  const next = kernel.getState()
+  const nextMessage = next.conversation.entries.find((entry) => entry.kind === 'message')
+  const nextTool = next.conversation.entries.find(
+    (entry) => entry.kind === 'tool' && entry.name === 'read'
+  )
+  const nextSubagentTool = next.conversation.entries.find(
+    (entry) => entry.kind === 'tool' && entry.name === 'subagent'
+  )
+  assert.equal(nextMessage?.kind === 'message' ? nextMessage.text : null, 'Owned text')
+  assert.equal(nextTool?.kind === 'tool' ? nextTool.output : null, 'ok')
+  assert.notEqual(nextTool?.kind === 'tool' ? nextTool.details : null, 'mutated details')
+  assert.equal(
+    nextSubagentTool?.kind === 'tool'
+      ? nextSubagentTool.subagent?.participants[0]?.currentTool
+      : null,
+    'read'
+  )
+})
+
+test('background compaction with unchanged stats emits lifecycle only', async () => {
+  const pointerA: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage1-compaction-a.jsonl',
+    sessionId: 'stage1-compaction-a',
+    sessionName: 'A'
+  }
+  const pointerB: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage1-compaction-b.jsonl',
+    sessionId: 'stage1-compaction-b',
+    sessionName: 'B'
+  }
+  const sharedStats: PiRpcSessionStats = {
+    sessionId: pointerA.sessionId,
+    sessionFile: pointerA.sessionFile,
+    userMessages: 1,
+    assistantMessages: 1,
+    toolCalls: 0,
+    toolResults: 0,
+    totalMessages: 2,
+    tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, total: 15 },
+    cost: 0
+  }
+  const runtimeA = new FakeRuntimeHost(
+    { sessionId: pointerA.sessionId, sessionFile: pointerA.sessionFile },
+    [{ role: 'assistant', content: [{ type: 'text', text: 'Old A' }], timestamp: 1 }],
+    [],
+    undefined,
+    sharedStats
+  )
+  const runtimeB = new FakeRuntimeHost(
+    { sessionId: pointerB.sessionId, sessionFile: pointerB.sessionFile },
+    [{ role: 'assistant', content: [{ type: 'text', text: 'Foreground B' }], timestamp: 2 }]
+  )
+  const runtimes = [runtimeA, runtimeB]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [pointerA, pointerB],
+        activeSessionKey: pointerA.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(pointerA.sessionFile)
+  // Seed summary statistics so a later identical refresh is a navigation no-op.
+  runtimeA.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Old A' }],
+        timestamp: 1,
+        usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 }
+      }
+    }
+  })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  await kernel.activateSession(pointerB.sessionFile)
+
+  const foregroundBefore = kernel.getState().conversation.entries
+  const events: KernelEvent[] = []
+  const unsubscribe = kernel.subscribe((event) => events.push(event))
+  runtimeA.replaceMessages([
+    { role: 'assistant', content: [{ type: 'text', text: 'Compacted A' }], timestamp: 3 }
+  ])
+  // Same stats as already stored for A: navigation projection must not change.
+  runtimeA.setSessionStats(sharedStats)
+
+  const completed = waitForCompactionOutcome(kernel, 'completed')
+  runtimeA.emit({ type: 'pi-event', event: { type: 'compaction_start', reason: 'manual' } })
+  runtimeA.emit({
+    type: 'pi-event',
+    event: {
+      type: 'compaction_end',
+      reason: 'manual',
+      result: { summary: 'Compacted', firstKeptEntryId: 'kept', tokensBefore: 100 },
+      aborted: false,
+      willRetry: false
+    }
+  })
+  await completed
+  unsubscribe()
+
+  const stateChanged = events.filter((event) => event.type === 'kernel.state-changed')
+  const statePatched = events.filter((event) => event.type === 'kernel.state-patched')
+  const lifecycle = events.filter((event) => event.type === 'kernel.compaction-ended')
+  assert.equal(stateChanged.length, 0)
+  assert.equal(statePatched.length, 0)
+  assert.equal(lifecycle.length, 1)
+  assert.deepEqual(kernel.getState().conversation.entries, foregroundBefore)
+  assert.equal(kernel.getState().session.id, pointerB.sessionId)
+
+  await kernel.activateSession(pointerA.sessionFile)
+  const entry = kernel.getState().conversation.entries[0]
+  assert.equal(entry?.kind === 'message' ? entry.text : null, 'Compacted A')
+})
+
+test('background compaction with changed stats emits exactly one state snapshot', async () => {
+  const pointerA: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage1-stats-a.jsonl',
+    sessionId: 'stage1-stats-a',
+    sessionName: 'A'
+  }
+  const pointerB: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage1-stats-b.jsonl',
+    sessionId: 'stage1-stats-b',
+    sessionName: 'B'
+  }
+  const runtimeA = new FakeRuntimeHost(
+    { sessionId: pointerA.sessionId, sessionFile: pointerA.sessionFile },
+    [{ role: 'assistant', content: [{ type: 'text', text: 'Old A' }], timestamp: 1 }]
+  )
+  const runtimeB = new FakeRuntimeHost(
+    { sessionId: pointerB.sessionId, sessionFile: pointerB.sessionFile },
+    [{ role: 'assistant', content: [{ type: 'text', text: 'Foreground B' }], timestamp: 2 }]
+  )
+  const runtimes = [runtimeA, runtimeB]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [pointerA, pointerB],
+        activeSessionKey: pointerA.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(pointerA.sessionFile)
+  await kernel.activateSession(pointerB.sessionFile)
+  const foregroundBefore = kernel.getState().conversation.entries
+  const events: KernelEvent[] = []
+  const unsubscribe = kernel.subscribe((event) => events.push(event))
+  runtimeA.replaceMessages([
+    { role: 'assistant', content: [{ type: 'text', text: 'Compacted A' }], timestamp: 3 }
+  ])
+  runtimeA.setSessionStats({
+    sessionId: pointerA.sessionId,
+    sessionFile: pointerA.sessionFile,
+    userMessages: 1,
+    assistantMessages: 1,
+    toolCalls: 0,
+    toolResults: 0,
+    totalMessages: 2,
+    tokens: { input: 40, output: 20, cacheRead: 0, cacheWrite: 0, total: 60 },
+    cost: 0.1
+  })
+
+  const completed = waitForCompactionOutcome(kernel, 'completed')
+  runtimeA.emit({ type: 'pi-event', event: { type: 'compaction_start', reason: 'manual' } })
+  runtimeA.emit({
+    type: 'pi-event',
+    event: {
+      type: 'compaction_end',
+      reason: 'manual',
+      result: { summary: 'Compacted', firstKeptEntryId: 'kept', tokensBefore: 100 },
+      aborted: false,
+      willRetry: false
+    }
+  })
+  await completed
+  unsubscribe()
+
+  const stateChanged = events.filter((event) => event.type === 'kernel.state-changed')
+  assert.equal(stateChanged.length, 1)
+  assert.equal(stateChanged[0]?.type, 'kernel.state-changed')
+  if (stateChanged[0]?.type === 'kernel.state-changed') {
+    assert.equal(stateChanged[0].state.session.id, pointerB.sessionId)
+    assert.deepEqual(stateChanged[0].state.conversation.entries, foregroundBefore)
+    assert.equal(
+      stateChanged[0].state.sessions.find(({ id }) => id === pointerA.sessionId)?.statistics?.totalTokens,
+      60
+    )
+  }
+  assert.deepEqual(kernel.getState().conversation.entries, foregroundBefore)
+})
+
+test('background compaction projection failure emits lifecycle only', async () => {
+  const pointerA: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/session-1.jsonl',
+    sessionId: 'session-1',
+    sessionName: 'A'
+  }
+  const pointerB: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage1-compaction-failure-b.jsonl',
+    sessionId: 'stage1-compaction-failure-b',
+    sessionName: 'B'
+  }
+  const runtimeA = new CompactingRuntimeHost(
+    [{ role: 'assistant', content: [{ type: 'text', text: 'Old A' }], timestamp: 1 }],
+    [{ role: 'assistant', content: [{ type: 'text', text: 'Compacted A' }], timestamp: 3 }]
+  )
+  const runtimeB = new FakeRuntimeHost(
+    { sessionId: pointerB.sessionId, sessionFile: pointerB.sessionFile },
+    [{ role: 'assistant', content: [{ type: 'text', text: 'Foreground B' }], timestamp: 2 }]
+  )
+  const runtimes = [runtimeA, runtimeB]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [pointerA, pointerB],
+        activeSessionKey: pointerA.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(pointerA.sessionFile)
+  await kernel.activateSession(pointerB.sessionFile)
+  const foregroundBefore = kernel.getState().conversation.entries
+  const events: KernelEvent[] = []
+  const unsubscribe = kernel.subscribe((event) => events.push(event))
+  runtimeA.failNextCompactedProjection()
+  const failed = waitForCompactionOutcome(kernel, 'failed')
+  runtimeA.emit({ type: 'pi-event', event: { type: 'compaction_start', reason: 'manual' } })
+  runtimeA.emit({
+    type: 'pi-event',
+    event: {
+      type: 'compaction_end',
+      reason: 'manual',
+      result: { summary: 'Compacted', firstKeptEntryId: 'kept', tokensBefore: 100 },
+      aborted: false,
+      willRetry: false
+    }
+  })
+  const outcome = await failed
+  unsubscribe()
+
+  assert.equal(outcome.outcome, 'failed')
+  assert.equal(events.filter((event) => event.type === 'kernel.state-changed').length, 0)
+  assert.equal(events.filter((event) => event.type === 'kernel.state-patched').length, 0)
+  assert.equal(
+    events.filter(
+      (event) => event.type === 'kernel.compaction-ended' && event.outcome === 'failed'
+    ).length,
+    1
+  )
+  assert.equal(kernel.getState().session.id, pointerB.sessionId)
+  assert.deepEqual(kernel.getState().conversation.entries, foregroundBefore)
+
+  await kernel.activateSession(pointerA.sessionFile)
+  const entry = kernel.getState().conversation.entries[0]
+  assert.equal(entry?.kind === 'message' ? entry.text : null, 'Old A')
+  assert.equal(kernel.getState().session.compaction, null)
+})
+
+test('background automatic naming emits exactly one navigation state snapshot', async () => {
+  const pointerA: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage1-name-a.jsonl',
+    sessionId: 'stage1-name-a',
+    sessionName: null
+  }
+  const pointerB: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage1-name-b.jsonl',
+    sessionId: 'stage1-name-b',
+    sessionName: 'Foreground B'
+  }
+  const runtimeA = new FakeRuntimeHost(
+    {
+      sessionId: pointerA.sessionId,
+      sessionFile: pointerA.sessionFile,
+      model: { provider: 'openai', id: 'gpt-purpose' }
+    },
+    [
+      { role: 'user', content: [{ type: 'text', text: 'Name this session' }], timestamp: 1 },
+      { role: 'assistant', content: [{ type: 'text', text: 'Naming now' }], timestamp: 2 }
+    ]
+  )
+  const runtimeB = new FakeRuntimeHost({
+    sessionId: pointerB.sessionId,
+    sessionFile: pointerB.sessionFile,
+    sessionName: pointerB.sessionName ?? undefined
+  })
+  const runtimes = [runtimeA, runtimeB]
+  let resolveName!: (value: string) => void
+  const namePromise = new Promise<string>((resolve) => {
+    resolveName = resolve
+  })
+  let generationStarted = false
+  const persisted: SessionPointer[] = []
+  let observeNamePersistence = (): void => {}
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(null, persisted, [], [], async () => {
+        generationStarted = true
+        return namePromise
+      }),
+      persistSession: async (pointer) => {
+        observeNamePersistence()
+        persisted.push({ ...pointer })
+      },
+      sessionRegistry: {
+        sessions: [pointerA, pointerB],
+        activeSessionKey: pointerA.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(pointerA.sessionFile)
+  assert.equal(generationStarted, true)
+  await kernel.activateSession(pointerB.sessionFile)
+
+  const foregroundBefore = kernel.getState().conversation.entries
+  const spies = installStage2BStructuralSpies(kernel)
+  observeNamePersistence = () => {
+    assert.equal(kernel.getState().session.id, pointerB.sessionId)
+  }
+  const events: KernelEvent[] = []
+  const unsubscribe = kernel.subscribe((event) => events.push(event))
+  try {
+    resolveName('Generated A')
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  } finally {
+    unsubscribe()
+    spies.restore()
+  }
+
+  assert.equal(spies.loadContextCalls(), 0)
+  assert.equal(spies.suppressWrites(), 0)
+  const stateChanged = events.filter((event) => event.type === 'kernel.state-changed')
+  assert.equal(stateChanged.length, 1)
+  if (stateChanged[0]?.type === 'kernel.state-changed') {
+    assert.equal(stateChanged[0].state.session.id, pointerB.sessionId)
+    assert.deepEqual(stateChanged[0].state.conversation.entries, foregroundBefore)
+    assert.equal(
+      stateChanged[0].state.sessions.find(({ id }) => id === pointerA.sessionId)?.name,
+      'Generated A'
+    )
+  }
+  assert.deepEqual(kernel.getState().conversation.entries, foregroundBefore)
+})
+
+test('inactive async usage no-op emits zero state events', async () => {
+  const pointerA: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage1-usage-a.jsonl',
+    sessionId: 'stage1-usage-a',
+    sessionName: 'A'
+  }
+  const pointerB: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage1-usage-b.jsonl',
+    sessionId: 'stage1-usage-b',
+    sessionName: 'B'
+  }
+  const stats: PiRpcSessionStats = {
+    sessionId: pointerA.sessionId,
+    sessionFile: pointerA.sessionFile,
+    userMessages: 0,
+    assistantMessages: 1,
+    toolCalls: 0,
+    toolResults: 0,
+    totalMessages: 2,
+    tokens: { input: 11, output: 7, cacheRead: 0, cacheWrite: 0, total: 18 },
+    cost: 0
+  }
+  const runtimeA = new DeferredSessionStatsRuntimeHost(
+    { sessionId: pointerA.sessionId, sessionFile: pointerA.sessionFile },
+    [],
+    [],
+    undefined,
+    stats
+  )
+  const runtimeB = new FakeRuntimeHost({
+    sessionId: pointerB.sessionId,
+    sessionFile: pointerB.sessionFile,
+    sessionName: pointerB.sessionName ?? undefined
+  })
+  const runtimes = [runtimeA, runtimeB]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [pointerA, pointerB],
+        activeSessionKey: pointerA.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(pointerA.sessionFile)
+  runtimeA.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Seed usage' }],
+        timestamp: 1,
+        usage: { input: 11, output: 7, cacheRead: 0, cacheWrite: 0 }
+      }
+    }
+  })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  await kernel.activateSession(pointerB.sessionFile)
+
+  const foregroundBefore = kernel.getState().conversation.entries
+  runtimeA.beginDeferringSessionStats()
+  const events: KernelEvent[] = []
+  const unsubscribe = kernel.subscribe((event) => events.push(event))
+  runtimeA.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Background usage' }],
+        timestamp: 2,
+        usage: { input: 11, output: 7, cacheRead: 0, cacheWrite: 0 }
+      }
+    }
+  })
+  assert.equal(runtimeA.pendingSessionStatsCount(), 1)
+  // Resolve with identical stats: no navigation change, no publication.
+  runtimeA.resolveNextSessionStats(stats)
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  unsubscribe()
+
+  assert.equal(events.filter((event) => event.type === 'kernel.state-changed').length, 0)
+  assert.equal(events.filter((event) => event.type === 'kernel.state-patched').length, 0)
+  assert.deepEqual(kernel.getState().conversation.entries, foregroundBefore)
+  assert.equal(kernel.getState().session.id, pointerB.sessionId)
+})
+
+/**
+ * Stage 2A: inactive ordinary Pi streaming must never loadContext-swap into the
+ * active execution workspace. Narrow test-only cast reaches private loadContext.
+ */
+type WorkbenchKernelStage2AInternals = {
+  loadContext: (context: unknown) => void
+  projectNavigationState: (projectPath: string) => unknown
+  state: {
+    conversation: { entries: readonly unknown[], activeRunStartIndex: number | null }
+    session: { id: string | null, messageCount: number }
+    runtime: { status: RuntimeStatus }
+  }
+  runtime: RuntimeHost | null
+  activeContext: {
+    state: {
+      conversation: { entries: readonly unknown[], activeRunStartIndex: number | null }
+      session: { id: string | null, messageCount: number }
+    }
+    runtime: RuntimeHost
+    provisionalCommit: Promise<void> | null
+  } | null
+}
+
+function stage2AInternals(kernel: WorkbenchKernel): WorkbenchKernelStage2AInternals {
+  return kernel as unknown as WorkbenchKernelStage2AInternals
+}
+
+test('Stage 2A inactive ordinary streaming never calls loadContext and preserves foreground identity', async () => {
+  const pointerA: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2a-session-a.jsonl',
+    sessionId: 'stage2a-session-a',
+    sessionName: 'A'
+  }
+  const pointerB: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2a-session-b.jsonl',
+    sessionId: 'stage2a-session-b',
+    sessionName: 'B'
+  }
+  const runtimeA = new FakeRuntimeHost({
+    sessionId: pointerA.sessionId,
+    sessionFile: pointerA.sessionFile,
+    sessionName: pointerA.sessionName ?? undefined,
+    messageCount: 0
+  })
+  const runtimeB = new FakeRuntimeHost({
+    sessionId: pointerB.sessionId,
+    sessionFile: pointerB.sessionFile,
+    sessionName: pointerB.sessionName ?? undefined
+  })
+  const runtimes = [runtimeA, runtimeB]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [pointerA, pointerB],
+        activeSessionKey: pointerA.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(pointerA.sessionFile)
+  runtimeA.emit({ type: 'activity-started' })
+  await kernel.activateSession(pointerB.sessionFile)
+  assert.equal(kernel.getState().session.id, pointerB.sessionId)
+
+  const internals = stage2AInternals(kernel)
+  const originalLoadContext = internals.loadContext.bind(kernel)
+  const originalProjectNavigationState = internals.projectNavigationState.bind(kernel)
+  let loadContextCalls = 0
+  let projectNavigationStateCalls = 0
+  internals.loadContext = (context) => {
+    loadContextCalls += 1
+    throw new Error(`loadContext must not run for inactive ordinary streaming (call #${loadContextCalls})`)
+  }
+  internals.projectNavigationState = (projectPath) => {
+    projectNavigationStateCalls += 1
+    return originalProjectNavigationState(projectPath)
+  }
+
+  const foregroundState = internals.state
+  const foregroundConversation = foregroundState.conversation
+  const foregroundEntries = foregroundState.conversation.entries
+  const foregroundSession = foregroundState.session
+  const foregroundRuntime = internals.runtime
+  const foregroundActiveContext = internals.activeContext
+  assert.ok(foregroundActiveContext)
+  const foregroundContextState = foregroundActiveContext.state
+  const foregroundContextConversation = foregroundContextState.conversation
+  const foregroundContextEntries = foregroundContextState.conversation.entries
+  const foregroundContextSession = foregroundContextState.session
+
+  const events: KernelEvent[] = []
+  const unsubscribe = kernel.subscribe((event) => events.push(event))
+  let observedDuringProjection = false
+
+  try {
+    // Observe the Kernel reentrantly while the inactive payload is projected. This
+    // catches transient direct swaps even if a future implementation restores them.
+    const reentrantMessage: Record<string, unknown> = {
+      role: 'assistant',
+      timestamp: 5
+    }
+    Object.defineProperty(reentrantMessage, 'content', {
+      enumerable: true,
+      get: () => {
+        observedDuringProjection = true
+        assert.equal(internals.state, foregroundState)
+        assert.equal(internals.state.conversation, foregroundConversation)
+        assert.equal(internals.state.session, foregroundSession)
+        assert.equal(internals.runtime, foregroundRuntime)
+        assert.equal(internals.activeContext, foregroundActiveContext)
+        assert.equal(kernel.getState().session.id, pointerB.sessionId)
+        return [{ type: 'text', text: 'Observed while inactive A projected' }]
+      }
+    })
+    runtimeA.emit({
+      type: 'pi-event',
+      event: { type: 'message_update', message: reentrantMessage }
+    })
+    // The getter's deliberate getState() call projects Project summaries. Reset the
+    // counter so the following streaming trace measures only Kernel event handling.
+    projectNavigationStateCalls = 0
+
+  // Realistic inactive A streaming trace (thinking rides in message content).
+  runtimeA.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_start',
+      message: { role: 'user', content: 'Inspect package.json', timestamp: 10 }
+    }
+  })
+  runtimeA.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_update',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'Inspect the project file.' },
+          { type: 'toolCall', id: 'tool-1', name: 'read', arguments: { path: 'package.json' } }
+        ],
+        timestamp: 20
+      }
+    }
+  })
+  runtimeA.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'Inspect the project file.' },
+          { type: 'toolCall', id: 'tool-1', name: 'read', arguments: { path: 'package.json' } }
+        ],
+        timestamp: 20
+      }
+    }
+  })
+  runtimeA.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_start',
+      toolCallId: 'tool-1',
+      toolName: 'read',
+      args: { path: 'package.json' }
+    }
+  })
+  for (const fragment of ['{"name"', '{"name":"pi-gui"}']) {
+    runtimeA.emit({
+      type: 'pi-event',
+      event: {
+        type: 'tool_execution_update',
+        toolCallId: 'tool-1',
+        toolName: 'read',
+        args: { path: 'package.json' },
+        partialResult: { content: [{ type: 'text', text: fragment }] }
+      }
+    })
+  }
+  runtimeA.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_end',
+      toolCallId: 'tool-1',
+      toolName: 'read',
+      result: { content: [{ type: 'text', text: '{"name":"pi-gui"}' }] },
+      isError: false
+    }
+  })
+  for (const text of ['Hel', 'Hello', 'Hello from A']) {
+    runtimeA.emit({
+      type: 'pi-event',
+      event: {
+        type: 'message_update',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'Summarize the result.' },
+            { type: 'text', text }
+          ],
+          timestamp: 30
+        }
+      }
+    })
+  }
+  runtimeA.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'Summarize the result.' },
+          { type: 'text', text: 'Hello from A' }
+        ],
+        timestamp: 30
+      }
+    }
+  })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  } finally {
+    unsubscribe()
+    internals.loadContext = originalLoadContext
+    internals.projectNavigationState = originalProjectNavigationState
+  }
+
+  assert.equal(observedDuringProjection, true)
+  assert.equal(loadContextCalls, 0)
+  assert.equal(projectNavigationStateCalls, 0)
+  assert.equal(events.filter((event) => event.type === 'kernel.state-changed').length, 0)
+  assert.equal(events.filter((event) => event.type === 'kernel.state-patched').length, 0)
+
+  // Foreground execution workspace identity is strictly unchanged.
+  assert.equal(internals.state, foregroundState)
+  assert.equal(internals.state.conversation, foregroundConversation)
+  assert.equal(internals.state.conversation.entries, foregroundEntries)
+  assert.equal(internals.state.session, foregroundSession)
+  assert.equal(internals.runtime, foregroundRuntime)
+  assert.equal(internals.activeContext, foregroundActiveContext)
+  assert.equal(internals.activeContext?.state, foregroundContextState)
+  assert.equal(internals.activeContext?.state.conversation, foregroundContextConversation)
+  assert.equal(internals.activeContext?.state.conversation.entries, foregroundContextEntries)
+  assert.equal(internals.activeContext?.state.session, foregroundContextSession)
+  assert.equal(internals.activeContext?.runtime, runtimeB)
+  assert.equal(kernel.getState().session.id, pointerB.sessionId)
+
+  // Structural spies are restored before activation; verify accumulated A state.
+  await kernel.activateSession(pointerA.sessionFile)
+
+  const activated = kernel.getState()
+  assert.equal(activated.session.id, pointerA.sessionId)
+  assert.equal(activated.session.messageCount, 2)
+  const assistantMessages = activated.conversation.entries.filter(
+    (entry) => entry.kind === 'message' && entry.role === 'assistant'
+  )
+  const tools = activated.conversation.entries.filter((entry) => entry.kind === 'tool')
+  assert.equal(assistantMessages.length >= 1, true)
+  const finalAssistant = assistantMessages[assistantMessages.length - 1]
+  assert.equal(
+    finalAssistant?.kind === 'message' ? finalAssistant.text : null,
+    'Hello from A'
+  )
+  assert.equal(tools.length, 1)
+  assert.equal(tools[0]?.kind === 'tool' ? tools[0].toolCallId : null, 'tool-1')
+  assert.equal(tools[0]?.kind === 'tool' ? tools[0].status : null, 'success')
+  assert.equal(tools[0]?.kind === 'tool' ? tools[0].output : null, '{"name":"pi-gui"}')
+})
+
+test('Stage 2A inactive provisional message_end materializes through explicit context entry', async () => {
+  const provisionalRuntime = new FakeRuntimeHost({
+    sessionId: 'stage2a-provisional-a',
+    sessionFile: '/tmp/stage2a-provisional-a.jsonl'
+  })
+  const foregroundRuntime = new FakeRuntimeHost({
+    sessionId: 'stage2a-session-b',
+    sessionFile: '/tmp/stage2a-session-b.jsonl'
+  })
+  let validationCalls = 0
+  const persisted: SessionPointer[] = []
+  const kernel = new WorkbenchKernel(
+    (() => {
+      const runtimes = [provisionalRuntime, foregroundRuntime]
+      return () => {
+        const runtime = runtimes.shift()
+        assert.ok(runtime)
+        return runtime
+      }
+    })(),
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(null, persisted),
+      validateSession: async (pointer) => {
+        validationCalls += 1
+        if (validationCalls === 1) throw fileError('ENOENT', 'not written')
+        return { ...pointer, sessionFile: '/tmp/stage2a-materialized-a.jsonl' }
+      }
+    }
+  )
+
+  await kernel.start()
+  await kernel.prompt('Materialize A without loadContext')
+  await kernel.start()
+  assert.equal(kernel.getState().session.id, 'stage2a-session-b')
+
+  const internals = stage2AInternals(kernel)
+  const originalLoadContext = internals.loadContext.bind(kernel)
+  let loadContextCalls = 0
+  internals.loadContext = (context) => {
+    loadContextCalls += 1
+    throw new Error(`loadContext must not run for inactive provisional message_end (call #${loadContextCalls})`)
+  }
+
+  const events: KernelEvent[] = []
+  const unsubscribe = kernel.subscribe((event) => events.push(event))
+  provisionalRuntime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'A is written' }],
+        timestamp: 10
+      }
+    }
+  })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  unsubscribe()
+
+  assert.equal(loadContextCalls, 0)
+  assert.equal(kernel.getState().session.id, 'stage2a-session-b')
+  assert.deepEqual(
+    persisted.map(({ sessionId }) => sessionId),
+    ['stage2a-session-b', 'stage2a-provisional-a']
+  )
+  // Navigation snapshot is allowed for materialization; Conversation patches are not.
+  assert.equal(events.filter((event) => event.type === 'kernel.state-patched').length, 0)
+
+  internals.loadContext = originalLoadContext
+  await kernel.activateSession('/tmp/stage2a-materialized-a.jsonl')
+  assert.equal(kernel.getState().session.id, 'stage2a-provisional-a')
+  assert.equal(kernel.getState().session.resumeAvailable, true)
+})
+
+test('Stage 2A provisional metadata failure does not create a durable ghost session', async () => {
+  const provisionalRuntime = new FakeRuntimeHost({
+    sessionId: 'stage2a-metadata-failure-a',
+    sessionFile: '/tmp/stage2a-metadata-failure-a.jsonl'
+  })
+  const foregroundRuntime = new FakeRuntimeHost({
+    sessionId: 'stage2a-metadata-failure-b',
+    sessionFile: '/tmp/stage2a-metadata-failure-b.jsonl'
+  })
+  let firstProvisionalValidation = true
+  let resolveMetadataAttempted!: () => void
+  const metadataAttempted = new Promise<void>((resolve) => {
+    resolveMetadataAttempted = resolve
+  })
+  const persisted: SessionPointer[] = []
+  const kernel = new WorkbenchKernel(
+    (() => {
+      const runtimes = [provisionalRuntime, foregroundRuntime]
+      return () => {
+        const runtime = runtimes.shift()
+        assert.ok(runtime)
+        return runtime
+      }
+    })(),
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(null, persisted),
+      validateSession: async (pointer) => {
+        if (pointer.sessionId !== 'stage2a-metadata-failure-a') return pointer
+        if (firstProvisionalValidation) {
+          firstProvisionalValidation = false
+          throw fileError('ENOENT', 'not written')
+        }
+        return { ...pointer, sessionFile: '/tmp/stage2a-metadata-failure-materialized-a.jsonl' }
+      },
+      readSessionActivityAt: async (pointer) => {
+        if (pointer.sessionId === 'stage2a-metadata-failure-a') {
+          resolveMetadataAttempted()
+          throw new Error('metadata read failed before persistence')
+        }
+        return null
+      }
+    }
+  )
+
+  await kernel.start()
+  await kernel.prompt('Do not persist before metadata is readable')
+  await kernel.start()
+  provisionalRuntime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Metadata will fail' }],
+        timestamp: 10
+      }
+    }
+  })
+  await metadataAttempted
+  await new Promise<void>((resolve) => setImmediate(resolve))
+
+  assert.equal(kernel.getState().session.id, 'stage2a-metadata-failure-b')
+  assert.deepEqual(
+    persisted.map(({ sessionId }) => sessionId),
+    ['stage2a-metadata-failure-b']
+  )
+})
+
+test('stopContext waits for an owning background provisional durable commit before removal', async () => {
+  const pointerB: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/provisional-stop-b.jsonl',
+    sessionId: 'provisional-stop-b',
+    sessionName: 'Foreground B'
+  }
+  const runtimeA = new FakeRuntimeHost({
+    sessionId: 'provisional-stop-a',
+    sessionFile: '/tmp/provisional-stop-a.jsonl'
+  })
+  const runtimeB = new FakeRuntimeHost({
+    sessionId: pointerB.sessionId,
+    sessionFile: pointerB.sessionFile,
+    sessionName: pointerB.sessionName ?? undefined
+  })
+  const runtimes = [runtimeA, runtimeB]
+  let firstProvisionalValidation = true
+  let resolvePersistEntered!: () => void
+  let releasePersist!: () => void
+  const persistEntered = new Promise<void>((resolve) => {
+    resolvePersistEntered = resolve
+  })
+  const persistGate = new Promise<void>((resolve) => {
+    releasePersist = resolve
+  })
+  const persisted: SessionPointer[] = []
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: { sessions: [pointerB], activeSessionKey: null },
+      validateSession: async ({ projectPath, sessionFile, sessionId, sessionName }) => {
+        if (sessionId === 'provisional-stop-a' && firstProvisionalValidation) {
+          firstProvisionalValidation = false
+          throw fileError('ENOENT', 'not written yet')
+        }
+        return { projectPath, sessionFile, sessionId, sessionName }
+      },
+      persistSession: async (pointer) => {
+        if (pointer.sessionId === 'provisional-stop-a') {
+          resolvePersistEntered()
+          await persistGate
+        }
+        persisted.push({ ...pointer })
+      }
+    }
+  )
+
+  await kernel.start()
+  await kernel.activateSession(pointerB.sessionFile)
+  runtimeA.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Materialize before stop' }],
+        timestamp: 10
+      }
+    }
+  })
+  await persistEntered
+
+  const internals = stage2BInternals(kernel)
+  const contextA = internals.contextByRuntime.get(runtimeA)
+  assert.ok(contextA)
+  let stopSettled = false
+  const stopPromise = internals.stopContext(contextA).then(() => {
+    stopSettled = true
+  })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(stopSettled, false)
+  assert.equal(runtimeA.stopCalls, 0)
+
+  releasePersist()
+  await stopPromise
+  assert.equal(runtimeA.stopCalls, 1)
+  assert.equal(internals.contextByRuntime.has(runtimeA), false)
+  assert.equal(
+    persisted.some(({ sessionId }) => sessionId === 'provisional-stop-a'),
+    true
+  )
+  assert.equal(kernel.getState().session.id, pointerB.sessionId)
+  assert.equal(
+    kernel.getState().sessions.find(({ id }) => id === 'provisional-stop-a')?.runtimeStatus,
+    'stopped'
+  )
+})
+
+/**
+ * Stage 2B: inactive RuntimeHostEvent delivery must stay Context-local.
+ * Structural spies install a phantom suppressEvents write detector even though
+ * production no longer owns that field.
+ */
+type WorkbenchKernelStage2BInternals = {
+  loadContext: (context: unknown) => void
+  projectNavigationState: (projectPath: string) => unknown
+  stopContext: (context: unknown) => Promise<void>
+  suppressEvents?: boolean
+  state: {
+    conversation: { entries: readonly unknown[], activeRunStartIndex: number | null }
+    session: {
+      id: string | null
+      messageCount: number
+      name: string | null
+      settled: boolean
+      pendingMessageCount: number
+      pendingSteeringMessages: readonly string[]
+      pendingFollowUpMessages: readonly string[]
+    }
+    runtime: {
+      status: RuntimeStatus
+      lastError: string | null
+      exitCode: number | null
+      exitSignal: string | null
+    }
+    activeProjectKey: string | null
+    sessions: readonly { key: string, name: string | null, runtimeStatus: RuntimeStatus }[]
+  }
+  runtime: RuntimeHost | null
+  activeContext: {
+    state: {
+      conversation: { entries: readonly unknown[], activeRunStartIndex: number | null }
+      session: {
+        id: string | null
+        messageCount: number
+        name: string | null
+        settled: boolean
+        pendingMessageCount: number
+        pendingSteeringMessages: readonly string[]
+        pendingFollowUpMessages: readonly string[]
+      }
+      runtime: {
+        status: RuntimeStatus
+        lastError: string | null
+        exitCode: number | null
+        exitSignal: string | null
+      }
+    }
+    runtime: RuntimeHost
+    provisionalCommit: Promise<void> | null
+    provisionalSettled: boolean
+    provisionalSession: { pointer: SessionPointer } | null
+    pendingSessionName: unknown
+    sessionNameOperation: unknown
+  } | null
+  contexts: Set<{
+    runtime: RuntimeHost
+    state: {
+      conversation: { entries: readonly unknown[], activeRunStartIndex: number | null }
+      session: {
+        id: string | null
+        messageCount: number
+        name: string | null
+        settled: boolean
+        pendingMessageCount: number
+        pendingSteeringMessages: readonly string[]
+        pendingFollowUpMessages: readonly string[]
+      }
+      runtime: {
+        status: RuntimeStatus
+        lastError: string | null
+        exitCode: number | null
+        exitSignal: string | null
+      }
+    }
+    provisionalCommit: Promise<void> | null
+    provisionalSettled: boolean
+    provisionalSession: { pointer: SessionPointer } | null
+  }>
+  contextByRuntime: Map<RuntimeHost, {
+    state: {
+      conversation: { entries: readonly unknown[], activeRunStartIndex: number | null }
+      session: {
+        id: string | null
+        messageCount: number
+        name: string | null
+        settled: boolean
+        pendingMessageCount: number
+        pendingSteeringMessages: readonly string[]
+        pendingFollowUpMessages: readonly string[]
+      }
+      runtime: {
+        status: RuntimeStatus
+        lastError: string | null
+        exitCode: number | null
+        exitSignal: string | null
+      }
+    }
+    provisionalCommit: Promise<void> | null
+    provisionalSettled: boolean
+    provisionalSession: { pointer: SessionPointer } | null
+  }>
+  sessionPointers: SessionPointer[]
+  sessionPointersByProject: Map<string, SessionPointer[]>
+}
+
+function stage2BInternals(kernel: WorkbenchKernel): WorkbenchKernelStage2BInternals {
+  return kernel as unknown as WorkbenchKernelStage2BInternals
+}
+
+function installStage2BStructuralSpies(kernel: WorkbenchKernel): {
+  loadContextCalls: () => number
+  suppressWrites: () => number
+  restore: () => void
+  assertForeground: (sessionId: string) => void
+  captureForeground: () => {
+    state: WorkbenchKernelStage2BInternals['state']
+    conversation: WorkbenchKernelStage2BInternals['state']['conversation']
+    entries: readonly unknown[]
+    session: WorkbenchKernelStage2BInternals['state']['session']
+    runtime: RuntimeHost | null
+    activeContext: WorkbenchKernelStage2BInternals['activeContext']
+  }
+} {
+  const internals = stage2BInternals(kernel)
+  const originalLoadContext = internals.loadContext.bind(kernel)
+  let loadContextCalls = 0
+  let suppressWrites = 0
+  let suppressValue = internals.suppressEvents ?? false
+  internals.loadContext = (context) => {
+    loadContextCalls += 1
+    throw new Error(`loadContext must not run for Stage 2B inactive events (call #${loadContextCalls})`)
+  }
+  Object.defineProperty(kernel, 'suppressEvents', {
+    configurable: true,
+    enumerable: true,
+    get: () => suppressValue,
+    set: (value: boolean) => {
+      suppressWrites += 1
+      suppressValue = value
+    }
+  })
+
+  const captureForeground = () => {
+    const state = internals.state
+    return {
+      state,
+      conversation: state.conversation,
+      entries: state.conversation.entries,
+      session: state.session,
+      runtime: internals.runtime,
+      activeContext: internals.activeContext
+    }
+  }
+
+  const assertForeground = (sessionId: string) => {
+    const foreground = captureForeground()
+    assert.equal(kernel.getState().session.id, sessionId)
+    assert.equal(internals.runtime, foreground.runtime)
+    assert.equal(internals.activeContext, foreground.activeContext)
+    assert.equal(internals.state, foreground.state)
+    assert.equal(internals.state.conversation, foreground.conversation)
+    assert.equal(internals.state.session, foreground.session)
+  }
+
+  return {
+    loadContextCalls: () => loadContextCalls,
+    suppressWrites: () => suppressWrites,
+    restore: () => {
+      internals.loadContext = originalLoadContext
+      Object.defineProperty(kernel, 'suppressEvents', {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: suppressValue
+      })
+    },
+    assertForeground,
+    captureForeground
+  }
+}
+
+function reentrantHostState(
+  runtime: FakeRuntimeHost,
+  onAccess: () => void
+): void {
+  const originalGetState = runtime.getState.bind(runtime)
+  runtime.getState = () => {
+    onAccess()
+    return originalGetState()
+  }
+}
+
+test('Stage 2B inactive host/lifecycle/metadata never swaps and preserves exact navigation counts', async () => {
+  const pointerA: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2b-session-a.jsonl',
+    sessionId: 'stage2b-session-a',
+    sessionName: 'A'
+  }
+  const pointerB: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2b-session-b.jsonl',
+    sessionId: 'stage2b-session-b',
+    sessionName: 'B'
+  }
+  const runtimeA = new FakeRuntimeHost({
+    sessionId: pointerA.sessionId,
+    sessionFile: pointerA.sessionFile,
+    sessionName: pointerA.sessionName ?? undefined,
+    messageCount: 0
+  })
+  const runtimeB = new FakeRuntimeHost({
+    sessionId: pointerB.sessionId,
+    sessionFile: pointerB.sessionFile,
+    sessionName: pointerB.sessionName ?? undefined
+  })
+  const runtimes = [runtimeA, runtimeB]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      now: () => 100,
+      sessionRegistry: {
+        sessions: [pointerA, pointerB],
+        activeSessionKey: pointerA.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(pointerA.sessionFile)
+  await kernel.activateSession(pointerB.sessionFile)
+  assert.equal(kernel.getState().session.id, pointerB.sessionId)
+
+  const spies = installStage2BStructuralSpies(kernel)
+  const events: KernelEvent[] = []
+  const unsubscribe = kernel.subscribe((event) => events.push(event))
+  let reentrantObservations = 0
+  const observeForeground = (): void => {
+    reentrantObservations += 1
+    spies.assertForeground(pointerB.sessionId)
+  }
+  reentrantHostState(runtimeA, observeForeground)
+
+  const countChanged = () => events.filter((event) => event.type === 'kernel.state-changed').length
+  const countPatched = () => events.filter((event) => event.type === 'kernel.state-patched').length
+  const drain = async () => {
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+
+  try {
+    const beforeActivity = countChanged()
+    runtimeA.emit({ type: 'activity-started' })
+    assert.equal(countChanged() - beforeActivity, 1)
+    assert.equal(countPatched(), 0)
+    assert.equal(kernel.getState().session.id, pointerB.sessionId)
+    assert.equal(
+      kernel.getState().sessions.find((session) => session.key === pointerA.sessionFile)?.runtimeStatus,
+      'running'
+    )
+
+    // Duplicate activity-started is a no-op.
+    const afterFirstStart = countChanged()
+    runtimeA.emit({ type: 'activity-started' })
+    assert.equal(countChanged(), afterFirstStart)
+
+    const beforeSettled = countChanged()
+    runtimeA.emit({ type: 'activity-settled' })
+    assert.equal(countChanged() - beforeSettled, 1)
+    assert.equal(
+      kernel.getState().sessions.find((session) => session.key === pointerA.sessionFile)?.runtimeStatus,
+      'ready'
+    )
+    runtimeA.emit({ type: 'activity-settled' })
+    assert.equal(countChanged(), beforeSettled + 1)
+
+    const beforeAgentStart = countChanged()
+    runtimeA.emit({ type: 'pi-event', event: { type: 'agent_start' } })
+    assert.equal(countChanged() - beforeAgentStart, 1)
+    runtimeA.emit({ type: 'pi-event', event: { type: 'agent_start' } })
+    assert.equal(countChanged(), beforeAgentStart + 1)
+
+    // Queue update must not publish navigation.
+    const reentrantSteering = ['queued steering']
+    Object.defineProperty(reentrantSteering, '0', {
+      enumerable: true,
+      configurable: true,
+      get: () => {
+        observeForeground()
+        return 'queued steering'
+      }
+    })
+    const beforeQueue = countChanged()
+    runtimeA.emit({
+      type: 'pi-event',
+      event: {
+        type: 'queue_update',
+        steering: reentrantSteering,
+        followUp: ['follow up one']
+      }
+    })
+    assert.equal(countChanged(), beforeQueue)
+    assert.equal(countPatched(), 0)
+
+    // Malformed queue is ignored.
+    runtimeA.emit({
+      type: 'pi-event',
+      event: {
+        type: 'queue_update',
+        steering: 'not-an-array',
+        followUp: ['x']
+      }
+    })
+    assert.equal(countChanged(), beforeQueue)
+
+    const beforeAgentSettled = countChanged()
+    runtimeA.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+    assert.equal(countChanged() - beforeAgentSettled, 1)
+    const afterFirstAgentSettled = countChanged()
+    runtimeA.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+    // A deterministic clock makes the duplicate settlement navigation-neutral.
+    assert.equal(countChanged(), afterFirstAgentSettled)
+    assert.equal(countPatched(), 0)
+    assert.equal(kernel.getState().session.id, pointerB.sessionId)
+
+    const renamedName = Object.defineProperty({} as { value?: string }, 'value', {
+      enumerable: true,
+      get: () => {
+        observeForeground()
+        return 'Renamed A'
+      }
+    })
+    const beforeRename = countChanged()
+    runtimeA.emit({
+      type: 'pi-event',
+      event: {
+        type: 'session_info_changed',
+        get name() {
+          return renamedName.value as string
+        }
+      }
+    })
+    assert.equal(countChanged() - beforeRename, 1)
+    assert.equal(
+      kernel.getState().sessions.find((session) => session.key === pointerA.sessionFile)?.name,
+      'Renamed A'
+    )
+    assert.equal(kernel.getState().session.name, pointerB.sessionName)
+
+    // Custom/unknown Pi event updates only Conversation; zero navigation.
+    const beforeCustom = countChanged()
+    runtimeA.emit({
+      type: 'pi-event',
+      event: {
+        type: 'extension_error',
+        get error() {
+          observeForeground()
+          return 'background extension fault'
+        }
+      }
+    })
+    assert.equal(countChanged(), beforeCustom)
+    assert.equal(countPatched(), 0)
+
+    // stderr/protocol diagnostics do not change navigation summaries.
+    const beforeStderr = countChanged()
+    runtimeA.emit({
+      type: 'diagnostic',
+      kind: 'stderr',
+      get message() {
+        observeForeground()
+        return 'noise on stderr'
+      },
+      stderrChars: 12
+    })
+    assert.equal(countChanged(), beforeStderr)
+    runtimeA.emit({
+      type: 'diagnostic',
+      kind: 'protocol',
+      message: 'protocol warning',
+      stderrChars: 12
+    })
+    assert.equal(countChanged(), beforeStderr)
+
+    const beforeCrash = countChanged()
+    runtimeA.emit({
+      type: 'diagnostic',
+      kind: 'process',
+      message: 'process died',
+      stderrChars: 12
+    })
+    assert.equal(countChanged() - beforeCrash, 1)
+    assert.equal(
+      kernel.getState().sessions.find((session) => session.key === pointerA.sessionFile)?.runtimeStatus,
+      'crashed'
+    )
+    // Duplicate process diagnostic while already crashed is a no-op for navigation.
+    runtimeA.emit({
+      type: 'diagnostic',
+      kind: 'process',
+      message: 'process died again',
+      stderrChars: 12
+    })
+    assert.equal(countChanged(), beforeCrash + 1)
+
+    // Recover A via a fresh activation is not available; process-exit on crashed stays no-op.
+    const beforeExit = countChanged()
+    runtimeA.emit({ type: 'process-exit', code: 17, signal: null })
+    assert.equal(countChanged(), beforeExit)
+
+    await drain()
+    assert.equal(spies.loadContextCalls(), 0)
+    assert.equal(spies.suppressWrites(), 0)
+    assert.ok(reentrantObservations > 0)
+    assert.equal(kernel.getState().session.id, pointerB.sessionId)
+  } finally {
+    unsubscribe()
+    spies.restore()
+  }
+
+  // Activation of A reveals context-local results: settled queues cleared, rename, custom entry,
+  // and crash/exit evidence.
+  await kernel.activateSession(pointerA.sessionFile)
+  const activated = kernel.getState()
+  assert.equal(activated.session.id, pointerA.sessionId)
+  assert.equal(activated.session.name, 'Renamed A')
+  assert.equal(activated.session.pendingMessageCount, 0)
+  assert.deepEqual(activated.session.pendingSteeringMessages, [])
+  assert.deepEqual(activated.session.pendingFollowUpMessages, [])
+  assert.equal(activated.runtime.status, 'crashed')
+  // process-exit after a process diagnostic preserves the exit evidence and final crash reason.
+  assert.equal(activated.runtime.lastError, 'Pi RPC process exited with code 17.')
+  assert.equal(activated.runtime.exitCode, 17)
+  assert.equal(activated.conversation.entries.some((entry) =>
+    entry.kind === 'error' && entry.message === 'background extension fault'
+  ), true)
+})
+
+test('Stage 2B inactive process-exit crashes only the owning context', async () => {
+  const pointerA: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2b-exit-a.jsonl',
+    sessionId: 'stage2b-exit-a',
+    sessionName: 'Exit A'
+  }
+  const pointerB: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2b-exit-b.jsonl',
+    sessionId: 'stage2b-exit-b',
+    sessionName: 'Exit B'
+  }
+  const runtimeA = new FakeRuntimeHost({
+    sessionId: pointerA.sessionId,
+    sessionFile: pointerA.sessionFile,
+    sessionName: pointerA.sessionName ?? undefined
+  })
+  const runtimeB = new FakeRuntimeHost({
+    sessionId: pointerB.sessionId,
+    sessionFile: pointerB.sessionFile,
+    sessionName: pointerB.sessionName ?? undefined
+  })
+  const runtimes = [runtimeA, runtimeB]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [pointerA, pointerB],
+        activeSessionKey: pointerA.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(pointerA.sessionFile)
+  await kernel.activateSession(pointerB.sessionFile)
+
+  const spies = installStage2BStructuralSpies(kernel)
+  const events: KernelEvent[] = []
+  const unsubscribe = kernel.subscribe((event) => events.push(event))
+  reentrantHostState(runtimeA, () => {
+    assert.equal(kernel.getState().session.id, pointerB.sessionId)
+  })
+
+  try {
+    runtimeA.emit({ type: 'activity-started' })
+    events.length = 0
+    runtimeA.emit({ type: 'process-exit', code: 9, signal: null })
+    assert.equal(events.filter((event) => event.type === 'kernel.state-changed').length, 1)
+    assert.equal(events.filter((event) => event.type === 'kernel.state-patched').length, 0)
+    assert.equal(kernel.getState().session.id, pointerB.sessionId)
+    assert.equal(kernel.getState().runtime.status, 'ready')
+    assert.equal(
+      kernel.getState().sessions.find((session) => session.key === pointerA.sessionFile)?.runtimeStatus,
+      'crashed'
+    )
+    assert.equal(spies.loadContextCalls(), 0)
+    assert.equal(spies.suppressWrites(), 0)
+  } finally {
+    unsubscribe()
+    spies.restore()
+  }
+
+  await kernel.activateSession(pointerA.sessionFile)
+  assert.equal(kernel.getState().runtime.status, 'crashed')
+  assert.equal(
+    kernel.getState().runtime.lastError,
+    'Pi RPC process exited with code 9.'
+  )
+  assert.equal(kernel.getState().runtime.exitCode, 9)
+})
+
+test('Stage 2B inactive session_info_changed isolates cross-project pointer maps', async () => {
+  const pointerA: SessionPointer = {
+    projectPath: '/tmp/project-a',
+    sessionFile: '/tmp/stage2b-cross-a.jsonl',
+    sessionId: 'stage2b-cross-a',
+    sessionName: 'Project A session'
+  }
+  const pointerB: SessionPointer = {
+    projectPath: '/tmp/project-b',
+    sessionFile: '/tmp/stage2b-cross-b.jsonl',
+    sessionId: 'stage2b-cross-b',
+    sessionName: 'Project B session'
+  }
+  const runtimeA = new FakeRuntimeHost({
+    sessionId: pointerA.sessionId,
+    sessionFile: pointerA.sessionFile,
+    sessionName: pointerA.sessionName ?? undefined
+  })
+  const runtimeB = new FakeRuntimeHost({
+    sessionId: pointerB.sessionId,
+    sessionFile: pointerB.sessionFile,
+    sessionName: pointerB.sessionName ?? undefined
+  })
+  const runtimes = [runtimeA, runtimeB]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    {
+      projects: [{ path: '/tmp/project-a' }, { path: '/tmp/project-b' }],
+      activeProjectKey: '/tmp/project-a'
+    },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [pointerA, pointerB],
+        activeSessionKey: pointerA.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(pointerA.sessionFile)
+  await kernel.activateProject('/tmp/project-b', {
+    sessions: [pointerB],
+    activeSessionKey: pointerB.sessionFile
+  })
+  assert.equal(kernel.getState().activeProjectKey, '/tmp/project-b')
+  assert.equal(kernel.getState().session.id, pointerB.sessionId)
+
+  const spies = installStage2BStructuralSpies(kernel)
+  const internals = stage2BInternals(kernel)
+  const bPointersBefore = [...(internals.sessionPointersByProject.get('/tmp/project-b') ?? internals.sessionPointers)]
+  const events: KernelEvent[] = []
+  const unsubscribe = kernel.subscribe((event) => events.push(event))
+
+  try {
+    runtimeA.emit({
+      type: 'pi-event',
+      event: { type: 'session_info_changed', name: 'Renamed only A' }
+    })
+    assert.equal(spies.loadContextCalls(), 0)
+    assert.equal(spies.suppressWrites(), 0)
+    assert.equal(kernel.getState().session.id, pointerB.sessionId)
+    assert.equal(kernel.getState().session.name, pointerB.sessionName)
+    assert.equal(kernel.getState().activeProjectKey, '/tmp/project-b')
+    // B's project pointer map must remain untouched.
+    assert.deepEqual(
+      internals.sessionPointersByProject.get('/tmp/project-b') ?? internals.sessionPointers,
+      bPointersBefore
+    )
+    assert.equal(
+      (internals.sessionPointersByProject.get('/tmp/project-a') ?? [])
+        .find((pointer) => pointer.sessionFile === pointerA.sessionFile)?.sessionName,
+      'Renamed only A'
+    )
+  } finally {
+    unsubscribe()
+    spies.restore()
+  }
+
+  await kernel.activateProject('/tmp/project-a', {
+    sessions: [
+      { ...pointerA, sessionName: 'Renamed only A' },
+      pointerB
+    ],
+    activeSessionKey: pointerA.sessionFile
+  })
+  assert.equal(kernel.getState().session.name, 'Renamed only A')
+})
+
+test('Stage 2B inactive provisional agent_settled retries ENOENT without swap', async () => {
+  const provisionalRuntime = new FakeRuntimeHost({
+    sessionId: 'stage2b-provisional-a',
+    sessionFile: '/tmp/stage2b-provisional-a.jsonl'
+  })
+  const foregroundRuntime = new FakeRuntimeHost({
+    sessionId: 'stage2b-session-b',
+    sessionFile: '/tmp/stage2b-session-b.jsonl'
+  })
+  const canonicalPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2b-materialized-a.jsonl',
+    sessionId: 'stage2b-provisional-a',
+    sessionName: null
+  }
+  const persisted: SessionPointer[] = []
+  // Count only provisional-A validations:
+  // 1 = initial start ENOENT (provisional), 2 = message_end commit in flight,
+  // 3 = post-settled ENOENT retry success.
+  let validationCalls = 0
+  let holdValidation!: () => void
+  const validationGate = new Promise<void>((resolve) => {
+    holdValidation = resolve
+  })
+  const kernel = new WorkbenchKernel(
+    (() => {
+      const runtimes = [provisionalRuntime, foregroundRuntime]
+      return () => {
+        const runtime = runtimes.shift()
+        assert.ok(runtime)
+        return runtime
+      }
+    })(),
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(null, persisted),
+      validateSession: async (pointer) => {
+        if (pointer.sessionId !== 'stage2b-provisional-a') return pointer
+        validationCalls += 1
+        if (validationCalls === 1) throw fileError('ENOENT', 'not written yet')
+        if (validationCalls === 2) {
+          await validationGate
+          throw fileError('ENOENT', 'still racing write')
+        }
+        return { ...pointer, sessionFile: canonicalPointer.sessionFile }
+      }
+    }
+  )
+
+  await kernel.start()
+  assert.equal(validationCalls, 1)
+  await kernel.prompt('Materialize A in background')
+  await kernel.start()
+  assert.equal(kernel.getState().session.id, 'stage2b-session-b')
+  assert.equal(validationCalls, 1)
+
+  const spies = installStage2BStructuralSpies(kernel)
+  const events: KernelEvent[] = []
+  const unsubscribe = kernel.subscribe((event) => events.push(event))
+  let settledWatch: (() => void) | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+
+  try {
+    // message_end starts commit #2 and parks on the gate.
+    provisionalRuntime.emit({
+      type: 'pi-event',
+      event: {
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'A body' }],
+          timestamp: 20
+        }
+      }
+    })
+    assert.equal(validationCalls, 2)
+
+    // agent_settled while commit #2 is in flight: mark settled, do not start a second commit.
+    provisionalRuntime.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+    assert.equal(validationCalls, 2)
+
+    const committed = new Promise<void>((resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error(
+          `timed out waiting for materialization; validationCalls=${validationCalls}; sessions=${kernel.getState().sessions.map((s) => s.key).join(',')}; persisted=${persisted.map((p) => p.sessionFile).join(',')}`
+        ))
+      }, 1000)
+      settledWatch = kernel.subscribe(() => {
+        if (kernel.getState().sessions.some((session) => session.key === canonicalPointer.sessionFile)) {
+          if (timer !== undefined) {
+            clearTimeout(timer)
+            timer = undefined
+          }
+          if (settledWatch !== undefined) {
+            settledWatch()
+            settledWatch = undefined
+          }
+          resolve()
+        }
+      })
+    })
+
+    // Release call #2 → ENOENT → scheduled retry call #3 succeeds.
+    holdValidation()
+    await committed
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+
+    assert.equal(spies.loadContextCalls(), 0)
+    assert.equal(spies.suppressWrites(), 0)
+    assert.equal(kernel.getState().session.id, 'stage2b-session-b')
+    assert.equal(validationCalls, 3)
+    assert.equal(
+      persisted.filter((pointer) => pointer.sessionId === 'stage2b-provisional-a').length,
+      1
+    )
+    assert.equal(
+      events.filter((event) => event.type === 'kernel.state-patched').length,
+      0
+    )
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+    settledWatch?.()
+    unsubscribe()
+    spies.restore()
+  }
+
+  await kernel.activateSession(canonicalPointer.sessionFile)
+  assert.equal(kernel.getState().session.id, 'stage2b-provisional-a')
+  assert.equal(kernel.getState().runtime.status, 'ready')
+  assert.equal(kernel.getState().session.settled, true)
+  assert.equal(kernel.getState().session.resumeAvailable, true)
+})
+
+test('Stage 2B inactive agent_settled clears only that context queues and run boundary', async () => {
+  const pointerA: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2b-queue-a.jsonl',
+    sessionId: 'stage2b-queue-a',
+    sessionName: 'Queue A'
+  }
+  const pointerB: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2b-queue-b.jsonl',
+    sessionId: 'stage2b-queue-b',
+    sessionName: 'Queue B'
+  }
+  const runtimeA = new FakeRuntimeHost({
+    sessionId: pointerA.sessionId,
+    sessionFile: pointerA.sessionFile,
+    sessionName: pointerA.sessionName ?? undefined
+  })
+  const runtimeB = new FakeRuntimeHost({
+    sessionId: pointerB.sessionId,
+    sessionFile: pointerB.sessionFile,
+    sessionName: pointerB.sessionName ?? undefined
+  })
+  const runtimes = [runtimeA, runtimeB]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [pointerA, pointerB],
+        activeSessionKey: pointerA.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(pointerA.sessionFile)
+  await kernel.activateSession(pointerB.sessionFile)
+
+  // Seed B queue so we can prove it is not cleared.
+  runtimeB.emit({
+    type: 'pi-event',
+    event: {
+      type: 'queue_update',
+      steering: ['b-steer'],
+      followUp: ['b-follow']
+    }
+  })
+  assert.equal(kernel.getState().session.pendingMessageCount, 2)
+
+  const spies = installStage2BStructuralSpies(kernel)
+  try {
+    runtimeA.emit({ type: 'pi-event', event: { type: 'agent_start' } })
+    runtimeA.emit({
+      type: 'pi-event',
+      event: {
+        type: 'message_start',
+        message: { role: 'user', content: 'A turn', timestamp: 1 }
+      }
+    })
+    runtimeA.emit({
+      type: 'pi-event',
+      event: {
+        type: 'queue_update',
+        steering: ['a-steer'],
+        followUp: ['a-follow']
+      }
+    })
+    runtimeA.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+    assert.equal(spies.loadContextCalls(), 0)
+    assert.equal(spies.suppressWrites(), 0)
+    // B remains foreground with its queue intact.
+    assert.equal(kernel.getState().session.id, pointerB.sessionId)
+    assert.equal(kernel.getState().session.pendingMessageCount, 2)
+    assert.deepEqual(kernel.getState().session.pendingSteeringMessages, ['b-steer'])
+  } finally {
+    spies.restore()
+  }
+
+  await kernel.activateSession(pointerA.sessionFile)
+  assert.equal(kernel.getState().session.id, pointerA.sessionId)
+  assert.equal(kernel.getState().runtime.status, 'ready')
+  assert.equal(kernel.getState().session.settled, true)
+  assert.equal(kernel.getState().session.pendingMessageCount, 0)
+  assert.deepEqual(kernel.getState().session.pendingSteeringMessages, [])
+  assert.deepEqual(kernel.getState().session.pendingFollowUpMessages, [])
+  assert.equal(kernel.getState().conversation.activeRunStartIndex, null)
+  assert.equal(
+    kernel.getState().conversation.entries.some((entry) =>
+      entry.kind === 'message' && entry.role === 'user' && entry.text === 'A turn'
+    ),
+    true
+  )
+})
+
+class DeferredCompactionRuntimeHost extends FakeRuntimeHost {
+  private deferEnd = false
+
+  deferCompactEnd(): void {
+    this.deferEnd = true
+  }
+
+  completeCompact(payload?: {
+    reason?: 'manual' | 'threshold' | 'overflow'
+    result?: unknown
+    aborted?: boolean
+    willRetry?: boolean
+  }): void {
+    this.emit({
+      type: 'pi-event',
+      event: {
+        type: 'compaction_end',
+        reason: payload?.reason ?? 'manual',
+        result: payload?.result ?? {
+          summary: 'Compacted',
+          firstKeptEntryId: 'kept',
+          tokensBefore: 100
+        },
+        aborted: payload?.aborted ?? false,
+        willRetry: payload?.willRetry ?? false
+      }
+    })
+  }
+
+  override async send(command: RuntimeCommand): Promise<RuntimeCommandResult> {
+    if (command.type !== 'compact') return super.send(command)
+    this.commands.push(command)
+    this.emit({
+      type: 'pi-event',
+      event: { type: 'compaction_start', reason: 'manual' }
+    })
+    // Deferred mode returns after start so invokeCommand can await the lifecycle
+    // while tests switch sessions or inject crash/exit. End is emitted separately.
+    if (this.deferEnd) return { type: 'accepted' }
+    this.emit({
+      type: 'pi-event',
+      event: {
+        type: 'compaction_end',
+        reason: 'manual',
+        result: { summary: 'Compacted', firstKeptEntryId: 'kept', tokensBefore: 100 },
+        aborted: false,
+        willRetry: false
+      }
+    })
+    return { type: 'accepted' }
+  }
+}
+
+test('Stage 2B inactive compaction never swaps and covers start/end outcomes', async () => {
+  const pointerA: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2b-compaction-a.jsonl',
+    sessionId: 'stage2b-compaction-a',
+    sessionName: 'Compaction A'
+  }
+  const pointerB: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2b-compaction-b.jsonl',
+    sessionId: 'stage2b-compaction-b',
+    sessionName: 'Compaction B'
+  }
+  const runtimeA = new FakeRuntimeHost({
+    sessionId: pointerA.sessionId,
+    sessionFile: pointerA.sessionFile,
+    sessionName: pointerA.sessionName ?? undefined,
+    messageCount: 2
+  })
+  const runtimeB = new FakeRuntimeHost({
+    sessionId: pointerB.sessionId,
+    sessionFile: pointerB.sessionFile,
+    sessionName: pointerB.sessionName ?? undefined
+  })
+  const runtimes = [runtimeA, runtimeB]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [pointerA, pointerB],
+        activeSessionKey: pointerA.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(pointerA.sessionFile)
+  await kernel.activateSession(pointerB.sessionFile)
+  assert.equal(kernel.getState().session.id, pointerB.sessionId)
+
+  const spies = installStage2BStructuralSpies(kernel)
+  const events: KernelEvent[] = []
+  const unsubscribe = kernel.subscribe((event) => events.push(event))
+  let reentrantObservations = 0
+  const observeForeground = (): void => {
+    reentrantObservations += 1
+    spies.assertForeground(pointerB.sessionId)
+  }
+  reentrantHostState(runtimeA, observeForeground)
+
+  const countChanged = () => events.filter((event) => event.type === 'kernel.state-changed').length
+  const countPatched = () => events.filter((event) => event.type === 'kernel.state-patched').length
+  const lifecycleOf = (type: 'kernel.compaction-started' | 'kernel.compaction-ended') =>
+    events.filter((event) => event.type === type)
+
+  try {
+    const beforeStart = countChanged()
+    runtimeA.emit({
+      type: 'pi-event',
+      event: {
+        type: 'compaction_start',
+        get reason() {
+          observeForeground()
+          return 'manual'
+        }
+      }
+    })
+    assert.equal(countChanged(), beforeStart)
+    assert.equal(countPatched(), 0)
+    assert.equal(lifecycleOf('kernel.compaction-started').length, 1)
+    assert.deepEqual(lifecycleOf('kernel.compaction-started')[0], {
+      type: 'kernel.compaction-started',
+      projectKey: '/tmp/project',
+      sessionKey: pointerA.sessionFile,
+      reason: 'manual'
+    })
+    assert.equal(kernel.getState().session.id, pointerB.sessionId)
+    assert.equal(kernel.getState().session.compaction, null)
+
+    // Completed path with statistics may publish one navigation-bounded state event.
+    const beforeCompleted = countChanged()
+    const completed = waitForCompactionOutcome(kernel, 'completed')
+    runtimeA.emit({
+      type: 'pi-event',
+      event: {
+        type: 'compaction_end',
+        reason: 'manual',
+        result: { summary: 'Compacted', firstKeptEntryId: 'kept', tokensBefore: 100 },
+        aborted: false,
+        willRetry: false
+      }
+    })
+    await completed
+    assert.equal(countPatched(), 0)
+    assert.ok(countChanged() - beforeCompleted <= 1)
+    assert.equal(kernel.getState().session.id, pointerB.sessionId)
+    assert.equal(kernel.getState().session.compaction, null)
+
+    // Failed malformed end
+    runtimeA.emit({ type: 'pi-event', event: { type: 'compaction_start', reason: 'threshold' } })
+    const failed = waitForCompactionOutcome(kernel, 'failed')
+    runtimeA.emit({
+      type: 'pi-event',
+      event: {
+        type: 'compaction_end',
+        reason: 'threshold',
+        result: 42,
+        aborted: false,
+        willRetry: false
+      }
+    })
+    await failed
+
+    // Cancelled end
+    runtimeA.emit({ type: 'pi-event', event: { type: 'compaction_start', reason: 'overflow' } })
+    const cancelled = waitForCompactionOutcome(kernel, 'cancelled')
+    runtimeA.emit({
+      type: 'pi-event',
+      event: {
+        type: 'compaction_end',
+        reason: 'overflow',
+        result: null,
+        aborted: true,
+        willRetry: false
+      }
+    })
+    await cancelled
+
+    // Retry end keeps lifecycle open without swapping foreground.
+    runtimeA.emit({ type: 'pi-event', event: { type: 'compaction_start', reason: 'overflow' } })
+    const retrying = waitForCompactionOutcome(kernel, 'retrying')
+    runtimeA.emit({
+      type: 'pi-event',
+      event: {
+        type: 'compaction_end',
+        reason: 'overflow',
+        result: null,
+        aborted: false,
+        willRetry: true
+      }
+    })
+    await retrying
+    const retryCompleted = waitForCompactionOutcome(kernel, 'completed')
+    runtimeA.emit({
+      type: 'pi-event',
+      event: {
+        type: 'compaction_end',
+        reason: 'overflow',
+        result: { summary: 'Compacted', firstKeptEntryId: 'kept', tokensBefore: 50 },
+        aborted: false,
+        willRetry: true
+      }
+    })
+    await retryCompleted
+
+    assert.equal(spies.loadContextCalls(), 0)
+    assert.equal(spies.suppressWrites(), 0)
+    assert.equal(countPatched(), 0)
+    assert.ok(reentrantObservations > 0)
+    assert.equal(kernel.getState().session.id, pointerB.sessionId)
+    assert.equal(kernel.getState().session.compaction, null)
+    assert.ok(lifecycleOf('kernel.compaction-started').length >= 4)
+    assert.ok(lifecycleOf('kernel.compaction-ended').length >= 5)
+  } finally {
+    unsubscribe()
+    spies.restore()
+  }
+
+  await kernel.activateSession(pointerA.sessionFile)
+  assert.equal(kernel.getState().session.id, pointerA.sessionId)
+  assert.equal(kernel.getState().session.compaction, null)
+})
+
+test('Stage 2B /compact echo stays on originating context after switch', async () => {
+  const pointerA: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2b-compact-echo-a.jsonl',
+    sessionId: 'stage2b-compact-echo-a',
+    sessionName: 'Echo A'
+  }
+  const pointerB: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2b-compact-echo-b.jsonl',
+    sessionId: 'stage2b-compact-echo-b',
+    sessionName: 'Echo B'
+  }
+  const runtimeA = new DeferredCompactionRuntimeHost({
+    sessionId: pointerA.sessionId,
+    sessionFile: pointerA.sessionFile,
+    sessionName: pointerA.sessionName ?? undefined
+  })
+  const runtimeB = new FakeRuntimeHost({
+    sessionId: pointerB.sessionId,
+    sessionFile: pointerB.sessionFile,
+    sessionName: pointerB.sessionName ?? undefined
+  })
+  const runtimes = [runtimeA, runtimeB]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [pointerA, pointerB],
+        activeSessionKey: pointerA.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(pointerA.sessionFile)
+  runtimeA.deferCompactEnd()
+  const invocation = kernel.invokeCommand(COMPACT_COMMAND_ID, 'Keep decisions')
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  await kernel.activateSession(pointerB.sessionFile)
+  assert.equal(kernel.getState().session.id, pointerB.sessionId)
+
+  runtimeA.completeCompact()
+  await invocation
+
+  assert.equal(kernel.getState().session.id, pointerB.sessionId)
+  assert.equal(
+    kernel.getState().conversation.entries.some((entry) =>
+      entry.kind === 'command' && entry.text === '/compact Keep decisions'
+    ),
+    false
+  )
+
+  await kernel.activateSession(pointerA.sessionFile)
+  assert.equal(
+    kernel.getState().conversation.entries.some((entry) =>
+      entry.kind === 'command' && entry.text === '/compact Keep decisions'
+    ),
+    true
+  )
+  assert.equal(kernel.getState().session.compaction, null)
+})
+
+test('Stage 2B process diagnostic during inactive compaction fails only that lifecycle', async () => {
+  const pointerA: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2b-compact-crash-a.jsonl',
+    sessionId: 'stage2b-compact-crash-a',
+    sessionName: 'Crash A'
+  }
+  const pointerB: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2b-compact-crash-b.jsonl',
+    sessionId: 'stage2b-compact-crash-b',
+    sessionName: 'Crash B'
+  }
+  const runtimeA = new DeferredCompactionRuntimeHost({
+    sessionId: pointerA.sessionId,
+    sessionFile: pointerA.sessionFile,
+    sessionName: pointerA.sessionName ?? undefined
+  })
+  const runtimeB = new FakeRuntimeHost({
+    sessionId: pointerB.sessionId,
+    sessionFile: pointerB.sessionFile,
+    sessionName: pointerB.sessionName ?? undefined
+  })
+  const runtimes = [runtimeA, runtimeB]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [pointerA, pointerB],
+        activeSessionKey: pointerA.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(pointerA.sessionFile)
+  runtimeA.deferCompactEnd()
+  const invocation = kernel.invokeCommand(COMPACT_COMMAND_ID, '')
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  await kernel.activateSession(pointerB.sessionFile)
+  const events: KernelEvent[] = []
+  const unsubscribe = kernel.subscribe((event) => events.push(event))
+
+  runtimeA.emit({
+    type: 'diagnostic',
+    kind: 'process',
+    message: 'process died during compact',
+    stderrChars: 0
+  })
+
+  await assert.rejects(invocation, /process died during compact/)
+  unsubscribe()
+
+  assert.equal(
+    events.filter((event) =>
+      event.type === 'kernel.compaction-ended' && event.outcome === 'failed'
+    ).length,
+    1
+  )
+  assert.equal(kernel.getState().session.id, pointerB.sessionId)
+  assert.equal(kernel.getState().runtime.status, 'ready')
+  assert.equal(kernel.getState().session.compaction, null)
+
+  await kernel.activateSession(pointerA.sessionFile)
+  assert.equal(kernel.getState().runtime.status, 'crashed')
+  assert.equal(kernel.getState().session.compaction, null)
+})
+
+test('Stage 2B process-exit during active compaction settles failed exactly once', async () => {
+  const runtime = new DeferredCompactionRuntimeHost()
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  await kernel.start()
+  runtime.deferCompactEnd()
+  const invocation = kernel.invokeCommand(COMPACT_COMMAND_ID, '')
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.deepEqual(kernel.getState().session.compaction, { reason: 'manual' })
+
+  const events: KernelEvent[] = []
+  kernel.subscribe((event) => events.push(event))
+  runtime.emit({ type: 'process-exit', code: 9, signal: null })
+
+  await assert.rejects(invocation, /exited with code 9/)
+  assert.equal(
+    events.filter((event) =>
+      event.type === 'kernel.compaction-ended' && event.outcome === 'failed'
+    ).length,
+    1
+  )
+  assert.equal(kernel.getState().session.compaction, null)
+  assert.equal(kernel.getState().runtime.status, 'crashed')
+})
+
+test('Stage 2B stop during gated compaction projection rejects once and blocks late mutation', async () => {
+  const pointerA: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2b-compact-stop-a.jsonl',
+    sessionId: 'stage2b-compact-stop-a',
+    sessionName: 'Stop A'
+  }
+  const pointerB: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2b-compact-stop-b.jsonl',
+    sessionId: 'stage2b-compact-stop-b',
+    sessionName: 'Stop B'
+  }
+  const runtimeA = new DelayedCompactionProjectionRuntimeHost(
+    [{ role: 'assistant', content: [{ type: 'text', text: 'Old A' }], timestamp: 1 }],
+    [{ role: 'assistant', content: [{ type: 'text', text: 'Compacted A should not apply' }], timestamp: 3 }]
+  )
+  // Patch session identity on the delayed host.
+  Object.assign((runtimeA as unknown as { sessionState: Record<string, unknown> }).sessionState, {
+    sessionId: pointerA.sessionId,
+    sessionFile: pointerA.sessionFile,
+    sessionName: pointerA.sessionName
+  })
+  const runtimeB = new FakeRuntimeHost({
+    sessionId: pointerB.sessionId,
+    sessionFile: pointerB.sessionFile,
+    sessionName: pointerB.sessionName ?? undefined,
+    messageCount: 1
+  }, [{ role: 'assistant', content: [{ type: 'text', text: 'Foreground B' }], timestamp: 2 }])
+  const runtimes = [runtimeA, runtimeB]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [pointerA, pointerB],
+        activeSessionKey: pointerA.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(pointerA.sessionFile)
+  const invocation = kernel.invokeCommand(COMPACT_COMMAND_ID, '')
+  await runtimeA.projectionEntered
+  await kernel.activateSession(pointerB.sessionFile)
+  const foregroundBefore = kernel.getState().conversation.entries
+
+  const rejected = assert.rejects(invocation, /runtime stopped|session changed|cancelled/i)
+  const internals = stage2BInternals(kernel)
+  const contextA = internals.contextByRuntime.get(runtimeA)
+  assert.ok(contextA)
+  await internals.stopContext(contextA)
+  await rejected
+
+  runtimeA.releaseProjection()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  await new Promise<void>((resolve) => setImmediate(resolve))
+
+  assert.equal(kernel.getState().session.id, pointerB.sessionId)
+  assert.deepEqual(kernel.getState().conversation.entries, foregroundBefore)
+  assert.equal(
+    kernel.getState().conversation.entries.some((entry) =>
+      entry.kind === 'message' && entry.text === 'Compacted A should not apply'
+    ),
+    false
+  )
+})
+
+test('Stage 2B inactive stop uses bounded navigation only', async () => {
+  const pointerA: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2b-stop-a.jsonl',
+    sessionId: 'stage2b-stop-a',
+    sessionName: 'Stop A'
+  }
+  const pointerB: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stage2b-stop-b.jsonl',
+    sessionId: 'stage2b-stop-b',
+    sessionName: 'Stop B'
+  }
+  const runtimeA = new FakeRuntimeHost({
+    sessionId: pointerA.sessionId,
+    sessionFile: pointerA.sessionFile,
+    sessionName: pointerA.sessionName ?? undefined
+  })
+  const runtimeB = new FakeRuntimeHost({
+    sessionId: pointerB.sessionId,
+    sessionFile: pointerB.sessionFile,
+    sessionName: pointerB.sessionName ?? undefined
+  })
+  const runtimes = [runtimeA, runtimeB]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [pointerA, pointerB],
+        activeSessionKey: pointerA.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(pointerA.sessionFile)
+  await kernel.activateSession(pointerB.sessionFile)
+  assert.equal(kernel.getState().session.id, pointerB.sessionId)
+
+  const spies = installStage2BStructuralSpies(kernel)
+  const events: KernelEvent[] = []
+  const unsubscribe = kernel.subscribe((event) => events.push(event))
+  const internals = stage2BInternals(kernel)
+  const contextA = internals.contextByRuntime.get(runtimeA)
+  assert.ok(contextA)
+
+  try {
+    await internals.stopContext(contextA)
+    const changed = events.filter((event) => event.type === 'kernel.state-changed')
+    const patched = events.filter((event) => event.type === 'kernel.state-patched')
+    // Two real transitions: ready→stopping and stopping→stopped/removed.
+    assert.equal(changed.length, 2)
+    assert.equal(patched.length, 0)
+    assert.equal(spies.loadContextCalls(), 0)
+    assert.equal(spies.suppressWrites(), 0)
+    assert.equal(kernel.getState().session.id, pointerB.sessionId)
+    assert.equal(kernel.getState().runtime.status, 'ready')
+    assert.equal(
+      kernel.getState().sessions.find((session) => session.key === pointerA.sessionFile)?.runtimeStatus,
+      'stopped'
+    )
+  } finally {
+    unsubscribe()
+    spies.restore()
+  }
+})
+
+test('Stage 2B Context event gate and dispatcher have no loadContext or suppressEvents fallback', async () => {
+  const source = await import('node:fs/promises').then((fs) =>
+    fs.readFile(new URL('./workbench-kernel.ts', import.meta.url), 'utf8')
+  )
+  const methodBody = (name: string): string => {
+    const start = source.indexOf(`private ${name}(`)
+    assert.ok(start >= 0)
+    const nextPrivate = source.indexOf('\n  private ', start + 1)
+    return source.slice(start, nextPrivate === -1 ? undefined : nextPrivate)
+  }
+  const eventGate = methodBody('handleContextEvent')
+  const dispatcher = methodBody('deliverContextEvent')
+  for (const body of [eventGate, dispatcher]) {
+    assert.equal(body.includes('loadContext'), false)
+    assert.equal(body.includes('suppressEvents'), false)
+    assert.equal(body.includes('handleInactiveCompactionLegacy'), false)
+  }
+  assert.equal(eventGate.includes('deferredEvents'), true)
+  assert.equal(eventGate.includes('deliverContextEvent'), true)
+  assert.equal(dispatcher.includes('handleInactiveRuntimeEvent'), true)
+  assert.equal(source.includes('handleInactiveCompactionLegacy'), false)
+  assert.equal(source.includes('private suppressEvents'), false)
+})
+
+const LIVE_TOOL_PNG =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
+test('tool image attachment changes fall back to full state and never include base64', async () => {
+  const runtime = new FakeRuntimeHost({
+    sessionId: 'session-1',
+    sessionFile: '/tmp/session-1.jsonl',
+    thinkingLevel: 'medium',
+    isStreaming: false,
+    messageCount: 0,
+    pendingMessageCount: 0
+  })
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  await kernel.start()
+  const events: KernelEvent[] = []
+  kernel.subscribe((event) => events.push(event))
+
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_start',
+      toolCallId: 'tool-img-1',
+      toolName: 'generate_image',
+      args: { prompt: 'cat' }
+    }
+  })
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_end',
+      toolCallId: 'tool-img-1',
+      toolName: 'generate_image',
+      isError: false,
+      result: {
+        content: [
+          { type: 'text', text: 'done' },
+          { type: 'image', mimeType: 'image/png', data: LIVE_TOOL_PNG }
+        ]
+      }
+    }
+  })
+
+  const changed = events.filter((event) => event.type === 'kernel.state-changed')
+  assert.ok(changed.length >= 1)
+  const state = kernel.getState()
+  const tool = state.conversation.entries.find((entry) => entry.kind === 'tool')
+  assert.equal(tool?.kind === 'tool' ? tool.attachments?.[0]?.contentIndex : null, 1)
+  assert.equal(JSON.stringify(state).includes(LIVE_TOOL_PNG), false)
+  assert.equal(JSON.stringify(events).includes(LIVE_TOOL_PNG), false)
+})
+
+test('getToolImage reads live runtime messages and short-lived cache after tool end', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/session-tool-img.jsonl',
+    sessionId: 'session-tool-img',
+    sessionName: 'Tool images'
+  }
+  const runtime = new FakeRuntimeHost({
+    sessionId: pointer.sessionId,
+    sessionFile: pointer.sessionFile,
+    sessionName: pointer.sessionName ?? undefined,
+    thinkingLevel: 'medium',
+    isStreaming: false,
+    messageCount: 0,
+    pendingMessageCount: 0
+  })
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(pointer),
+      readSessionMessages: async () => {
+        throw new Error('history should not be required for live cache path')
+      }
+    }
+  )
+  await kernel.activateSession(pointer.sessionFile)
+
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_end',
+      toolCallId: 'live-img',
+      toolName: 'generate_image',
+      isError: false,
+      result: {
+        content: [
+          { type: 'text', text: 'ok' },
+          { type: 'image', mimeType: 'image/png', data: LIVE_TOOL_PNG }
+        ]
+      }
+    }
+  })
+
+  // Immediate open before transcript materializes: Main cache must serve the image.
+  const cached = await kernel.getToolImage(pointer.sessionFile, 'live-img', 1)
+  assert.equal(cached.mimeType, 'image/png')
+  assert.equal(cached.data, LIVE_TOOL_PNG)
+  assert.equal(cached.path, '')
+
+  runtime.replaceMessages([
+    {
+      role: 'toolResult',
+      toolCallId: 'live-img',
+      content: [
+        { type: 'text', text: 'ok' },
+        { type: 'image', mimeType: 'image/png', data: LIVE_TOOL_PNG }
+      ]
+    }
+  ])
+  const fromRuntime = await kernel.getToolImage(pointer.sessionFile, 'live-img', 1)
+  assert.equal(fromRuntime.data, LIVE_TOOL_PNG)
+})
+
+test('tool image cache expires and cannot cross the active Project boundary', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/session-tool-cache-boundary.jsonl',
+    sessionId: 'session-tool-cache-boundary',
+    sessionName: 'Tool image cache boundary'
+  }
+  const runtimeA = new FakeRuntimeHost({
+    sessionId: pointer.sessionId,
+    sessionFile: pointer.sessionFile,
+    sessionName: pointer.sessionName ?? undefined,
+    thinkingLevel: 'medium',
+    isStreaming: false,
+    messageCount: 0,
+    pendingMessageCount: 0
+  })
+  const runtimeB = new FakeRuntimeHost()
+  const runtimes = [runtimeA, runtimeB]
+  let now = 1_000
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    {
+      projects: [{ path: '/tmp/project' }, { path: '/tmp/other-project' }],
+      activeProjectKey: '/tmp/project'
+    },
+    {
+      ...kernelOptions(pointer),
+      now: () => now
+    }
+  )
+  await kernel.activateSession(pointer.sessionFile)
+
+  runtimeA.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_end',
+      toolCallId: 'cache-boundary',
+      toolName: 'generate_image',
+      isError: false,
+      result: {
+        content: [{ type: 'image', mimeType: 'image/png', data: LIVE_TOOL_PNG }]
+      }
+    }
+  })
+  assert.equal(
+    (await kernel.getToolImage(pointer.sessionFile, 'cache-boundary', 0)).data,
+    LIVE_TOOL_PNG
+  )
+
+  now += 60_001
+  await assert.rejects(
+    () => kernel.getToolImage(pointer.sessionFile, 'cache-boundary', 0),
+    /not found/i
+  )
+
+  now += 1
+  runtimeA.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_end',
+      toolCallId: 'cache-project',
+      toolName: 'generate_image',
+      isError: false,
+      result: {
+        content: [
+          { type: 'image', mimeType: 'image/png', data: LIVE_TOOL_PNG },
+          { type: 'image', mimeType: 'image/png', data: LIVE_TOOL_PNG }
+        ]
+      }
+    }
+  })
+  runtimeA.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_end',
+      toolCallId: 'cache-project',
+      toolName: 'generate_image',
+      isError: false,
+      result: {
+        content: [{ type: 'image', mimeType: 'image/png', data: LIVE_TOOL_PNG }]
+      }
+    }
+  })
+  await assert.rejects(
+    () => kernel.getToolImage(pointer.sessionFile, 'cache-project', 1),
+    /no longer owned|not found/i
+  )
+  await kernel.activateProject('/tmp/other-project', sessionRegistry(null))
+  await assert.rejects(
+    () => kernel.getToolImage(pointer.sessionFile, 'cache-project', 0),
+    /unavailable|not registered|active project/i
+  )
+})
+
+test('getToolImage reads historical toolResult and rejects invalid identity or content', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/session-hist-img.jsonl',
+    sessionId: 'session-hist-img',
+    sessionName: 'History images'
+  }
+  const messages = [
+    {
+      role: 'toolResult',
+      toolCallId: 'hist-img',
+      content: [
+        { type: 'text', text: 'ok' },
+        { type: 'image', mimeType: 'image/png', data: LIVE_TOOL_PNG }
+      ]
+    }
+  ]
+  const kernel = new WorkbenchKernel(
+    () => new FakeRuntimeHost(),
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(pointer),
+      readSessionMessages: async () => messages
+    }
+  )
+
+  const image = await kernel.getToolImage(pointer.sessionFile, 'hist-img', 1)
+  assert.equal(image.data, LIVE_TOOL_PNG)
+  assert.equal(image.name, 'image-2')
+
+  await assert.rejects(
+    () => kernel.getToolImage('relative/session.jsonl', 'hist-img', 1),
+    /absolute/i
+  )
+  await assert.rejects(
+    () => kernel.getToolImage(pointer.sessionFile, 'missing', 1),
+    /not found/i
+  )
+  await assert.rejects(
+    () => kernel.getToolImage(pointer.sessionFile, 'hist-img', 0),
+    /invalid/i
+  )
+  await assert.rejects(
+    () => kernel.getToolImage(pointer.sessionFile, 'hist-img', 99),
+    /content index/i
+  )
+  assert.equal(
+    isKernelCommand({
+      type: 'kernel.get-tool-image',
+      sessionKey: pointer.sessionFile,
+      toolCallId: 'hist-img',
+      contentIndex: 1
+    }),
+    true
+  )
+  assert.equal(
+    isKernelCommand({
+      type: 'kernel.get-tool-image',
+      sessionKey: pointer.sessionFile,
+      toolCallId: 'hist-img',
+      contentIndex: 64
+    }),
+    false
+  )
 })

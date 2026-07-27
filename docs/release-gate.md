@@ -64,7 +64,7 @@ P2 在完整保留上述 P1 链路的基础上，还必须从同一 AppImage 验
 4. 空对话、Project/Session 切换反馈和切换后的 Composer 焦点恢复可观察；
 5. P2 新增步骤与 P1 回归使用同一隔离 XDG、清理和脱敏边界。
 
-`pnpm verify:linux` 只在干净工作区执行；它从 AppImage 的真实 renderer UI 完成 P1 回归与当前 P2 链路，并将 schema v2 的脱敏 `report.json` 与六张关键截图写入 `release/evidence/<UTC>-<commit>/`。P2 摘要只记录计数和布尔结果，不记录完整 Project 路径、Session 标题、prompt、tool output 或 credential。验证器不得向生产代码加入测试后门。
+`pnpm verify:linux` 只在干净工作区执行；它从 AppImage 的真实 renderer UI 完成 P1 回归、当前 P2 链路与 S19 Subagent 任务详情 gate，并将 schema v2 的脱敏 `report.json` 与九张关键截图写入 `release/evidence/<UTC>-<commit>/`。P2/S19 摘要只记录计数、角色集合和布尔结果，不记录完整 Project 路径、Session 标题、prompt、tool output 或 credential；S19 截图还必须遮罩 participant 任务标签、详情活动与最终输出。验证器不得向生产代码加入测试后门。
 
 ## Fail Fast
 

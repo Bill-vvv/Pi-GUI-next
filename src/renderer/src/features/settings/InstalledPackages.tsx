@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import type { KernelInstalledPackage } from '../../../../shared/kernel-contract'
+import { unknownErrorMessage as errorMessage } from '../../unknown-error-message'
 
 type InstalledPackagesProps = {
   busy: boolean
@@ -141,8 +142,4 @@ export function InstalledPackages({
       </div>
     </section>
   )
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }

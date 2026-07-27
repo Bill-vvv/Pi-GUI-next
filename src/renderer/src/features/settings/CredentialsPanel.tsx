@@ -42,6 +42,8 @@ type CredentialsPanelProps = {
     providerId: string,
     modelIds: string[]
   ) => Promise<KernelModelPricingFetchResult>
+  onDirtyChange: (dirty: boolean) => void
+  onActiveOperationChange: (active: boolean) => void
 }
 
 type AuthOperation = {
@@ -78,7 +80,9 @@ export function CredentialsPanel({
   onSaveProvider,
   onRemoveProvider,
   onTestProvider,
-  onFetchModelPricing
+  onFetchModelPricing,
+  onDirtyChange,
+  onActiveOperationChange
 }: CredentialsPanelProps): React.JSX.Element {
   const [credentials, setCredentials] = useState<KernelProviderCredential[]>([])
   const [loading, setLoading] = useState(true)
@@ -123,6 +127,11 @@ export function CredentialsPanel({
       cancelRequestedRef.current = false
     }
   }, [onCancelProviderLogin])
+
+  useEffect(() => {
+    onActiveOperationChange(operation !== null)
+    return () => onActiveOperationChange(false)
+  }, [onActiveOperationChange, operation])
 
   useEffect(() => {
     let active = true
@@ -402,6 +411,7 @@ export function CredentialsPanel({
           onRemoveProvider={onRemoveProvider}
           onTestProvider={onTestProvider}
           onFetchModelPricing={onFetchModelPricing}
+          onDirtyChange={onDirtyChange}
         />
       </section>
 

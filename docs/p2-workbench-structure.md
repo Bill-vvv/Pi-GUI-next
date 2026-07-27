@@ -51,7 +51,7 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 #### 3.1.1 导航排序与行命中要求
 
 - Project 保留手动拖拽排序；Project 行不得常驻原生 `draggable`，只有主行内容收到鼠标主键按下后才临时武装，并在 `pointerup`、`pointercancel` 或 `dragend` 任一路径立即解除。
-- 每个 Project 的 Session 都由 Kernel 独立排序，并将 `running` 项无条件置顶。运行中组和非运行组内部始终按 `lastActivityAt` 倒序输出；最新活动在前，无可用活动时间的项放在末尾，同状态、同时间项保持稳定顺序。Session 不提供手动拖拽或第二套持久化顺序。
+- 每个 Project 的 Session 都由 Kernel 独立排序，并将 `running` 项无条件置顶。运行中组和非运行组内部始终按 `lastActivityAt` 倒序输出；最新活动在前，无可用活动时间的项放在末尾，同状态、同时间项保持稳定顺序。`lastActivityAt` 取 Pi transcript 中最新 `message` entry 的时间；仅打开/恢复 Session 时写入的 capability、`session_info` 等运行元数据不属于对话活动，也不得刷新时间或排序。Session 不提供手动拖拽或第二套持久化顺序。Renderer 的普通历史默认显示 5 个并按 5 个继续展开，但当前展示项、provisional / 非空闲 Runtime，以及后台刚完成但尚未查看的 Session 必须作为分页外保留项；结束后的 Kernel 重排不得让用户尚未查看的完成项从导航消失。
 - 新建等 Project action slot 不得武装行拖拽；Project 与 Session 行内按钮都必须拥有独立点击边界。
 - action slot 内叠放时间文字、运行指示和操作按钮时，操作按钮必须位于最上层并独占可见区域的指针命中；被隐藏或替换的文字、图标及状态层必须使用 `pointer-events: none`，文字层同时禁止文本选择。
 - `opacity: 0` 只改变绘制结果，不代表元素已经退出 hit testing。任何悬浮切换实现都必须分别核对视觉层、pointer events、文本选择和 stacking order，不能只验证图标是否显示。
@@ -65,13 +65,17 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 
 ### 3.3 Conversation Timeline
 
-- 保留现有 `message`、`thinking`、`tool`、`error` normalized entry 和增量 patch 路径。
+- 保留现有 `message`、`thinking`、`tool`、`error` normalized entry，并为固定 Subagent / Advisor 适配增加 `subagent-notice` 与 `advisor`；全部继续使用同一 Conversation 与增量 patch 路径。
 - 以一次 user turn 和随后一个 agent run 形成可辨识的 turn group。
 - 活动 run 线性展示 thinking 与 tool；settled 后的工作过程摘要与最终回答保持在同一 turn group 内，不作为脱离回答的独立大卡片。
 - 保留按 `toolCallId` 原地更新、最近 60 轮渐进挂载、用户离开底部后停止自动跟随等现有行为。
-- 当某轮原始用户 prompt 已滚出顶部、该轮回答仍处于顶部阅读位置时，在 Session Header 下粘着该 prompt；下一轮进入顶部阅读位置时自动切换，长内容可展开，附件摘要同步保留，粘着区域高度计入 Timeline 顶部安全区。Navigator 完全展开时，Timeline 左缘显示与真实用户轮次对应的 Prompt 导航短标记；悬浮或键盘聚焦可预览内容，点击定位对应轮次，折叠与窄窗口下隐藏。
-- 复制最后回答、导出 HTML 和分叉对话属于当前 Conversation 操作，以图标组放在时间线末尾，不占用 Session Header。
-- Project 或 Session 选择变化时，Timeline identity 随活动二元组变化，不复用上一 Session 的滚动、粘着 prompt 和 disclosure 状态。
+- 固定适配的 `pi-subagents` 在拉起后进入同一 turn：唤起中与运行中的 Subagent 必须直接显示，不得藏入 thinking 或通用工具详情 disclosure；前台运行默认按参与者显示紧凑、可聚焦的任务胶囊和同行整体状态。胶囊用“当前展示 Conversation identity + Subagent toolCallId + participant.index”作为稳定目标；点击后宽窗口打开不覆盖 Timeline / Composer 的 Workbench 第三列，较窄窗口在主工作区显示带返回入口的完整详情面，并原地跟随归一化 patch 更新 Agent、状态、当前活动、用量、错误和最终输出。关闭/返回/Escape 恢复合理焦点；Project、Session、新对话、归档预览 identity 变化、目标消失或设置页打开时关闭旧详情。普通完成通知在 Timeline 只形成轻量可点击的完成任务胶囊，并保留通知协议中的原始 Agent 名称作为胶囊标签，不用“后台任务结果”等通用文案替代；不展开结果预览，点击后由同一 Workbench 任务详情显示完整内容。控制、转向、supervisor 协作与 Watchdog 警告仍以独立通知显示；Main 从白名单 details 投影 supervisor request 的稳定 identity 与 pending/handled 生命周期，同一 run participant 的具体 request 替代泛化 attention，成功 reply 原地更新。该协作默认不作为用户 alert，只有 completion guard 与 Watchdog blocker 使用 alert。GUI 不读取子 Session transcript 或 artifact，不建立任务数据库或运行控制，也不按通知文案猜测原 run identity。
+- 固定适配的 Advisor advisory 留在触发它的 turn 内，按归一化 entry 时序显示名称、严重度、
+  正文和 guidance；blocker 不覆盖 Assistant 最终回答，Renderer 不解析 raw custom message
+  或 XML。
+- Navigator 完全展开时，Timeline 左缘显示与真实用户轮次对应的 Prompt 导航短标记；悬浮或键盘聚焦可预览内容，点击定位对应轮次，折叠与窄窗口下隐藏。不在 Session Header 下粘着当前阅读轮次的用户 prompt。
+- 复制回答、导出 HTML 与分叉对话属于当前 Conversation 操作：每个具备真实操作能力的已完成 turn 都在下方常驻预留同高的内联图标槽，悬停该 turn 或用键盘聚焦槽内按钮时只切换图标可见性与命中，不改变后续内容位置，也不占用 Session Header。复制/导出反馈固定留在发起操作的同一 turn 槽内，并以单行省略保持槽高；没有 turn 来源的快捷键反馈才使用时间线末尾的稳定位置。图标保持无底板的轻量外观。导出与分叉仍是会话级能力；复制作用于当前聚焦轮次的最终回答。
+- Project 或 Session 选择变化时，Timeline identity 随活动二元组变化，不复用上一 Session 的滚动和 disclosure 状态。
 
 ### 3.4 Composer 与命令入口
 
@@ -93,8 +97,9 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 
 - 已持久化 Session 的 GUI 主键使用 canonical `sessionFile`。
 - `sessionId` 是 Pi 返回并在 resume 时校验的身份字段，不单独作为跨 Project 主键。
-- Pi 0.80.10 的新 Session 在 `get_state` 返回 `sessionFile`、`sessionId` 时，JSONL 文件仍可能尚未创建；此时 Kernel 只保留进程内 provisional identity，不写 Session 索引或活动指针。
-- 第一个 assistant `message_end` 后等待 Pi 将 JSONL 落盘，再 canonicalize、校验普通文件并持久化；只有全部成功才发布正式 Session identity。落盘失败时不得登记 ghost Session。
+- Pi 0.80.10 的新 Session 在 `get_state` 返回 `sessionFile`、`sessionId` 时，JSONL 文件仍可能尚未创建；此时 Kernel 只保留进程内 provisional identity，**不写 XDG Session 索引**。
+- 导航层可立即把 provisional identity 投影进 `sessions[]`（`provisional: true`）并设 `activeSessionKey`，供左侧列表占位与选中；该占位不可 resume/archive/export，失败或停止后必须从列表移除，不得留下 ghost。
+- 第一个 assistant `message_end` 后等待 Pi 将 JSONL 落盘，再 canonicalize、校验普通文件并持久化；只有全部成功才把同一导航项升级为正式 Session identity。落盘失败时不得登记 ghost Session。
 - Session 索引持久化于 XDG state，只保存恢复和导航必需的指针及名称；不复制 Conversation 内容。
 
 ### 4.3 当前投影

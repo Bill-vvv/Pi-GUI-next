@@ -1,11 +1,16 @@
-import type {
-  KernelApi,
-  KernelEvent,
-  KernelProviderCredential,
-  KernelProviderConfig,
-  KernelSessionUsage,
-  KernelState,
-  ThinkingLevel
+import {
+  MAGIC_CONTEXT_PACKAGE_NAME,
+  SUBAGENT_PACKAGE_NAME,
+  type KernelAdvisorConfiguration,
+  type KernelAdvisorDefinition,
+  type KernelApi,
+  type KernelEvent,
+  type KernelProviderCredential,
+  type KernelProviderConfig,
+  type KernelSessionUsage,
+  type KernelState,
+  type KernelSubagentDefinition,
+  type ThinkingLevel
 } from '../../../shared/kernel-contract'
 import { DEFAULT_SHORTCUT_SETTINGS } from '../../../shared/shortcut-settings'
 
@@ -227,10 +232,22 @@ const previewProjects = {
               details: 'src/renderer/src/features/chat/chat.css',
               truncated: false,
               timestamp: timestamp + 2_000,
-              durationMs: 86
+              durationMs: 86,
+              subagent: null
             },
             {
               id: 'preview-assistant-1',
+              kind: 'advisor',
+              advisorSlug: 'accessibility',
+              advisorName: 'Accessibility Advisor',
+              severity: 'concern',
+              guidance: '为所有图标按钮保留可读名称，并确认窄窗口下内容可以换行。',
+              content: '导航调整需要同时保留键盘焦点路径与清晰的选中状态。',
+              delivery: 'aside',
+              timestamp: timestamp + 2_500
+            },
+            {
+              id: 'preview-assistant-2',
               kind: 'message',
               role: 'assistant',
               text: '可以。我们先从左侧 Project / Session 导航开始，一次只确认一个区域。',
@@ -417,9 +434,22 @@ const initialState: KernelState = {
   projectTrustRequest: null,
   availableModels,
   sessionNaming: { mode: 'auto' },
-  general: { startupWorkspaceRestore: 'restore', doubleClickBorderMaximize: true },
-  subagent: { maxDepth: 3, preventCycles: true },
+  general: {
+    startupWorkspaceRestore: 'restore',
+    doubleClickBorderMaximize: true,
+    fastExtensionLoading: false
+  },
+  subagent: { maxDepth: 3 },
   shortcuts: { ...DEFAULT_SHORTCUT_SETTINGS },
+  advisor: {
+    compatibility: 'ready',
+    extensionVersion: '1.0.0',
+    systemEnabled: true,
+    liveToggle: true,
+    multiAdvisor: true,
+    roster: true,
+    error: null
+  },
   appearance: {
     theme: 'system',
     textSize: 'default',
@@ -435,42 +465,52 @@ const initialState: KernelState = {
       name: 'new',
       description: '在当前项目中新建对话',
       source: 'gui',
-      argumentHint: null
+      argumentHint: null,
+      sourceInfo: null
     },
     {
       id: 'pi-rpc.set-model',
       name: 'model',
       description: '切换当前 Pi 模型',
       source: 'pi-rpc',
-      argumentHint: '<provider/model>'
+      argumentHint: '<provider/model>',
+      sourceInfo: null
     },
     {
       id: 'pi-rpc.set-thinking-level',
       name: 'thinking',
       description: '设置思考强度',
       source: 'pi-rpc',
-      argumentHint: '<off|minimal|low|medium|high|xhigh|max>'
+      argumentHint: '<off|minimal|low|medium|high|xhigh|max>',
+      sourceInfo: null
     },
     {
       id: 'pi-rpc.compact',
       name: 'compact',
       description: '压缩当前 Session 上下文',
       source: 'pi-rpc',
-      argumentHint: '[instructions]'
+      argumentHint: '[instructions]',
+      sourceInfo: null
     },
     {
       id: 'pi-rpc.set-session-name',
       name: 'name',
       description: '设置当前 Session 名称',
       source: 'pi-rpc',
-      argumentHint: '<name>'
+      argumentHint: '<name>',
+      sourceInfo: null
     },
     {
       id: 'pi-command:skill:review',
       name: 'review',
       description: '检查当前变更并给出建议',
       source: 'skill',
-      argumentHint: '[arguments]'
+      argumentHint: '[arguments]',
+      sourceInfo: {
+        source: 'local',
+        scope: 'project',
+        origin: 'top-level'
+      }
     }
   ],
   runtime: {
@@ -500,11 +540,175 @@ export function createPreviewKernelApi(): KernelApi {
       extensionEnabled: false
     },
     {
-      source: 'npm:@mjakl/pi-subagent@1.0.0',
+      source: `npm:${SUBAGENT_PACKAGE_NAME}@1.0.0`,
+      filtered: false,
+      extensionEnabled: true
+    },
+    {
+      source: `npm:${MAGIC_CONTEXT_PACKAGE_NAME}@1.0.0`,
+      filtered: true,
+      extensionEnabled: false
+    },
+    {
+      source: 'npm:pi-gui-multi-advisor@1.0.0',
       filtered: false,
       extensionEnabled: true
     }
   ]
+  let subagentDefinitions: KernelSubagentDefinition[] = [
+    {
+      id: 'builtin:c2NvdXQubWQ',
+      scope: 'builtin',
+      editable: false,
+      enabled: true,
+      name: 'scout',
+      description: '快速检索并理解当前代码库',
+      systemPrompt: '快速定位与任务相关的文件、符号和约束，返回精确出处。',
+      model: null,
+      fallbackModels: null,
+      thinking: 'low',
+      systemPromptMode: 'replace',
+      inheritProjectContext: true,
+      inheritSkills: false,
+      defaultContext: 'fresh',
+      tools: ['read', 'grep', 'find'],
+      skills: null,
+      defaultAsync: null,
+      timeoutMs: null,
+      maxTurns: 12,
+      maxSubagentDepth: null
+    },
+    {
+      id: 'builtin:cmV2aWV3ZXIubWQ',
+      scope: 'builtin',
+      editable: false,
+      enabled: true,
+      name: 'reviewer',
+      description: '审查实现并指出明确、可执行的问题',
+      systemPrompt: '检查正确性、回归风险和边界条件，优先报告有证据的问题。',
+      model: null,
+      fallbackModels: null,
+      thinking: 'high',
+      systemPromptMode: 'replace',
+      inheritProjectContext: true,
+      inheritSkills: false,
+      defaultContext: 'fresh',
+      tools: ['read', 'grep', 'bash'],
+      skills: null,
+      defaultAsync: null,
+      timeoutMs: null,
+      maxTurns: 20,
+      maxSubagentDepth: null
+    },
+    {
+      id: 'project:c2VjdXJpdHktcmV2aWV3ZXIubWQ',
+      scope: 'project',
+      editable: true,
+      enabled: true,
+      name: 'security-reviewer',
+      description: '检查鉴权、输入校验与敏感信息泄漏',
+      systemPrompt: '只进行安全审查。按严重度列出问题，并给出文件与行号。',
+      model: 'openai-codex/gpt-5.6-sol',
+      fallbackModels: null,
+      thinking: 'high',
+      systemPromptMode: 'replace',
+      inheritProjectContext: true,
+      inheritSkills: false,
+      defaultContext: 'fresh',
+      tools: ['read', 'grep'],
+      skills: null,
+      defaultAsync: false,
+      timeoutMs: 120000,
+      maxTurns: 16,
+      maxSubagentDepth: 0
+    }
+  ]
+  let advisorConfiguration: KernelAdvisorConfiguration = {
+    definitions: [
+      {
+        id: 'builtin:default-advisor',
+        slug: 'default-advisor',
+        scope: 'builtin',
+        sourcePath: null,
+        sourceOrder: 0,
+        editable: false,
+        name: 'Default Advisor',
+        enabled: true,
+        model: 'gpt-5.6-sol',
+        thinking: 'medium',
+        tools: ['read', 'grep', 'find', 'ls'],
+        instructions: 'Review the current response for correctness and concrete risks.'
+      },
+      {
+        id: 'inherited:2:accessibility',
+        slug: 'accessibility',
+        scope: 'inherited',
+        sourcePath: '/home/vvv/Projects/WATCHDOG.yml',
+        sourceOrder: 2,
+        editable: false,
+        name: 'Accessibility',
+        enabled: true,
+        model: null,
+        thinking: 'high',
+        tools: ['read', 'grep', 'find'],
+        instructions: 'Check keyboard paths, accessible names, focus order, and narrow-window behavior.'
+      },
+      {
+        id: 'project:3:implementation-safety',
+        slug: 'implementation-safety',
+        scope: 'project',
+        sourcePath: '/home/vvv/Projects/pi-gui-next/WATCHDOG.yml',
+        sourceOrder: 3,
+        editable: true,
+        name: 'Implementation Safety',
+        enabled: true,
+        model: 'openai-codex/gpt-5.6-sol',
+        thinking: 'xhigh',
+        tools: ['read', 'grep', 'find', 'edit'],
+        instructions: 'Inspect the implementation boundary and report regressions with precise evidence.'
+      }
+    ],
+    sources: [
+      {
+        id: 'builtin:default-advisor',
+        scope: 'builtin',
+        path: null,
+        sourceOrder: 0,
+        editable: false,
+        instructions: ''
+      },
+      {
+        id: 'user:1',
+        scope: 'user',
+        path: '/home/vvv/.pi/agent/WATCHDOG.md',
+        sourceOrder: 1,
+        editable: true,
+        instructions: 'Prefer concise, actionable findings with evidence.'
+      },
+      {
+        id: 'inherited:2',
+        scope: 'inherited',
+        path: '/home/vvv/Projects/WATCHDOG.yml',
+        sourceOrder: 2,
+        editable: false,
+        instructions: 'Apply repository-wide accessibility and safety constraints.'
+      },
+      {
+        id: 'project:3',
+        scope: 'project',
+        path: '/home/vvv/Projects/pi-gui-next/WATCHDOG.yml',
+        sourceOrder: 3,
+        editable: true,
+        instructions: 'Respect the current Pi GUI architecture and frontend guidelines.'
+      }
+    ],
+    diagnostics: [
+      {
+        sourcePath: '/home/vvv/Projects/pi-gui-next/.omp/WATCHDOG.yml',
+        message: 'Preview diagnostic: inherited sample source was skipped.'
+      }
+    ]
+  }
   if (runningVariant) {
     state = {
       ...state,
@@ -730,6 +934,12 @@ export function createPreviewKernelApi(): KernelApi {
       }
     },
     exportSession: async () => ({ saved: false }),
+    getMessageImage: async () => {
+      throw new Error('Preview mode does not include session image payloads.')
+    },
+    getToolImage: async () => {
+      throw new Error('Preview mode does not include tool image payloads.')
+    },
     searchProjectPaths: async (query) => {
       if (state.activeProjectKey === null) throw new Error('Preview project is unavailable.')
       const normalizedQuery = query.toLocaleLowerCase('en-US')
@@ -812,7 +1022,7 @@ export function createPreviewKernelApi(): KernelApi {
       return current()
     },
     setSubagentEnabled: async (enabled) => {
-      const base = 'npm:@mjakl/pi-subagent'
+      const base = `npm:${SUBAGENT_PACKAGE_NAME}`
       if (!installedPackages.some((pkg) => pkg.source === base || pkg.source.startsWith(`${base}@`))) {
         throw new Error('Subagent Package is not installed.')
       }
@@ -822,6 +1032,131 @@ export function createPreviewKernelApi(): KernelApi {
           : pkg
       )
       return structuredClone(installedPackages)
+    },
+    setMagicContextEnabled: async (enabled) => {
+      const base = `npm:${MAGIC_CONTEXT_PACKAGE_NAME}`
+      if (!installedPackages.some((pkg) => pkg.source === base || pkg.source.startsWith(`${base}@`))) {
+        throw new Error('Magic Context Package is not installed.')
+      }
+      installedPackages = installedPackages.map((pkg) =>
+        pkg.source === base || pkg.source.startsWith(`${base}@`)
+          ? { ...pkg, extensionEnabled: enabled }
+          : pkg
+      )
+      return structuredClone(installedPackages)
+    },
+    setAdvisorSystemEnabled: (enabled) => commit({
+      ...state,
+      advisor: {
+        ...state.advisor,
+        systemEnabled: enabled
+      }
+    }),
+    setAdvisorExtensionEnabled: async (enabled) => {
+      const matches = installedPackages.filter(({ source }) => isAdvisorPackageSource(source))
+      if (matches.length !== 1) {
+        throw new Error('Advisor Package must have exactly one installed source.')
+      }
+      installedPackages = installedPackages.map((pkg) =>
+        isAdvisorPackageSource(pkg.source) ? { ...pkg, extensionEnabled: enabled } : pkg
+      )
+      return structuredClone(installedPackages)
+    },
+    listAdvisorDefinitions: async () => structuredClone(advisorConfiguration),
+    saveAdvisorDefinition: async (input) => {
+      const slug = slugifyAdvisorName(input.name)
+      const originalIndex = input.originalSlug === null
+        ? -1
+        : advisorConfiguration.definitions.findIndex((definition) =>
+            definition.editable &&
+            definition.scope === input.scope &&
+            definition.slug === input.originalSlug
+          )
+      if (input.originalSlug !== null && originalIndex === -1) {
+        throw new Error('Advisor definition no longer exists in the selected scope.')
+      }
+      if (advisorConfiguration.definitions.some((definition, index) =>
+        index !== originalIndex &&
+        definition.editable &&
+        definition.scope === input.scope &&
+        definition.slug === slug
+      )) {
+        throw new Error(`Advisor definition already exists: ${slug}`)
+      }
+      const sourceOrder = input.scope === 'project' ? 3 : 1
+      const sourcePath = input.scope === 'project'
+        ? '/home/vvv/Projects/pi-gui-next/WATCHDOG.yml'
+        : '/home/vvv/.pi/agent/WATCHDOG.yml'
+      const next: KernelAdvisorDefinition = {
+        id: `${input.scope}:${sourceOrder}:${slug}`,
+        slug,
+        scope: input.scope,
+        sourcePath,
+        sourceOrder,
+        editable: true,
+        name: input.name,
+        enabled: input.enabled,
+        model: input.model,
+        thinking: input.thinking,
+        tools: [...input.tools],
+        instructions: input.instructions
+      }
+      advisorConfiguration = {
+        ...advisorConfiguration,
+        definitions: originalIndex === -1
+          ? [...advisorConfiguration.definitions, next]
+          : advisorConfiguration.definitions.map((definition, index) =>
+              index === originalIndex ? next : definition
+            )
+      }
+      return structuredClone(advisorConfiguration)
+    },
+    removeAdvisorDefinition: async (slug, scope) => {
+      const index = advisorConfiguration.definitions.findIndex((definition) =>
+        definition.editable &&
+        definition.scope === scope &&
+        definition.slug === slug
+      )
+      if (index === -1) throw new Error('Advisor definition no longer exists.')
+      advisorConfiguration = {
+        ...advisorConfiguration,
+        definitions: advisorConfiguration.definitions.filter((_, candidate) => candidate !== index)
+      }
+      return structuredClone(advisorConfiguration)
+    },
+    listSubagentDefinitions: async () => structuredClone(subagentDefinitions),
+    saveSubagentDefinition: async (definition) => {
+      const { originalId, ...fields } = definition
+      const original = originalId === null
+        ? null
+        : subagentDefinitions.find((item) => item.id === originalId) ?? null
+      const id = originalId ?? `${definition.scope}:${btoa(`${definition.name}.md`)
+        .replace(/\+/gu, '-')
+        .replace(/\//gu, '_')
+        .replace(/=+$/gu, '')}`
+      const next: KernelSubagentDefinition = {
+        ...fields,
+        id,
+        editable: true,
+        enabled: original?.enabled ?? true
+      }
+      const originalIndex = originalId === null
+        ? -1
+        : subagentDefinitions.findIndex((item) => item.id === originalId)
+      subagentDefinitions = originalIndex === -1
+        ? [...subagentDefinitions, next]
+        : subagentDefinitions.map((item, index) => index === originalIndex ? next : item)
+      return structuredClone(subagentDefinitions)
+    },
+    setSubagentDefinitionEnabled: async (id, _scope, enabled) => {
+      subagentDefinitions = subagentDefinitions.map((definition) =>
+        definition.id === id ? { ...definition, enabled } : definition
+      )
+      return structuredClone(subagentDefinitions)
+    },
+    removeSubagentDefinition: async (id) => {
+      subagentDefinitions = subagentDefinitions.filter((definition) => definition.id !== id)
+      return structuredClone(subagentDefinitions)
     },
     updatePiPackage: current,
     updatePiPackages: current,
@@ -901,7 +1236,10 @@ export function createPreviewKernelApi(): KernelApi {
     setThinkingLevel: (thinkingLevel: ThinkingLevel) =>
       commit({ ...state, session: { ...state.session, thinkingLevel } }),
     setSessionNaming: (sessionNaming) => commit({ ...state, sessionNaming }),
-    setGeneral: (general) => commit({ ...state, general }),
+    setGeneral: (general) => commit({
+      ...state,
+      general: { ...state.general, ...general }
+    }),
     setSubagent: (subagent) => commit({ ...state, subagent }),
     setShortcuts: (shortcuts) => commit({ ...state, shortcuts }),
     setAppearance: (appearance) => commit({ ...state, appearance }),
@@ -931,4 +1269,28 @@ function isFuzzySubsequence(candidate: string, query: string): boolean {
     if (queryIndex === query.length) return true
   }
   return query.length === 0
+}
+
+function isAdvisorPackageSource(source: string): boolean {
+  if (source === 'pi-gui-multi-advisor') return true
+  if (/^npm:pi-gui-multi-advisor(?:@[^/]+)?$/u.test(source)) return true
+  if (!(
+    source.startsWith('/') ||
+    source.startsWith('./') ||
+    source.startsWith('../') ||
+    source.startsWith('~/') ||
+    source.startsWith('\\\\') ||
+    /^[a-z]:[\\/]/iu.test(source) ||
+    (!/^[a-z][a-z0-9+.-]*:/iu.test(source) && /[\\/]/u.test(source))
+  )) return false
+  const normalized = source.replace(/[\\/]+$/u, '')
+  return normalized.length > 0 &&
+    normalized.split(/[\\/]/u).at(-1) === 'pi-gui-multi-advisor'
+}
+
+function slugifyAdvisorName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '-')
+    .replace(/^-+|-+$/gu, '') || 'advisor'
 }

@@ -11,6 +11,7 @@ import {
   type KernelProviderTestResult
 } from '../../../../shared/kernel-contract'
 import { Select } from '../../components/Select'
+import { hasUnsavedSettingsDraft } from './settings-workspace'
 import './provider-settings.css'
 
 type ProviderSettingsProps = {
@@ -23,6 +24,7 @@ type ProviderSettingsProps = {
     providerId: string,
     modelIds: string[]
   ) => Promise<KernelModelPricingFetchResult>
+  onDirtyChange: (dirty: boolean) => void
 }
 
 type ProviderDraft = {
@@ -73,15 +75,18 @@ export function ProviderSettings({
   onSaveProvider,
   onRemoveProvider,
   onTestProvider,
-  onFetchModelPricing
+  onFetchModelPricing,
+  onDirtyChange
 }: ProviderSettingsProps): React.JSX.Element {
   const [providers, setProviders] = useState<KernelProviderConfig[]>([])
   const [draft, setDraft] = useState<ProviderDraft | null>(null)
+  const [baseline, setBaseline] = useState<ProviderDraft | null>(null)
   const [action, setAction] = useState<string | null>('loading')
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [expandedModelKey, setExpandedModelKey] = useState<string | null>(null)
   const controlsDisabled = busy || action !== null
+  const dirty = hasUnsavedSettingsDraft(draft, baseline)
 
   useEffect(() => {
     let active = true
@@ -102,14 +107,23 @@ export function ProviderSettings({
     }
   }, [onListProviders])
 
+  useEffect(() => {
+    onDirtyChange(dirty)
+    return () => onDirtyChange(false)
+  }, [dirty, onDirtyChange])
+
   function startCreate(): void {
-    setDraft(emptyProviderDraft())
+    const nextDraft = emptyProviderDraft()
+    setDraft(nextDraft)
+    setBaseline(nextDraft)
     setMessage(null)
     setError(null)
   }
 
   function startEdit(provider: KernelProviderConfig): void {
-    setDraft(providerDraft(provider))
+    const nextDraft = providerDraft(provider)
+    setDraft(nextDraft)
+    setBaseline(nextDraft)
     setMessage(null)
     setError(null)
   }
@@ -134,6 +148,7 @@ export function ProviderSettings({
         saved = true
         setProviders(nextProviders)
         setDraft(null)
+        setBaseline(null)
         if (mode === 'save-and-test') {
           const result = await onTestProvider(input.id, input.models[0].id)
           setMessage(testSuccessMessage(result, true))
@@ -157,7 +172,10 @@ export function ProviderSettings({
     void onRemoveProvider(provider.id)
       .then((nextProviders) => {
         setProviders(nextProviders)
-        if (draft?.originalId === provider.id) setDraft(null)
+        if (draft?.originalId === provider.id) {
+          setDraft(null)
+          setBaseline(null)
+        }
         setMessage('Provider 已删除。')
       })
       .catch((reason: unknown) => {
@@ -268,6 +286,7 @@ export function ProviderSettings({
           onChange={setDraft}
           onCancel={() => {
             setDraft(null)
+            setBaseline(null)
             setError(null)
           }}
           onFetchModelPricing={handleFetchModelPricing}

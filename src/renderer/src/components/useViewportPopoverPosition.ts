@@ -15,16 +15,16 @@ type PopoverPositionOptions = {
   axis?: 'horizontal' | 'vertical'
 }
 
-export function useViewportPopoverPosition(
+export function useViewportPopoverPosition<PopoverElement extends HTMLElement = HTMLDivElement>(
   open: boolean,
   triggerRef: RefObject<HTMLElement | null>,
   maximumHeight: number,
   options: PopoverPositionOptions = {}
 ): {
-  popoverRef: RefObject<HTMLDivElement | null>
+  popoverRef: RefObject<PopoverElement | null>
   position: PopoverPosition | null
 } {
-  const popoverRef = useRef<HTMLDivElement>(null)
+  const popoverRef = useRef<PopoverElement>(null)
   const [position, setPosition] = useState<PopoverPosition | null>(null)
   const preferredWidth = options.preferredWidth
   const align = options.align ?? 'start'

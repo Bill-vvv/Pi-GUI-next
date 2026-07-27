@@ -1,0 +1,342 @@
+.app-shell {
+  --sidebar-width: 332px;
+  --app-panel-gap: 0px;
+  /* Keep hit strips inside shell padding so they do not steal content clicks. */
+  --window-edge-hit-x: min(10px, var(--app-shell-padding));
+  --window-edge-hit-top: min(12px, var(--app-shell-padding));
+  --window-edge-hit-bottom: min(10px, var(--app-shell-padding));
+  display: grid;
+  grid-template-columns: minmax(0, var(--sidebar-width)) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--app-panel-gap);
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  isolation: isolate;
+  background: var(--color-bg-app);
+  padding: var(--app-shell-padding);
+  transition: grid-template-columns var(--motion-duration-layout) var(--motion-easing-layout);
+}
+
+/* Dedicated client-area edge strips. OS chrome is outside the web view, so
+   maximize must be triggered from in-app edges rather than the system border. */
+.window-edge-hit-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+}
+
+.window-edge-hit {
+  position: absolute;
+  pointer-events: auto;
+  /* Keep hit target inert for single clicks; only dblclick is handled. */
+  background: transparent;
+}
+
+.window-edge-hit.top {
+  top: 0;
+  left: var(--window-edge-hit-x);
+  right: var(--window-edge-hit-x);
+  height: var(--window-edge-hit-top);
+  cursor: default;
+}
+
+.window-edge-hit.bottom {
+  bottom: 0;
+  left: var(--window-edge-hit-x);
+  right: var(--window-edge-hit-x);
+  height: var(--window-edge-hit-bottom);
+}
+
+.window-edge-hit.left {
+  top: var(--window-edge-hit-top);
+  bottom: var(--window-edge-hit-bottom);
+  left: 0;
+  width: var(--window-edge-hit-x);
+}
+
+.window-edge-hit.right {
+  top: var(--window-edge-hit-top);
+  bottom: var(--window-edge-hit-bottom);
+  right: 0;
+  width: var(--window-edge-hit-x);
+}
+
+.app-shell::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='144' height='144' viewBox='0 0 144 144'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='144' height='144' filter='url(%23noise)' opacity='0.72'/%3E%3C/svg%3E");
+  background-size: var(--background-noise-size) var(--background-noise-size);
+  opacity: var(--background-noise-opacity);
+  mix-blend-mode: soft-light;
+}
+
+.app-shell.left-sidebar-collapsed {
+  grid-template-columns: minmax(0, 0px) minmax(0, 1fr);
+}
+
+.app-shell.left-sidebar-collapsed .left-sidebar {
+  transform: translateX(-0.65rem);
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.left-sidebar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface-sidebar);
+  box-shadow: var(--shadow-sidebar);
+  backdrop-filter: blur(18px);
+  visibility: visible;
+  transition: opacity var(--motion-duration-layout) var(--motion-easing-layout), transform var(--motion-duration-layout) var(--motion-easing-layout), border-color var(--motion-duration-control) var(--motion-easing-standard), background var(--motion-duration-control) var(--motion-easing-standard), visibility 0s linear;
+}
+
+.main-chat {
+  --composer-measured-clearance: 0px;
+  --composer-clearance: max(var(--composer-reserved-space), var(--composer-measured-clearance));
+  --chat-frame-edge-gap: 1.25rem;
+  --chat-frame-max-width: 860px;
+  --chat-frame-side-space: max(var(--chat-frame-edge-gap), calc((100% - var(--chat-frame-max-width)) / 2));
+  --chat-frame-width: min(var(--chat-frame-max-width), calc(100% - (var(--chat-frame-edge-gap) * 2)));
+  --conversation-padding-left: var(--chat-frame-side-space);
+  --conversation-padding-right: var(--chat-frame-side-space);
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 18px;
+  transition: transform var(--motion-duration-layout) var(--motion-easing-layout);
+}
+
+.sidebar-content {
+  --sidebar-bottom-mask-ramp: 1.55rem;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1.05rem;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0.95rem 0.95rem var(--sidebar-bottom-mask-ramp);
+  scrollbar-color: transparent transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - var(--sidebar-bottom-mask-ramp)), rgb(0 0 0 / 76%) calc(100% - 0.95rem), rgb(0 0 0 / 34%) calc(100% - 0.38rem), rgb(0 0 0 / 0%) 100%);
+  mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - var(--sidebar-bottom-mask-ramp)), rgb(0 0 0 / 76%) calc(100% - 0.95rem), rgb(0 0 0 / 34%) calc(100% - 0.38rem), rgb(0 0 0 / 0%) 100%);
+}
+
+.sidebar-footer {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.42rem;
+  padding: 0.45rem 0.95rem 0.95rem;
+}
+
+.runtime-context-status {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--text-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-context-error {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-status-error);
+  font-size: var(--text-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-collapse-toggle,
+.add-project-entry,
+.sidebar-settings-toggle {
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+}
+
+.add-project-empty-entry {
+  display: inline-flex;
+  width: auto;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 0.42rem;
+  padding: 0 0.8rem;
+  color: var(--color-text-primary);
+  font-size: var(--text-control);
+  font-weight: var(--weight-medium);
+  line-height: var(--line-control);
+}
+
+.left-sidebar-bottom-triggers {
+  position: absolute;
+  left: var(--conversation-padding-left);
+  bottom: calc(var(--composer-clearance, var(--composer-reserved-space)) + 0.35rem);
+  z-index: 5;
+}
+
+.left-sidebar-trigger {
+  width: 30px;
+  height: 30px;
+  color: var(--color-text-muted);
+  opacity: 0.82;
+}
+
+.left-sidebar-trigger:hover:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text-primary);
+  opacity: 1;
+}
+
+.workbench-session-header {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.68rem var(--conversation-padding-right) 0.42rem var(--conversation-padding-left);
+}
+
+.workbench-session-title {
+  max-width: 20rem;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-soft);
+  font-size: var(--text-control);
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1200px) {
+  .app-shell {
+    --sidebar-width: clamp(280px, 28vw, 312px);
+  }
+
+  .main-chat {
+    --chat-frame-edge-gap: 1rem;
+    --chat-frame-max-width: 820px;
+  }
+}
+
+@media (max-width: 1040px) {
+  .app-shell {
+    --sidebar-width: clamp(220px, 26vw, 280px);
+    grid-template-columns: minmax(220px, var(--sidebar-width)) minmax(0, 1fr);
+  }
+
+  .app-shell.left-sidebar-collapsed {
+    grid-template-columns: minmax(0, 0px) minmax(0, 1fr);
+  }
+
+  .sidebar-content {
+    gap: 0.75rem;
+    padding: 0.75rem 0.75rem var(--sidebar-bottom-mask-ramp);
+  }
+
+  .sidebar-footer {
+    padding: 0.38rem 0.75rem 0.75rem;
+  }
+}
+
+.app-shell.subagent-detail-open .main-chat {
+  display: none;
+}
+
+.app-shell > .subagent-task-detail {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+@media (min-width: 1280px) {
+  .app-shell.subagent-detail-open {
+    grid-template-columns:
+      minmax(0, var(--sidebar-width))
+      minmax(0, 1fr)
+      clamp(20rem, 26vw, 25rem);
+  }
+
+  .app-shell.subagent-detail-open.left-sidebar-collapsed {
+    grid-template-columns:
+      minmax(0, 0px)
+      minmax(0, 1fr)
+      clamp(20rem, 26vw, 25rem);
+  }
+
+  .app-shell.subagent-detail-open .main-chat {
+    display: grid;
+  }
+
+  .app-shell > .subagent-task-detail {
+    grid-column: 3;
+  }
+}
+
+@media (max-width: 700px) {
+    .app-shell {
+      --composer-bottom-offset: 4px;
+      --composer-reserved-space: clamp(9.75rem, 27dvh, 11.75rem);
+      --sidebar-rail-width: 54px;
+      grid-template-columns: minmax(220px, var(--sidebar-width)) minmax(0, 1fr);
+    }
+
+    .app-shell.left-sidebar-collapsed {
+      grid-template-columns: var(--sidebar-rail-width) minmax(0, 1fr);
+    }
+
+    .app-shell.left-sidebar-collapsed .left-sidebar {
+      transform: none;
+      opacity: 1;
+      pointer-events: auto;
+      visibility: visible;
+    }
+
+    .app-shell.left-sidebar-collapsed .left-sidebar {
+      border-color: transparent;
+      background: transparent;
+      backdrop-filter: none;
+    }
+
+    .app-shell.left-sidebar-collapsed .left-sidebar .sidebar-content {
+      align-items: center;
+      gap: 0.32rem;
+      overflow: hidden;
+      padding: 0.42rem 0;
+      -webkit-mask-image: none;
+      mask-image: none;
+    }
+
+    .main-chat {
+      --chat-frame-edge-gap: 0.65rem;
+    }
+
+    .workbench-session-header {
+      padding-right: var(--chat-frame-edge-gap);
+      padding-left: var(--chat-frame-edge-gap);
+    }
+}

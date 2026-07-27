@@ -24,29 +24,111 @@ test('runtime forwards all three project trust states as argv entries', () => {
   assert.equal(buildPiRpcArguments(undefined, false, false).at(-1), '--no-approve')
 })
 
-test('runtime adds official subagent flags only when subagent launch settings are provided', () => {
-  assert.equal(buildPiRpcArguments().includes('--subagent-max-depth'), false)
-  assert.deepEqual(
-    buildPiRpcArguments(undefined, false, undefined, {
-      maxDepth: 2,
-      preventCycles: true
-    }).slice(-3),
-    ['--subagent-max-depth', '2', '--subagent-prevent-cycles']
-  )
-  assert.deepEqual(
-    buildPiRpcArguments(undefined, false, undefined, {
-      maxDepth: 1,
-      preventCycles: false
-    }).slice(-3),
-    ['--subagent-max-depth', '1', '--no-subagent-prevent-cycles']
-  )
+test('runtime does not add legacy subagent arguments', () => {
+  const arguments_ = buildPiRpcArguments()
+  assert.equal(arguments_.includes('--subagent-max-depth'), false)
+  assert.equal(arguments_.includes('--subagent-prevent-cycles'), false)
+  assert.equal(arguments_.includes('--no-subagent-prevent-cycles'), false)
   assert.throws(
-    () => buildPiRpcArguments(undefined, false, undefined, {
-      maxDepth: 4 as 1,
-      preventCycles: true
-    }),
+    () => new LinuxLocalRuntime({ cwd: '/tmp', subagent: { maxDepth: 4 as 1 } }),
     /Invalid subagent settings/u
   )
+})
+
+test('runtime controls fast extension loading and merges it with subagent depth', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-runtime-subagent-env-'))
+  t.after(async () => rm(directory, { recursive: true, force: true }))
+  const executable = join(directory, 'pi')
+  const environmentLog = join(directory, 'environment.jsonl')
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs')
+if (process.argv[2] === '--version') {
+  process.stdout.write('0.80.10\\n')
+  process.exit(0)
+}
+appendFileSync(${JSON.stringify(environmentLog)}, JSON.stringify({
+  depth: process.env.PI_SUBAGENT_MAX_DEPTH,
+  parallel: process.env.PI_PARALLEL_EXTENSION_IMPORTS,
+  nativeCompiled: process.env.PI_NATIVE_COMPILED_EXTENSION_IMPORTS,
+  jitiTryNative: process.env.JITI_TRY_NATIVE,
+  nodeOptions: process.env.NODE_OPTIONS,
+  argv: process.argv.slice(2)
+}) + '\\n')
+let input = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  input += chunk
+  let newline
+  while ((newline = input.indexOf('\\n')) >= 0) {
+    const request = JSON.parse(input.slice(0, newline))
+    input = input.slice(newline + 1)
+    process.stdout.write(JSON.stringify({
+      type: 'response',
+      id: request.id,
+      success: true,
+      ...(request.type === 'get_state' ? { data: {} } : {})
+    }) + '\\n')
+  }
+})
+`,
+    { mode: 0o755 }
+  )
+  const inheritedDepth = process.env.PI_SUBAGENT_MAX_DEPTH
+  const inheritedParallelImports = process.env.PI_PARALLEL_EXTENSION_IMPORTS
+  const inheritedNativeCompiledImports = process.env.PI_NATIVE_COMPILED_EXTENSION_IMPORTS
+  const inheritedJitiTryNative = process.env.JITI_TRY_NATIVE
+  process.env.PI_SUBAGENT_MAX_DEPTH = '9'
+  process.env.PI_PARALLEL_EXTENSION_IMPORTS = '1'
+  process.env.PI_NATIVE_COMPILED_EXTENSION_IMPORTS = '1'
+  process.env.JITI_TRY_NATIVE = '0'
+  t.after(() => {
+    if (inheritedDepth === undefined) delete process.env.PI_SUBAGENT_MAX_DEPTH
+    else process.env.PI_SUBAGENT_MAX_DEPTH = inheritedDepth
+    if (inheritedParallelImports === undefined) delete process.env.PI_PARALLEL_EXTENSION_IMPORTS
+    else process.env.PI_PARALLEL_EXTENSION_IMPORTS = inheritedParallelImports
+    if (inheritedNativeCompiledImports === undefined) {
+      delete process.env.PI_NATIVE_COMPILED_EXTENSION_IMPORTS
+    } else {
+      process.env.PI_NATIVE_COMPILED_EXTENSION_IMPORTS = inheritedNativeCompiledImports
+    }
+    if (inheritedJitiTryNative === undefined) delete process.env.JITI_TRY_NATIVE
+    else process.env.JITI_TRY_NATIVE = inheritedJitiTryNative
+  })
+
+  const inheritedRuntime = new LinuxLocalRuntime({
+    cwd: directory,
+    explicitExecutable: executable
+  })
+  await inheritedRuntime.start()
+  await inheritedRuntime.stop()
+  const configuredRuntime = new LinuxLocalRuntime({
+    cwd: directory,
+    explicitExecutable: executable,
+    subagent: { maxDepth: 2 },
+    fastExtensionLoading: true
+  })
+  await configuredRuntime.start()
+  await configuredRuntime.stop()
+
+  const launches = (await readFile(environmentLog, 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as {
+      depth: string
+      parallel?: string
+      nativeCompiled?: string
+      jitiTryNative?: string
+      nodeOptions?: string
+      argv: string[]
+    })
+  assert.deepEqual(launches.map(({ depth }) => depth), ['9', '2'])
+  assert.deepEqual(launches.map(({ parallel }) => parallel), [undefined, '1'])
+  assert.deepEqual(launches.map(({ nativeCompiled }) => nativeCompiled), [undefined, '1'])
+  assert.deepEqual(launches.map(({ jitiTryNative }) => jitiTryNative), [undefined, '1'])
+  assert.equal(launches[1]?.nodeOptions?.includes('--import=data:text/javascript,'), true)
+  assert.equal(launches.some(({ argv }) => argv.some((argument) => argument.includes('subagent'))), false)
 })
 
 test('runtime resumes an absolute session file', () => {

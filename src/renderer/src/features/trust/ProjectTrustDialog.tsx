@@ -5,6 +5,7 @@ import type {
   KernelProjectTrustChoice,
   KernelProjectTrustRequest
 } from '../../../../shared/kernel-contract'
+import { unknownErrorMessage } from '../../unknown-error-message'
 import './project-trust-dialog.css'
 
 type ProjectTrustDialogProps = {
@@ -41,7 +42,7 @@ export function ProjectTrustDialog({
     try {
       await onResolve(request.id, choice)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
+      setError(unknownErrorMessage(reason))
       pendingRef.current = false
       setPending(false)
     }

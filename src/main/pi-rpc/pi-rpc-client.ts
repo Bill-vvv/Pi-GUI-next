@@ -13,6 +13,10 @@ import { LfJsonlParser, type JsonlParseBatch } from './jsonl-framing.ts'
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
 const DEFAULT_ABORT_TIMEOUT_MS = 120_000
 const DEFAULT_COMPACT_TIMEOUT_MS = 120_000
+const ADVISOR_CAPABILITY_CUSTOM_TYPE = 'pi-gui.multi-advisor/capabilities'
+const MAGIC_CONTEXT_CUSTOM_TYPE = 'ctx-status'
+const MAX_MAGIC_CONTEXT_TITLE_CHARS = 256
+const MAX_MAGIC_CONTEXT_TEXT_CHARS = 30_000
 const GUI_THINKING_LEVELS: ThinkingLevel[] = [
   'off',
   'minimal',
@@ -101,6 +105,8 @@ export type PiRpcSessionEntry = {
   parentId: string | null
   type: string
   timestamp: string
+  customType?: typeof ADVISOR_CAPABILITY_CUSTOM_TYPE | typeof MAGIC_CONTEXT_CUSTOM_TYPE
+  data?: unknown
   message?: {
     role: string
     content?: {
@@ -124,6 +130,11 @@ export type PiRpcSlashCommand = {
   name: string
   description?: string
   source: 'extension' | 'prompt' | 'skill'
+  sourceInfo: {
+    source: string
+    scope: 'user' | 'project' | 'temporary'
+    origin: 'package' | 'top-level'
+  }
 }
 
 export type PiRpcEvent = Record<string, unknown> & { type: string }
@@ -340,9 +351,14 @@ export class PiRpcClient {
       if (!isPiRpcSlashCommand(command)) {
         throw new Error('Invalid Pi RPC get_commands response')
       }
+      const sourceInfo = {
+        source: command.sourceInfo.source,
+        scope: command.sourceInfo.scope,
+        origin: command.sourceInfo.origin
+      }
       return command.description === undefined
-        ? { name: command.name, source: command.source }
-        : { name: command.name, description: command.description, source: command.source }
+        ? { name: command.name, source: command.source, sourceInfo }
+        : { name: command.name, description: command.description, source: command.source, sourceInfo }
     })
   }
 
@@ -547,6 +563,21 @@ function normalizePiRpcSessionEntry(value: unknown): PiRpcSessionEntry {
     type: value.type,
     timestamp: value.timestamp
   }
+  if (
+    value.type === 'custom' &&
+    (
+      value.customType === ADVISOR_CAPABILITY_CUSTOM_TYPE ||
+      value.customType === MAGIC_CONTEXT_CUSTOM_TYPE
+    )
+  ) {
+    return {
+      ...entry,
+      customType: value.customType,
+      data: value.customType === MAGIC_CONTEXT_CUSTOM_TYPE
+        ? normalizeMagicContextData(value.data)
+        : value.data
+    }
+  }
   if (value.type !== 'message') {
     return entry
   }
@@ -564,6 +595,34 @@ function normalizePiRpcSessionEntry(value: unknown): PiRpcSessionEntry {
       content: normalizeUserContent(value.message.content)
     }
   }
+}
+
+function normalizeMagicContextData(value: unknown): unknown {
+  if (!isRecord(value)) return undefined
+  if (
+    !isSafeMagicContextString(value.title, MAX_MAGIC_CONTEXT_TITLE_CHARS) ||
+    !isSafeMagicContextString(value.text, MAX_MAGIC_CONTEXT_TEXT_CHARS)
+  ) return undefined
+  const level = value.level
+  if (
+    level !== undefined &&
+    level !== 'info' &&
+    level !== 'success' &&
+    level !== 'warning' &&
+    level !== 'error'
+  ) return undefined
+  return {
+    title: value.title,
+    text: value.text,
+    ...(level === undefined ? {} : { level })
+  }
+}
+
+function isSafeMagicContextString(value: unknown, maxChars: number): value is string {
+  return typeof value === 'string' &&
+    value.trim().length > 0 &&
+    value.length <= maxChars &&
+    !value.includes('\0')
 }
 
 function normalizeUserContent(content: unknown): { text: string; hasImage: boolean } {
@@ -735,7 +794,15 @@ function isPiRpcSlashCommand(value: unknown): value is PiRpcSlashCommand {
     value.name.length > 0 &&
     !value.name.startsWith('/') &&
     (!('description' in value) || typeof value.description === 'string') &&
-    (value.source === 'extension' || value.source === 'prompt' || value.source === 'skill')
+    (value.source === 'extension' || value.source === 'prompt' || value.source === 'skill') &&
+    isRecord(value.sourceInfo) &&
+    isNonEmptyString(value.sourceInfo.source) &&
+    (
+      value.sourceInfo.scope === 'user' ||
+      value.sourceInfo.scope === 'project' ||
+      value.sourceInfo.scope === 'temporary'
+    ) &&
+    (value.sourceInfo.origin === 'package' || value.sourceInfo.origin === 'top-level')
   )
 }
 

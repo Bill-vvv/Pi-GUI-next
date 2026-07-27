@@ -241,3 +241,131 @@
 - 决策：首期固定适配 `@mjakl/pi-subagent`，由用户通过 Pi 原生 Package 命令显式安装。启停不建立 GUI 插件注册表，也不卸载 Package；GUI 只修改 Pi `settings.json` 中该 Package 的 Extension resource filter。最大嵌套深度和循环保护作为 GUI 配置写入 XDG，并且只在 Package 已安装且 Extension 已开启时，通过上游公开 CLI 参数进入新建或显式重载的 Pi Runtime。
 - 原因：该 Extension 已提供独立子进程、并行委派、持久会话、实时进度和递归保护，并明确兼容当前 Pi 0.80.10。复用 Pi 的 PackageSource 能让“关闭”对应真实加载状态；把开关仅保存在 Renderer 或私有 Extension 列表会形成第二份事实并可能继续执行代码。
 - 影响：设置新增独立 Subagent 页面，拓展页同时提供同一真实开关。安装、启停和参数变化不静默重启已有 Runtime；新建或显式 reload 后生效。首期不提供 Agent definition CRUD、任务监控、通用 Package resource 管理或内建 Subagent Runtime。
+
+## D-031 — 首个 Subagent 适配更正为 pi-subagents
+
+- 日期：2026-07-26
+- 状态：Accepted；替代 D-030 中固定 Package、运行参数和 cycle setting 的决定
+- 决策：首期固定适配 `pi-subagents`。安装与启停继续复用 Pi PackageSource 和 Extension resource filter；GUI 只保存最大嵌套深度，并在 Package 已安装且 Extension 已开启时通过 `PI_SUBAGENT_MAX_DEPTH` 环境变量将其传给新建或显式重载的 Runtime。`pi-subagents` 通过深度上限限制嵌套委派，不保留旧 Package 专属的 cycle setting。
+- 原因：截至 2026-07-26 的数据快照，`pi-subagents` 在 pi.dev 为 128K/mo，GitHub 仓库为 2.7k stars、572 commits；其采用环境变量的公开配置边界也与当前按 Runtime 注入设置的架构一致。
+- 影响：XDG config 升级为 v11；读取旧 v10 时迁移最大深度并移除 `@mjakl/pi-subagent` 专属的 cycle setting。用户需要安装并启用 `pi-subagents`；既有 Runtime 不静默重启。Agent definition CRUD、任务监控、通用 Package resource 管理和内建 Subagent Runtime 仍不进入首期。
+
+## D-032 — 已适配拓展统一在拓展页安装和启停
+
+- 日期：2026-07-26
+- 状态：Accepted；收紧 D-031 的 Renderer 入口职责
+- 决策：拓展页新增独立“已适配拓展”区域，首项为 `pi-subagents`，并唯一承载其安装与 Extension resource 启停。Subagent 页只读取 Package 状态并修改最大嵌套层数；未安装或已关闭时禁用参数控件并指向拓展页，不重复安装或启停入口。
+- 原因：安装和 Extension 启停属于拓展管理职责；在功能设置页重复入口会形成两个操作位置，也不利于后续把其他已完成 GUI 适配的拓展集中呈现。
+- 影响：通用 pi.dev Extension 目录和本地路径入口保持不变；“已适配拓展”只是固定适配项的小区域，不建立通用插件注册中心。Package 安装、资源过滤和状态仍以 Pi 用户设置为事实源。
+
+## D-033 — Subagent 页管理真实 Agent Markdown 定义
+
+- 日期：2026-07-26
+- 状态：Accepted；扩展 D-031，并替代 D-032 中“Subagent 页只修改最大嵌套层数”的限制；拓展页仍唯一负责 Package 安装与启停
+- 决策：Subagent 页增加 Agent definition 管理。Electron Main 只在 `pi-subagents` 的真实用户级与当前 canonical Project 发现目录中列出、新增、修改和删除 Markdown frontmatter 定义；Renderer 只通过窄 typed IPC 接收规范化字段。内置 Package 文件保持只读，但界面允许直接编辑；首次保存写入用户级或项目级同名覆盖，“恢复默认”删除同名覆盖，不修改 npm Package。编辑器使用可按作用域筛选的分页 Agent 列表，并把名称、作用域、用途、提示词、模型和思考强度放入基础设置；工具、Skills、上下文继承、前后台、超时、轮次、回退模型和单 Agent 嵌套限制放入高级设置。多选模式一次只统一修改一个公共字段，避免复制完整编辑表单。
+- 原因：用户需要在独立 Subagent 页面直接理解和管理角色内容；把全部 frontmatter 平铺在同一页面会降低可读性，把管理动作交给模型 prompt 又无法提供确定的保存、删除与作用域反馈。固定目录与 typed 字段可以复用 `pi-subagents` 事实源，同时不向 Renderer 暴露任意文件能力。
+- 影响：用户级定义写入 `~/.agents/`，项目级定义写入 `.pi/agents/`；同时读取旧用户 Agent 目录和项目 legacy 目录以展示运行时可发现内容。保存受管字段时保留 GUI 未管理的 frontmatter。Agent 定义、Package 状态和全局嵌套深度都不热改已有 Runtime，仍需新建或显式 reload Session；首版不加入运行任务监控、Chain 编辑器、Watchdog/Profile 管理或通用 Package Agent 注册中心。
+
+## D-034 — 多 Advisor 采用固定 Pi Extension 与 GUI 特别适配
+
+- 日期：2026-07-26
+- 状态：Accepted；扩展 D-032 的“已适配拓展”模式，不替代现有 Pi RPC 主拓扑
+- 决策：以固定审计版本的 OMP Advisor / Watchdog 行为作为复刻基线，开发一个可独立安装和手动开关的 Pi Multi Advisor Extension。多 Advisor 的模型、上下文、工具、调度、transcript 与可靠性由 Extension 在 Pi 进程内拥有；Electron Main 不嵌入 `AgentSession` 或第二套 Advisor Runtime，只提供固定 WATCHDOG 配置适配、窄 typed control 和严格归一化的 advisory/status 事件。拓展页唯一负责 Package 安装和 Extension resource 总开关；Advisor 专页负责 Extension 已加载后的系统启停、单 Advisor 启停、roster 配置与真实状态。
+- 原因：OMP 的价值来自多独立审阅者、严重度分流、WATCHDOG 配置和上下文/健康管理，而不是某个特定桌面壳。把引擎放进 Pi Extension 能复用当前固定 Pi 的 Session、Provider、认证和工具边界；GUI 特别适配又能提供比通用 custom message 更清晰的开关、配置和 Timeline 体验，同时避免 Electron Main 出现第二条 Agent 运行拓扑。
+- 影响：新增 [`advisor-system.md`](advisor-system.md) 和 S18 分阶段实施计划。Package 安装、Extension 加载、Advisor 系统暂停和单 Advisor 启停保持四种可区分状态；设置变化不静默重启 Session。首条链路默认只读，未知 raw custom event 不进入 Renderer；写入/Shell 等有副作用工具必须另行安全决策。S18 不建立通用 adapter registry、Conversation 数据库、OMP backend 或任意 Extension RPC。
+
+## D-035 — Magic Context 作为可选上下文引擎适配
+
+- 日期：2026-07-26
+- 状态：Accepted；扩展 D-027 的压缩生命周期边界与 D-032 的已适配拓展入口
+- 决策：固定适配 `@cortexkit/pi-magic-context`，安装与启停复用 Pi PackageSource 和 Extension resource filter，默认不安装、不启用。GUI 只报告 Package 是否存在及其 Extension 是否开启；不把“已开启”解释为配置或健康检查通过，不解析 Magic Context SQLite，也不复制上游交互式 setup。配置继续使用官方 `setup --harness pi`，健康检查使用 `doctor --harness pi`，运行态由 Pi 命令目录中的 `/ctx-status` 查看。
+- 原因：Magic Context 会在每次模型调用前管理上下文，并在启用时取消 Pi 原生自动压缩，能够覆盖长任务内部的多次模型/工具往返；但其 setup 需要选择 historian、dreamer、sidekick 和 embedding，且当前没有稳定的机器 health API。GUI 若从 Package 存在推断健康，或直接读取私有数据库，会建立错误且脆弱的第二套状态协议。
+- 影响：安装、启停和配置变化都只在新建或显式 reload Session 后生效。Magic Context 接管时，现有 Pi `compaction_start` / `compaction_end` 不再是其后台 Historian、SOFT/HARD materialization 或缓存状态的事实源；Renderer 不伪造对应进度。首期不内嵌 setup/doctor、不编辑 `magic-context.jsonc`、不读取缓存 token 指标，也不自动选择或消费额外模型。
+
+## D-036 — Agent 启停复用 pi-subagents 官方 disabled override
+
+- 日期：2026-07-26
+- 状态：Accepted；扩展 D-033 的 Agent 管理字段
+- 决策：Subagent 页通过窄 typed IPC 读取并修改 `settings.subagents.agentOverrides.<name>.disabled`。用户级状态写入 Pi 用户 `settings.json`，项目级状态写入当前 canonical Project 的 `.pi/settings.json`，项目级覆盖优先；关闭只从 `pi-subagents` Runtime 发现与可执行列表移除 Agent，不删除 Markdown 定义。列表支持“已启动 / 未启动”筛选，单项与多选批量修改复用同一真实状态。
+- 原因：`pi-subagents` 已公开 `disable` / `enable` 管理动作和同一 settings schema；复用它能让 GUI、Agent 管理工具与 Runtime 看到一致结果。只在 Renderer 保存开关会产生第二份状态且不会阻止实际执行。
+- 影响：Main 只读写固定用户与项目 settings 路径中的单个 `disabled` 字段，严格保留其他 Pi 设置；非法 JSON 或非法 override 结构 Fail Fast。启停不静默重启已有 Session，恢复默认或删除 GUI 管理的定义时同步清理对应 disabled 字段。
+
+## D-037 — S18-1 固定独立 Package、默认关闭与 protocol v1
+
+- 日期：2026-07-26
+- 状态：Accepted；落实 D-034 的第一阶段
+- 决策：首个实现 Package 固定命名为 `pi-gui-multi-advisor` 0.1.0，作为 `extensions/pi-gui-multi-advisor/` 下可被 Pi 独立安装的 Package，不把主应用改成 workspace。系统默认关闭，唯一启用事实为 `${PI_CODING_AGENT_DIR || ~/.pi/agent}/pi-gui-multi-advisor.json` 的 strict v1 JSON；`/advisor on|off|status` 复用同一状态。protocol v1 以 `pi-gui.multi-advisor/capabilities` custom entry 发布能力，以 `pi-gui.multi-advisor/advisory` custom message 保存结构化建议。首版 Advisor 复用当前 Pi model/modelRegistry auth，只拥有 `advise` 与 Pi 公开 `read`、`grep`、`find`、`ls` 工具。
+- 原因：Pi 0.80.10 的公开 Package root 已验证可提供独立 `Agent`、`turn_end`、只读工具、custom entry/message、命令和 TUI renderer；不需要 private deep import、OMP backend 或 Main 内第二 Runtime。独立 Package 既能脱离 GUI 手动使用，也给后续多 roster 留出真实发布边界。默认关闭和单一 strict state 避免第三方模型调用被安装动作隐式激活。
+- 影响：S18-1 当前只完成单 Advisor 引擎与协议基线；WATCHDOG schema 已冻结但 YAML 发现/合并、多 Advisor、严重度策略、usage/dump/subagents 和 GUI projector 仍按后续阶段实施。当前 Main 忽略 custom role，真实 GUI 卡片与 typed control 必须等 S18-2；S18-1 只有通过真实 Provider turn 后才能标记 Complete。
+
+## D-038 — Subagent 适配同时覆盖运行显示
+
+- 日期：2026-07-26
+- 状态：Accepted；扩展 D-031 与 D-033，替代其中“运行任务不进入首版”的显示限制，不改变拓展页和 Subagent 管理页职责
+- 决策：`pi-subagents` 的 GUI 适配必须同时覆盖管理面与 Conversation 显示面。Agent 定义和运行参数继续由 Subagent 设置页管理；实际拉起后，前台 `subagent` 工具从结构化 details 归一化参与 Agent、任务、状态、当前工具/路径、轮次、工具数、token、耗时、错误和最终输出，并在当前 turn 的工作过程中显示。默认显示密度采用“每个参与者一个任务胶囊 + 同行整体状态”，点击摘要后才展开完整运行详情，运行中不自动展开。后台完成、控制、转向和 supervisor 请求只接受固定 custom type，作为独立 Timeline 通知；其中 supervisor/control 的结构化协调生命周期由 D-046 进一步收敛。Renderer 不解析 raw details 或通知 Markdown 来推断状态。
+- 原因：只提供定义 CRUD 和 Package 开关无法回答“已经拉起谁、正在做什么、是否完成、产出了什么”；同时直接展示原始 details、child transcript 或临时 artifact 会泄漏实现细节、放大状态体积并建立第二份运行事实。
+- 影响：shared contract 增加归一化 Subagent 运行摘要与通知 entry，工具增量 patch 原子携带该摘要；历史恢复与实时事件共用 Main projector。当前 S19 source slice 已由 participant 胶囊打开 Workbench 真实第三列任务阅读面，窄窗口切换为同工作区完整详情面，并以稳定 locator 恢复焦点；原行内完整 disclosure 已移除。首期不增加独立任务数据库、全局任务中心、子 Session transcript 浏览、artifact 文件读取、运行控制按钮或靠文本猜测的后台任务关联。
+
+## D-039 — Advisor 首阶段使用 Sol 中等推理
+
+- 日期：2026-07-26
+- 状态：Accepted；替代 D-037 中“首版 Advisor 复用当前 Pi model”的模型选择规则
+- 决策：S18-1 的单 Advisor 在主会话当前 Provider 内固定选择 `gpt-5.6-sol`，thinking 固定为 `medium`，并继续复用 Pi ModelRegistry 的认证事实。目标 Provider 不提供该模型、模型不支持 reasoning 或认证不可用时，Advisor 明确暂停且不静默回退。S18-3 GUI 再提供逐 Advisor 模型配置，至少允许显式选择 `gpt-5.6-terra`、跟随主模型或 Pi 目录中的其他模型；长期候选是 `terra + medium` 常驻审查、`sol + high` 高风险升级审查，自动升级不在 S18-1 实现。
+- 原因：Advisor 需要发现主 Agent 已接受方案中的隐含错误，核心审查对推理能力的要求不低；首阶段优先建立高质量基线，再用真实质量、延迟与成本证据决定常驻模型。显式失败比无提示降级更能保持审查结果可信。
+- 影响：S18-1 不再随主会话模型 ID 切换，只借用当前 Provider 来确定 Sol 的模型条目和认证；当前 Provider 没有 Sol 时该轮不审查。GUI 模型选择、Terra 常驻和 Sol 升级仍按后续阶段进入真实 WATCHDOG 配置，不在 Renderer 建立提前生效的假设置。
+
+## D-040 — S18-2 分离 Advisor Extension resource 与 Session system 控制
+
+- 日期：2026-07-26
+- 状态：Accepted；落实 D-034 的 GUI 投影与控制阶段
+- 决策：拓展页只识别真实存在的 `pi-gui-multi-advisor` bare、npm 或 local PackageSource，并通过 Pi resource filter 控制 Extension 是否在新建或显式重载 Session 中加载；没有可执行的 GUI 安装来源时只提示手动安装。Advisor 页只显示 strict capability 握手得到的兼容性、版本与当前 Session system 状态，并通过唯一的 `/advisor on|off` Extension command 实时切换后重新读取 capability 确认。历史和实时 advisory 共用 Main strict projector，Renderer 只接收 `KernelAdvisorEntry` 并在对应 turn 内显示。
+- 原因：Package 存在、Extension resource 开启、protocol 兼容与 Advisor system 开启是四个不同事实。把它们合并为一个界面开关会伪造热加载和健康状态；透传任意 custom payload 或命令则会突破现有窄 IPC 边界。
+- 影响：Pi RPC 只为固定 GUI adapter allowlist 中的 custom type 保留数据，S18-2 在该 allowlist 增加 Advisor capability；其他非消息 entry 继续清洗。未知/非法 capability 显示 unavailable 或 incompatible，未知/非法 advisory 被丢弃。S18-2 不实现 roster、usage、dump、配置编辑、自动安装或通用 Extension adapter，这些能力按 S18-3 以后逐项接入。
+
+## D-041 — S18-3 采用固定 Advisor 工具允许表与配置级显式授权
+
+- 日期：2026-07-26
+- 状态：Accepted；落实 D-034 中“扩大工具范围必须单独决策”的安全门
+- 决策：protocol v2 的 Advisor roster 只接受 `read`、`grep`、`find`、`ls`、`edit`、`write` 六个公开 Pi 工具；省略或空 `tools` 继续得到四个只读工具。`edit` / `write` 必须在单个 Advisor 的 WATCHDOG 定义中显式列出，GUI 勾选时持续显示“独立 Advisor 直接执行且不经过主 Agent 审批”的告警。原生 `bash`、browser 和任意 Extension tool 不进入允许表，因为 Pi 0.80.10 的公开 `createBashTool` 没有命令级 allowlist、sandbox 或主 Agent 审批回调。Project 未受信任时，Extension 只读取用户级 WATCHDOG，不发现或执行任何项目级 Advisor 定义。
+- 原因：独立 Advisor `Agent` 不复用 primary tool approval wrapper；直接开放 OMP 的任意 built-in 会把配置文件变成隐式任意执行入口。固定允许表、默认只读、配置级逐项授权和 Project trust gate 能满足“适当开放写工具”，同时保留可审计边界。验证执行若后续确有需求，应实现固定 argv、cwd、timeout 和环境的专用 wrapper，不能把任意 Shell 字符串伪装成受控验证。
+- 影响：Extension Package 升至 0.2.0 / protocol v2，capability 明确报告 `readOnlyTools` 与 `optionalTools`；Main 和 Renderer 不提供 `bash` 选项，也不接受未知工具名。保存 WATCHDOG 不会自动 reload 当前 Session；新建或显式 reload 后，配置授权才进入独立 Advisor Runtime。该决定不提供逐次工具确认，用户对 `edit` / `write` 的持久化勾选就是该 Advisor 的明确授权。
+
+## D-042 — Subagent 结果只在任务详情阅读
+
+- 日期：2026-07-27
+- 状态：Accepted；收紧 D-038 中后台 completion 通知的 Renderer 展示规则
+- 决策：Timeline 继续直接展示可点击的 Subagent 任务胶囊、参与者状态，以及控制、转向、supervisor 协作与 Watchdog 通知；普通 `completion` custom message 只形成轻量、可点击的完成任务胶囊，不在对话正文渲染结果预览。任务处理内容与最终输出以同一 Workbench 任务详情为阅读面。具体 supervisor/control 是否构成用户警报由 D-046 的结构化原因和生命周期决定，不再一概视为用户介入。
+- 原因：Subagent 结果正文会与任务详情及主 Agent 的最终回答形成重复阅读流，放大对话长度并削弱主回答层级；同时后台 completion 未必能稳定关联回原 `toolCallId`，因此不能简单隐藏唯一结果入口。
+- 影响：Main 严格归一化固定 completion custom type，并为通知建立独立、稳定的详情目标；Renderer 只显示胶囊与终态，点击后展示已归一化的完整通知内容。该变更不新增任务数据库、原 run 文本关联、child transcript/artifact 读取或运行控制；无法稳定关联原任务时仍以 notice identity 打开详情，不靠 Markdown 猜测 `toolCallId`。
+
+## D-043 — Todo 使用当前轮次的 Composer 专用投影
+
+- 日期：2026-07-27
+- 状态：Accepted；扩展 D-009 的工具展示与 Composer clearance 边界
+- 决策：固定识别 `todowrite` 工具，由 Electron Main 对每个完整列表严格投影 `id`、`content`、`status` 与 `priority`，并清除该专用工具 entry 的原始 args/details。Renderer 只使用最后一个用户轮次内最新的非失败列表；新用户轮次尚未调用 Todo、空列表或 Conversation identity 变化时旧列表退出。Todo 在 Composer 上方显示为比输入框更窄的轻量 disclosure 托盘，普通 Timeline 不重复展示同一工具卡。
+- 原因：Todo 是当前执行计划，不应埋在通用工具日志，也不应由 Renderer 解析字符串化参数；同时把整个 Session 最后一次列表永久固定会让已完成旧任务污染后续无 Todo 的轮次。当前轮次选择既保留 settled 后的完成回顾，也在下一条用户消息出现时自然收口。
+- 影响：Pi session 和 Conversation tool entry 继续是事实来源，不新增 Todo 数据库、Renderer 持久化或独立 IPC。面板展开状态只属于当前展示 identity；列表高度由既有 Composer `ResizeObserver` 计入 Timeline clearance，窄窗口改为可用宽度，键盘、ARIA 与 reduced-motion 继续遵循前端规范。
+
+## D-044 — 工具结果图片走 metadata 投影与按需 IPC
+
+- 日期：2026-07-27
+- 状态：Accepted；扩展 D-018/D-019 的 ImageContent 边界与 D-004 的 Conversation 事实源
+- 决策：Pi `tool_execution_update` / `tool_execution_end` 与历史 `toolResult` 的混合 `TextContent`/`ImageContent` 统一投影为同一 `KernelToolEntry`。文本进入 `output`；图片只进入 metadata-only `attachments`（`type`、`name`、`mimeType`、`byteLength`、稳定 `contentIndex`），base64 永不进入 KernelState、patch、日志或 Renderer 常驻 state。支持 PNG/JPEG/GIF/WebP，复用 4.5 MiB base64 上限，并在 Main 校验 canonical base64 与 MIME/signature 匹配；非法块静默忽略且不破坏同结果合法文本/图片。Renderer 通过窄 typed `getToolImage(sessionKey, toolCallId, contentIndex)` 按需读取：历史以 active branch transcript 为事实源；只有 terminal end 可写入实时兜底 cache，cache 必须绑定 `projectPath + sessionId + sessionKey + Runtime generation + toolCallId + contentIndex`，仅在同一 displayed Runtime 仍投影该附件且消息列表尚无 toolResult 时读取，并受 60 秒 TTL、8 条目及 24 MiB base64 总预算约束；权威消息命中、terminal 替换、identity 迁移、归档、停止时清理相应内容。terminal tool 忽略晚到 start/update；Renderer 异步结果必须核对 request token、Session、Tool 与 contentIndex。图片 metadata 变化不走 append-only 文本 patch，退回 `kernel.state-changed`。本决定不扩展 Session HTML export，不提供保存/下载入口，不为 Subagent 专用工具显示通用图片 UI，也不允许 Renderer 按路径读图。
+- 原因：图片生成工具已成功返回 image content，但 projection 只保留 text 导致 Timeline 无法展示；复用 message image 身份会混淆 user message 与 toolResult 校验，把 base64 塞进 KernelState 又会破坏 patch/性能/安全边界。
+- 影响：新增 `KernelToolImageAttachment` 与 `kernel.get-tool-image`；普通工具详情显示图片入口并复用现有灯箱交互；空文本但有图片时不显示“等待工具输出”。验证覆盖 projection 混合内容、非法图片、state/patch 无 base64、typed IPC 校验与历史/实时隔离。
+
+## D-045 — Session 活动时间只由对话消息推进
+
+- 日期：2026-07-27
+- 状态：Accepted；收紧 D-028 中 JSONL `lastActivityAt` 的事实口径
+- 决策：持久化 Session 的 `lastActivityAt` 取 Pi transcript 内最新 `type: "message"` entry 的时间。文件 mtime、最后一条任意 JSONL entry、Session 激活/恢复，以及启动时追加的 capability、`session_info`、模型或其他运行元数据都不得推进活动时间。新对话在尚未持久化时继续使用 provisional 活动时间；真实 prompt/run 完成后 Kernel 可即时推进内存活动时间，后续 transcript 扫描必须收敛到对应 message 时间。
+- 原因：加载 Extension 时可以在没有新对话内容的情况下追加 capability custom entry 并改写 JSONL mtime；若把文件或任意尾 entry 当成活动事实，单击历史 Session 就会刷新时间并改变排序，把“最近打开”错误伪装成“最近对话活动”。
+- 影响：Session 点击、恢复、能力握手和重命名不再改变时间或排序；用户/Assistant/toolResult/custom message 等真实 message entry 仍推进最近活动。活动时间读取是只读 metadata 投影，不建立第二份访问时间或持久化排序事实。
+
+## D-046 — Subagent supervisor 协作使用结构化生命周期
+
+- 日期：2026-07-27
+- 状态：Accepted；收紧 D-038/D-042 的控制与 supervisor 通知展示语义
+- 决策：固定 `subagent_control_notice` 与 `subagent_supervisor_request` 继续进入 Conversation，但 Main 必须只从白名单 details 投影 `runId`、Agent、participant index、request ID、reason、是否需要 supervisor 回复及 `pending/handled` 生命周期。具体 request 使用稳定 request identity；同一 `runId + participant index` 的 supervisor request 替代泛化 `needs_attention`，重复事件原地 upsert。成功的 `subagent_supervisor` / `intercom` reply tool result 将对应 request 原地标为 handled，失败不得伪装已处理。Renderer 将该状态解释为主 Agent 内部协作而非默认用户警报；只有结构化 `completion_guard` 与 Watchdog blocker 使用 alert。`subagent_wait`、supervisor reply、status/steer/resume 等管理工具使用简洁状态文案，原始参数与输出只在展开的技术详情中出现。
+- 原因：同一个 supervisor 请求过去会同时产生泛化 attention、具体 request、reply 工具与 wait 工具，并把 Run ID、intercom target 和可执行命令直接堆入主阅读流；这既重复，也把“主 Agent 可自行处理”误报为“用户必须处理”。上游 custom message 已提供稳定结构化 identity，没有必要靠 Markdown 命令文本关联。
+- 影响：历史恢复与实时消息继续共用同一 projector；旧版缺少结构化 details 的通知保留兼容降级，但不获得跨消息关联。GUI 不建立任务数据库、不直接绕过主 Agent 回复子代理，也不从通知正文猜 `runId`。若主 Agent 真正需要产品选择或授权，仍通过正常 Assistant 对话向用户提问。

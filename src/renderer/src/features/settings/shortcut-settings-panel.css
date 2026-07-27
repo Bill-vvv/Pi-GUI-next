@@ -15,6 +15,9 @@
 
 .shortcut-settings-list {
   overflow: hidden;
+  border-radius: var(--radius-panel);
+  padding: 6px;
+  background: var(--color-surface-subtle);
 }
 
 .shortcut-settings-row {
@@ -23,12 +26,19 @@
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  margin: 0 18px;
-  padding: 14px 0;
+  margin: 0;
+  border-radius: var(--radius-control);
+  padding: 14px 12px;
+  transition: background var(--motion-duration-control) var(--motion-easing-standard);
 }
 
 .shortcut-settings-row + .shortcut-settings-row {
-  border-top: 1px solid var(--color-border-divider);
+  border-top: 0;
+}
+
+.shortcut-settings-row:hover,
+.shortcut-settings-row:focus-within {
+  background: var(--color-surface-subtle-strong);
 }
 
 .shortcut-settings-copy {

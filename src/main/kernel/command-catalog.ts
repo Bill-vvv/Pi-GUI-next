@@ -19,56 +19,64 @@ const BUILTIN_COMMANDS: readonly KernelCommandDescriptor[] = [
     name: 'new',
     description: '在当前项目中新建对话',
     source: 'gui',
-    argumentHint: null
+    argumentHint: null,
+    sourceInfo: null
   },
   {
     id: FORK_SESSION_COMMAND_ID,
     name: 'fork',
     description: '从当前活动路径的用户消息分叉会话',
     source: 'gui',
-    argumentHint: null
+    argumentHint: null,
+    sourceInfo: null
   },
   {
     id: EXPORT_SESSION_COMMAND_ID,
     name: 'export',
     description: '将当前活动分支导出为离线 HTML',
     source: 'gui',
-    argumentHint: null
+    argumentHint: null,
+    sourceInfo: null
   },
   {
     id: COPY_LAST_ANSWER_COMMAND_ID,
     name: 'copy',
     description: '复制最后一条 Assistant 最终回答',
     source: 'gui',
-    argumentHint: null
+    argumentHint: null,
+    sourceInfo: null
   },
   {
     id: SET_MODEL_COMMAND_ID,
     name: 'model',
     description: '切换当前 Pi 模型',
     source: 'pi-rpc',
-    argumentHint: '<provider/model>'
+    argumentHint: '<provider/model>',
+    sourceInfo: null
   },
   {
     id: SET_THINKING_COMMAND_ID,
     name: 'thinking',
     description: '设置思考强度',
     source: 'pi-rpc',
-    argumentHint: '<off|minimal|low|medium|high|xhigh|max>'
+    argumentHint: '<off|minimal|low|medium|high|xhigh|max>',
+    sourceInfo: null
   },
   {
     id: COMPACT_COMMAND_ID,
     name: 'compact',
     description: '压缩当前 Session 上下文',
     source: 'pi-rpc',
-    argumentHint: '[instructions]'
+    argumentHint: '[instructions]',
+    sourceInfo: null
   },
   {
     id: SET_SESSION_NAME_COMMAND_ID,
     name: 'name',
     description: '设置当前 Session 名称',
     source: 'pi-rpc',
-    argumentHint: '<name>'
+    argumentHint: '<name>',
+    sourceInfo: null
   }
 ]
 
@@ -77,7 +85,8 @@ const RELOAD_SESSION_COMMAND: KernelCommandDescriptor = {
   name: 'reload',
   description: '重新加载当前已持久化 Session',
   source: 'gui',
-  argumentHint: null
+  argumentHint: null,
+  sourceInfo: null
 }
 
 export function createCommandCatalog(
@@ -97,7 +106,12 @@ export function createCommandCatalog(
       name: command.name,
       description: command.description ?? fallbackDescription(command.source),
       source: command.source,
-      argumentHint: '[arguments]'
+      argumentHint: '[arguments]',
+      sourceInfo: {
+        source: command.sourceInfo.source,
+        scope: command.sourceInfo.scope,
+        origin: command.sourceInfo.origin
+      }
     })
   }
 

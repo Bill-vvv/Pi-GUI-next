@@ -1,9 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 
+import {
+  MAGIC_CONTEXT_PACKAGE_NAME,
+  SUBAGENT_PACKAGE_NAME
+} from '../../../../shared/kernel-contract'
 import type {
   AppearanceSettings,
   GeneralSettings,
-  KernelCommandDescriptor,
+  KernelAdvisorConfiguration,
+  KernelAdvisorDefinitionInput,
+  KernelAdvisorEditableScope,
   KernelExtensionSelectionKind,
   KernelInstalledPackage,
   KernelModelPricingFetchResult,
@@ -15,6 +21,9 @@ import type {
   KernelProviderInput,
   KernelProviderTestResult,
   KernelState,
+  KernelSubagentDefinition,
+  KernelSubagentEditableScope,
+  KernelSubagentDefinitionInput,
   SessionNamingSettings,
   SubagentSettings as SubagentSettingsValue,
   ShortcutSettings
@@ -24,24 +33,18 @@ import { Select, type SelectOptionGroup } from '../../components/Select'
 import { InstalledPackages } from './InstalledPackages'
 import { PiDevCatalog } from './PiDevCatalog'
 import { CredentialsPanel } from './CredentialsPanel'
+import { ModelSettings } from './ModelSettings'
 import { ShortcutSettingsPanel } from './ShortcutSettingsPanel'
-import { SubagentPackageControl, SubagentSettings } from './SubagentSettings'
+import { AdaptedExtensionPackageControl } from './AdaptedExtensionPackageControl'
+import { AdvisorExtensionPackageControl } from './AdvisorExtensionPackageControl'
+import { AdvisorSettings } from './AdvisorSettings'
+import { SubagentSettings } from './SubagentSettings'
+import { SkillSettings } from './SkillSettings'
+import type { SettingsSection } from './SettingsNavigation'
 import {
   TOOL_DISPLAY_DENSITIES,
   type ToolDisplayDensity
 } from '../../tool-display-density'
-
-export type SettingsSection =
-  | 'general'
-  | 'models'
-  | 'credentials'
-  | 'shortcuts'
-  | 'appearance'
-  | 'packages'
-  | 'extensions'
-  | 'subagent'
-  | 'skills'
-  | 'preferences'
 
 type SettingsPanelProps = {
   state: KernelState
@@ -90,12 +93,35 @@ type SettingsPanelProps = {
   onSetSessionNaming: (settings: SessionNamingSettings) => Promise<void>
   onSetGeneral: (settings: GeneralSettings) => Promise<void>
   onSetSubagentEnabled: (enabled: boolean) => Promise<void>
+  onSetMagicContextEnabled: (enabled: boolean) => Promise<void>
+  onSetAdvisorSystemEnabled: (enabled: boolean) => Promise<void>
+  onSetAdvisorExtensionEnabled: (enabled: boolean) => Promise<void>
+  onListAdvisorDefinitions: () => Promise<KernelAdvisorConfiguration>
+  onSaveAdvisorDefinition: (
+    definition: KernelAdvisorDefinitionInput
+  ) => Promise<KernelAdvisorConfiguration>
+  onRemoveAdvisorDefinition: (
+    slug: string,
+    scope: KernelAdvisorEditableScope
+  ) => Promise<KernelAdvisorConfiguration>
+  onListSubagentDefinitions: () => Promise<KernelSubagentDefinition[]>
+  onSaveSubagentDefinition: (
+    definition: KernelSubagentDefinitionInput
+  ) => Promise<KernelSubagentDefinition[]>
+  onSetSubagentDefinitionEnabled: (
+    id: string,
+    scope: KernelSubagentEditableScope,
+    enabled: boolean
+  ) => Promise<KernelSubagentDefinition[]>
+  onRemoveSubagentDefinition: (id: string) => Promise<KernelSubagentDefinition[]>
   onSetSubagent: (settings: SubagentSettingsValue) => Promise<void>
   onSetAppearance: (settings: AppearanceSettings) => Promise<void>
   onSetShortcuts: (settings: ShortcutSettings) => Promise<void>
   onShortcutRecordingChange: (recording: boolean) => void
   toolDisplayDensity: ToolDisplayDensity
   onSetToolDisplayDensity: (density: ToolDisplayDensity) => void
+  onDirtyChange: (dirty: boolean) => void
+  onActiveOperationChange: (active: boolean) => void
 }
 
 export function SettingsPanel({
@@ -133,42 +159,27 @@ export function SettingsPanel({
   onSetSessionNaming,
   onSetGeneral,
   onSetSubagentEnabled,
+  onSetMagicContextEnabled,
+  onSetAdvisorSystemEnabled,
+  onSetAdvisorExtensionEnabled,
+  onListAdvisorDefinitions,
+  onSaveAdvisorDefinition,
+  onRemoveAdvisorDefinition,
+  onListSubagentDefinitions,
+  onSaveSubagentDefinition,
+  onSetSubagentDefinitionEnabled,
+  onRemoveSubagentDefinition,
   onSetSubagent,
   onSetAppearance,
   onSetShortcuts,
   onShortcutRecordingChange,
   toolDisplayDensity,
-  onSetToolDisplayDensity
+  onSetToolDisplayDensity,
+  onDirtyChange,
+  onActiveOperationChange
 }: SettingsPanelProps): React.JSX.Element {
   const [removingExtensionPath, setRemovingExtensionPath] = useState<string | null>(null)
   const [packageRevision, setPackageRevision] = useState(0)
-  const [skillCreatorOpen, setSkillCreatorOpen] = useState(false)
-  const [skillName, setSkillName] = useState('')
-  const [skillPurpose, setSkillPurpose] = useState('')
-  const [skillScope, setSkillScope] = useState<'user' | 'project'>('user')
-  const [skillCreatorError, setSkillCreatorError] = useState<string | null>(null)
-  const [selectedProvider, setSelectedProvider] = useState(
-    state.session.model?.provider ?? state.availableModels[0]?.provider ?? ''
-  )
-  const providers = [...new Set(state.availableModels.map((model) => model.provider))]
-  const currentModel = state.session.model
-  const currentProviderAvailable = currentModel === null || providers.includes(currentModel.provider)
-  const providerValue = providers.includes(selectedProvider) ||
-    currentModel?.provider === selectedProvider
-    ? selectedProvider
-    : providers[0] ?? ''
-  const providerModels = state.availableModels.filter((model) => model.provider === providerValue)
-  const selectedCurrentModel = currentModel?.provider === providerValue ? currentModel : null
-  const selectedCurrentModelAvailable = selectedCurrentModel === null || providerModels.some(
-    (model) => model.id === selectedCurrentModel.id
-  )
-  const activeModelValue = selectedCurrentModel !== null
-    ? selectedCurrentModel.id
-    : ''
-  const canSetModel = !busy && state.runtime.status === 'ready' && providers.length > 0
-  useEffect(() => {
-    if (state.session.model !== null) setSelectedProvider(state.session.model.provider)
-  }, [state.session.model?.provider])
   const namingValue = sessionNamingValue(state.sessionNaming)
   const selectedNamingModel = state.sessionNaming.mode === 'model' ? state.sessionNaming : null
   const selectedNamingModelAvailable = selectedNamingModel === null || state.availableModels.some(
@@ -227,7 +238,6 @@ export function SettingsPanel({
       label: `${value}%`
     }))
   }]
-  const skillCommands = state.commands.filter((command) => command.source === 'skill')
   return (
     <section className="settings-screen" aria-label="设置">
       <div className="settings-content">
@@ -240,7 +250,10 @@ export function SettingsPanel({
               <h2>常规</h2>
             </div>
 
-            <section className="settings-group" aria-labelledby="settings-general-startup">
+            <section
+              className="settings-group settings-group-inline"
+              aria-labelledby="settings-general-startup"
+            >
               <h3 id="settings-general-startup" className="settings-group-heading">启动</h3>
               <div className="settings-group-card">
                 <div className="settings-row">
@@ -272,7 +285,10 @@ export function SettingsPanel({
               </div>
             </section>
 
-            <section className="settings-group" aria-labelledby="settings-general-window">
+            <section
+              className="settings-group settings-group-inline"
+              aria-labelledby="settings-general-window"
+            >
               <h3 id="settings-general-window" className="settings-group-heading">窗口</h3>
               <div className="settings-group-card">
                 <div className="settings-row">
@@ -303,6 +319,40 @@ export function SettingsPanel({
                 </div>
               </div>
             </section>
+
+            <section
+              className="settings-group settings-group-inline"
+              aria-labelledby="settings-general-extensions"
+            >
+              <h3 id="settings-general-extensions" className="settings-group-heading">拓展</h3>
+              <div className="settings-group-card">
+                <div className="settings-row">
+                  <div className="settings-row-copy">
+                    <label htmlFor="general-fast-extension-loading">
+                      拓展启动加速（实验性）
+                    </label>
+                    <p>
+                      已编译 JS 优先使用原生导入，多个拓展并行导入；factory
+                      仍按原顺序执行。仅影响新建或显式重载的会话。
+                    </p>
+                  </div>
+                  <div className="settings-row-control settings-checkbox-control">
+                    <input
+                      id="general-fast-extension-loading"
+                      type="checkbox"
+                      checked={state.general.fastExtensionLoading}
+                      disabled={busy}
+                      onChange={(event) => {
+                        void onSetGeneral({
+                          ...state.general,
+                          fastExtensionLoading: event.currentTarget.checked
+                        }).catch(() => undefined)
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </section>
           </>
         ) : null}
 
@@ -312,7 +362,11 @@ export function SettingsPanel({
               <h2>外观</h2>
             </div>
 
-            <section className="settings-group" aria-label="主题">
+            <section
+              className="settings-group settings-group-inline"
+              aria-labelledby="appearance-theme-heading"
+            >
+              <h3 id="appearance-theme-heading" className="settings-group-heading">主题</h3>
               <div className="settings-group-card">
                 <div className="settings-row">
                   <div className="settings-row-copy">
@@ -338,7 +392,11 @@ export function SettingsPanel({
               </div>
             </section>
 
-            <section className="settings-group" aria-label="界面强调">
+            <section
+              className="settings-group settings-group-inline"
+              aria-labelledby="appearance-emphasis-heading"
+            >
+              <h3 id="appearance-emphasis-heading" className="settings-group-heading">界面强调</h3>
               <div className="settings-group-card">
                 <div className="settings-row">
                   <div className="settings-row-copy">
@@ -364,7 +422,7 @@ export function SettingsPanel({
                 <div className="settings-row">
                   <div className="settings-row-copy">
                     <h4>面板透明度</h4>
-                    <p>调整侧栏、卡片与 Composer 面板的通透程度</p>
+                    <p>调整侧栏、复合面板与 Composer 面板的通透程度</p>
                   </div>
                   <div className="settings-row-control settings-theme-control">
                     <Select
@@ -386,7 +444,10 @@ export function SettingsPanel({
               </div>
             </section>
 
-            <section className="settings-group" aria-labelledby="appearance-conversation-heading">
+            <section
+              className="settings-group settings-group-inline"
+              aria-labelledby="appearance-conversation-heading"
+            >
               <h3 id="appearance-conversation-heading" className="settings-group-heading">Agent 对话</h3>
               <div className="settings-group-card">
                 <div className="settings-row settings-tool-density">
@@ -438,7 +499,10 @@ export function SettingsPanel({
               </div>
             </section>
 
-            <section className="settings-group" aria-labelledby="appearance-typography-heading">
+            <section
+              className="settings-group settings-group-inline"
+              aria-labelledby="appearance-typography-heading"
+            >
               <h3 id="appearance-typography-heading" className="settings-group-heading">字体</h3>
               <div className="settings-group-card">
                 <div className="settings-row">
@@ -570,6 +634,50 @@ export function SettingsPanel({
             <div className="settings-section-heading">
               <h2 data-tooltip="安装或卸载后，将在下一次新建或重新打开对话时生效。">拓展</h2>
             </div>
+            <AdaptedExtensionPackageControl
+              heading="已适配拓展"
+              idPrefix="settings-extensions-subagent"
+              packageName={SUBAGENT_PACKAGE_NAME}
+              detailUrl="https://pi.dev/packages/pi-subagents"
+              description="为 Pi 提供可委派的 Subagent Extension"
+              notice="安装与启停会在新建或显式重载 Session 后生效。"
+              busy={busy}
+              onListPiPackages={onListPiPackages}
+              onInstallPiDevPackage={async (name) => {
+                await onInstallPiDevPackage(name)
+                setPackageRevision((revision) => revision + 1)
+              }}
+              onSetEnabled={onSetSubagentEnabled}
+              onOpenExternal={onOpenExternal}
+            />
+            <AdaptedExtensionPackageControl
+              heading="Magic Context"
+              idPrefix="settings-extensions-magic-context"
+              packageName={MAGIC_CONTEXT_PACKAGE_NAME}
+              detailUrl="https://github.com/cortexkit/magic-context"
+              description="提供后台上下文压缩与跨会话记忆"
+              notice={(
+                <>
+                  拓展显示“已开启”只表示拓展已启用，不代表配置或健康状态已验证。
+                  安装后仍需手动运行 <code>npx @cortexkit/magic-context@latest setup --harness pi</code>；
+                  新建或显式重载 Session 后生效。运行态可用 <code>/ctx-status</code>，
+                  健康检查请运行 <code>npx @cortexkit/magic-context@latest doctor --harness pi</code>。
+                </>
+              )}
+              busy={busy}
+              onListPiPackages={onListPiPackages}
+              onInstallPiDevPackage={async (name) => {
+                await onInstallPiDevPackage(name)
+                setPackageRevision((revision) => revision + 1)
+              }}
+              onSetEnabled={onSetMagicContextEnabled}
+              onOpenExternal={onOpenExternal}
+            />
+            <AdvisorExtensionPackageControl
+              busy={busy}
+              onListPiPackages={onListPiPackages}
+              onSetEnabled={onSetAdvisorExtensionEnabled}
+            />
             <PiDevCatalog
               kind="extension"
               busy={busy}
@@ -584,18 +692,6 @@ export function SettingsPanel({
                 await onRemovePiPackage(source)
                 setPackageRevision((revision) => revision + 1)
               }}
-              onOpenExternal={onOpenExternal}
-            />
-            <SubagentPackageControl
-              heading="已适配"
-              idPrefix="settings-extensions-subagent"
-              busy={busy}
-              onListPiPackages={onListPiPackages}
-              onInstallPiDevPackage={async (name) => {
-                await onInstallPiDevPackage(name)
-                setPackageRevision((revision) => revision + 1)
-              }}
-              onSetSubagentEnabled={onSetSubagentEnabled}
               onOpenExternal={onOpenExternal}
             />
             <section className="settings-group" aria-labelledby="settings-local-extensions-heading">
@@ -668,213 +764,50 @@ export function SettingsPanel({
         {section === 'subagent' ? (
           <SubagentSettings
             settings={state.subagent}
+            activeProjectKey={state.activeProjectKey}
+            availableModels={state.availableModels}
             busy={busy}
             onListPiPackages={onListPiPackages}
-            onInstallPiDevPackage={async (name) => {
-              await onInstallPiDevPackage(name)
-              setPackageRevision((revision) => revision + 1)
-            }}
-            onSetSubagentEnabled={onSetSubagentEnabled}
+            onListSubagentDefinitions={onListSubagentDefinitions}
+            onSaveSubagentDefinition={onSaveSubagentDefinition}
+            onSetSubagentDefinitionEnabled={onSetSubagentDefinitionEnabled}
+            onRemoveSubagentDefinition={onRemoveSubagentDefinition}
             onSetSubagent={onSetSubagent}
-            onOpenExternal={onOpenExternal}
+            onDirtyChange={onDirtyChange}
           />
         ) : null}
 
-        {section === 'skills' ? (
-          <>
-            <div className="settings-section-heading settings-section-heading-with-action">
-              <h2>技能</h2>
-              <button
-                className="settings-skill-create-toggle"
-                type="button"
-                disabled={busy || state.activeProjectKey === null || state.runtime.status !== 'ready'}
-                data-tooltip={
-                  state.activeProjectKey === null
-                    ? '请先添加并选择一个项目。'
-                    : state.runtime.status !== 'ready' ? '请等待 Pi Runtime 就绪。' : undefined
-                }
-                onClick={() => {
-                  setSkillCreatorError(null)
-                  setSkillCreatorOpen((open) => !open)
-                }}
-              >
-                {skillCreatorOpen ? '取消' : '新建技能'}
-              </button>
-            </div>
-
-            {skillCreatorOpen ? (
-              <form
-                className="settings-card settings-card-stacked settings-skill-creator"
-                onSubmit={(event) => {
-                  event.preventDefault()
-                  const name = skillName.trim()
-                  const purpose = skillPurpose.trim()
-                  if (!isValidSkillName(name)) {
-                    setSkillCreatorError('名称须为 1–64 位小写字母、数字或连字符，且不能以连字符开头、结尾或连续使用。')
-                    return
-                  }
-                  if (purpose.length === 0) {
-                    setSkillCreatorError('请说明技能要解决的问题。')
-                    return
-                  }
-                  if (skillScope === 'project' && state.activeProjectKey === null) {
-                    setSkillCreatorError('当前项目已不可用，请重新选择项目。')
-                    return
-                  }
-                  const target = skillScope === 'project'
-                    ? `${state.activeProjectKey}/.pi/skills/${name}/SKILL.md`
-                    : `~/.pi/agent/skills/${name}/SKILL.md`
-                  setSkillCreatorError(null)
-                  void onCreateSkill(buildSkillCreationPrompt(name, purpose, target))
-                    .catch((error: unknown) => {
-                      setSkillCreatorError(error instanceof Error ? error.message : '无法启动技能创建任务。')
-                    })
-                }}
-              >
-                <div className="settings-skill-field">
-                  <label htmlFor="settings-skill-name">技能名称</label>
-                  <input
-                    id="settings-skill-name"
-                    value={skillName}
-                    maxLength={64}
-                    placeholder="例如 code-review"
-                    autoComplete="off"
-                    required
-                    onChange={(event) => setSkillName(event.currentTarget.value)}
-                  />
-                  <p>使用小写字母、数字和连字符。</p>
-                </div>
-                <div className="settings-skill-field">
-                  <label htmlFor="settings-skill-purpose">用途</label>
-                  <textarea
-                    id="settings-skill-purpose"
-                    value={skillPurpose}
-                    maxLength={1024}
-                    rows={4}
-                    placeholder="说明这个技能要完成什么，以及应在什么情况下使用"
-                    required
-                    onChange={(event) => setSkillPurpose(event.currentTarget.value)}
-                  />
-                </div>
-                <div className="settings-skill-field">
-                  <label htmlFor="settings-skill-scope">作用范围</label>
-                  <Select
-                    id="settings-skill-scope"
-                    value={skillScope}
-                    groups={[{
-                      options: [
-                        { value: 'user', label: '所有项目（用户级）' },
-                        { value: 'project', label: '仅当前项目' }
-                      ]
-                    }]}
-                    disabled={busy}
-                    onValueChange={(value) => {
-                      if (value === 'user' || value === 'project') setSkillScope(value)
-                    }}
-                  />
-                </div>
-                {skillCreatorError === null ? null : (
-                  <p className="settings-skill-error" role="alert">{skillCreatorError}</p>
-                )}
-                <div className="settings-skill-create-actions">
-                  <p>Pi 会先展示拟创建的文件并等待你确认；技能可能包含可执行代码，请在写入前审查。</p>
-                  <button type="submit" disabled={busy}>交给 Pi 创建</button>
-                </div>
-              </form>
-            ) : null}
-
-            {skillCommands.length === 0 ? (
-              <div
-                className="settings-empty-state"
-                role="status"
-                data-tooltip="技能由 Pi 管理；Workbench 会在 Runtime 提供命令后显示在这里。"
-              >
-                <h3>尚未发现技能命令</h3>
-              </div>
-            ) : (
-              <RuntimeCommandList
-                commands={skillCommands}
-                badge="Skill"
-                fallbackDescription="该技能未提供说明。"
-              />
-            )}
-          </>
+        {section === 'advisor' ? (
+          <AdvisorSettings
+            advisor={state.advisor}
+            runtimeStatus={state.runtime.status}
+            activeProjectKey={state.activeProjectKey}
+            availableModels={state.availableModels}
+            busy={busy}
+            onSetSystemEnabled={onSetAdvisorSystemEnabled}
+            onListDefinitions={onListAdvisorDefinitions}
+            onSaveDefinition={onSaveAdvisorDefinition}
+            onRemoveDefinition={onRemoveAdvisorDefinition}
+          />
         ) : null}
 
-        {section === 'models' ? (
-          <>
-            <div className="settings-section-heading">
-              <h2>模型</h2>
-            </div>
+        <SkillSettings
+          active={section === 'skills'}
+          commands={state.commands}
+          activeProjectKey={state.activeProjectKey}
+          runtimeStatus={state.runtime.status}
+          busy={busy}
+          onCreateSkill={onCreateSkill}
+        />
 
-            <section className="settings-group" aria-labelledby="settings-conversation-model">
-              <h3 id="settings-conversation-model" className="settings-group-heading">对话模型</h3>
-              <div className="settings-group-card">
-                <div className="settings-row">
-                  <div className="settings-row-copy">
-                    <h4>Provider</h4>
-                  </div>
-                  <div className="settings-row-control">
-                    <Select
-                      id="conversation-model-provider"
-                      value={providerValue}
-                      groups={[{
-                        options: [
-                          ...(!currentProviderAvailable && currentModel !== null
-                            ? [{
-                                value: currentModel.provider,
-                                label: `${currentModel.provider}（当前不可用）`,
-                                disabled: true
-                              }]
-                            : []),
-                          ...providers.map((provider) => ({ value: provider, label: provider }))
-                        ]
-                      }]}
-                      disabled={!canSetModel}
-                      onValueChange={setSelectedProvider}
-                    />
-                  </div>
-                </div>
-
-                <div className="settings-row">
-                  <div className="settings-row-copy">
-                    <h4>Model</h4>
-                  </div>
-                  <div className="settings-row-control">
-                    <Select
-                      id="conversation-model"
-                      value={activeModelValue}
-                      groups={[{
-                        options: [
-                          ...(!selectedCurrentModelAvailable && selectedCurrentModel !== null
-                            ? [{
-                                value: selectedCurrentModel.id,
-                                label: `${
-                                  selectedCurrentModel.name === selectedCurrentModel.id
-                                    ? selectedCurrentModel.name
-                                    : `${selectedCurrentModel.name} · ${selectedCurrentModel.id}`
-                                }（当前不可用）`,
-                                disabled: true
-                              }]
-                            : []),
-                          ...providerModels.map((model) => ({
-                            value: model.id,
-                            label: model.name === model.id ? model.name : `${model.name} · ${model.id}`
-                          }))
-                        ]
-                      }]}
-                      disabled={!canSetModel || providerModels.length === 0}
-                      onValueChange={(modelId) => {
-                        void onSetModel(providerValue, modelId).catch(() => undefined)
-                      }}
-                    />
-                  </div>
-                </div>
-              </div>
-            </section>
-
-          </>
-        ) : null}
+        <ModelSettings
+          active={section === 'models'}
+          availableModels={state.availableModels}
+          currentModel={state.session.model}
+          runtimeStatus={state.runtime.status}
+          busy={busy}
+          onSetModel={onSetModel}
+        />
 
         {section === 'credentials' ? (
           <>
@@ -895,6 +828,8 @@ export function SettingsPanel({
               onRemoveProvider={onRemoveProvider}
               onTestProvider={onTestProvider}
               onFetchModelPricing={onFetchModelPricing}
+              onDirtyChange={onDirtyChange}
+              onActiveOperationChange={onActiveOperationChange}
             />
           </>
         ) : null}
@@ -913,26 +848,35 @@ export function SettingsPanel({
               <h2>偏好</h2>
             </div>
 
-            <section className="settings-group" aria-labelledby="settings-session-naming">
+            <section
+              className="settings-group settings-group-inline"
+              aria-labelledby="settings-session-naming"
+            >
               <h3 id="settings-session-naming" className="settings-group-heading">对话管理</h3>
-              <article className="settings-card settings-card-stacked">
-                <label
-                  htmlFor="session-naming-mode"
-                  data-tooltip="认证由 Pi 管理；自动模式只使用当前已授权 Provider 中的低成本模型。"
-                >
-                  自动对话命名
-                </label>
-                <Select
-                  id="session-naming-mode"
-                  value={namingValue}
-                  groups={namingOptionGroups}
-                  disabled={busy}
-                  onValueChange={(value) => {
-                    const settings = resolveSessionNaming(value, state)
-                    if (settings !== null) void onSetSessionNaming(settings).catch(() => undefined)
-                  }}
-                />
-              </article>
+              <div className="settings-group-card">
+                <div className="settings-row">
+                  <div className="settings-row-copy">
+                    <label
+                      htmlFor="session-naming-mode"
+                      data-tooltip="认证由 Pi 管理；自动模式只使用当前已授权 Provider 中的低成本模型。"
+                    >
+                      自动对话命名
+                    </label>
+                  </div>
+                  <div className="settings-row-control">
+                    <Select
+                      id="session-naming-mode"
+                      value={namingValue}
+                      groups={namingOptionGroups}
+                      disabled={busy}
+                      onValueChange={(value) => {
+                        const settings = resolveSessionNaming(value, state)
+                        if (settings !== null) void onSetSessionNaming(settings).catch(() => undefined)
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
             </section>
           </>
         ) : null}
@@ -1010,31 +954,6 @@ function appearanceThemeDescription(theme: AppearanceSettings['theme']): string 
   return theme === 'dark' ? '始终使用深色主题' : '始终使用浅色主题'
 }
 
-function RuntimeCommandList({
-  commands,
-  badge,
-  fallbackDescription
-}: {
-  commands: KernelCommandDescriptor[]
-  badge: string
-  fallbackDescription: string
-}): React.JSX.Element {
-  return (
-    <div className="settings-command-list">
-      {commands.map((command) => (
-        <article className="settings-card settings-card-stacked" key={command.id}>
-          <div className="settings-command-title">
-            <h3>/{command.name}</h3>
-            <span className="settings-value-chip">{badge}</span>
-          </div>
-          <p>{command.description || fallbackDescription}</p>
-          {command.argumentHint === null ? null : <code>{command.argumentHint}</code>}
-        </article>
-      ))}
-    </div>
-  )
-}
-
 function resolveSessionNaming(value: string, state: KernelState): SessionNamingSettings | null {
   if (value === 'auto') return { mode: 'auto' }
   if (value === 'off') return { mode: 'off' }
@@ -1055,25 +974,4 @@ function sessionNamingValue(settings: SessionNamingSettings): string {
 
 function sessionNamingModelValue(provider: string, modelId: string): string {
   return `model:${encodeURIComponent(provider)}:${encodeURIComponent(modelId)}`
-}
-
-function isValidSkillName(name: string): boolean {
-  return name.length <= 64 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(name)
-}
-
-function buildSkillCreationPrompt(name: string, purpose: string, target: string): string {
-  return [
-    '请创建一个 Pi Agent Skill。',
-    '',
-    `技能名称：${name}`,
-    `用途：${purpose}`,
-    `目标文件：${target}`,
-    '',
-    '请遵循以下约束：',
-    '- 按 Pi Agent Skills 格式创建 SKILL.md，frontmatter 必须包含 name 和具体的 description。',
-    '- 只创建完成该技能所必需的文件，不增加无关脚本、参考资料或资产。',
-    '- 先检查目标路径是否已经存在；若存在，不要覆盖，先说明冲突。',
-    '- 写入前先展示拟创建的文件、完整内容和必要理由，并等待我明确确认。',
-    '- 在我确认之前不要调用任何写入工具。'
-  ].join('\n')
 }

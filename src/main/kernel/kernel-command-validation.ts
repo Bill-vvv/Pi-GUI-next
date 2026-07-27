@@ -1,11 +1,14 @@
 import {
   KERNEL_PROVIDER_APIS,
+  ADVISOR_TOOL_NAMES,
   type AppearanceSettings,
   type GeneralSettings,
   type KernelCommand,
+  type KernelAdvisorDefinitionInput,
   type KernelPromptAttachment,
   type KernelProjectTrustChoice,
   type KernelProviderInput,
+  type KernelSubagentDefinitionInput,
   type SessionNamingSettings,
   type SubagentSettings,
   type ThinkingLevel
@@ -30,6 +33,8 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
     value.type === 'kernel.list-providers' ||
     value.type === 'kernel.list-provider-credentials' ||
     value.type === 'kernel.list-pi-packages' ||
+    value.type === 'kernel.list-advisor-definitions' ||
+    value.type === 'kernel.list-subagent-definitions' ||
     value.type === 'kernel.update-pi-packages'
   ) {
     return Object.keys(value).length === 1
@@ -58,6 +63,28 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
   if (value.type === 'kernel.fork-session') {
     return typeof value.entryId === 'string' && Object.keys(value).length === 2
   }
+  if (value.type === 'kernel.get-message-image') {
+    return typeof value.sessionKey === 'string' &&
+      typeof value.messageId === 'string' &&
+      value.messageId.length > 0 &&
+      value.messageId.length <= 256 &&
+      typeof value.attachmentIndex === 'number' &&
+      Number.isInteger(value.attachmentIndex) &&
+      value.attachmentIndex >= 0 &&
+      value.attachmentIndex < 64 &&
+      Object.keys(value).length === 4
+  }
+  if (value.type === 'kernel.get-tool-image') {
+    return typeof value.sessionKey === 'string' &&
+      typeof value.toolCallId === 'string' &&
+      value.toolCallId.length > 0 &&
+      value.toolCallId.length <= 256 &&
+      typeof value.contentIndex === 'number' &&
+      Number.isInteger(value.contentIndex) &&
+      value.contentIndex >= 0 &&
+      value.contentIndex < 64 &&
+      Object.keys(value).length === 4
+  }
   if (value.type === 'kernel.search-project-paths') {
     return isProjectPathQuery(value.query) && Object.keys(value).length === 2
   }
@@ -82,8 +109,33 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
   if (value.type === 'kernel.remove-pi-package' || value.type === 'kernel.update-pi-package') {
     return typeof value.source === 'string' && Object.keys(value).length === 2
   }
-  if (value.type === 'kernel.set-subagent-enabled') {
+  if (
+    value.type === 'kernel.set-subagent-enabled' ||
+    value.type === 'kernel.set-magic-context-enabled' ||
+    value.type === 'kernel.set-advisor-system-enabled' ||
+    value.type === 'kernel.set-advisor-extension-enabled'
+  ) {
     return typeof value.enabled === 'boolean' && Object.keys(value).length === 2
+  }
+  if (value.type === 'kernel.save-subagent-definition') {
+    return isSubagentDefinitionInput(value.definition) && Object.keys(value).length === 2
+  }
+  if (value.type === 'kernel.save-advisor-definition') {
+    return isAdvisorDefinitionInput(value.definition) && Object.keys(value).length === 2
+  }
+  if (value.type === 'kernel.remove-advisor-definition') {
+    return isAdvisorSlug(value.slug) &&
+      (value.scope === 'user' || value.scope === 'project') &&
+      Object.keys(value).length === 3
+  }
+  if (value.type === 'kernel.set-subagent-definition-enabled') {
+    return isSubagentDefinitionId(value.id) &&
+      (value.scope === 'user' || value.scope === 'project') &&
+      typeof value.enabled === 'boolean' &&
+      Object.keys(value).length === 4
+  }
+  if (value.type === 'kernel.remove-subagent-definition') {
+    return isSubagentDefinitionId(value.id) && Object.keys(value).length === 2
   }
   if (value.type === 'kernel.save-provider') {
     return isProviderInput(value.provider) && Object.keys(value).length === 2
@@ -345,16 +397,106 @@ function isNonNegativeFiniteNumber(value: unknown): value is number {
 
 function isGeneralSettings(value: unknown): value is GeneralSettings {
   return isRecord(value) &&
-    Object.keys(value).length === 2 &&
+    Object.keys(value).length === 3 &&
     (value.startupWorkspaceRestore === 'restore' || value.startupWorkspaceRestore === 'none') &&
-    typeof value.doubleClickBorderMaximize === 'boolean'
+    typeof value.doubleClickBorderMaximize === 'boolean' &&
+    typeof value.fastExtensionLoading === 'boolean'
 }
 
 function isSubagentSettings(value: unknown): value is SubagentSettings {
   return isRecord(value) &&
-    Object.keys(value).length === 2 &&
-    (value.maxDepth === 1 || value.maxDepth === 2 || value.maxDepth === 3) &&
-    typeof value.preventCycles === 'boolean'
+    Object.keys(value).length === 1 &&
+    (value.maxDepth === 1 || value.maxDepth === 2 || value.maxDepth === 3)
+}
+
+function isSubagentDefinitionInput(value: unknown): value is KernelSubagentDefinitionInput {
+  return isRecord(value) &&
+    Object.keys(value).length === 18 &&
+    (value.originalId === null || isSubagentDefinitionId(value.originalId)) &&
+    (value.scope === 'user' || value.scope === 'project') &&
+    typeof value.name === 'string' &&
+    /^[a-z0-9][a-z0-9-]{0,63}$/u.test(value.name) &&
+    isSingleLineText(value.description, 500, false) &&
+    typeof value.systemPrompt === 'string' &&
+    value.systemPrompt.length <= 100_000 &&
+    !value.systemPrompt.includes('\0') &&
+    (value.model === null || isSingleLineText(value.model, 256, false)) &&
+    isOptionalStringList(value.fallbackModels) &&
+    (value.thinking === null || isThinkingLevel(value.thinking)) &&
+    (value.systemPromptMode === 'replace' || value.systemPromptMode === 'append') &&
+    typeof value.inheritProjectContext === 'boolean' &&
+    typeof value.inheritSkills === 'boolean' &&
+    (
+      value.defaultContext === null ||
+      value.defaultContext === 'fresh' ||
+      value.defaultContext === 'fork'
+    ) &&
+    isOptionalStringList(value.tools) &&
+    isOptionalStringList(value.skills) &&
+    (value.defaultAsync === null || typeof value.defaultAsync === 'boolean') &&
+    (value.timeoutMs === null || isBoundedPositiveInteger(value.timeoutMs, 86_400_000)) &&
+    (value.maxTurns === null || isBoundedPositiveInteger(value.maxTurns, 1_000)) &&
+    (
+      value.maxSubagentDepth === null ||
+      isBoundedNonNegativeInteger(value.maxSubagentDepth, 3)
+    )
+}
+
+function isAdvisorDefinitionInput(value: unknown): value is KernelAdvisorDefinitionInput {
+  return isRecord(value) &&
+    Object.keys(value).length === 8 &&
+    (value.originalSlug === null || isAdvisorSlug(value.originalSlug)) &&
+    (value.scope === 'user' || value.scope === 'project') &&
+    isSingleLineText(value.name, 128, false) &&
+    value.name.trim() === value.name &&
+    typeof value.enabled === 'boolean' &&
+    (value.model === null || (
+      isSingleLineText(value.model, 256, false) &&
+      value.model.trim() === value.model
+    )) &&
+    (value.thinking === null || isThinkingLevel(value.thinking)) &&
+    Array.isArray(value.tools) &&
+    value.tools.every((tool) =>
+      typeof tool === 'string' && (ADVISOR_TOOL_NAMES as readonly string[]).includes(tool)
+    ) &&
+    new Set(value.tools).size === value.tools.length &&
+    typeof value.instructions === 'string' &&
+    value.instructions.length <= 100_000 &&
+    !value.instructions.includes('\0')
+}
+
+function isAdvisorSlug(value: unknown): value is string {
+  return typeof value === 'string' &&
+    value.length <= 128 &&
+    /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(value)
+}
+
+function isSubagentDefinitionId(value: unknown): value is string {
+  return typeof value === 'string' &&
+    /^(?:builtin|user|project):[A-Za-z0-9_-]+$/u.test(value)
+}
+
+function isOptionalStringList(value: unknown): value is string[] | null {
+  return value === null || (
+    Array.isArray(value) &&
+    value.length <= 64 &&
+    value.every((item) => isSingleLineText(item, 512, false))
+  )
+}
+
+function isSingleLineText(value: unknown, maxLength: number, allowEmpty: boolean): value is string {
+  return typeof value === 'string' &&
+    (allowEmpty || value.trim().length > 0) &&
+    value.length <= maxLength &&
+    !/[\0\r\n]/u.test(value)
+}
+
+function isBoundedPositiveInteger(value: unknown, max: number): value is number {
+  return Number.isSafeInteger(value) && Number(value) > 0 && Number(value) <= max
+}
+
+function isBoundedNonNegativeInteger(value: unknown, max: number): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= max
 }
 
 function isAppearanceTheme(value: unknown): value is AppearanceSettings['theme'] {

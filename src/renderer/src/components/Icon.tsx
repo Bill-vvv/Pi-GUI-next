@@ -13,7 +13,6 @@ export type IconName =
   | 'fork'
   | 'left-sidebar-close'
   | 'left-sidebar-open'
-  | 'logs'
   | 'messages'
   | 'model'
   | 'packages'
@@ -22,7 +21,6 @@ export type IconName =
   | 'plus'
   | 'unread'
   | 'preferences'
-  | 'right-sidebar'
   | 'settings'
   | 'skills'
   | 'stop'
@@ -149,13 +147,6 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
           <path d="m12 9 3 3-3 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" opacity="0.72" />
         </svg>
       )
-    case 'logs':
-      return (
-        <svg {...common}>
-          <path d="M6.5 3.75h7.75L18.5 8v10.25A2.25 2.25 0 0 1 16.25 20.5h-9.5A2.25 2.25 0 0 1 4.5 18.25V5.75A2 2 0 0 1 6.5 3.75Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-          <path d="M14 4.25V8.5h4M8 11h8M8 14.5h8M8 18h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      )
     case 'messages':
       return (
         <svg {...common}>
@@ -211,14 +202,6 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
           <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.8" />
           <circle cx="12" cy="9" r="2.4" stroke="currentColor" strokeWidth="1.8" />
           <path d="M6.8 17c.75-2.45 2.5-3.7 5.2-3.7s4.45 1.25 5.2 3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        </svg>
-      )
-    case 'right-sidebar':
-      return (
-        <svg {...common}>
-          <rect x="4" y="5" width="16" height="14" rx="3" stroke="currentColor" strokeWidth="1.8" />
-          <path d="M15 5v14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-          <path d="M17.5 9v6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" opacity="0.62" />
         </svg>
       )
     case 'settings':

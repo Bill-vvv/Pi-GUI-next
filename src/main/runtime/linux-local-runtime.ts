@@ -27,6 +27,42 @@ const STOP_GRACE_MS = 1_000
 const PROBE_SESSION_NAME = 'Pi GUI S11 probe'
 const PROGRESS_SYSTEM_PROMPT =
   'For non-trivial tasks, provide brief user-visible commentary before important tool operations and after important discoveries. Do not narrate every tool call. Use commentary for progress updates and final_answer for the final response.'
+const FAST_EXTENSION_RESOLVER_HOOK_URL = `data:text/javascript,${encodeURIComponent(`
+import { existsSync, realpathSync } from 'node:fs'
+import { registerHooks } from 'node:module'
+import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+try {
+  const cliPath = realpathSync(process.argv[1])
+  const packageRoot = dirname(dirname(cliPath))
+  const piAiRoot = join(packageRoot, 'node_modules/@earendil-works/pi-ai/dist')
+  const aliases = new Map(Object.entries({
+    '@earendil-works/pi-coding-agent': join(packageRoot, 'dist/index.js'),
+    '@earendil-works/pi-agent-core': join(packageRoot, 'node_modules/@earendil-works/pi-agent-core/dist/index.js'),
+    '@earendil-works/pi-tui': join(packageRoot, 'node_modules/@earendil-works/pi-tui/dist/index.js'),
+    '@earendil-works/pi-ai': join(piAiRoot, 'compat.js'),
+    '@earendil-works/pi-ai/compat': join(piAiRoot, 'compat.js'),
+    '@earendil-works/pi-ai/oauth': join(piAiRoot, 'oauth.js'),
+    '@earendil-works/pi-ai/providers/all': join(piAiRoot, 'providers/all.js'),
+    '@mariozechner/pi-coding-agent': join(packageRoot, 'dist/index.js'),
+    '@mariozechner/pi-agent-core': join(packageRoot, 'node_modules/@earendil-works/pi-agent-core/dist/index.js'),
+    '@mariozechner/pi-tui': join(packageRoot, 'node_modules/@earendil-works/pi-tui/dist/index.js'),
+    '@mariozechner/pi-ai': join(piAiRoot, 'compat.js'),
+    '@mariozechner/pi-ai/compat': join(piAiRoot, 'compat.js'),
+    '@mariozechner/pi-ai/oauth': join(piAiRoot, 'oauth.js'),
+    '@mariozechner/pi-ai/providers/all': join(piAiRoot, 'providers/all.js')
+  }).filter(([, target]) => existsSync(target)))
+  registerHooks({
+    resolve(specifier, context, nextResolve) {
+      const target = aliases.get(specifier)
+      return target === undefined
+        ? nextResolve(specifier, context)
+        : { url: pathToFileURL(target).href, shortCircuit: true }
+    }
+  })
+} catch {}
+`)}`
 
 export type LinuxLocalRuntimeOptions = {
   cwd: string
@@ -38,13 +74,13 @@ export type LinuxLocalRuntimeOptions = {
   noSession?: boolean
   projectTrust?: boolean
   subagent?: SubagentSettings
+  fastExtensionLoading?: boolean
 }
 
 export function buildPiRpcArguments(
   sessionFile?: string,
   noSession = false,
-  projectTrust?: boolean,
-  subagent?: SubagentSettings
+  projectTrust?: boolean
 ): string[] {
   if (sessionFile !== undefined && noSession) {
     throw new Error('Session file and no-session mode cannot be used together.')
@@ -66,15 +102,6 @@ export function buildPiRpcArguments(
   }
   if (projectTrust === true) arguments_.push('--approve')
   else if (projectTrust === false) arguments_.push('--no-approve')
-  if (subagent !== undefined) {
-    assertSubagentSettings(subagent)
-    arguments_.push('--subagent-max-depth', String(subagent.maxDepth))
-    arguments_.push(
-      subagent.preventCycles
-        ? '--subagent-prevent-cycles'
-        : '--no-subagent-prevent-cycles'
-    )
-  }
   return arguments_
 }
 
@@ -159,18 +186,35 @@ export class LinuxLocalRuntime implements RuntimeHost {
     }
     this.assertStartNotCancelled()
 
+    const env = { ...process.env }
+    delete env.PI_PARALLEL_EXTENSION_IMPORTS
+    delete env.PI_NATIVE_COMPILED_EXTENSION_IMPORTS
+    delete env.JITI_TRY_NATIVE
+    if (this.options.fastExtensionLoading === true) {
+      env.PI_PARALLEL_EXTENSION_IMPORTS = '1'
+      env.PI_NATIVE_COMPILED_EXTENSION_IMPORTS = '1'
+      env.JITI_TRY_NATIVE = '1'
+      if (!env.NODE_OPTIONS?.includes(FAST_EXTENSION_RESOLVER_HOOK_URL)) {
+        env.NODE_OPTIONS = [env.NODE_OPTIONS, `--import=${FAST_EXTENSION_RESOLVER_HOOK_URL}`]
+          .filter((value) => value !== undefined && value.length > 0)
+          .join(' ')
+      }
+    }
+    if (this.options.subagent !== undefined) {
+      env.PI_SUBAGENT_MAX_DEPTH = String(this.options.subagent.maxDepth)
+    }
     const child = spawn(
       executable,
       buildPiRpcArguments(
         this.options.sessionFile,
         this.options.noSession,
-        this.options.projectTrust,
-        this.options.subagent
+        this.options.projectTrust
       ),
       {
         cwd: this.options.cwd,
         shell: false,
-        stdio: ['pipe', 'pipe', 'pipe']
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env
       }
     )
     this.child = child
@@ -590,10 +634,7 @@ function startCancelledError(): Error {
 }
 
 function assertSubagentSettings(settings: SubagentSettings): void {
-  if (
-    (settings.maxDepth !== 1 && settings.maxDepth !== 2 && settings.maxDepth !== 3) ||
-    typeof settings.preventCycles !== 'boolean'
-  ) {
+  if (settings.maxDepth !== 1 && settings.maxDepth !== 2 && settings.maxDepth !== 3) {
     throw new Error('Invalid subagent settings.')
   }
 }

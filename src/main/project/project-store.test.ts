@@ -85,7 +85,7 @@ test('concurrent project registrations complete in FIFO order without temporary 
   const configDirectory = join(configHome, 'pi-gui-next')
   const configText = await readFile(join(configDirectory, 'config.json'), 'utf8')
   assert.deepEqual(JSON.parse(configText), {
-    version: 10,
+    version: 12,
     projects: [firstProject, secondProject],
     activeProjectKey: secondProject.path,
     sessionNaming: { mode: 'auto' },
@@ -97,7 +97,11 @@ test('concurrent project registrations complete in FIFO order without temporary 
       uiFontFamily: null,
       codeFontFamily: null
     },
-    general: { startupWorkspaceRestore: 'restore', doubleClickBorderMaximize: true },
+    general: {
+      startupWorkspaceRestore: 'restore',
+      doubleClickBorderMaximize: true,
+      fastExtensionLoading: false
+    },
     shortcuts: DEFAULT_SHORTCUT_SETTINGS,
     subagent: DEFAULT_SUBAGENT_SETTINGS
   })
@@ -168,7 +172,7 @@ test('session naming settings migrate to the current config without storing OAut
     modelId: 'gpt-5.4-mini'
   })
   assert.deepEqual(JSON.parse(await readFile(join(configDirectory, 'config.json'), 'utf8')), {
-    version: 10,
+    version: 12,
     projects: [project],
     activeProjectKey: project.path,
     sessionNaming: {
@@ -184,13 +188,17 @@ test('session naming settings migrate to the current config without storing OAut
       uiFontFamily: null,
       codeFontFamily: null
     },
-    general: { startupWorkspaceRestore: 'restore', doubleClickBorderMaximize: true },
+    general: {
+      startupWorkspaceRestore: 'restore',
+      doubleClickBorderMaximize: true,
+      fastExtensionLoading: false
+    },
     shortcuts: DEFAULT_SHORTCUT_SETTINGS,
     subagent: DEFAULT_SUBAGENT_SETTINGS
   })
 })
 
-test('appearance settings migrate config v4 to v10 and persist theme, accent, transparency, and text size', async (t) => {
+test('appearance settings migrate config v4 to v12 and persist theme, accent, transparency, and text size', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-gui-appearance-settings-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const configHome = join(root, 'config')
@@ -230,7 +238,7 @@ test('appearance settings migrate config v4 to v10 and persist theme, accent, tr
     assert.equal((await new ProjectStore(options).loadAppearance()).theme, theme)
   }
   assert.deepEqual(JSON.parse(await readFile(join(configDirectory, 'config.json'), 'utf8')), {
-    version: 10,
+    version: 12,
     projects: [project],
     activeProjectKey: project.path,
     sessionNaming: { mode: 'auto' },
@@ -242,7 +250,11 @@ test('appearance settings migrate config v4 to v10 and persist theme, accent, tr
       uiFontFamily: 'Noto Sans',
       codeFontFamily: 'JetBrains Mono'
     },
-    general: { startupWorkspaceRestore: 'restore', doubleClickBorderMaximize: true },
+    general: {
+      startupWorkspaceRestore: 'restore',
+      doubleClickBorderMaximize: true,
+      fastExtensionLoading: false
+    },
     shortcuts: DEFAULT_SHORTCUT_SETTINGS,
     subagent: DEFAULT_SUBAGENT_SETTINGS
   })
@@ -283,15 +295,24 @@ test('config v7 gains the default text size and roundtrips startup workspace res
     uiFontFamily: null,
     codeFontFamily: null
   })
-  assert.deepEqual(await store.loadGeneral(), { startupWorkspaceRestore: 'restore', doubleClickBorderMaximize: true })
-  await store.saveGeneral({ startupWorkspaceRestore: 'none', doubleClickBorderMaximize: true })
+  assert.deepEqual(await store.loadGeneral(), {
+    startupWorkspaceRestore: 'restore',
+    doubleClickBorderMaximize: true,
+    fastExtensionLoading: false
+  })
+  await store.saveGeneral({
+    startupWorkspaceRestore: 'none',
+    doubleClickBorderMaximize: true,
+    fastExtensionLoading: true
+  })
 
   assert.deepEqual(await new ProjectStore(options).loadGeneral(), {
     startupWorkspaceRestore: 'none',
-    doubleClickBorderMaximize: true
+    doubleClickBorderMaximize: true,
+    fastExtensionLoading: true
   })
   assert.deepEqual(JSON.parse(await readFile(join(configDirectory, 'config.json'), 'utf8')), {
-    version: 10,
+    version: 12,
     projects: [project],
     activeProjectKey: project.path,
     sessionNaming: { mode: 'auto' },
@@ -303,9 +324,69 @@ test('config v7 gains the default text size and roundtrips startup workspace res
       uiFontFamily: null,
       codeFontFamily: null
     },
-    general: { startupWorkspaceRestore: 'none', doubleClickBorderMaximize: true },
+    general: {
+      startupWorkspaceRestore: 'none',
+      doubleClickBorderMaximize: true,
+      fastExtensionLoading: true
+    },
     shortcuts: DEFAULT_SHORTCUT_SETTINGS,
     subagent: DEFAULT_SUBAGENT_SETTINGS
+  })
+})
+
+test('config v11 strictly migrates fast extension loading to false and persists v12', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-gui-general-v11-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const configHome = join(root, 'config')
+  const configDirectory = join(configHome, 'pi-gui-next')
+  const configFile = join(configDirectory, 'config.json')
+  await mkdir(configDirectory, { recursive: true })
+  const legacyConfig = {
+    version: 11,
+    projects: [],
+    activeProjectKey: null,
+    sessionNaming: { mode: 'auto' },
+    appearance: {
+      theme: 'system',
+      accentColor: 'amber',
+      surfaceTransparency: 20,
+      textSize: 'default',
+      uiFontFamily: null,
+      codeFontFamily: null
+    },
+    general: {
+      startupWorkspaceRestore: 'restore',
+      doubleClickBorderMaximize: true
+    },
+    shortcuts: DEFAULT_SHORTCUT_SETTINGS,
+    subagent: DEFAULT_SUBAGENT_SETTINGS
+  }
+  const store = new ProjectStore({ configHome, stateHome: join(root, 'state') })
+  await writeFile(configFile, JSON.stringify(legacyConfig))
+
+  assert.deepEqual(await store.loadGeneral(), {
+    startupWorkspaceRestore: 'restore',
+    doubleClickBorderMaximize: true,
+    fastExtensionLoading: false
+  })
+  await writeFile(configFile, JSON.stringify({
+    ...legacyConfig,
+    general: { ...legacyConfig.general, unknown: true }
+  }))
+  await assert.rejects(store.loadGeneral(), /Invalid Pi GUI project config/)
+
+  await writeFile(configFile, JSON.stringify(legacyConfig))
+  await store.saveGeneral({
+    startupWorkspaceRestore: 'restore',
+    doubleClickBorderMaximize: true,
+    fastExtensionLoading: true
+  })
+  const persisted = JSON.parse(await readFile(configFile, 'utf8'))
+  assert.equal(persisted.version, 12)
+  assert.deepEqual(persisted.general, {
+    startupWorkspaceRestore: 'restore',
+    doubleClickBorderMaximize: true,
+    fastExtensionLoading: true
   })
 })
 
@@ -337,7 +418,8 @@ test('legacy general border settings migrate to double-click maximize', async (t
   }))
   assert.deepEqual(await new ProjectStore({ configHome, stateHome: join(root, 'state') }).loadGeneral(), {
     startupWorkspaceRestore: 'none',
-    doubleClickBorderMaximize: true
+    doubleClickBorderMaximize: true,
+    fastExtensionLoading: false
   })
 
   await writeFile(join(configDirectory, 'config.json'), JSON.stringify({
@@ -346,7 +428,8 @@ test('legacy general border settings migrate to double-click maximize', async (t
   }))
   assert.deepEqual(await new ProjectStore({ configHome, stateHome: join(root, 'state') }).loadGeneral(), {
     startupWorkspaceRestore: 'restore',
-    doubleClickBorderMaximize: false
+    doubleClickBorderMaximize: false,
+    fastExtensionLoading: false
   })
 
   await writeFile(join(configDirectory, 'config.json'), JSON.stringify({
@@ -355,7 +438,8 @@ test('legacy general border settings migrate to double-click maximize', async (t
   }))
   assert.deepEqual(await new ProjectStore({ configHome, stateHome: join(root, 'state') }).loadGeneral(), {
     startupWorkspaceRestore: 'restore',
-    doubleClickBorderMaximize: true
+    doubleClickBorderMaximize: true,
+    fastExtensionLoading: false
   })
 
   await writeFile(join(configDirectory, 'config.json'), JSON.stringify({
@@ -364,7 +448,8 @@ test('legacy general border settings migrate to double-click maximize', async (t
   }))
   assert.deepEqual(await new ProjectStore({ configHome, stateHome: join(root, 'state') }).loadGeneral(), {
     startupWorkspaceRestore: 'none',
-    doubleClickBorderMaximize: false
+    doubleClickBorderMaximize: false,
+    fastExtensionLoading: false
   })
 })
 
@@ -406,11 +491,11 @@ test('shortcut settings migrate from v8, roundtrip null bindings, and restore de
   await store.saveShortcuts(DEFAULT_SHORTCUT_SETTINGS)
   assert.deepEqual(await store.loadShortcuts(), DEFAULT_SHORTCUT_SETTINGS)
   const persisted = JSON.parse(await readFile(configFile, 'utf8'))
-  assert.equal(persisted.version, 10)
+  assert.equal(persisted.version, 12)
   assert.deepEqual(persisted.shortcuts, DEFAULT_SHORTCUT_SETTINGS)
 })
 
-test('subagent settings migrate from v9 and persist as config v10', async (t) => {
+test('subagent settings migrate from v9 and v10 and persist as config v12', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-gui-subagent-settings-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const configHome = join(root, 'config')
@@ -440,16 +525,30 @@ test('subagent settings migrate from v9 and persist as config v10', async (t) =>
   const store = new ProjectStore({ configHome, stateHome: join(root, 'state') })
 
   assert.deepEqual(await store.loadSubagent(), DEFAULT_SUBAGENT_SETTINGS)
-  await store.saveSubagent({ maxDepth: 2, preventCycles: false })
+  await store.saveSubagent({ maxDepth: 2 })
   assert.deepEqual(await new ProjectStore({
     configHome,
     stateHome: join(root, 'state')
-  }).loadSubagent(), { maxDepth: 2, preventCycles: false })
-  const persisted = JSON.parse(await readFile(configFile, 'utf8'))
-  assert.equal(persisted.version, 10)
-  assert.deepEqual(persisted.subagent, { maxDepth: 2, preventCycles: false })
+  }).loadSubagent(), { maxDepth: 2 })
+  let persisted = JSON.parse(await readFile(configFile, 'utf8'))
+  assert.equal(persisted.version, 12)
+  assert.deepEqual(persisted.subagent, { maxDepth: 2 })
+
+  await writeFile(configFile, JSON.stringify({
+    ...persisted,
+    version: 10,
+    subagent: { maxDepth: 1, preventCycles: false }
+  }))
+  assert.deepEqual(await new ProjectStore({
+    configHome,
+    stateHome: join(root, 'state')
+  }).loadSubagent(), { maxDepth: 1 })
+  await store.saveSubagent({ maxDepth: 3 })
+  persisted = JSON.parse(await readFile(configFile, 'utf8'))
+  assert.equal(persisted.version, 12)
+  assert.deepEqual(persisted.subagent, { maxDepth: 3 })
   assert.throws(
-    () => store.saveSubagent({ maxDepth: 4 as 1, preventCycles: true }),
+    () => store.saveSubagent({ maxDepth: 4 as 1 }),
     /Invalid Pi GUI subagent settings/u
   )
 })
@@ -632,7 +731,7 @@ test('version 1 project and session files migrate on the next write', async (t) 
   })
 
   assert.deepEqual(JSON.parse(await readFile(join(configDirectory, 'config.json'), 'utf8')), {
-    version: 10,
+    version: 12,
     projects: [oldProject, newProject],
     activeProjectKey: newProject.path,
     sessionNaming: { mode: 'auto' },
@@ -644,7 +743,11 @@ test('version 1 project and session files migrate on the next write', async (t) 
       uiFontFamily: null,
       codeFontFamily: null
     },
-    general: { startupWorkspaceRestore: 'restore', doubleClickBorderMaximize: true },
+    general: {
+      startupWorkspaceRestore: 'restore',
+      doubleClickBorderMaximize: true,
+      fastExtensionLoading: false
+    },
     shortcuts: DEFAULT_SHORTCUT_SETTINGS,
     subagent: DEFAULT_SUBAGENT_SETTINGS
   })
@@ -881,8 +984,6 @@ test('session validation requires an existing regular file', async (t) => {
   await rm(sessionFile, { recursive: true })
   await writeFile(sessionFile, '{}\n')
   assert.deepEqual(await store.validateSession(pointer), pointer)
-  assert.equal(typeof await store.sessionActivityAt(sessionFile), 'number')
-  assert.equal(await store.sessionActivityAt(join(root, 'missing-session.jsonl')), null)
   await assert.rejects(
     store.validateSession({ ...pointer, extra: true } as typeof pointer),
     /Invalid Pi GUI session pointer/

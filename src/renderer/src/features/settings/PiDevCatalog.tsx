@@ -5,6 +5,7 @@ import type {
   KernelPiDevPackage
 } from '../../../../shared/kernel-contract'
 import piDevLogoUrl from '../../assets/pi-dev-logo.svg'
+import { unknownErrorMessage as errorMessage } from '../../unknown-error-message'
 
 type PiDevCatalogProps = {
   kind: 'package' | 'extension'
@@ -187,8 +188,4 @@ export function PiDevCatalog({
       </div>
     </section>
   )
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }

@@ -247,7 +247,7 @@ test('keeps the legacy prompt payload unchanged without images', () => {
   )
 })
 
-test('maps the S11 command set with exact payloads and strips command sourceInfo', async () => {
+test('maps the S11 command set with exact payloads and retains safe command sourceInfo', async () => {
   const fake = createFakeProcess()
   const client = new PiRpcClient(fake.child)
   const commands = client.getCommands()
@@ -276,14 +276,36 @@ test('maps the S11 command set with exact payloads and strips command sourceInfo
                   name: 'review',
                   description: 'Review changes',
                   source: 'extension',
-                  sourceInfo: { path: '/private/extension.ts' }
+                  sourceInfo: {
+                    path: '/private/extension.ts',
+                    source: 'review-extension',
+                    scope: 'project',
+                    origin: 'top-level',
+                    baseDir: '/private'
+                  }
                 },
-                { name: 'summarize', source: 'skill' },
+                {
+                  name: 'summarize',
+                  source: 'skill',
+                  sourceInfo: {
+                    path: '/private/summarize/SKILL.md',
+                    source: 'summarize',
+                    scope: 'user',
+                    origin: 'package',
+                    baseDir: '/private/summarize'
+                  }
+                },
                 {
                   name: 'skill:CTF•AI/ML 攻防',
                   description: 'AI/ML challenge skill',
                   source: 'skill',
-                  sourceInfo: { path: '/private/skill/SKILL.md' }
+                  sourceInfo: {
+                    path: '/private/skill/SKILL.md',
+                    source: 'CTF•AI/ML 攻防',
+                    scope: 'temporary',
+                    origin: 'top-level',
+                    baseDir: '/private/skill'
+                  }
                 }
               ]
             }
@@ -293,26 +315,51 @@ test('maps the S11 command set with exact payloads and strips command sourceInfo
   }
 
   assert.deepEqual(await commands, [
-    { name: 'review', description: 'Review changes', source: 'extension' },
-    { name: 'summarize', source: 'skill' },
+    {
+      name: 'review',
+      description: 'Review changes',
+      source: 'extension',
+      sourceInfo: { source: 'review-extension', scope: 'project', origin: 'top-level' }
+    },
+    {
+      name: 'summarize',
+      source: 'skill',
+      sourceInfo: { source: 'summarize', scope: 'user', origin: 'package' }
+    },
     {
       name: 'skill:CTF•AI/ML 攻防',
       description: 'AI/ML challenge skill',
-      source: 'skill'
+      source: 'skill',
+      sourceInfo: { source: 'CTF•AI/ML 攻防', scope: 'temporary', origin: 'top-level' }
     }
   ])
   await Promise.all([compact, compactWithoutInstructions, setSessionName])
 })
 
 test('rejects malformed get_commands responses', async () => {
+  const validSourceInfo = { source: 'review', scope: 'project', origin: 'top-level' }
   const invalidData = [
     {},
     { commands: 'review' },
     { commands: [null] },
-    { commands: [{ name: '', source: 'prompt' }] },
-    { commands: [{ name: '/review', source: 'prompt' }] },
-    { commands: [{ name: 'review', description: 1, source: 'prompt' }] },
-    { commands: [{ name: 'review', source: 'builtin' }] }
+    { commands: [{ name: '', source: 'prompt', sourceInfo: validSourceInfo }] },
+    { commands: [{ name: '/review', source: 'prompt', sourceInfo: validSourceInfo }] },
+    {
+      commands: [{
+        name: 'review',
+        description: 1,
+        source: 'prompt',
+        sourceInfo: validSourceInfo
+      }]
+    },
+    { commands: [{ name: 'review', source: 'builtin', sourceInfo: validSourceInfo }] },
+    {
+      commands: [{
+        name: 'review',
+        source: 'prompt',
+        sourceInfo: { source: 'review', scope: 'workspace', origin: 'top-level' }
+      }]
+    }
   ]
 
   for (const data of invalidData) {
@@ -591,6 +638,39 @@ test('gets normalized entries without retaining image or non-user payloads', asy
           type: 'branch',
           timestamp: '2026-07-24T01:00:02.000Z',
           summary: 'private branch payload'
+        },
+        {
+          id: 'advisor-capability-1',
+          parentId: 'branch-1',
+          type: 'custom',
+          timestamp: '2026-07-24T01:00:03.000Z',
+          customType: 'pi-gui.multi-advisor/capabilities',
+          data: {
+            protocolVersion: 1,
+            identity: 'pi-gui-multi-advisor',
+            enabled: true
+          }
+        },
+        {
+          id: 'unrelated-custom-1',
+          parentId: 'advisor-capability-1',
+          type: 'custom',
+          timestamp: '2026-07-24T01:00:04.000Z',
+          customType: 'third-party/private',
+          data: { secret: 'do-not-retain' }
+        },
+        {
+          id: 'magic-context-status-1',
+          parentId: 'unrelated-custom-1',
+          type: 'custom',
+          timestamp: '2026-07-24T01:00:05.000Z',
+          customType: 'ctx-status',
+          data: {
+            title: 'Dream complete',
+            text: 'Embedded 4 memories.',
+            level: 'success',
+            details: { retainedForStrictProjection: true }
+          }
         }
       ]
     }
@@ -621,10 +701,42 @@ test('gets normalized entries without retaining image or non-user payloads', asy
         parentId: 'assistant-1',
         type: 'branch',
         timestamp: '2026-07-24T01:00:02.000Z'
+      },
+      {
+        id: 'advisor-capability-1',
+        parentId: 'branch-1',
+        type: 'custom',
+        timestamp: '2026-07-24T01:00:03.000Z',
+        customType: 'pi-gui.multi-advisor/capabilities',
+        data: {
+          protocolVersion: 1,
+          identity: 'pi-gui-multi-advisor',
+          enabled: true
+        }
+      },
+      {
+        id: 'unrelated-custom-1',
+        parentId: 'advisor-capability-1',
+        type: 'custom',
+        timestamp: '2026-07-24T01:00:04.000Z'
+      },
+      {
+        id: 'magic-context-status-1',
+        parentId: 'unrelated-custom-1',
+        type: 'custom',
+        timestamp: '2026-07-24T01:00:05.000Z',
+        customType: 'ctx-status',
+        data: {
+          title: 'Dream complete',
+          text: 'Embedded 4 memories.',
+          level: 'success'
+        }
       }
     ]
   })
   assert.equal(JSON.stringify(await Promise.resolve(entries)).includes('large-private-payload'), false)
+  assert.equal(JSON.stringify(await Promise.resolve(entries)).includes('do-not-retain'), false)
+  assert.equal(JSON.stringify(await Promise.resolve(entries)).includes('retainedForStrictProjection'), false)
 })
 
 test('rejects malformed get_entries responses and unknown user content blocks', async () => {

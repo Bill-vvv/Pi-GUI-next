@@ -1,0 +1,22 @@
+Behavioral references
+=====================
+
+Oh My Pi
+--------
+Project: https://github.com/can1357/oh-my-pi
+Reference commit: 667111575ebba136dadfd6989379e7f67e0d40d9
+License: MIT
+
+The WATCHDOG configuration field shape and advisor behavior were studied as a
+behavioral reference. This package does not claim that Oh My Pi source code was
+copied.
+
+pi-omplike-advisor
+------------------
+Project: https://github.com/pasky/pi-omplike-advisor
+Reference commit: 43eb9a976d751c06016a62b5423e2c6ddaff43a1
+Package license declaration: MIT
+
+The independent read-only Pi advisor pattern was studied as a behavioral
+reference. This package does not claim that pi-omplike-advisor source code was
+copied.

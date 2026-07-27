@@ -134,7 +134,7 @@ test('toggles only the package extension filter while preserving other PackageSo
     packages: [
       'npm:plain',
       {
-        source: 'npm:@mjakl/pi-subagent@1.0.0',
+        source: 'npm:pi-subagents@1.0.0',
         autoload: false,
         extensions: [],
         skills: ['skills'],
@@ -149,31 +149,31 @@ test('toggles only the package extension filter while preserving other PackageSo
   assert.deepEqual(await service.list(), [
     { source: 'npm:plain', filtered: false, extensionEnabled: true },
     {
-      source: 'npm:@mjakl/pi-subagent@1.0.0',
+      source: 'npm:pi-subagents@1.0.0',
       filtered: true,
       extensionEnabled: false
     }
   ])
-  const enabled = await service.setExtensionEnabled('npm:@mjakl/pi-subagent', true)
+  const enabled = await service.setExtensionEnabled('npm:pi-subagents', true)
   assert.equal(enabled[1]?.extensionEnabled, true)
   let settings = JSON.parse(await readFile(settingsPath, 'utf8')) as {
     packages: Array<Record<string, unknown>>
   }
   assert.deepEqual(settings.packages[1], {
-    source: 'npm:@mjakl/pi-subagent@1.0.0',
+    source: 'npm:pi-subagents@1.0.0',
     skills: ['skills'],
     prompts: ['prompts'],
     themes: ['themes'],
     custom: { retained: true }
   })
 
-  const disabled = await service.setExtensionEnabled('npm:@mjakl/pi-subagent', false)
+  const disabled = await service.setExtensionEnabled('npm:pi-subagents', false)
   assert.equal(disabled[1]?.extensionEnabled, false)
   settings = JSON.parse(await readFile(settingsPath, 'utf8')) as {
     packages: Array<Record<string, unknown>>
   }
   assert.deepEqual(settings.packages[1], {
-    source: 'npm:@mjakl/pi-subagent@1.0.0',
+    source: 'npm:pi-subagents@1.0.0',
     skills: ['skills'],
     prompts: ['prompts'],
     themes: ['themes'],
@@ -184,6 +184,43 @@ test('toggles only the package extension filter while preserving other PackageSo
     service.setExtensionEnabled('npm:missing', true),
     /not present in user settings/u
   )
+})
+
+test('toggles a versioned scoped npm package from its base source', async (t) => {
+  const agentDir = await mkdtemp(join(tmpdir(), 'pi-gui-scoped-package-toggle-'))
+  t.after(() => rm(agentDir, { recursive: true, force: true }))
+  const settingsPath = join(agentDir, 'settings.json')
+  const packageSource = 'npm:@cortexkit/pi-magic-context@2.3.4'
+  await writeFile(settingsPath, JSON.stringify({
+    packages: [{
+      source: packageSource,
+      extensions: [],
+      skills: ['skills'],
+      custom: { retained: true }
+    }]
+  }), 'utf8')
+  const service = new PiDevPackageService({ agentDir })
+
+  await service.setExtensionEnabled('npm:@cortexkit/pi-magic-context', true)
+  let settings = JSON.parse(await readFile(settingsPath, 'utf8')) as {
+    packages: Array<Record<string, unknown>>
+  }
+  assert.deepEqual(settings.packages[0], {
+    source: packageSource,
+    skills: ['skills'],
+    custom: { retained: true }
+  })
+
+  await service.setExtensionEnabled('npm:@cortexkit/pi-magic-context', false)
+  settings = JSON.parse(await readFile(settingsPath, 'utf8')) as {
+    packages: Array<Record<string, unknown>>
+  }
+  assert.deepEqual(settings.packages[0], {
+    source: packageSource,
+    extensions: [],
+    skills: ['skills'],
+    custom: { retained: true }
+  })
 })
 
 test('fails fast when the catalog no longer contains package cards', async () => {

@@ -8,11 +8,14 @@ import type {
   KernelSessionPreview,
   KernelSessionUsage,
   KernelState,
+  KernelTodoItem,
   ThinkingLevel
 } from '../../../../shared/kernel-contract'
 import { Icon } from '../../components/Icon'
 import { IconButton } from '../../components/IconButton'
 import { useViewportPopoverPosition } from '../../components/useViewportPopoverPosition'
+import { formatUsd } from '../../format-usd'
+import { unknownErrorMessage as errorMessage } from '../../unknown-error-message'
 import {
   filterSlashCommands,
   parseSlashCommandToken,
@@ -22,8 +25,10 @@ import {
   parseActiveProjectPathToken,
   replaceProjectPathToken
 } from './project-path-input'
+import { shouldAbortComposerFromEscape } from './composer-escape'
 import { readDroppedPromptAttachments } from './prompt-attachments'
 import { ComposerModelPicker } from './ComposerModelPicker'
+import { TodoPanel } from './TodoPanel'
 import {
   projectPathMatchKey,
   ProjectPathSurface,
@@ -64,6 +69,7 @@ type ComposerProps = {
   busy: boolean
   pendingAction: string | null
   completedAction: { action: string; succeeded: boolean } | null
+  todos: KernelTodoItem[] | null
   onSelectPromptAttachments: () => Promise<KernelPromptAttachment[]>
   onSearchProjectPaths: (query: string) => Promise<KernelProjectPathSearchResult>
   onStartSession: () => Promise<void>
@@ -73,6 +79,7 @@ type ComposerProps = {
   onFollowUp: (message: string, attachments?: KernelPromptAttachment[]) => Promise<void>
   onInvokeCommand: (commandId: string, argument: string) => Promise<void>
   onAbort: () => Promise<void>
+  globalEscapeAbortEnabled: boolean
   onSetModel: (provider: string, modelId: string) => Promise<void>
   onSetThinkingLevel: (level: ThinkingLevel) => Promise<void>
 }
@@ -89,6 +96,7 @@ export function Composer({
   busy,
   pendingAction,
   completedAction,
+  todos,
   onSelectPromptAttachments,
   onSearchProjectPaths,
   onStartSession,
@@ -98,6 +106,7 @@ export function Composer({
   onFollowUp,
   onInvokeCommand,
   onAbort,
+  globalEscapeAbortEnabled,
   onSetModel,
   onSetThinkingLevel
 }: ComposerProps): React.JSX.Element {
@@ -257,16 +266,21 @@ export function Composer({
   }, [])
 
   useEffect(() => {
-    if (!running) return
     const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') return
-      if (event.isComposing || event.keyCode === 229) return
+      if (!shouldAbortComposerFromEscape({
+        enabled: globalEscapeAbortEnabled,
+        running,
+        key: event.key,
+        defaultPrevented: event.defaultPrevented,
+        isComposing: event.isComposing,
+        keyCode: event.keyCode
+      })) return
       event.preventDefault()
       void onAbort().catch(() => undefined)
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onAbort, running])
+  }, [globalEscapeAbortEnabled, onAbort, running])
 
   useEffect(() => {
     if (!viewingNewSession) return
@@ -737,6 +751,8 @@ export function Composer({
         void submitPrompt()
       }}
     >
+      {todos === null ? null : <TodoPanel key={displayedContextKey} todos={todos} />}
+
       {running && (session.pendingSteeringMessages.length > 0 || session.pendingFollowUpMessages.length > 0) ? (
         <section className="composer-queue" aria-label="已排队消息" aria-live="polite">
           <ol className="composer-queue-list">
@@ -1136,10 +1152,6 @@ function formatPercent(value: number | null): string {
   return value === null ? '—' : `${value.toFixed(1)}%`
 }
 
-function formatUsd(value: number): string {
-  return `$${value.toFixed(value > 0 && value < 0.01 ? 4 : 2)}`
-}
-
 function clampPercent(value: number): number {
   return Math.min(100, Math.max(0, value))
 }
@@ -1159,10 +1171,6 @@ function composerPlaceholder(
   if (viewedSessionRuntimeStatus === 'running') return 'Enter 排队，Alt+Enter 引导'
   if (viewedSessionRuntimeStatus === 'crashed') return 'Pi Runtime 已退出'
   return ''
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 function hasDraggedFiles(dataTransfer: DataTransfer): boolean {

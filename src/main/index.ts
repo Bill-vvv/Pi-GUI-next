@@ -10,11 +10,13 @@ import {
 } from 'electron'
 import { execFile } from 'node:child_process'
 import { writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import {
   KERNEL_COMMAND_CHANNEL,
   KERNEL_EVENT_CHANNEL,
+  MAGIC_CONTEXT_PACKAGE_NAME,
   OPEN_EXTERNAL_CHANNEL,
   PROVIDER_AUTH_EVENT_CHANNEL,
   WINDOW_FULLSCREEN_CHANGED_CHANNEL,
@@ -28,6 +30,7 @@ import {
   type KernelProviderAuthEvent
 } from '../shared/kernel-contract.ts'
 import { normalizeExternalUrl } from '../shared/external-url.ts'
+import { AdvisorDefinitionStore } from './advisor/advisor-definition-store.ts'
 import { PiExtensionStore } from './extension/pi-extension-store.ts'
 import { PiDevPackageService } from './extension/pi-dev-package-service.ts'
 import { createSessionExportHtml } from './export/session-export-html.ts'
@@ -41,16 +44,19 @@ import { testProviderConnection } from './provider/provider-connection-test.ts'
 import { ProjectStore } from './project/project-store.ts'
 import { searchProjectPaths } from './project/project-path-search.ts'
 import { readSessionStatistics } from './project/session-statistics.ts'
-import { readSessionMessages } from './project/session-transcript.ts'
+import { readSessionActivityAt, readSessionMessages } from './project/session-transcript.ts'
 import { LinuxLocalRuntime, probePiRpc } from './runtime/linux-local-runtime.ts'
 import { generateSessionNameWithPi } from './runtime/session-name-generator.ts'
 import { errorMessage } from './utils/errors.ts'
 import { PiProjectTrust } from './security/pi-project-trust.ts'
+import { SubagentDefinitionStore } from './subagent/subagent-definition-store.ts'
 import {
   isAllowedRendererUrl,
   resolveRendererTarget,
   type RendererTarget
 } from './security/renderer-security.ts'
+
+const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
 let mainWindow: BrowserWindow | null = null
 let kernel: WorkbenchKernel | null = null
@@ -70,7 +76,7 @@ async function createMainWindow(rendererTarget: RendererTarget): Promise<void> {
     minHeight: 560,
     autoHideMenuBar: true,
     webPreferences: {
-      preload: join(__dirname, '../preload/index.cjs'),
+      preload: join(mainBundleDirectory, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false
     }
@@ -135,7 +141,7 @@ async function startApplication(): Promise<void> {
     isPackaged: app.isPackaged,
     electronViteMode: process.env.NODE_ENV_ELECTRON_VITE,
     rendererUrl: process.env.ELECTRON_RENDERER_URL,
-    rendererFilePath: join(__dirname, '../renderer/index.html')
+    rendererFilePath: join(mainBundleDirectory, '../renderer/index.html')
   })
   const projectStore = new ProjectStore()
   const general = await projectStore.loadGeneral()
@@ -155,6 +161,8 @@ async function startApplication(): Promise<void> {
     piExecutablePath: process.env.PI_GUI_PI_EXECUTABLE,
     fetch: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init)
   })
+  const subagentDefinitionStore = new SubagentDefinitionStore()
+  const advisorDefinitionStore = new AdvisorDefinitionStore()
   let subagentPackageEnabled = isSubagentPackageEnabled(await piDevPackageService.list())
   const refreshSubagentPackageEnabled = async (): Promise<void> => {
     subagentPackageEnabled = isSubagentPackageEnabled(await piDevPackageService.list())
@@ -187,6 +195,7 @@ async function startApplication(): Promise<void> {
         explicitExecutable: process.env.PI_GUI_PI_EXECUTABLE,
         sessionFile: launchOptions.sessionFile,
         projectTrust: launchOptions.projectTrust,
+        fastExtensionLoading: launchOptions.fastExtensionLoading,
         ...(subagentPackageEnabled ? { subagent: launchOptions.subagent } : {})
       }),
     projectRegistry,
@@ -206,7 +215,7 @@ async function startApplication(): Promise<void> {
       restoreArchivedSession: (projectPath, sessionKey) =>
         projectStore.restoreArchivedSession(projectPath, sessionKey),
       validateSession: (pointer) => projectStore.validateSession(pointer),
-      readSessionActivityAt: (pointer) => projectStore.sessionActivityAt(pointer.sessionFile),
+      readSessionActivityAt,
       readSessionStatistics,
       readSessionMessages,
       persistProjectOrder: (projectKeys) => projectStore.reorderProjects(projectKeys),
@@ -298,6 +307,18 @@ async function startApplication(): Promise<void> {
         const result = await kernel.forkSession(command.entryId)
         return { state: kernel.getState(), ...result }
       }
+      case 'kernel.get-message-image':
+        return kernel.getMessageImage(
+          command.sessionKey,
+          command.messageId,
+          command.attachmentIndex
+        )
+      case 'kernel.get-tool-image':
+        return kernel.getToolImage(
+          command.sessionKey,
+          command.toolCallId,
+          command.contentIndex
+        )
       case 'kernel.export-session': {
         const preparation = await kernel.prepareSessionExport()
         const options = {
@@ -385,6 +406,56 @@ async function startApplication(): Promise<void> {
         )
         subagentPackageEnabled = isSubagentPackageEnabled(packages)
         return packages
+      }
+      case 'kernel.set-magic-context-enabled':
+        return piDevPackageService.setExtensionEnabled(
+          `npm:${MAGIC_CONTEXT_PACKAGE_NAME}`,
+          command.enabled
+        )
+      case 'kernel.set-advisor-system-enabled':
+        await kernel.setAdvisorSystemEnabled(command.enabled)
+        return kernel.getState()
+      case 'kernel.set-advisor-extension-enabled': {
+        const matches = (await piDevPackageService.list()).filter(({ source }) =>
+          isAdvisorPackageSource(source)
+        )
+        if (matches.length !== 1) {
+          throw new Error('Advisor package extension source must resolve uniquely.')
+        }
+        return piDevPackageService.setExtensionEnabled(matches[0]!.source, command.enabled)
+      }
+      case 'kernel.list-advisor-definitions': {
+        const projectPath = await activeProjectPath(kernel, projectStore)
+        return advisorDefinitionStore.list(projectPath)
+      }
+      case 'kernel.save-advisor-definition': {
+        const projectPath = await activeProjectPath(kernel, projectStore)
+        return advisorDefinitionStore.save(projectPath, command.definition)
+      }
+      case 'kernel.remove-advisor-definition': {
+        const projectPath = await activeProjectPath(kernel, projectStore)
+        return advisorDefinitionStore.remove(projectPath, command.slug, command.scope)
+      }
+      case 'kernel.list-subagent-definitions': {
+        const projectPath = await activeProjectPath(kernel, projectStore)
+        return subagentDefinitionStore.list(projectPath)
+      }
+      case 'kernel.save-subagent-definition': {
+        const projectPath = await activeProjectPath(kernel, projectStore)
+        return subagentDefinitionStore.save(projectPath, command.definition)
+      }
+      case 'kernel.set-subagent-definition-enabled': {
+        const projectPath = await activeProjectPath(kernel, projectStore)
+        return subagentDefinitionStore.setEnabled(
+          projectPath,
+          command.id,
+          command.scope,
+          command.enabled
+        )
+      }
+      case 'kernel.remove-subagent-definition': {
+        const projectPath = await activeProjectPath(kernel, projectStore)
+        return subagentDefinitionStore.remove(projectPath, command.id)
       }
       case 'kernel.update-pi-package':
         await piDevPackageService.update(command.source)
@@ -659,6 +730,20 @@ function configuredProject(state: {
   return project
 }
 
+async function activeProjectPath(
+  activeKernel: WorkbenchKernel,
+  projectStore: ProjectStore
+): Promise<string | null> {
+  const state = activeKernel.getState()
+  if (state.activeProjectKey === null) return null
+  const project = configuredProject(state)
+  const canonicalPath = await projectStore.validateProjectPath(project.path)
+  if (canonicalPath !== project.path) {
+    throw new Error(`Active project path no longer resolves canonically: ${project.path}`)
+  }
+  return canonicalPath
+}
+
 function sessionExportFileName(title: string | null): string {
   const base = (title ?? '')
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
@@ -698,4 +783,22 @@ function isSubagentPackageEnabled(
 function isSubagentPackageSource(source: string): boolean {
   const base = `npm:${SUBAGENT_PACKAGE_NAME}`
   return source === base || source.startsWith(`${base}@`)
+}
+
+function isAdvisorPackageSource(source: string): boolean {
+  if (source === 'pi-gui-multi-advisor') return true
+  if (/^npm:pi-gui-multi-advisor(?:@[^/]+)?$/u.test(source)) return true
+  if (!isLocalPackageSource(source)) return false
+  const normalized = source.replace(/[\\/]+$/u, '')
+  return normalized.length > 0 && basename(normalized) === 'pi-gui-multi-advisor'
+}
+
+function isLocalPackageSource(source: string): boolean {
+  return source.startsWith('/') ||
+    source.startsWith('./') ||
+    source.startsWith('../') ||
+    source.startsWith('~/') ||
+    source.startsWith('\\\\') ||
+    /^[a-z]:[\\/]/iu.test(source) ||
+    (!/^[a-z][a-z0-9+.-]*:/iu.test(source) && /[\\/]/u.test(source))
 }

@@ -115,7 +115,12 @@ type ProjectConfigFileV9 = {
   shortcuts: ShortcutSettings
 }
 
-type ProjectConfigFile = {
+type LegacySubagentSettingsV10 = {
+  maxDepth: 1 | 2 | 3
+  preventCycles: boolean
+}
+
+type ProjectConfigFileV10 = {
   version: 10
   projects: Array<{ path: string }>
   activeProjectKey: string | null
@@ -123,7 +128,23 @@ type ProjectConfigFile = {
   appearance: AppearanceSettings
   general: GeneralSettings
   shortcuts: ShortcutSettings
+  subagent: LegacySubagentSettingsV10
+}
+
+type ProjectConfigFileV11 = {
+  version: 11
+  projects: Array<{ path: string }>
+  activeProjectKey: string | null
+  sessionNaming: SessionNamingSettings
+  appearance: AppearanceSettings
+  general: Pick<GeneralSettings, 'startupWorkspaceRestore' | 'doubleClickBorderMaximize'>
+  shortcuts: ShortcutSettings
   subagent: SubagentSettings
+}
+
+type ProjectConfigFile = Omit<ProjectConfigFileV11, 'version' | 'general'> & {
+  version: 12
+  general: GeneralSettings
 }
 
 export type ProjectRegistry = {
@@ -359,6 +380,29 @@ export class ProjectStore {
     if (isProjectConfigFile(value)) {
       return copyConfiguration(value)
     }
+    if (isProjectConfigFileV11(value)) {
+      return {
+        ...copyRegistry(value),
+        sessionNaming: copySessionNaming(value.sessionNaming),
+        appearance: copyAppearance(value.appearance),
+        general: {
+          ...copyGeneralV11(value.general),
+          fastExtensionLoading: DEFAULT_GENERAL_SETTINGS.fastExtensionLoading
+        },
+        shortcuts: copyShortcutSettings(value.shortcuts),
+        subagent: copySubagent(value.subagent)
+      }
+    }
+    if (isProjectConfigFileV10(value)) {
+      return {
+        ...copyRegistry(value),
+        sessionNaming: copySessionNaming(value.sessionNaming),
+        appearance: copyAppearance(value.appearance),
+        general: requireGeneral(value.general),
+        shortcuts: copyShortcutSettings(value.shortcuts),
+        subagent: { maxDepth: value.subagent.maxDepth }
+      }
+    }
     if (isProjectConfigFileV9(value)) {
       return {
         ...copyRegistry(value),
@@ -498,16 +542,6 @@ export class ProjectStore {
     }
     await access(canonicalSessionFile, constants.R_OK)
     return { ...pointer, sessionFile: canonicalSessionFile }
-  }
-
-  async sessionActivityAt(sessionFile: string): Promise<number | null> {
-    assertAbsolute(sessionFile, 'Session file')
-    try {
-      const sessionStat = await stat(sessionFile)
-      return sessionStat.isFile() ? sessionStat.mtimeMs : null
-    } catch {
-      return null
-    }
   }
 
   saveSession(pointer: SessionPointer): Promise<void> {
@@ -781,7 +815,7 @@ function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
   if (
     !isRecord(value) ||
     Object.keys(value).length !== 8 ||
-    value.version !== 10 ||
+    value.version !== 12 ||
     !Array.isArray(value.projects) ||
     !value.projects.every(isProject) ||
     new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
@@ -791,6 +825,46 @@ function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
     !acceptsGeneral(value.general) ||
     !isShortcutSettings(value.shortcuts) ||
     !isSubagent(value.subagent)
+  ) {
+    return false
+  }
+  return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
+}
+
+function isProjectConfigFileV11(value: unknown): value is ProjectConfigFileV11 {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 8 ||
+    value.version !== 11 ||
+    !Array.isArray(value.projects) ||
+    !value.projects.every(isProject) ||
+    new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
+    (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
+    !isSessionNaming(value.sessionNaming) ||
+    !isAppearance(value.appearance) ||
+    !isGeneralV11(value.general) ||
+    !isShortcutSettings(value.shortcuts) ||
+    !isSubagent(value.subagent)
+  ) {
+    return false
+  }
+  return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
+}
+
+function isProjectConfigFileV10(value: unknown): value is ProjectConfigFileV10 {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 8 ||
+    value.version !== 10 ||
+    !Array.isArray(value.projects) ||
+    !value.projects.every(isProject) ||
+    new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
+    (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
+    !isSessionNaming(value.sessionNaming) ||
+    !isAppearance(value.appearance) ||
+    !acceptsGeneral(value.general) ||
+    !isShortcutSettings(value.shortcuts) ||
+    !isLegacySubagentV10(value.subagent)
   ) {
     return false
   }
@@ -852,7 +926,7 @@ function isProjectConfigFileV4(value: unknown): value is ProjectConfigFileV4 {
 
 function toProjectConfigFile(configuration: ProjectConfiguration): ProjectConfigFile {
   return {
-    version: 10,
+    version: 12,
     projects: configuration.projects.map((project) => ({ ...project })),
     activeProjectKey: configuration.activeProjectKey,
     sessionNaming: copySessionNaming(configuration.sessionNaming),
@@ -901,14 +975,23 @@ function copyAppearance(settings: AppearanceSettings): AppearanceSettings {
 function copyGeneral(settings: GeneralSettings): GeneralSettings {
   return {
     startupWorkspaceRestore: settings.startupWorkspaceRestore,
+    doubleClickBorderMaximize: settings.doubleClickBorderMaximize,
+    fastExtensionLoading: settings.fastExtensionLoading
+  }
+}
+
+function copyGeneralV11(
+  settings: Pick<GeneralSettings, 'startupWorkspaceRestore' | 'doubleClickBorderMaximize'>
+): Pick<GeneralSettings, 'startupWorkspaceRestore' | 'doubleClickBorderMaximize'> {
+  return {
+    startupWorkspaceRestore: settings.startupWorkspaceRestore,
     doubleClickBorderMaximize: settings.doubleClickBorderMaximize
   }
 }
 
 function copySubagent(settings: SubagentSettings): SubagentSettings {
   return {
-    maxDepth: settings.maxDepth,
-    preventCycles: settings.preventCycles
+    maxDepth: settings.maxDepth
   }
 }
 
@@ -917,6 +1000,12 @@ function assertSubagent(value: SubagentSettings): void {
 }
 
 function isSubagent(value: unknown): value is SubagentSettings {
+  return isRecord(value) &&
+    Object.keys(value).length === 1 &&
+    (value.maxDepth === 1 || value.maxDepth === 2 || value.maxDepth === 3)
+}
+
+function isLegacySubagentV10(value: unknown): value is LegacySubagentSettingsV10 {
   return isRecord(value) &&
     Object.keys(value).length === 2 &&
     (value.maxDepth === 1 || value.maxDepth === 2 || value.maxDepth === 3) &&
@@ -932,6 +1021,16 @@ function assertGeneral(value: GeneralSettings): void {
 }
 
 function isGeneral(value: unknown): value is GeneralSettings {
+  return isRecord(value) &&
+    Object.keys(value).length === 3 &&
+    (value.startupWorkspaceRestore === 'restore' || value.startupWorkspaceRestore === 'none') &&
+    typeof value.doubleClickBorderMaximize === 'boolean' &&
+    typeof value.fastExtensionLoading === 'boolean'
+}
+
+function isGeneralV11(
+  value: unknown
+): value is Pick<GeneralSettings, 'startupWorkspaceRestore' | 'doubleClickBorderMaximize'> {
   return isRecord(value) &&
     Object.keys(value).length === 2 &&
     (value.startupWorkspaceRestore === 'restore' || value.startupWorkspaceRestore === 'none') &&
@@ -961,19 +1060,27 @@ function isLegacyGeneralWithBorderFlag(value: unknown): value is LegacyGeneralWi
 
 function normalizeGeneral(value: unknown): GeneralSettings | null {
   if (isGeneral(value)) return copyGeneral(value)
+  if (isGeneralV11(value)) {
+    return {
+      ...copyGeneralV11(value),
+      fastExtensionLoading: DEFAULT_GENERAL_SETTINGS.fastExtensionLoading
+    }
+  }
   if (isLegacyGeneralWithBorderFlag(value)) {
     const enabled = value.doubleClickBorderAction === undefined
       ? Boolean(value.doubleClickBorderFullscreen)
       : value.doubleClickBorderAction !== 'off'
     return {
       startupWorkspaceRestore: value.startupWorkspaceRestore,
-      doubleClickBorderMaximize: enabled
+      doubleClickBorderMaximize: enabled,
+      fastExtensionLoading: DEFAULT_GENERAL_SETTINGS.fastExtensionLoading
     }
   }
   if (isLegacyGeneral(value)) {
     return {
       startupWorkspaceRestore: value.startupWorkspaceRestore,
-      doubleClickBorderMaximize: DEFAULT_GENERAL_SETTINGS.doubleClickBorderMaximize
+      doubleClickBorderMaximize: DEFAULT_GENERAL_SETTINGS.doubleClickBorderMaximize,
+      fastExtensionLoading: DEFAULT_GENERAL_SETTINGS.fastExtensionLoading
     }
   }
   return null

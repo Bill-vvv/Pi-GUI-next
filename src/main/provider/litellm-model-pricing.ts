@@ -30,16 +30,12 @@ export async function fetchLiteLlmModelPricing(
     const matches: KernelModelPricingFetchResult['matches'] = []
     const missingModelIds: string[] = []
     for (const modelId of modelIds) {
-      const modelKey = resolveModelKey(value, providerId, modelId)
-      if (modelKey === null) {
+      const match = resolvePricingMatch(value, providerId, modelId)
+      if (match === null) {
         missingModelIds.push(modelId)
         continue
       }
-      matches.push({
-        modelId,
-        modelKey,
-        pricing: parsePricing(value[modelKey], modelKey)
-      })
+      matches.push({ modelId, ...match })
     }
 
     return {
@@ -55,36 +51,61 @@ export async function fetchLiteLlmModelPricing(
   }
 }
 
-function resolveModelKey(value: JsonObject, providerId: string, modelId: string): string | null {
+function resolvePricingMatch(
+  value: JsonObject,
+  providerId: string,
+  modelId: string
+): { modelKey: string; pricing: KernelModelPricing } | null {
+  for (const modelKey of pricingCandidateKeys(value, providerId, modelId)) {
+    const pricing = tryParsePricing(value[modelKey], modelKey)
+    if (pricing !== null) return { modelKey, pricing }
+  }
+  return null
+}
+
+function pricingCandidateKeys(value: JsonObject, providerId: string, modelId: string): string[] {
   const keys = Object.keys(value)
-  const exactModelId = exactKey(keys, modelId)
-  if (exactModelId !== null) return exactModelId
-
-  const providerModelId = `${providerId}/${modelId}`
-  const exactProviderModelId = exactKey(keys, providerModelId)
-  if (exactProviderModelId !== null) return exactProviderModelId
-
-  const suffix = `/${modelId}`.toLowerCase()
   const providerIdLower = providerId.toLowerCase()
-  const candidates = keys.filter((key) => key.toLowerCase().endsWith(suffix))
-  if (candidates.length === 0) return null
-  const providerCandidates = candidates.filter((key) => {
+  const exactCandidates = [
+    exactKey(keys, modelId),
+    exactKey(keys, `${providerId}/${modelId}`)
+  ].filter((key): key is string => key !== null)
+  const suffix = `/${modelId}`.toLowerCase()
+  const suffixCandidates = keys.filter((key) => key.toLowerCase().endsWith(suffix))
+  const providerCandidates: string[] = []
+  const otherCandidates: string[] = []
+
+  for (const key of suffixCandidates) {
     const pricing = value[key]
-    return (
+    const matchesProvider =
       key.toLowerCase().startsWith(`${providerIdLower}/`) ||
       (
         isRecord(pricing) &&
         typeof pricing.litellm_provider === 'string' &&
         pricing.litellm_provider.toLowerCase() === providerIdLower
       )
-    )
-  })
-  return (providerCandidates.length > 0 ? providerCandidates : candidates).sort()[0] ?? null
+    if (matchesProvider) providerCandidates.push(key)
+    else otherCandidates.push(key)
+  }
+
+  return [...new Set([
+    ...exactCandidates,
+    ...providerCandidates.sort(),
+    ...otherCandidates.sort()
+  ])]
 }
 
 function exactKey(keys: readonly string[], candidate: string): string | null {
   const candidateLower = candidate.toLowerCase()
   return keys.find((key) => key.toLowerCase() === candidateLower) ?? null
+}
+
+function tryParsePricing(value: unknown, modelKey: string): KernelModelPricing | null {
+  try {
+    return parsePricing(value, modelKey)
+  } catch {
+    return null
+  }
 }
 
 function parsePricing(value: unknown, modelKey: string): KernelModelPricing {

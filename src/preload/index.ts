@@ -12,6 +12,7 @@ import {
   WINDOW_TOGGLE_FULLSCREEN_CHANNEL,
   WINDOW_TOGGLE_MAXIMIZE_CHANNEL,
   type KernelApi,
+  type KernelAdvisorConfiguration,
   type KernelArchiveResult,
   type KernelCommand,
   type KernelEvent,
@@ -20,6 +21,7 @@ import {
   type KernelForkCandidate,
   type KernelForkResult,
   type KernelPiDevCatalog,
+  type KernelMessageImage,
   type KernelPromptAttachment,
   type KernelProjectPathSearchResult,
   type KernelProviderConfig,
@@ -28,7 +30,8 @@ import {
   type KernelProviderTestResult,
   type KernelSessionExportResult,
   type KernelSessionPreview,
-  type KernelState
+  type KernelState,
+  type KernelSubagentDefinition
 } from '../shared/kernel-contract'
 
 const kernelApi: KernelApi = {
@@ -108,6 +111,26 @@ const kernelApi: KernelApi = {
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelSessionExportResult>
   },
+  getMessageImage: (sessionKey, messageId, attachmentIndex) => {
+    const command: KernelCommand = {
+      type: 'kernel.get-message-image',
+      sessionKey,
+      messageId,
+      attachmentIndex
+    }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMessageImage>
+  },
+  getToolImage: (sessionKey, toolCallId, contentIndex) => {
+    const command: KernelCommand = {
+      type: 'kernel.get-tool-image',
+      sessionKey,
+      toolCallId,
+      contentIndex
+    }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMessageImage>
+  },
   searchProjectPaths: (query) => {
     const command: KernelCommand = { type: 'kernel.search-project-paths', query }
 
@@ -160,6 +183,70 @@ const kernelApi: KernelApi = {
     }
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelInstalledPackage[]>
+  },
+  setMagicContextEnabled: (enabled) => {
+    const command: KernelCommand = {
+      type: 'kernel.set-magic-context-enabled',
+      enabled
+    }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelInstalledPackage[]>
+  },
+  setAdvisorSystemEnabled: (enabled) => {
+    const command: KernelCommand = {
+      type: 'kernel.set-advisor-system-enabled',
+      enabled
+    }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelState>
+  },
+  setAdvisorExtensionEnabled: (enabled) => {
+    const command: KernelCommand = {
+      type: 'kernel.set-advisor-extension-enabled',
+      enabled
+    }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelInstalledPackage[]>
+  },
+  listAdvisorDefinitions: () => {
+    const command: KernelCommand = { type: 'kernel.list-advisor-definitions' }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelAdvisorConfiguration>
+  },
+  saveAdvisorDefinition: (definition) => {
+    const command: KernelCommand = { type: 'kernel.save-advisor-definition', definition }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelAdvisorConfiguration>
+  },
+  removeAdvisorDefinition: (slug, scope) => {
+    const command: KernelCommand = { type: 'kernel.remove-advisor-definition', slug, scope }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelAdvisorConfiguration>
+  },
+  listSubagentDefinitions: () => {
+    const command: KernelCommand = { type: 'kernel.list-subagent-definitions' }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelSubagentDefinition[]>
+  },
+  saveSubagentDefinition: (definition) => {
+    const command: KernelCommand = { type: 'kernel.save-subagent-definition', definition }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelSubagentDefinition[]>
+  },
+  setSubagentDefinitionEnabled: (id, scope, enabled) => {
+    const command: KernelCommand = {
+      type: 'kernel.set-subagent-definition-enabled',
+      id,
+      scope,
+      enabled
+    }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelSubagentDefinition[]>
+  },
+  removeSubagentDefinition: (id) => {
+    const command: KernelCommand = { type: 'kernel.remove-subagent-definition', id }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelSubagentDefinition[]>
   },
   updatePiPackage: (source) => {
     const command: KernelCommand = { type: 'kernel.update-pi-package', source }

@@ -35,6 +35,19 @@ const ABORT_PROMPT =
   'Use the bash tool to run exactly `for i in $(seq 1 60); do sleep 1; done`, and wait for it to finish.'
 const CONTINUATION_PROMPT = 'Reply briefly that this recovered conversation can continue.'
 const SECOND_SESSION_PROMPT = 'Reply briefly that this second release-verification conversation is ready.'
+const S19_MARKERS = [
+  ['s19-alpha.txt', 'alpha'],
+  ['s19-beta.txt', 'beta'],
+  ['s19-gamma.txt', 'gamma']
+]
+const S19_PROMPT = [
+  'Use the subagent tool exactly once with one parallel invocation containing exactly three independent tasks.',
+  'Every task must use agent "worker"; do not use Oracle, Advisor, planner, scout, reviewer, or explorer. The workers must not edit any file.',
+  'Task 1: MUST first call bash with the exact command sleep 45; do not skip it. Then read s19-alpha.txt and return only its one-word value.',
+  'Task 2: MUST first call bash with the exact command sleep 45; do not skip it. Then read s19-beta.txt and return only its one-word value.',
+  'Task 3: MUST first call bash with the exact command sleep 45; do not skip it. Then read s19-gamma.txt and return only its one-word value.',
+  'Set concurrency to 3 and wait for all three tasks before replying. Do not perform the tasks yourself.'
+].join('\n')
 const STARTED_AT = new Date().toISOString()
 const RUN_STAMP = STARTED_AT.replaceAll(':', '-').replaceAll('.', '-')
 const TIMEOUT = {
@@ -59,6 +72,7 @@ let piExecutable = null
 let runtimeElectronVersion = null
 let projectPaths = []
 const steps = []
+const screenshotFiles = []
 const processTotals = { stdoutChars: 0, stderrChars: 0 }
 const p2Summary = {
   projects: { configured: 0, discovered: 0, switched: false },
@@ -77,6 +91,17 @@ const p2Summary = {
     switchFeedbackObserved: false,
     parallelRuntimes: false
   }
+}
+const s19Summary = {
+  parallelParticipants: 0,
+  agents: [],
+  observedLive: false,
+  escapePriority: false,
+  liveToCompleted: false,
+  wideLayout: false,
+  narrowLayout: false,
+  focusRestoration: { close: false, back: false, escape: false },
+  reducedMotion: false
 }
 
 class VerificationError extends Error {
@@ -130,7 +155,8 @@ async function preflight() {
   if (
     typeof packageJson?.version !== 'string' ||
     typeof packageJson?.engines?.node !== 'string' ||
-    typeof packageJson?.devDependencies?.electron !== 'string'
+    typeof packageJson?.devDependencies?.electron !== 'string' ||
+    typeof packageJson?.build?.appId !== 'string'
   ) {
     fail('E_PACKAGE_METADATA')
   }
@@ -209,6 +235,9 @@ async function prepareRun() {
   )
   temporaryRoot = resolve(temporaryRoot)
   projectPaths = [join(temporaryRoot, 'project'), join(temporaryRoot, 'project-secondary')]
+  await Promise.all(S19_MARKERS.map(([name, value]) =>
+    writeFile(join(projectPaths[0], name), `${value}\n`, { mode: 0o600, flag: 'wx' })
+  ))
   p2Summary.projects.configured = projectPaths.length
 }
 
@@ -227,7 +256,14 @@ async function exerciseUi() {
 
   await runStep('launch', async () => {
     ;({ app: activeApp, cdp: activeCdp } = await launchApp())
-    await waitForSelector(activeCdp, '.composer-start-action', TIMEOUT.page)
+    await waitForExpression(
+      activeCdp,
+      `window.piGui.getState().then((state) =>
+        state.runtime.status !== 'stopped' || document.querySelector('.composer-start-action') !== null
+      )`,
+      TIMEOUT.page,
+      'E_LAUNCH_SURFACE'
+    )
   })
 
   await runStep('runtime_identity', async () => {
@@ -260,7 +296,11 @@ async function exerciseUi() {
   })
 
   await runStep('pi_probe_ready', async () => {
-    await clickSelector(activeCdp, '.composer-start-action')
+    const startRequired = await evaluateValue(
+      activeCdp,
+      `document.querySelector('.composer-start-action') !== null`
+    )
+    if (startRequired) await clickSelector(activeCdp, '.composer-start-action')
     await waitForRuntime(activeCdp, 'ready', TIMEOUT.ready)
     const runtimeIdentity = await evaluateValue(
       activeCdp,
@@ -731,6 +771,236 @@ async function exerciseUi() {
     await captureScreenshot(activeCdp, 'p2-workbench.png')
   })
 
+  await runStep('s19_subagent_detail', async () => {
+    await setAppWindowSize(activeApp, activeCdp, 1600, 1000)
+    await submitPrompt(activeCdp, S19_PROMPT)
+
+    let liveRun = null
+    await waitForCondition(async () => {
+      liveRun = await latestParallelSubagentRun(activeCdp)
+      return liveRun?.runtime === 'running' && liveRun.toolStatus === 'running' &&
+        liveRun.participants.length === 3 &&
+        liveRun.participants.every((participant) =>
+          participant.agent === 'worker' && participant.status === 'running'
+        )
+    }, TIMEOUT.turn, 'E_S19_PARALLEL_LIVE')
+    s19Summary.parallelParticipants = liveRun.participants.length
+    s19Summary.agents = [...new Set(liveRun.participants.map((participant) => participant.agent))]
+    s19Summary.observedLive = true
+
+    await clickSelector(activeCdp, '.live-process-status-summary')
+    await waitForExpression(
+      activeCdp,
+      `document.querySelector('.live-process-status[open]') !== null`,
+      TIMEOUT.page,
+      'E_S19_LIVE_PROCESS_EXPAND'
+    )
+    const compactToolGroup = await evaluateValue(
+      activeCdp,
+      `document.querySelector('.tool-group-summary-row') !== null && document.querySelectorAll('button.subagent-run-chip').length < 3`
+    )
+    if (compactToolGroup) {
+      await clickSelector(activeCdp, '.tool-group-summary-row')
+      await waitForExpression(
+        activeCdp,
+        `document.querySelector('.tool-group-details[open]') !== null`,
+        TIMEOUT.page,
+        'E_S19_TOOL_GROUP_EXPAND'
+      )
+    }
+    await waitForExpression(
+      activeCdp,
+      `document.querySelectorAll('button.subagent-run-chip').length >= 3`,
+      TIMEOUT.page,
+      'E_S19_CAPSULES'
+    )
+
+    const first = {
+      toolCallId: liveRun.toolCallId,
+      participantIndex: liveRun.participants[0].index
+    }
+    const second = {
+      toolCallId: liveRun.toolCallId,
+      participantIndex: liveRun.participants[1].index
+    }
+    const third = {
+      toolCallId: liveRun.toolCallId,
+      participantIndex: liveRun.participants[2].index
+    }
+
+    await openSubagentParticipant(activeCdp, first)
+    const wideLayout = await evaluateValue(
+      activeCdp,
+      `(() => {
+        const shell = document.querySelector('.subagent-detail-shell')
+        const main = document.querySelector('.main-chat')
+        const detail = document.querySelector('.subagent-task-detail')
+        const sidebar = document.querySelector('.sidebar')
+        if (!(shell instanceof HTMLElement) || !(main instanceof HTMLElement) ||
+            !(detail instanceof HTMLElement) || !(sidebar instanceof HTMLElement)) return null
+        const mainRect = main.getBoundingClientRect()
+        const detailRect = detail.getBoundingClientRect()
+        return {
+          width: window.innerWidth,
+          shellOpen: shell.classList.contains('is-open'),
+          mainDisplay: getComputedStyle(main).display,
+          mainWidth: Math.round(mainRect.width),
+          detailWidth: Math.round(detailRect.width),
+          detailAfterMain: detailRect.left >= mainRect.right - 1,
+          selectedCount: document.querySelectorAll('.subagent-run-chip[aria-pressed="true"]').length
+        }
+      })()`
+    )
+    if (!wideLayout || wideLayout.width < 1280 || !wideLayout.shellOpen ||
+        wideLayout.mainDisplay !== 'grid' || wideLayout.mainWidth < 640 ||
+        wideLayout.detailWidth < 320 || !wideLayout.detailAfterMain ||
+        wideLayout.selectedCount !== 1) {
+      fail('E_S19_WIDE_LAYOUT')
+    }
+    s19Summary.wideLayout = true
+    await captureScreenshot(activeCdp, 's19-wide-live.png')
+
+    const abortBeforeEscape = (await conversationCounts(activeCdp)).abortedMessages
+    await dispatchKey(activeCdp, 'Escape', 'Escape')
+    await waitForExpression(
+      activeCdp,
+      `document.querySelector('.subagent-task-detail') === null`,
+      TIMEOUT.page,
+      'E_S19_ESCAPE_CLOSE'
+    )
+    await waitForSubagentFocus(activeCdp, first, 'E_S19_ESCAPE_FOCUS')
+    const afterEscape = await evaluateValue(
+      activeCdp,
+      `window.piGui.getState().then((state) => ({
+        runtime: state.runtime.status,
+        aborted: state.conversation.entries.filter((entry) =>
+          entry.kind === 'message' && entry.stopReason === 'aborted'
+        ).length
+      }))`
+    )
+    if (!afterEscape || afterEscape.runtime !== 'running' || afterEscape.aborted !== abortBeforeEscape) {
+      fail('E_S19_ESCAPE_ABORTED')
+    }
+    s19Summary.escapePriority = true
+
+    await openSubagentParticipant(activeCdp, first)
+    let completedRun = null
+    await waitForCondition(async () => {
+      completedRun = await latestParallelSubagentRun(activeCdp)
+      return completedRun?.toolCallId === first.toolCallId && completedRun.runtime === 'ready' &&
+        completedRun.participants.length === 3 &&
+        completedRun.participants.every((participant) =>
+          participant.status === 'completed' && participant.hasFinalOutput
+        )
+    }, TIMEOUT.turn, 'E_S19_COMPLETION')
+    const completedFirstSelector = subagentParticipantSelector(first)
+    await waitForExpression(
+      activeCdp,
+      `document.querySelector('.subagent-task-detail') !== null &&
+       document.querySelectorAll('.subagent-run-chip[aria-pressed="true"]').length === 1 &&
+       document.querySelector(${JSON.stringify(completedFirstSelector)})?.getAttribute('aria-pressed') === 'true'`,
+      TIMEOUT.page,
+      'E_S19_COMPLETED_DETAIL'
+    )
+    s19Summary.liveToCompleted = true
+    await captureScreenshot(activeCdp, 's19-wide-completed.png')
+
+    await clickSelector(activeCdp, '.subagent-task-detail-close')
+    await waitForExpression(
+      activeCdp,
+      `document.querySelector('.subagent-task-detail') === null`,
+      TIMEOUT.page,
+      'E_S19_CLOSE'
+    )
+    await waitForSubagentFocus(activeCdp, first, 'E_S19_CLOSE_FOCUS')
+    s19Summary.focusRestoration.close = true
+
+    await setAppWindowSize(activeApp, activeCdp, 1100, 900)
+    await openSubagentParticipant(activeCdp, second)
+    const narrowLayout = await evaluateValue(
+      activeCdp,
+      `(() => {
+        const main = document.querySelector('.main-chat')
+        const detail = document.querySelector('.subagent-task-detail')
+        const sidebar = document.querySelector('.sidebar')
+        const back = document.querySelector('.subagent-task-detail-back')
+        const close = document.querySelector('.subagent-task-detail-close')
+        if (!(main instanceof HTMLElement) || !(detail instanceof HTMLElement) ||
+            !(sidebar instanceof HTMLElement) || !(back instanceof HTMLElement) ||
+            !(close instanceof HTMLElement)) return null
+        return {
+          width: window.innerWidth,
+          mainDisplay: getComputedStyle(main).display,
+          detailWidth: Math.round(detail.getBoundingClientRect().width),
+          sidebarWidth: Math.round(sidebar.getBoundingClientRect().width),
+          backDisplay: getComputedStyle(back).display,
+          closeDisplay: getComputedStyle(close).display
+        }
+      })()`
+    )
+    if (!narrowLayout || narrowLayout.width >= 1280 || narrowLayout.mainDisplay !== 'none' ||
+        narrowLayout.detailWidth < 600 || narrowLayout.sidebarWidth < 280 ||
+        narrowLayout.backDisplay === 'none' || narrowLayout.closeDisplay !== 'none') {
+      fail('E_S19_NARROW_LAYOUT')
+    }
+    s19Summary.narrowLayout = true
+    await captureScreenshot(activeCdp, 's19-narrow-completed.png')
+
+    await clickSelector(activeCdp, '.subagent-task-detail-back')
+    await waitForExpression(
+      activeCdp,
+      `document.querySelector('.subagent-task-detail') === null`,
+      TIMEOUT.page,
+      'E_S19_BACK'
+    )
+    await waitForSubagentFocus(activeCdp, second, 'E_S19_BACK_FOCUS')
+    s19Summary.focusRestoration.back = true
+
+    await openSubagentParticipant(activeCdp, third)
+    await dispatchKey(activeCdp, 'Escape', 'Escape')
+    await waitForExpression(
+      activeCdp,
+      `document.querySelector('.subagent-task-detail') === null`,
+      TIMEOUT.page,
+      'E_S19_NARROW_ESCAPE'
+    )
+    await waitForSubagentFocus(activeCdp, third, 'E_S19_NARROW_ESCAPE_FOCUS')
+    s19Summary.focusRestoration.escape = true
+
+    await setAppWindowSize(activeApp, activeCdp, 1600, 1000)
+    await openSubagentParticipant(activeCdp, first)
+    await activeCdp.send('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-reduced-motion', value: 'reduce' }]
+    })
+    const reducedMotion = await evaluateValue(
+      activeCdp,
+      `(() => {
+        const shell = document.querySelector('.subagent-detail-shell')
+        const chip = document.querySelector('.subagent-run-chip[aria-pressed="true"]')
+        if (!(shell instanceof HTMLElement) || !(chip instanceof HTMLElement)) return null
+        return {
+          matches: matchMedia('(prefers-reduced-motion: reduce)').matches,
+          shellTransitionDuration: getComputedStyle(shell).transitionDuration,
+          chipTransitionDuration: getComputedStyle(chip).transitionDuration,
+          chipAnimationDuration: getComputedStyle(chip).animationDuration,
+          scrollBehavior: getComputedStyle(document.documentElement).scrollBehavior
+        }
+      })()`
+    )
+    const nearZeroDuration = (value) => typeof value === 'string' &&
+      value.split(',').every((part) => Number.parseFloat(part) <= 0.001)
+    if (!reducedMotion || !reducedMotion.matches ||
+        !nearZeroDuration(reducedMotion.shellTransitionDuration) ||
+        !nearZeroDuration(reducedMotion.chipTransitionDuration) ||
+        !nearZeroDuration(reducedMotion.chipAnimationDuration) ||
+        reducedMotion.scrollBehavior !== 'auto') {
+      fail('E_S19_REDUCED_MOTION')
+    }
+    s19Summary.reducedMotion = true
+    await clickSelector(activeCdp, '.subagent-task-detail-close')
+    await activeCdp.send('Emulation.setEmulatedMedia', { features: [] })
+  })
+
   await runStep('final_close', async () => {
     await closeApp(activeApp, activeCdp)
     activeApp = null
@@ -753,6 +1023,7 @@ async function runStep(name, operation) {
 
 async function launchApp() {
   const port = await reservePort()
+  const existingWindowIds = await niriWindowIds()
   const child = spawn(artifactPath, [`--remote-debugging-port=${port}`], {
     cwd: REPO_ROOT,
     env: xdgEnvironment(),
@@ -790,6 +1061,7 @@ async function launchApp() {
     const cdp = await CdpClient.connect(target.webSocketDebuggerUrl)
     await cdp.send('Page.enable')
     await cdp.send('Runtime.enable')
+    app.windowId = await waitForNewNiriWindow(existingWindowIds, TIMEOUT.page)
     return { app, cdp }
   } catch {
     await terminateApp(app)
@@ -972,6 +1244,121 @@ async function selectedTitledButton(cdp, selector) {
     `document.querySelector(${JSON.stringify(`${selector}[aria-current="true"]`)})?.getAttribute('title') ?? null`
   )
   return typeof title === 'string' && title.length > 0 ? title : null
+}
+
+async function latestParallelSubagentRun(cdp) {
+  return evaluateValue(
+    cdp,
+    `window.piGui.getState().then((state) => {
+      const runs = state.conversation.entries
+        .filter((entry) => entry.kind === 'tool' && entry.toolName === 'subagent' && entry.subagentRun?.mode === 'parallel')
+        .map((entry) => ({
+          toolCallId: entry.toolCallId,
+          toolStatus: entry.status,
+          runtime: state.runtime.status,
+          participants: entry.subagentRun.participants.map((participant) => ({
+            index: participant.index,
+            agent: participant.agent,
+            status: participant.status,
+            hasFinalOutput: typeof participant.finalOutput === 'string' && participant.finalOutput.length > 0
+          }))
+        }))
+      return runs.at(-1) ?? null
+    })`
+  )
+}
+
+function subagentParticipantSelector(locator) {
+  return `.subagent-run-chip[data-subagent-tool-call-id=${JSON.stringify(locator.toolCallId)}][data-subagent-participant-index=${JSON.stringify(String(locator.participantIndex))}]`
+}
+
+async function openSubagentParticipant(cdp, locator) {
+  const selector = subagentParticipantSelector(locator)
+  await waitForSelector(cdp, selector, TIMEOUT.page)
+  await clickSelector(cdp, selector)
+  await waitForExpression(
+    cdp,
+    `document.querySelector('.subagent-task-detail') !== null &&
+     document.querySelector(${JSON.stringify(selector)})?.getAttribute('aria-pressed') === 'true'`,
+    TIMEOUT.page,
+    'E_S19_DETAIL_OPEN'
+  )
+}
+
+async function waitForSubagentFocus(cdp, locator, code) {
+  const selector = subagentParticipantSelector(locator)
+  await waitForExpression(
+    cdp,
+    `(() => {
+      const active = document.activeElement
+      return active instanceof HTMLButtonElement && active.matches(${JSON.stringify(selector)})
+    })()`,
+    TIMEOUT.page,
+    code
+  )
+}
+
+async function niriWindowIds() {
+  let output
+  try {
+    ;({ stdout: output } = await execFileAsync('niri', ['msg', '--json', 'windows'], {
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024
+    }))
+  } catch {
+    fail('E_NIRI_WINDOWS')
+  }
+  let windows
+  try {
+    windows = JSON.parse(output)
+  } catch {
+    fail('E_NIRI_WINDOWS')
+  }
+  if (!Array.isArray(windows)) fail('E_NIRI_WINDOWS')
+  return new Set(windows.map((window) => window?.id).filter(Number.isInteger))
+}
+
+async function waitForNewNiriWindow(existingWindowIds, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    let output
+    try {
+      ;({ stdout: output } = await execFileAsync('niri', ['msg', '--json', 'windows'], {
+        encoding: 'utf8',
+        maxBuffer: 1024 * 1024
+      }))
+      const windows = JSON.parse(output)
+      const window = Array.isArray(windows)
+        ? windows.find((candidate) =>
+          Number.isInteger(candidate?.id) &&
+          !existingWindowIds.has(candidate.id) &&
+          candidate.app_id === packageJson.build.appId
+        )
+        : null
+      if (window) return window.id
+    } catch {
+      // Niri may not publish the new surface during the first few renderer frames.
+    }
+    await delay(100)
+  }
+  fail('E_NIRI_WINDOW')
+}
+
+async function setAppWindowSize(app, cdp, width, height) {
+  if (!Number.isInteger(app?.windowId)) fail('E_NIRI_WINDOW')
+  try {
+    await execFileAsync('niri', ['msg', 'action', 'focus-window', '--id', String(app.windowId)])
+    await execFileAsync('niri', ['msg', 'action', 'set-window-width', '--id', String(app.windowId), String(width)])
+    await execFileAsync('niri', ['msg', 'action', 'set-window-height', '--id', String(app.windowId), String(height)])
+  } catch {
+    fail('E_NIRI_WINDOW_SIZE')
+  }
+  await waitForExpression(
+    cdp,
+    `window.innerWidth === ${width} && window.innerHeight === ${height}`,
+    TIMEOUT.page,
+    'E_NIRI_WINDOW_SIZE'
+  )
 }
 
 async function focusComposer(cdp) {
@@ -1181,7 +1568,10 @@ async function captureScreenshot(cdp, filename) {
         .process-thinking-detail,
         .process-tool-detail,
         .tool-file-tooltip,
-        .connection-status-warning {
+        .connection-status-warning,
+        .subagent-task-detail-activity dd,
+        .subagent-task-final-output,
+        .subagent-task-detail-error {
           visibility: hidden !important;
         }
         .chat-message.user::after,
@@ -1192,13 +1582,23 @@ async function captureScreenshot(cdp, filename) {
           visibility: visible;
         }
         .chronological-activity-text,
-        .process-step-text {
+        .process-step-text,
+        .subagent-run-chip-label,
+        .subagent-task-detail-heading h2 {
           font-size: 0 !important;
         }
         .chronological-activity-text::after,
         .process-step-text::after {
           content: '步骤内容已脱敏';
           font-size: 12px;
+        }
+        .subagent-run-chip-label::after {
+          content: 'Subagent';
+          font-size: 12px;
+        }
+        .subagent-task-detail-heading h2::after {
+          content: '任务已脱敏';
+          font-size: 14px;
         }
         .session-title,
         .workbench-session-title,
@@ -1229,6 +1629,7 @@ async function captureScreenshot(cdp, filename) {
       mode: 0o600,
       flag: 'wx'
     })
+    screenshotFiles.push(filename)
   } finally {
     await evaluateValue(
       cdp,
@@ -1543,8 +1944,8 @@ async function writeReport(status, error) {
   if (reportDirectory === null) return
   const report = {
     schemaVersion: 2,
-    verification: 'P2/S13 AppImage real UI',
-    phase: 'P2',
+    verification: 'P2/S13/S19 AppImage real UI',
+    phase: 'P2/S19',
     status,
     timestamps: {
       startedAt: STARTED_AT,
@@ -1561,16 +1962,10 @@ async function writeReport(status, error) {
     system: await osIdentity(),
     processOutputCounts: { ...processTotals },
     p2Summary,
+    s19Summary,
     evidence: {
       screenshotTextRedacted: true,
-      screenshots: [
-        'ready-tool.png',
-        'abort-settled.png',
-        'crashed.png',
-        'resumed.png',
-        'reopened-resumed.png',
-        'p2-workbench.png'
-      ]
+      screenshots: [...screenshotFiles]
     },
     steps,
     error

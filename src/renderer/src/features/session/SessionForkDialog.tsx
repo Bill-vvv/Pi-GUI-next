@@ -9,6 +9,7 @@ type SessionForkDialogProps = {
   loading: boolean
   error: string | null
   submitting: boolean
+  preferredUserText?: string | null
   onCancel: () => void
   onRetry: () => void
   onSubmit: (entryId: string) => Promise<void>
@@ -19,6 +20,7 @@ export function SessionForkDialog({
   loading,
   error,
   submitting,
+  preferredUserText = null,
   onCancel,
   onRetry,
   onSubmit
@@ -38,12 +40,18 @@ export function SessionForkDialog({
       setSelectedEntryId(null)
       return
     }
-    setSelectedEntryId((current) =>
-      current !== null && candidates.some(({ entryId }) => entryId === current)
-        ? current
-        : candidates[0].entryId
-    )
-  }, [candidates])
+    setSelectedEntryId((current) => {
+      if (current !== null && candidates.some(({ entryId }) => entryId === current)) {
+        return current
+      }
+      const preferred = preferredUserText?.trim() ?? ''
+      if (preferred.length > 0) {
+        const match = candidates.find((candidate) => candidate.text === preferred)
+        if (match !== undefined) return match.entryId
+      }
+      return candidates[0]!.entryId
+    })
+  }, [candidates, preferredUserText])
 
   useEffect(() => {
     previousFocusRef.current = document.activeElement instanceof HTMLElement
@@ -134,7 +142,11 @@ export function SessionForkDialog({
                   key={candidate.entryId}
                 >
                   <input
-                    ref={index === 0 ? firstCandidateRef : undefined}
+                    ref={
+                      (selectedEntryId === null ? index === 0 : candidate.entryId === selectedEntryId)
+                        ? firstCandidateRef
+                        : undefined
+                    }
                     type="radio"
                     name="session-fork-candidate"
                     value={candidate.entryId}

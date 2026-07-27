@@ -19,16 +19,19 @@ import {
 test('builds the typed GUI and Pi RPC command catalog', () => {
   const catalog = createCommandCatalog()
 
-  assert.deepEqual(catalog.map(({ id, name, source }) => ({ id, name, source })), [
-    { id: NEW_SESSION_COMMAND_ID, name: 'new', source: 'gui' },
-    { id: FORK_SESSION_COMMAND_ID, name: 'fork', source: 'gui' },
-    { id: EXPORT_SESSION_COMMAND_ID, name: 'export', source: 'gui' },
-    { id: COPY_LAST_ANSWER_COMMAND_ID, name: 'copy', source: 'gui' },
-    { id: SET_MODEL_COMMAND_ID, name: 'model', source: 'pi-rpc' },
-    { id: SET_THINKING_COMMAND_ID, name: 'thinking', source: 'pi-rpc' },
-    { id: COMPACT_COMMAND_ID, name: 'compact', source: 'pi-rpc' },
-    { id: SET_SESSION_NAME_COMMAND_ID, name: 'name', source: 'pi-rpc' }
-  ])
+  assert.deepEqual(
+    catalog.map(({ id, name, source, sourceInfo }) => ({ id, name, source, sourceInfo })),
+    [
+      { id: NEW_SESSION_COMMAND_ID, name: 'new', source: 'gui', sourceInfo: null },
+      { id: FORK_SESSION_COMMAND_ID, name: 'fork', source: 'gui', sourceInfo: null },
+      { id: EXPORT_SESSION_COMMAND_ID, name: 'export', source: 'gui', sourceInfo: null },
+      { id: COPY_LAST_ANSWER_COMMAND_ID, name: 'copy', source: 'gui', sourceInfo: null },
+      { id: SET_MODEL_COMMAND_ID, name: 'model', source: 'pi-rpc', sourceInfo: null },
+      { id: SET_THINKING_COMMAND_ID, name: 'thinking', source: 'pi-rpc', sourceInfo: null },
+      { id: COMPACT_COMMAND_ID, name: 'compact', source: 'pi-rpc', sourceInfo: null },
+      { id: SET_SESSION_NAME_COMMAND_ID, name: 'name', source: 'pi-rpc', sourceInfo: null }
+    ]
+  )
 })
 
 test('adds reload only when a persisted ready session makes it available', () => {
@@ -40,17 +43,38 @@ test('adds reload only when a persisted ready session makes it available', () =>
       name: 'reload',
       description: '重新加载当前已持久化 Session',
       source: 'gui',
-      argumentHint: null
+      argumentHint: null,
+      sourceInfo: null
     }
   )
 })
 
 test('normalizes dynamic commands and keeps typed names authoritative', () => {
+  const reviewSourceInfo = { source: 'review-extension', scope: 'project', origin: 'top-level' } as const
   const catalog = createCommandCatalog([
-    { name: 'review', description: 'Review changes', source: 'extension' },
-    { name: 'review', description: 'Prompt collision', source: 'prompt' },
-    { name: 'MODEL', description: 'Builtin collision', source: 'skill' },
-    { name: 'skill:deploy', source: 'skill' }
+    {
+      name: 'review',
+      description: 'Review changes',
+      source: 'extension',
+      sourceInfo: reviewSourceInfo
+    },
+    {
+      name: 'review',
+      description: 'Prompt collision',
+      source: 'prompt',
+      sourceInfo: { source: 'review', scope: 'user', origin: 'package' }
+    },
+    {
+      name: 'MODEL',
+      description: 'Builtin collision',
+      source: 'skill',
+      sourceInfo: { source: 'model', scope: 'temporary', origin: 'top-level' }
+    },
+    {
+      name: 'skill:deploy',
+      source: 'skill',
+      sourceInfo: { source: 'deploy', scope: 'user', origin: 'package' }
+    }
   ])
 
   assert.deepEqual(catalog.slice(8), [
@@ -59,14 +83,17 @@ test('normalizes dynamic commands and keeps typed names authoritative', () => {
       name: 'review',
       description: 'Review changes',
       source: 'extension',
-      argumentHint: '[arguments]'
+      argumentHint: '[arguments]',
+      sourceInfo: reviewSourceInfo
     },
     {
       id: 'pi-command:skill:skill:deploy',
       name: 'skill:deploy',
       description: 'Pi Skill',
       source: 'skill',
-      argumentHint: '[arguments]'
+      argumentHint: '[arguments]',
+      sourceInfo: { source: 'deploy', scope: 'user', origin: 'package' }
     }
   ])
+  assert.notStrictEqual(catalog[8]?.sourceInfo, reviewSourceInfo)
 })

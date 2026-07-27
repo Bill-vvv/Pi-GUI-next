@@ -1,8 +1,17 @@
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent
+} from 'react'
 
 import type {
   AppearanceSettings,
   GeneralSettings,
+  KernelAdvisorConfiguration,
+  KernelAdvisorDefinitionInput,
+  KernelAdvisorEditableScope,
   KernelExtensionSelectionKind,
   KernelForkCandidate,
   KernelInstalledPackage,
@@ -19,6 +28,9 @@ import type {
   KernelProviderTestResult,
   KernelSessionPreview,
   KernelState,
+  KernelSubagentDefinition,
+  KernelSubagentEditableScope,
+  KernelSubagentDefinitionInput,
   SessionNamingSettings,
   SubagentSettings,
   ShortcutSettings,
@@ -43,15 +55,31 @@ import {
   sessionTitle
 } from '../features/project/ProjectNavigator'
 import { SessionForkDialog } from '../features/session/SessionForkDialog'
-import { SettingsPanel, type SettingsSection } from '../features/settings/SettingsPanel'
+import { SettingsPanel } from '../features/settings/SettingsPanel'
+import {
+  SettingsNavigation,
+  type SettingsSection
+} from '../features/settings/SettingsNavigation'
+import { useSettingsWorkspace } from '../features/settings/settings-workspace'
 import { Timeline } from '../features/chat/Timeline'
+import { SubagentTaskDetail } from '../features/chat/SubagentTaskDetail'
+import {
+  matchesSubagentTaskTrigger,
+  reconcileSubagentTaskSelection,
+  resolveSubagentTaskSelection,
+  SUBAGENT_TASK_TRIGGER_SELECTOR,
+  subagentTaskSelectionKey,
+  workbenchConversationIdentity,
+  type SubagentTaskSelection,
+  type SubagentTaskTarget
+} from '../features/chat/subagent-task-detail-model'
 import { ProjectTrustDialog } from '../features/trust/ProjectTrustDialog'
 import {
   DEFAULT_TOOL_DISPLAY_DENSITY,
   isToolDisplayDensity,
   type ToolDisplayDensity
 } from '../tool-display-density'
-import '../styles/chat.css'
+import { currentTurnTodos } from '../todo-state'
 
 const TOOL_DISPLAY_DENSITY_STORAGE_KEY = 'pi-workbench.tool-display-density'
 const PINNED_PROJECTS_STORAGE_KEY = 'pi-workbench.pinned-projects'
@@ -78,6 +106,7 @@ type WorkbenchProps = {
   forkCandidatesLoading: boolean
   forkError: string | null
   forkSubmitting: boolean
+  forkPreferredUserText: string | null
   onAddProject: () => Promise<void>
   onActivateProject: (projectKey: string) => Promise<void>
   onStartSession: () => Promise<void>
@@ -95,11 +124,12 @@ type WorkbenchProps = {
   onPreviewSession: (sessionKey: string) => Promise<void>
   onClearSessionPreview: () => void
   onClearArchivedSessionPreview: () => void
-  onOpenForkDialog: () => void
+  onOpenForkDialog: (preferredUserText?: string) => void
   onCloseForkDialog: () => void
   onRetryForkCandidates: () => void
   onForkSession: (entryId: string) => Promise<void>
   onExportSession: () => Promise<void>
+  onCopyAnswer: (text: string) => Promise<void>
   onCopyLastAnswer: () => Promise<void>
   onArchiveSession: (sessionKey: string) => Promise<void>
   onReorderProjects: (projectKeys: string[]) => Promise<void>
@@ -148,6 +178,27 @@ type WorkbenchProps = {
   onSetSessionNaming: (settings: SessionNamingSettings) => Promise<void>
   onSetGeneral: (settings: GeneralSettings) => Promise<void>
   onSetSubagentEnabled: (enabled: boolean) => Promise<void>
+  onSetMagicContextEnabled: (enabled: boolean) => Promise<void>
+  onSetAdvisorSystemEnabled: (enabled: boolean) => Promise<void>
+  onSetAdvisorExtensionEnabled: (enabled: boolean) => Promise<void>
+  onListAdvisorDefinitions: () => Promise<KernelAdvisorConfiguration>
+  onSaveAdvisorDefinition: (
+    definition: KernelAdvisorDefinitionInput
+  ) => Promise<KernelAdvisorConfiguration>
+  onRemoveAdvisorDefinition: (
+    slug: string,
+    scope: KernelAdvisorEditableScope
+  ) => Promise<KernelAdvisorConfiguration>
+  onListSubagentDefinitions: () => Promise<KernelSubagentDefinition[]>
+  onSaveSubagentDefinition: (
+    definition: KernelSubagentDefinitionInput
+  ) => Promise<KernelSubagentDefinition[]>
+  onSetSubagentDefinitionEnabled: (
+    id: string,
+    scope: KernelSubagentEditableScope,
+    enabled: boolean
+  ) => Promise<KernelSubagentDefinition[]>
+  onRemoveSubagentDefinition: (id: string) => Promise<KernelSubagentDefinition[]>
   onSetSubagent: (settings: SubagentSettings) => Promise<void>
   onSetAppearance: (settings: AppearanceSettings) => Promise<void>
   onSetShortcuts: (settings: ShortcutSettings) => Promise<void>
@@ -172,6 +223,7 @@ export function Workbench({
   forkCandidatesLoading,
   forkError,
   forkSubmitting,
+  forkPreferredUserText,
   onAddProject,
   onActivateProject,
   onStartSession,
@@ -188,6 +240,7 @@ export function Workbench({
   onRetryForkCandidates,
   onForkSession,
   onExportSession,
+  onCopyAnswer,
   onCopyLastAnswer,
   onArchiveSession,
   onReorderProjects,
@@ -224,6 +277,16 @@ export function Workbench({
   onSetSessionNaming,
   onSetGeneral,
   onSetSubagentEnabled,
+  onSetMagicContextEnabled,
+  onSetAdvisorSystemEnabled,
+  onSetAdvisorExtensionEnabled,
+  onListAdvisorDefinitions,
+  onSaveAdvisorDefinition,
+  onRemoveAdvisorDefinition,
+  onListSubagentDefinitions,
+  onSaveSubagentDefinition,
+  onSetSubagentDefinitionEnabled,
+  onRemoveSubagentDefinition,
   onSetSubagent,
   onSetAppearance,
   onSetShortcuts
@@ -231,11 +294,20 @@ export function Workbench({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => window.matchMedia('(max-width: 700px)').matches
   )
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
+  const {
+    settingsOpen,
+    settingsSection,
+    openSettings,
+    requestSectionChange,
+    requestCloseSettings,
+    onDirtyChange,
+    onActiveOperationChange
+  } = useSettingsWorkspace()
   const [shortcutRecording, setShortcutRecording] = useState(false)
   const [composerControlRequest, setComposerControlRequest] =
     useState<ComposerControlRequest | null>(null)
+  const [subagentTaskSelection, setSubagentTaskSelection] =
+    useState<SubagentTaskSelection | null>(null)
   const [toolDisplayDensity, setToolDisplayDensity] = useState<ToolDisplayDensity>(() => {
     const stored = window.localStorage.getItem(TOOL_DISPLAY_DENSITY_STORAGE_KEY)
     return isToolDisplayDensity(stored) ? stored : DEFAULT_TOOL_DISPLAY_DENSITY
@@ -261,9 +333,24 @@ export function Workbench({
     conversation
   } = state
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
+  const mainChatRef = useRef<HTMLElement>(null)
+  const subagentTaskDetailRef = useRef<HTMLElement>(null)
   const restoreSettingsFocusRef = useRef(false)
   const settingsActionRef = useRef<string | null>(null)
   const composerControlRevisionRef = useRef(0)
+  const closeSubagentTaskDetail = useCallback((restoreFocus: boolean) => {
+    const selection = subagentTaskSelection
+    setSubagentTaskSelection(null)
+    if (!restoreFocus) return
+    requestAnimationFrame(() => {
+      const mainChat = mainChatRef.current
+      const trigger = mainChat === null || selection === null
+        ? null
+        : findSubagentTaskTrigger(mainChat, selection)
+      if (trigger !== null) trigger.focus()
+      else mainChat?.focus()
+    })
+  }, [subagentTaskSelection])
   useEffect(() => {
     if (settingsOpen || !restoreSettingsFocusRef.current) return
     restoreSettingsFocusRef.current = false
@@ -280,8 +367,13 @@ export function Workbench({
         hasVisibleShortcutBlockingSurface()
       ) return
       if (settingsOpen && event.key === 'Escape') {
-        restoreSettingsFocusRef.current = true
-        setSettingsOpen(false)
+        if (requestCloseSettings()) restoreSettingsFocusRef.current = true
+        event.preventDefault()
+        event.stopPropagation()
+        return
+      }
+      if (subagentTaskSelection !== null && event.key === 'Escape') {
+        closeSubagentTaskDetail(true)
         event.preventDefault()
         event.stopPropagation()
         return
@@ -296,8 +388,8 @@ export function Workbench({
       event.preventDefault()
       event.stopPropagation()
     }
-    window.addEventListener('keydown', handleShortcut)
-    return () => window.removeEventListener('keydown', handleShortcut)
+    window.addEventListener('keydown', handleShortcut, { capture: true })
+    return () => window.removeEventListener('keydown', handleShortcut, { capture: true })
   })
   const doubleClickBorderMaximize = state.general.doubleClickBorderMaximize !== false
   const handleWindowEdgeDoubleClick = (event: ReactMouseEvent<HTMLDivElement>): void => {
@@ -340,6 +432,59 @@ export function Workbench({
         viewingInactiveSession ? { entries: [], activeRunStartIndex: null } : conversation
       )
   )
+  const displayedTodos = currentTurnTodos(displayedConversation.entries)
+  const displayedConversationIdentity = workbenchConversationIdentity({
+    activeProjectKey,
+    displayedSessionKey,
+    viewingNewSession,
+    archivedSessionKey: archivedSessionPreview?.sessionKey ?? null
+  })
+  const reconciledSubagentTaskSelection = settingsOpen
+    ? null
+    : reconcileSubagentTaskSelection(
+        displayedConversation.entries,
+        displayedConversationIdentity,
+        subagentTaskSelection
+      )
+  const selectedSubagentTask = resolveSubagentTaskSelection(
+    displayedConversation.entries,
+    displayedConversationIdentity,
+    reconciledSubagentTaskSelection
+  )
+  const selectedSubagentTaskKey = reconciledSubagentTaskSelection === null
+    ? null
+    : subagentTaskSelectionKey(reconciledSubagentTaskSelection)
+  const openSubagentTaskDetail = useCallback((
+    target: SubagentTaskTarget,
+    _trigger: HTMLButtonElement
+  ): void => {
+    setSubagentTaskSelection({
+      conversationIdentity: displayedConversationIdentity,
+      ...target
+    })
+  }, [displayedConversationIdentity])
+  useEffect(() => {
+    if (subagentTaskSelection === null) return
+    if (
+      settingsOpen ||
+      subagentTaskSelection.conversationIdentity !== displayedConversationIdentity
+    ) {
+      setSubagentTaskSelection(null)
+      return
+    }
+    if (reconciledSubagentTaskSelection !== null) return
+    setSubagentTaskSelection(null)
+    requestAnimationFrame(() => mainChatRef.current?.focus())
+  }, [
+    displayedConversationIdentity,
+    reconciledSubagentTaskSelection,
+    settingsOpen,
+    subagentTaskSelection
+  ])
+  useEffect(() => {
+    if (selectedSubagentTaskKey === null) return
+    subagentTaskDetailRef.current?.focus()
+  }, [selectedSubagentTaskKey])
   const canForkSession =
     !viewingArchivedSession &&
     sessionPreview === null &&
@@ -375,7 +520,7 @@ export function Workbench({
         : pendingAction === null &&
           completedAction?.action === 'copy-last-answer' &&
           completedAction.succeeded
-          ? '已复制最后一条回答'
+          ? '已复制回答'
           : null
   const contextActionStatus = sessionPreviewPending
     ? '正在读取对话…'
@@ -474,12 +619,12 @@ export function Workbench({
     if (actionId === 'open-settings') {
       if (viewingArchivedSession) onClearArchivedSessionPreview()
       setSidebarCollapsed(false)
-      setSettingsOpen(true)
+      openSettings()
       return true
     }
     if (actionId === 'new-session') {
       if (!canStartSession) return false
-      setSettingsOpen(false)
+      if (settingsOpen && !requestCloseSettings()) return false
       void onStartSession().catch(() => undefined)
       return true
     }
@@ -493,7 +638,7 @@ export function Workbench({
         activeProject === null ||
         (displayedStatus !== 'ready' && displayedStatus !== 'running')
       ) return false
-      setSettingsOpen(false)
+      if (settingsOpen && !requestCloseSettings()) return false
       requestComposerControl('focus')
       return true
     }
@@ -506,7 +651,7 @@ export function Workbench({
         (!viewingNewSession && activeSessionKey === null) ||
         runtime.status !== 'ready'
       ) return false
-      setSettingsOpen(false)
+      if (settingsOpen && !requestCloseSettings()) return false
       requestComposerControl('open-model-picker')
       return true
     }
@@ -565,7 +710,7 @@ export function Workbench({
     return true
   }
   return (
-    <main className={`app-shell${sidebarCollapsed ? ' left-sidebar-collapsed' : ''}${settingsOpen ? ' settings-open' : ''}`}>
+    <main className={`app-shell${sidebarCollapsed ? ' left-sidebar-collapsed' : ''}${settingsOpen ? ' settings-open' : ''}${selectedSubagentTask === null ? '' : ' subagent-detail-open'}`}>
       {doubleClickBorderMaximize ? (
         <div className="window-edge-hit-layer" aria-hidden="true">
           <div className="window-edge-hit top" onDoubleClick={handleWindowEdgeDoubleClick} />
@@ -577,111 +722,13 @@ export function Workbench({
       <aside className="left-sidebar" aria-label={settingsOpen ? '设置导航' : '项目与对话'}>
         <div className={`sidebar-content${settingsOpen ? ' settings-sidebar-content' : ''}`}>
           {settingsOpen ? (
-            <>
-              <button
-                className="settings-back"
-                type="button"
-                onClick={() => {
-                  restoreSettingsFocusRef.current = true
-                  setSettingsOpen(false)
-                }}
-              >
-                <span aria-hidden="true">←</span>
-                <span>返回</span>
-              </button>
-              <nav className="settings-nav" aria-label="设置分类">
-                <button
-                  type="button"
-                  className={settingsSection === 'general' ? 'selected' : ''}
-                  aria-current={settingsSection === 'general' ? 'page' : undefined}
-                  onClick={() => setSettingsSection('general')}
-                >
-                  <Icon name="settings" />
-                  <span>常规</span>
-                </button>
-                <button
-                  type="button"
-                  className={settingsSection === 'models' ? 'selected' : ''}
-                  aria-current={settingsSection === 'models' ? 'page' : undefined}
-                  onClick={() => setSettingsSection('models')}
-                >
-                  <Icon name="model" />
-                  <span>模型</span>
-                </button>
-                <button
-                  type="button"
-                  className={settingsSection === 'credentials' ? 'selected' : ''}
-                  aria-current={settingsSection === 'credentials' ? 'page' : undefined}
-                  onClick={() => setSettingsSection('credentials')}
-                >
-                  <Icon name="preferences" />
-                  <span>凭证</span>
-                </button>
-                <button
-                  type="button"
-                  className={settingsSection === 'shortcuts' ? 'selected' : ''}
-                  aria-current={settingsSection === 'shortcuts' ? 'page' : undefined}
-                  onClick={() => setSettingsSection('shortcuts')}
-                >
-                  <Icon name="preferences" />
-                  <span>快捷键</span>
-                </button>
-                <button
-                  type="button"
-                  className={settingsSection === 'appearance' ? 'selected' : ''}
-                  aria-current={settingsSection === 'appearance' ? 'page' : undefined}
-                  onClick={() => setSettingsSection('appearance')}
-                >
-                  <Icon name="appearance" />
-                  <span>外观</span>
-                </button>
-                <button
-                  type="button"
-                  className={settingsSection === 'packages' ? 'selected' : ''}
-                  aria-current={settingsSection === 'packages' ? 'page' : undefined}
-                  onClick={() => setSettingsSection('packages')}
-                >
-                  <Icon name="packages" />
-                  <span>Package</span>
-                </button>
-                <button
-                  type="button"
-                  className={settingsSection === 'extensions' ? 'selected' : ''}
-                  aria-current={settingsSection === 'extensions' ? 'page' : undefined}
-                  onClick={() => setSettingsSection('extensions')}
-                >
-                  <Icon name="extensions" />
-                  <span>拓展</span>
-                </button>
-                <button
-                  type="button"
-                  className={settingsSection === 'subagent' ? 'selected' : ''}
-                  aria-current={settingsSection === 'subagent' ? 'page' : undefined}
-                  onClick={() => setSettingsSection('subagent')}
-                >
-                  <Icon name="subagents" />
-                  <span>Subagent</span>
-                </button>
-                <button
-                  type="button"
-                  className={settingsSection === 'skills' ? 'selected' : ''}
-                  aria-current={settingsSection === 'skills' ? 'page' : undefined}
-                  onClick={() => setSettingsSection('skills')}
-                >
-                  <Icon name="skills" />
-                  <span>技能</span>
-                </button>
-                <button
-                  type="button"
-                  className={settingsSection === 'preferences' ? 'selected' : ''}
-                  aria-current={settingsSection === 'preferences' ? 'page' : undefined}
-                  onClick={() => setSettingsSection('preferences')}
-                >
-                  <Icon name="preferences" />
-                  <span>偏好</span>
-                </button>
-              </nav>
-            </>
+            <SettingsNavigation
+              section={settingsSection}
+              onSectionChange={requestSectionChange}
+              onBack={() => {
+                if (requestCloseSettings()) restoreSettingsFocusRef.current = true
+              }}
+            />
           ) : null}
           <ProjectNavigator
             hidden={settingsOpen}
@@ -718,15 +765,28 @@ export function Workbench({
               label="收起侧边栏"
               onClick={() => setSidebarCollapsed(true)}
             />
-            <IconButton
-              className="add-project-entry"
-              icon="plus"
-              iconSize="lg"
-              label="添加项目"
-              aria-busy={pendingAction === 'add-project' ? true : undefined}
-              disabled={!canChangeProjectOrSession}
-              onClick={() => void onAddProject().catch(() => undefined)}
-            />
+            {projects.length === 0 ? (
+              <button
+                className="add-project-entry add-project-empty-entry"
+                type="button"
+                aria-busy={pendingAction === 'add-project' ? true : undefined}
+                disabled={!canChangeProjectOrSession}
+                onClick={() => void onAddProject().catch(() => undefined)}
+              >
+                <Icon name="plus" size="control" />
+                <span>{pendingAction === 'add-project' ? '正在添加…' : '添加项目'}</span>
+              </button>
+            ) : (
+              <IconButton
+                className="add-project-entry"
+                icon="plus"
+                iconSize="lg"
+                label="添加项目"
+                aria-busy={pendingAction === 'add-project' ? true : undefined}
+                disabled={!canChangeProjectOrSession}
+                onClick={() => void onAddProject().catch(() => undefined)}
+              />
+            )}
             <IconButton
               ref={settingsButtonRef}
               className="sidebar-settings-toggle"
@@ -737,14 +797,19 @@ export function Workbench({
               onClick={() => {
                 if (viewingArchivedSession) onClearArchivedSessionPreview()
                 setSidebarCollapsed(false)
-                setSettingsOpen(true)
+                openSettings()
               }}
             />
           </footer>
         )}
       </aside>
 
-      <section className="main-chat" aria-label={`${projectName} 对话工作区`}>
+      <section
+        className="main-chat"
+        ref={mainChatRef}
+        tabIndex={-1}
+        aria-label={`${projectName} 对话工作区`}
+      >
         {sidebarCollapsed ? (
           <div className="left-sidebar-bottom-triggers">
             <IconButton
@@ -778,7 +843,7 @@ export function Workbench({
             onOpenExternal={onOpenExternal}
             onCreateSkill={async (prompt) => {
               await promptInDisplayedSession(prompt)
-              setSettingsOpen(false)
+              requestCloseSettings()
             }}
             onListProviders={onListProviders}
             onSaveProvider={onSaveProvider}
@@ -807,6 +872,22 @@ export function Workbench({
               settingsActionRef.current = 'set-subagent-enabled'
               return onSetSubagentEnabled(enabled)
             }}
+            onSetMagicContextEnabled={(enabled) => {
+              settingsActionRef.current = 'set-magic-context-enabled'
+              return onSetMagicContextEnabled(enabled)
+            }}
+            onSetAdvisorSystemEnabled={(enabled) => {
+              settingsActionRef.current = 'set-advisor-system-enabled'
+              return onSetAdvisorSystemEnabled(enabled)
+            }}
+            onSetAdvisorExtensionEnabled={onSetAdvisorExtensionEnabled}
+            onListAdvisorDefinitions={onListAdvisorDefinitions}
+            onSaveAdvisorDefinition={onSaveAdvisorDefinition}
+            onRemoveAdvisorDefinition={onRemoveAdvisorDefinition}
+            onListSubagentDefinitions={onListSubagentDefinitions}
+            onSaveSubagentDefinition={onSaveSubagentDefinition}
+            onSetSubagentDefinitionEnabled={onSetSubagentDefinitionEnabled}
+            onRemoveSubagentDefinition={onRemoveSubagentDefinition}
             onSetSubagent={(settings) => {
               settingsActionRef.current = 'set-subagent'
               return onSetSubagent(settings)
@@ -822,6 +903,8 @@ export function Workbench({
               setToolDisplayDensity(density)
               window.localStorage.setItem(TOOL_DISPLAY_DENSITY_STORAGE_KEY, density)
             }}
+            onDirtyChange={onDirtyChange}
+            onActiveOperationChange={onActiveOperationChange}
           />
         ) : (
           <>
@@ -858,7 +941,7 @@ export function Workbench({
         </header>
 
         <Timeline
-          key={`${activeProjectKey ?? 'no-project'}:${archivedSessionPreview !== null ? `archived:${archivedSessionPreview.sessionKey}` : viewingNewSession ? 'new-session' : displayedSessionKey ?? 'no-session'}`}
+          key={displayedConversationIdentity}
           entries={displayedConversation.entries}
           activeRunStartIndex={displayedConversation.activeRunStartIndex}
           runtimeStatus={viewingArchivedSession
@@ -874,15 +957,22 @@ export function Workbench({
           }
           showPromptNavigation={!sidebarCollapsed}
           toolDisplayDensity={toolDisplayDensity}
-          canCopyLastAnswer={canCopyLastAnswer}
+          sessionKey={
+            archivedSessionPreview?.sessionKey ??
+            sessionPreview?.sessionKey ??
+            displayedSessionKey
+          }
+          canCopyAnswers={canCopyLastAnswer}
           canExportSession={canExportSession}
           canForkSession={canForkSession}
           conversationActionBusy={busy}
           conversationActionStatus={conversationActionStatus}
           conversationActionError={conversationActionError}
-          onCopyLastAnswer={onCopyLastAnswer}
+          onCopyAnswer={onCopyAnswer}
           onExportSession={onExportSession}
-          onForkSession={onOpenForkDialog}
+          onForkTurn={onOpenForkDialog}
+          subagentTaskSelection={reconciledSubagentTaskSelection}
+          onOpenSubagentTask={openSubagentTaskDetail}
           warning={
             timelineActionError ??
             (!viewingArchivedSession && runtime.status === 'crashed'
@@ -903,6 +993,7 @@ export function Workbench({
           busy={busy}
           pendingAction={pendingAction}
           completedAction={completedAction}
+          todos={displayedTodos}
           onSelectPromptAttachments={onSelectPromptAttachments}
           onSearchProjectPaths={onSearchProjectPaths}
           onStartSession={onStartSession}
@@ -918,6 +1009,7 @@ export function Workbench({
             await onInvokeCommand(commandId, argument)
           }}
           onAbort={onAbort}
+          globalEscapeAbortEnabled={selectedSubagentTask === null}
           onSetModel={(provider, modelId) => {
             settingsActionRef.current = null
             return onSetModel(provider, modelId)
@@ -930,6 +1022,15 @@ export function Workbench({
           </>
         )}
       </section>
+
+      {selectedSubagentTask === null ? null : (
+        <SubagentTaskDetail
+          entry={selectedSubagentTask.entry}
+          participant={selectedSubagentTask.participant}
+          panelRef={subagentTaskDetailRef}
+          onClose={() => closeSubagentTaskDetail(true)}
+        />
+      )}
 
       {state.projectTrustRequest === null ? null : (
         <ProjectTrustDialog
@@ -944,6 +1045,7 @@ export function Workbench({
           loading={forkCandidatesLoading}
           error={forkError}
           submitting={forkSubmitting}
+          preferredUserText={forkPreferredUserText}
           onCancel={onCloseForkDialog}
           onRetry={onRetryForkCandidates}
           onSubmit={onForkSession}
@@ -977,6 +1079,8 @@ function settingsSectionForAction(action: string | null): SettingsSection | null
   if (action === 'set-general') return 'general'
   if (action === 'set-appearance') return 'appearance'
   if (action === 'set-model') return 'models'
+  if (action === 'set-magic-context-enabled') return 'extensions'
+  if (action === 'set-advisor-system-enabled') return 'advisor'
   if (action === 'set-subagent-enabled' || action === 'set-subagent') return 'subagent'
   if (action === 'set-session-naming') return 'preferences'
   return null
@@ -992,6 +1096,26 @@ function hasVisibleShortcutBlockingSurface(): boolean {
     const style = window.getComputedStyle(element)
     return style.visibility !== 'hidden' && style.display !== 'none'
   })
+}
+
+function findSubagentTaskTrigger(
+  root: HTMLElement,
+  selection: SubagentTaskSelection
+): HTMLButtonElement | null {
+  const candidates = [...root.querySelectorAll<HTMLButtonElement>(
+    SUBAGENT_TASK_TRIGGER_SELECTOR
+  )]
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const candidate = candidates[index]
+    if (candidate === undefined) continue
+    if (matchesSubagentTaskTrigger(selection, {
+      kind: candidate.dataset.subagentTaskKind ?? null,
+      toolCallId: candidate.dataset.subagentToolCallId ?? null,
+      participantIndex: candidate.dataset.subagentParticipantIndex ?? null,
+      noticeId: candidate.dataset.subagentNoticeId ?? null
+    })) return candidate
+  }
+  return null
 }
 
 function hasEditableShortcutTarget(event: KeyboardEvent): boolean {

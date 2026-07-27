@@ -96,6 +96,120 @@ export function stripPromptFileBlocks(message: string): string {
     : `${parsed.text}\n${references}`
 }
 
+const MESSAGE_IMAGE_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp'
+])
+const MAX_MESSAGE_IMAGE_BASE64_CHARS = 4.5 * 1024 * 1024
+
+export function findUserMessageForImageLookup(
+  messages: readonly unknown[],
+  messageId: string
+): unknown {
+  const history = /^message:history:(\d+):user$/u.exec(messageId)
+  if (history !== null) {
+    const index = Number(history[1])
+    if (!Number.isInteger(index) || index < 0 || index >= messages.length) {
+      throw new Error(`User message not found for ${messageId}.`)
+    }
+    const message = messages[index]
+    if (!isRecord(message) || message.role !== 'user') {
+      throw new Error(`User message not found for ${messageId}.`)
+    }
+    return message
+  }
+
+  const live = /^message:user:(\d+)$/u.exec(messageId)
+  if (live !== null) {
+    const timestamp = Number(live[1])
+    if (!Number.isFinite(timestamp)) {
+      throw new Error(`Unsupported message id for image lookup: ${messageId}`)
+    }
+    const matches = messages.filter((message) =>
+      isRecord(message) &&
+      message.role === 'user' &&
+      typeof message.timestamp === 'number' &&
+      message.timestamp === timestamp
+    )
+    if (matches.length !== 1) {
+      throw new Error(`User message not found for ${messageId}.`)
+    }
+    return matches[0]
+  }
+
+  throw new Error(`Unsupported message id for image lookup: ${messageId}`)
+}
+
+export function extractProjectedMessageImage(
+  message: unknown,
+  attachmentIndex: number
+): {
+  mimeType: string
+  data: string
+  name: string
+  path: string
+} {
+  if (!Number.isInteger(attachmentIndex) || attachmentIndex < 0) {
+    throw new Error('Message image attachment index is invalid.')
+  }
+  if (!isRecord(message) || message.role !== 'user') {
+    throw new Error('Message image lookup requires a user message.')
+  }
+
+  const display = projectPromptDisplay(message.content)
+  const attachment = display.attachments[attachmentIndex]
+  if (attachment === undefined || attachment.type !== 'image') {
+    throw new Error('Message does not contain an image attachment at the requested index.')
+  }
+
+  let imageOrdinal = 0
+  for (let index = 0; index < attachmentIndex; index += 1) {
+    if (display.attachments[index]?.type === 'image') imageOrdinal += 1
+  }
+
+  const images = collectPromptImages(message.content)
+  const image = images[imageOrdinal]
+  if (image === undefined) {
+    throw new Error('Session message is missing the projected image payload.')
+  }
+  if (!MESSAGE_IMAGE_MIME_TYPES.has(image.mimeType)) {
+    throw new Error(`Unsupported message image type: ${image.mimeType}`)
+  }
+  if (
+    image.data.length === 0 ||
+    image.data.length > MAX_MESSAGE_IMAGE_BASE64_CHARS ||
+    !isStrictBase64(image.data)
+  ) {
+    throw new Error('Session message image payload is invalid.')
+  }
+
+  return {
+    mimeType: image.mimeType,
+    data: image.data,
+    name: attachment.name,
+    path: attachment.path
+  }
+}
+
+function collectPromptImages(content: unknown): KernelPromptImage[] {
+  if (!Array.isArray(content)) return []
+  const images: KernelPromptImage[] = []
+  for (const item of content) {
+    if (isPromptImage(item)) images.push(item)
+  }
+  return images
+}
+
+function isStrictBase64(value: string): boolean {
+  if (
+    value.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)
+  ) return false
+  return Buffer.from(value, 'base64').toString('base64') === value
+}
+
 type ParsedFileBlock = {
   type: 'block'
   path: string
