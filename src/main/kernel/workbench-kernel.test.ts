@@ -4061,6 +4061,8 @@ test('activating a registered session preserves and reuses managed runtimes', as
   )
   const runtimes = [firstRuntime, secondRuntime]
   const launches: Array<{ sessionFile?: string }> = []
+  const persisted: SessionPointer[] = []
+  let rejectManagedPersistence = false
   const kernel = new WorkbenchKernel(
     (_project, launchOptions) => {
       launches.push(launchOptions)
@@ -4074,6 +4076,10 @@ test('activating a registered session preserves and reuses managed runtimes', as
       sessionRegistry: {
         sessions: [firstPointer, secondPointer],
         activeSessionKey: firstPointer.sessionFile
+      },
+      persistSession: async (pointer) => {
+        if (rejectManagedPersistence) throw new Error('persist active session failed')
+        persisted.push(pointer)
       }
     }
   )
@@ -4105,6 +4111,20 @@ test('activating a registered session preserves and reuses managed runtimes', as
   assert.equal(firstRuntime.startCalls, 1)
   assert.equal(secondRuntime.stopCalls, 0)
   secondRuntime.emit({ type: 'activity-settled' })
+  assert.deepEqual(persisted.map(({ sessionId }) => sessionId), [
+    firstPointer.sessionId,
+    secondPointer.sessionId,
+    firstPointer.sessionId
+  ])
+
+  rejectManagedPersistence = true
+  await assert.rejects(
+    kernel.activateSession(secondPointer.sessionFile),
+    /persist active session failed/
+  )
+  assert.equal(kernel.getState().activeSessionKey, firstPointer.sessionFile)
+  assert.equal(kernel.getState().session.id, firstPointer.sessionId)
+
   await assert.rejects(
     kernel.activateSession('/tmp/unregistered-session.jsonl'),
     /Session is not registered for the active project/

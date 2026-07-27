@@ -669,18 +669,22 @@ export class WorkbenchKernel {
     await this.beginLaunch(async () => {
       const project = configuredProject(this.state)
       const managed = this.contextBySessionKey.get(contextKey(project.path, sessionKey))
+      const storedPointer = this.sessionPointers.find(
+        (pointer) => pointer.projectPath === project.path && pointer.sessionFile === sessionKey
+      )
       const restartManaged = managed !== undefined &&
         managed === this.activeContext &&
         managed.state.runtime.status === 'crashed'
       if (managed !== undefined && !restartManaged) {
+        if (storedPointer !== undefined) {
+          await this.persistSession(storedPointer)
+          this.assertLaunchActive()
+        }
         this.captureActiveContext()
         this.loadContext(managed)
         this.emitState()
         return
       }
-      const storedPointer = this.sessionPointers.find(
-        (pointer) => pointer.projectPath === project.path && pointer.sessionFile === sessionKey
-      )
       if (storedPointer === undefined) {
         throw new Error(`Session is not registered for the active project: ${sessionKey}`)
       }
