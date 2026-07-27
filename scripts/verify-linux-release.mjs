@@ -26,6 +26,13 @@ import { spawn } from 'node:child_process'
 const execFileAsync = promisify(execFile)
 const SCRIPT_PATH = fileURLToPath(import.meta.url)
 const REPO_ROOT = dirname(dirname(SCRIPT_PATH))
+const VERIFY_LOCK_DIRECTORY = join(
+  tmpdir(),
+  `pi-gui-next-verify-linux-${typeof process.getuid === 'function' ? process.getuid() : 'user'}.lock`
+)
+const VERIFY_LOCK_OWNER_PATH = join(VERIFY_LOCK_DIRECTORY, 'owner.json')
+const VERIFY_ACTIVE_DEV_OVERRIDE = 'PI_GUI_VERIFY_ALLOW_ACTIVE_DEV'
+const NON_RUN_GUARD_CODES = new Set(['E_VERIFY_ALREADY_RUNNING', 'E_DEV_GUI_RUNNING'])
 const PI_VERSION = '0.80.10'
 const CWD_MARKER_NAME = '.pi-gui-s7-cwd-ok'
 const CWD_MARKER_CONTENT = 'pi-gui-s7-tool-ok'
@@ -69,6 +76,7 @@ const THINKING_LEVEL_LABELS = {
 }
 
 let stage = 'preflight'
+let verifierLockHeld = false
 let reportDirectory = null
 let temporaryRoot = null
 let activeApp = null
@@ -127,23 +135,121 @@ function fail(code) {
 
 async function main() {
   try {
+    await acquireVerifierLock()
+    await assertNoCanonicalDevelopmentGui()
     await preflight()
     await prepareRun()
     await exerciseUi()
     await writeReport('passed', null)
   } catch (error) {
+    const code = error instanceof VerificationError ? error.code : 'E_UNEXPECTED'
     await cleanupActiveApp()
-    await ensureReportDirectory().catch(() => undefined)
-    await writeReport('failed', {
-      stage,
-      code: error instanceof VerificationError ? error.code : 'E_UNEXPECTED'
-    }).catch(() => undefined)
+    if (!NON_RUN_GUARD_CODES.has(code)) {
+      await ensureReportDirectory().catch(() => undefined)
+      await writeReport('failed', { stage, code }).catch(() => undefined)
+    }
+    process.stderr.write(`[verify:linux] ${stage}: ${code}${failureHint(code)}\n`)
     process.exitCode = 1
   } finally {
     if (temporaryRoot !== null) {
       await rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined)
     }
+    await releaseVerifierLock()
   }
+}
+
+async function acquireVerifierLock() {
+  stage = 'preflight.verifier_lock'
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await mkdir(VERIFY_LOCK_DIRECTORY, { mode: 0o700 })
+      verifierLockHeld = true
+      await writeFile(
+        VERIFY_LOCK_OWNER_PATH,
+        `${JSON.stringify({ pid: process.pid, startedAt: STARTED_AT, script: SCRIPT_PATH })}\n`,
+        { mode: 0o600, flag: 'wx' }
+      )
+      return
+    } catch (error) {
+      if (verifierLockHeld) {
+        await releaseVerifierLock()
+        throw error
+      }
+      if (error?.code !== 'EEXIST') throw error
+      const owner = await readVerifierLockOwner()
+      if (owner !== null && await isVerifierProcess(owner.pid)) {
+        fail('E_VERIFY_ALREADY_RUNNING')
+      }
+      const lockAgeMs = await stat(VERIFY_LOCK_DIRECTORY)
+        .then((lockStat) => Date.now() - lockStat.mtimeMs)
+        .catch((statError) => statError?.code === 'ENOENT' ? null : Promise.reject(statError))
+      if (lockAgeMs === null) continue
+      if (owner === null && lockAgeMs < 30_000) fail('E_VERIFY_ALREADY_RUNNING')
+      await rm(VERIFY_LOCK_DIRECTORY, { recursive: true, force: true })
+    }
+  }
+  fail('E_VERIFY_ALREADY_RUNNING')
+}
+
+async function releaseVerifierLock() {
+  if (!verifierLockHeld) return
+  verifierLockHeld = false
+  await rm(VERIFY_LOCK_DIRECTORY, { recursive: true, force: true }).catch(() => undefined)
+}
+
+async function readVerifierLockOwner() {
+  try {
+    const owner = JSON.parse(await readFile(VERIFY_LOCK_OWNER_PATH, 'utf8'))
+    return Number.isSafeInteger(owner?.pid) && owner.pid > 0 ? owner : null
+  } catch {
+    return null
+  }
+}
+
+async function isVerifierProcess(pid) {
+  const args = await processArguments(pid)
+  return args.some((argument) =>
+    argument === SCRIPT_PATH ||
+    argument === 'scripts/verify-linux-release.mjs' ||
+    argument.endsWith('/scripts/verify-linux-release.mjs')
+  )
+}
+
+async function assertNoCanonicalDevelopmentGui() {
+  stage = 'preflight.dev_gui'
+  if (process.env[VERIFY_ACTIVE_DEV_OVERRIDE] === '1') return
+  const procEntries = await readdir('/proc', { withFileTypes: true })
+  for (const entry of procEntries) {
+    if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue
+    const args = await processArguments(Number(entry.name))
+    if (
+      !args.includes('dev') ||
+      !args.some((argument) => argument.includes('electron-vite'))
+    ) {
+      continue
+    }
+    const cwd = await realpath(join('/proc', entry.name, 'cwd')).catch(() => null)
+    if (cwd === REPO_ROOT) fail('E_DEV_GUI_RUNNING')
+  }
+}
+
+async function processArguments(pid) {
+  try {
+    const commandLine = await readFile(join('/proc', String(pid), 'cmdline'))
+    return commandLine.toString('utf8').split('\0').filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+function failureHint(code) {
+  if (code === 'E_VERIFY_ALREADY_RUNNING') {
+    return '; another pnpm verify:linux process owns the workstation UI gate'
+  }
+  if (code === 'E_DEV_GUI_RUNNING') {
+    return `; stop pnpm dev first, or explicitly set ${VERIFY_ACTIVE_DEV_OVERRIDE}=1 for a supervised run`
+  }
+  return ''
 }
 
 async function preflight() {

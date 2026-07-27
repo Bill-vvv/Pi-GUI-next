@@ -66,6 +66,8 @@ P2 在完整保留上述 P1 链路的基础上，还必须从同一 AppImage 验
 
 `pnpm verify:linux` 只在干净工作区执行；它从 AppImage 的真实 renderer UI 完成 P1 回归、当前 P2 链路与 S19 Subagent 任务详情 gate，并将 schema v2 的脱敏 `report.json` 与九张关键截图写入 `release/evidence/<UTC>-<commit>/`。P2/S19 摘要只记录计数、角色集合和布尔结果，不记录完整 Project 路径、Session 标题、prompt、tool output 或 credential；S19 截图还必须遮罩 participant 任务标签、详情活动与最终输出。验证器不得向生产代码加入测试后门。
 
+真实 UI gate 独占工作站窗口：同一用户同时只能运行一个 `pnpm verify:linux`。canonical `pnpm dev` 仍在运行时，验证器必须在启动 AppImage 前以 `E_DEV_GUI_RUNNING` Fail Fast，防止后台 Agent 反复打开或聚焦测试 GUI；正式验收应先关闭开发实例。只有人工监督且明确接受窗口抢占时，才可显式设置 `PI_GUI_VERIFY_ALLOW_ACTIVE_DEV=1` 覆盖该保护，跨进程互斥仍然生效。异常退出遗留的 verifier lock 只能在 owner 进程已不存在后回收。
+
 ## Fail Fast
 
 任一必需命令失败、版本不匹配、工作区不干净、证据与 commit 不一致，或只能从开发服务器完成链路时，发布停止；不得静默 fallback 到另一套 runtime、checkout 或产物。
