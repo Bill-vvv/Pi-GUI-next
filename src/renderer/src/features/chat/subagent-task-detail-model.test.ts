@@ -248,6 +248,8 @@ function participant(
     agent,
     status: 'running',
     task,
+    model: null,
+    usage: null,
     currentTool: null,
     currentPath: null,
     toolCount: 0,
@@ -255,6 +257,7 @@ function participant(
     tokens: 0,
     durationMs: 0,
     error: null,
-    finalOutput: null
+    finalOutput: null,
+    outputReferences: []
   }
 }

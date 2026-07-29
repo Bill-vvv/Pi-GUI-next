@@ -365,7 +365,7 @@
 ## D-046 — Subagent supervisor 协作使用结构化生命周期
 
 - 日期：2026-07-27
-- 状态：Accepted；收紧 D-038/D-042 的控制与 supervisor 通知展示语义
+- 状态：Accepted；收紧 D-038/D-042 的控制与 supervisor 通知展示语义；内部发现/轮询可见性已由 D-056 收紧
 - 决策：固定 `subagent_control_notice` 与 `subagent_supervisor_request` 继续进入 Conversation，但 Main 必须只从白名单 details 投影 `runId`、Agent、participant index、request ID、reason、是否需要 supervisor 回复及 `pending/handled` 生命周期。具体 request 使用稳定 request identity；同一 `runId + participant index` 的 supervisor request 替代泛化 `needs_attention`，重复事件原地 upsert。成功的 `subagent_supervisor` / `intercom` reply tool result 将对应 request 原地标为 handled，失败不得伪装已处理。Renderer 将该状态解释为主 Agent 内部协作而非默认用户警报；只有结构化 `completion_guard` 与 Watchdog blocker 使用 alert。`subagent_wait`、supervisor reply、status/steer/resume 等管理工具使用简洁状态文案，原始参数与输出只在展开的技术详情中出现。
 - 原因：同一个 supervisor 请求过去会同时产生泛化 attention、具体 request、reply 工具与 wait 工具，并把 Run ID、intercom target 和可执行命令直接堆入主阅读流；这既重复，也把“主 Agent 可自行处理”误报为“用户必须处理”。上游 custom message 已提供稳定结构化 identity，没有必要靠 Markdown 命令文本关联。
 - 影响：历史恢复与实时消息继续共用同一 projector；旧版缺少结构化 details 的通知保留兼容降级，但不获得跨消息关联。GUI 不建立任务数据库、不直接绕过主 Agent 回复子代理，也不从通知正文猜 `runId`。若主 Agent 真正需要产品选择或授权，仍通过正常 Assistant 对话向用户提问。
@@ -402,10 +402,90 @@
 - 原因：用户当前最缺少的是“为什么不可用、当前到底加载了什么”的解释，而不是另一套 Agent/Context Runtime。Renderer 直接读取 Agent 文件、Magic Context SQLite 或 debug telemetry 会建立第二份事实；凭文本拼接 stop/steer/setup/doctor 又会突破 typed IPC 和父 Agent 协调所有权。
 - 影响：Magic Context 的 Package installed、Extension enabled、Session loaded 与 health verified 保持四个不同事实；没有结构化 doctor 证据时健康为 unknown，Runtime reload 后旧状态立即失效。GUI 不执行任意 Shell、不编辑 `magic-context.jsonc`、不解析私有数据库、不从 Pi compaction 推断后台状态，也不在 `pi-subagents` 提供稳定 typed capability 前加入 stop/interrupt/resume/steer/supervisor reply 控制。后续公开协议不得包含 prompt、output、memory 内容、embedding、credential、数据库路径或私有 schema。
 
+## D-051 — 任务完成通知点击使用 Main 私有 Broker 激活精确 Session
+
+- 日期：2026-07-28
+- 状态：Accepted；扩展 D-003/D-017 的 Main control plane 与多 Session 激活边界，不建立通用 GUI server
+- 决策：`pi-gui-task-notify` 在交互任务达到 `agent_settled` 后向 Electron Main 的私有 Unix-domain socket 发送 strict v1 通知请求；Main 独占 `notify-send` 和默认点击动作，并以 `--print-id` 的服务端 ID 回执确认动作通知已经创建，而不把进程 spawn 当作成功。每个 GUI Pi RPC 子进程只通过环境获得该 socket 路径与随机 capability token；Main 对请求限长、拒绝额外字段并使用参数数组，不接受命令、URL 或 Shell 字符串。点击时 Main 重新读取 Project/Session registry，要求 Project canonical 且已注册、Session 未归档、canonical 且为可读普通文件；首轮 provisional Session 只允许对同一精确 identity 做最多约一秒的 bounded registry/ENOENT 重试。验证完成后 Main 恢复和聚焦窗口，再按 Project→Session 顺序调用既有 Kernel 激活方法，成功后再次聚焦。
+- 原因：单独调用 `notify-send` 只能得到桌面动作 ID，无法安全进入 Electron control plane 或选择对应 Session；模拟鼠标、远程调试和 OS 级通用 deep link 都会扩大不稳定或可滥用边界。窄的本地 capability broker 可以保留多 Runtime 身份，同时不把 Renderer、Pi stdout 或通用网络服务变成控制入口。
+- 影响：Broker 目录固定为 `0700`、socket 为 `0600`，请求只允许一条 bounded JSON line；Broker 在 Kernel shutdown 前停止接收、销毁等待中的通知动作并 drain 已开始的激活。Package/TUI、动作能力或 Broker 不可用时扩展只回退普通桌面通知，不伪装可跳转。协议不携带回答正文、credential、工具输出或任意文件读取能力；Session 切换继续以 Pi session 和 ProjectStore registry 为事实源。
+
 ## D-052 — 内存治理分离持久 Session、执行 Runtime 与 Renderer 工作集
 
 - 日期：2026-07-28
-- 状态：Accepted；扩展 D-004/D-010/D-017，并将 S26 提升为当前最高优先级
-- 决策：Pi Session 文件继续是持久 Conversation 事实源，但 managed `RuntimeContext`、Pi RPC 进程和 Renderer Conversation 不再与每个已访问 Session 同生命周期。内存治理固定采用三层边界：Main/Renderer IPC 必须有 revision、合并与字节/队列上限；Renderer 只持有活动 Conversation 的有界页面工作集；非前台 Runtime 只有在已持久化、非 provisional、非 busy 且 Kernel 与已加载 Extension 明确释放全部 operation lease 后才能成为 quiescent 并休眠。首期先提供用户显式休眠；自动回收采用前台保护、保守 warm set、grace period、内存压力与 LRU，未知 Extension 状态 fail-closed。
+- 状态：Accepted；扩展 D-004/D-010/D-017，并将 S26 提升为当前最高优先级；其中用户显式休眠部分由 D-058 替代
+- 决策：Pi Session 文件继续是持久 Conversation 事实源，但 managed `RuntimeContext`、Pi RPC 进程和 Renderer Conversation 不再与每个已访问 Session 同生命周期。内存治理固定采用三层边界：Main/Renderer IPC 必须有 revision、合并与字节/队列上限；Renderer 只持有活动 Conversation 的有界页面工作集；自动判定非前台 Runtime 为 quiescent 时，只有已持久化、非 provisional、非 busy 且 Kernel 与已加载 Extension 明确释放全部 operation lease 才能休眠。首期用户显式休眠属于用户授权的 Runtime 终止操作，仍重检 Kernel-owned busy gate，但不伪称已经获得 Extension quiescence；自动回收采用前台保护、保守 warm set、grace period、内存压力与 LRU，未知 Extension 状态 fail-closed。
 - 原因：实际运行证明两个独立放大器同时存在：Renderer 在约 1 小时 52 分后达到约 5.4 GiB RSS，其中约 4.98 GiB 为 Chromium `PartitionAlloc`；Workbench Kernel 又为每个 managed Session 保留完整 `KernelState` 与 Pi Runtime，没有 idle eviction。重启只能暂时释放内存，不能阻止多个 Runtime 和 native allocation 再次增长。`runtime=ready`、`agent_settled` 和零在途 RPC 也不能证明 Magic Context、Subagent、Advisor、compaction、命名或其他 Extension 后台工作已完成。
 - 影响：大量 mutating IPC 不再同时通过 event 与 invoke return 传输两份完整 `KernelState`；Navigation、active Session 与 Conversation 逐步拆分。Timeline 的“最近 60 turn”从仅限制 DOM 挂载演进为可分页、可驱逐的数据工作集。自动休眠不得停止 running、starting、stopping、provisional、存在 operation lease 或 quiescence 未知的 Runtime；并行 busy Runtime 不设硬数量上限。诊断默认关闭、输出有界且只记录角色、状态、计数、字节、duration、PSS/RSS/private/anonymous、DOM/V8/native 指标，不记录 prompt、output、Session identity、路径、credential 或私有 Extension 内容。
+
+## D-053 — 对话 Markdown 允许用户点击打开本地绝对路径
+
+- 日期：2026-07-28
+- 状态：Accepted；替代 D-007 中“Markdown 链接只允许外部协议”的部分，不改变 Renderer 文件读取边界
+- 决策：对话 Markdown 链接除 `http:`、`https:`、`mailto:` 外，允许 Linux 绝对路径与无远程 host 的 `file:` URL。Renderer 只把归一化目标通过现有受信 typed IPC 交给 Main；Main 对 web/mail 使用 `shell.openExternal`，对本地文件使用 `fileURLToPath` 与 `shell.openPath`，不让 BrowserWindow 导航，也不把文件内容读入 Renderer。相对路径、远程 file host、`javascript:`、`data:` 和其他 scheme 继续拒绝。
+- 原因：Pi 的默认执行模型允许 Agent 直接使用本地工具；本地链接仍需用户明确点击，因此把 Assistant 生成的 Project 报告路径降级为不可点击文字，与产品的默认 YOLO 交互边界不一致。专门允许本地绝对目标即可恢复报告、日志和源码引用的直接打开，不需要建立 artifact registry、文件预览器或任意文件读取 IPC。
+- 影响：`[REPORT.md](/absolute/path/REPORT.md)` 与等价 `file:` 链接会渲染为真实 anchor 并调用系统默认应用。此能力是打开动作而非内容投影；KernelState、Conversation、附件、导出和 Renderer 文件读取边界不变。Markdown 图片仍不自动加载本地或远程资源。
+
+## D-054 — Advisor 当前控制面退役，历史审查记录保持可读
+
+- 日期：2026-07-28
+- 状态：Accepted；替代 D-034/D-040/D-048 中 Advisor 作为当前 Settings 功能和已适配拓展的部分，不改变 Pi Session 事实源
+- 决策：用户级 Pi 环境卸载 `pi-gui-multi-advisor`，Settings 删除 Advisor 分类、Extension resource 控制和 roster 编辑器。当前产品不再提供 Advisor 安装、启停、配置或运行状态入口；仓库中的独立 Package 源码只作为历史 source snapshot 保留。既有 Session 中符合固定 schema 的 `pi-gui.multi-advisor/advisory` 继续由 Main strict projector 投影为只读 Timeline 卡片。
+- 原因：Advisor 不再是当前工作流依赖，继续常驻设置入口会把已卸载能力伪装成可用产品面；直接删除历史 projector 又会让旧 Session 丢失已保存的审查上下文。移除控制面并保留只读历史兼容是最小且可逆的退役边界。
+- 影响：新建或重载 Session 不再从用户 Package 设置加载 Advisor；GUI 不提示重新安装，也不编辑 WATCHDOG。历史卡片不具备重新运行、修改或启停能力。未来若重新引入 Advisor，必须重新建立真实 Package、版本化 capability、typed control 和独立验收，而不能仅恢复旧导航入口。
+
+## D-055 — Subagent 详情按状态组织并投影实际模型、消耗与输出引用
+
+- 日期：2026-07-28
+- 状态：Accepted；扩展 D-038/D-042/D-050，不建立 child transcript 或 artifact 阅读器
+- 决策：Subagent 任务详情不再用同一固定分区平铺全部状态。运行中以当前活动为主，完成态直接显示结果或输出文件，失败态优先显示错误，暂停态显示已有输出与最后活动；完成态不保留空“当前活动”或重复 completion envelope。Main 从前台结构化 `results[]` 投影 child 实际报告的 model，以及 canonical input/output/cache read/cache write token、USD cost、turn/tool count 和 duration；缺失值保持 unavailable，不从 Agent definition、调用参数、名称或 child Session 推断。显式 file-only `outputReference` 与固定 completion `Output saved to` 行只投影 Agent、绝对路径、展示大小和行数 metadata，Renderer 可在用户点击后复用受信本地路径打开边界，但不读取或缓存文件正文。后台 completion custom message 未携带实际 model/usage 时详情明确说明不可用，并移除 Session file 行和重复英文包装。
+- 原因：旧详情把后台完成通知伪装成单个运行 participant，连续重复“后台任务结果/完成/任务状态/Background task completed”，同时把 Session 路径与输出引用混入“最终输出”；固定用量框又无法区分真实 0 与协议未提供。状态驱动层级和 typed usage 能让用户先阅读任务结果，并准确理解模型、成本与执行规模，而不扩大 Renderer 对 child 工作区的读取权限。
+- 影响：`KernelSubagentParticipant` 增加 nullable model、nullable canonical usage 和 metadata-only output references；Kernel state copy/patch 继续保持嵌套值隔离。Timeline completion 胶囊仍保留通知协议中的原始 Agent 名称与独立 notice identity；详情可把已知 `parallel:` 标签压缩为可读的 Agent 计数，并在折叠技术信息中保留原始标识。未来若要让后台通知显示实际 model/usage，必须由 `pi-subagents` 在版本化 completion 协议中直接携带这些字段，不能由 GUI 扫描 child transcript 补齐。
+
+## D-056 — 内部工具发现与轮询不占用 Timeline
+
+- 日期：2026-07-28
+- 状态：Accepted；收紧 D-046 的 Subagent 管理工具可见性，不改变任务胶囊与协调通知协议
+- 决策：`subagent list/status`、`subagent_wait` 以及 `subagent_supervisor`/`intercom` 的 pending/status/list 只用于主 Agent 的发现、等待与轮询，不形成 Timeline 过程行，也不进入普通工具汇总。真实 Subagent 运行继续按 participant 显示任务胶囊；steer/resume/interrupt/stop、supervisor reply 与 Watchdog 等有用户意义的控制或异常状态继续使用专用协作展示。`todowrite` 的 Main/Renderer leaf-name 识别统一接受 `.`、`:`、`/` namespace 分隔，避免专用 Todo 托盘因工具命名形式退回普通工具卡。
+- 原因：等待、状态查询和委派前强制 discovery 会在任务胶囊旁重复产生“等待结束”“已检查状态”或普通“调用工具”行，把实现细节误作用户过程；专用工具的 namespace 解析不一致也可能造成同类回退。
+- 影响：过滤同时作用于 completed 与 live process 构建，隐藏条目不会封口相邻 thinking/普通工具分组；有意义的控制动作仍保留状态和技术详情。Renderer 不根据输出文本推断动作，Main 不删除 transcript 事实，只收敛可见投影。
+
+## D-057 — 空 provisional Session 只存在于新对话工作区
+
+- 日期：2026-07-28
+- 状态：Accepted；收紧 P2 Session identity 与 Navigator 投影边界，不改变 Pi Session 事实源
+- 决策：点击新建后，Kernel 仍可启动并保留一个进程内 provisional Session，供 Composer、模型选择和首条消息使用；但在首条 prompt 被 Runtime 接受前，该 identity 不进入 Project 的 Navigator Session 列表，也不计入 Project Session 数量。首条 prompt 成功提交后，同一 provisional identity 立即进入列表；发送失败则恢复为空白隐藏状态。用户在空白阶段切换 Project 或 Session 时停止并移除该不可持久化 Runtime context。
+- 原因：空白编辑器需要即时可用和 Runtime 预热，但尚无用户消息的占位项不是对话历史。把它展示为“新对话”会污染 Navigator、数量和最近活动，同时切走后保留不可见 provisional Runtime 会造成无法重新访问的后台资源。
+- 影响：活动工作区的 `state.sessions` 可继续包含空 provisional summary，以维持 typed identity 与草稿迁移；Project 导航使用 `projects[].sessions` 的可见投影。重复新建在当前空白 provisional 上保持幂等；首条 prompt 后再次新建才创建下一条并行 Runtime。空 provisional 不可 resume、archive、export，也不得成为 Runtime 自动回收候选或写入 XDG Session index。
+
+## D-058 — 主动 Runtime 休眠不作为独立用户功能
+
+- 日期：2026-07-28
+- 状态：Accepted；替代 D-052 中首期用户显式休眠的产品面，不改变自动休眠目标
+- 决策：删除 Session、Project 与全部空闲 Runtime 的用户主动休眠入口，以及对应 `KernelCommand`、Main dispatch、preload/`KernelApi`、Renderer action/通知和 Project/全局批量实现。Main/Kernel 只保留不经 IPC 暴露的单 Runtime 回收原语，复用持久 Session 校验、前台与 busy gate、launch/stop 串行化、stop 失败 ownership 和同 Session identity 恢复；候选选择、grace period、压力触发、warm set 与 LRU 统一归未来自动休眠策略所有。
+- 原因：主动休眠把 Runtime 生命周期实现细节变成三个独立操作，却没有稳定、必要的用户工作流；Project/全局批量按钮还容易让“当前 `ready`”被误解为已证明 Extension quiescence。把停止与恢复能力收回 Kernel 内部，可以避免重复产品面和策略分叉，同时保留自动休眠真正需要的底层能力。
+- 影响：Navigator 不再显示月亮按钮或“休眠全部”，也不返回休眠/跳过数量；普通选择仍不会停止后台 Runtime，归档、显式 reload/stop、异常恢复和应用退出继续使用既有生命周期路径。自动休眠、operation lease、内存压力回收与 LRU 仍为 S26 Pending；在这些事实完备前不得根据 `ready`、`settled` 或零在途 RPC 自动停止 Runtime。
+
+## D-059 — Navigator 顶层区分项目与任务
+
+- 日期：2026-07-28
+- 状态：Accepted
+- 决策：Navigator 顶层使用“项目 / 任务”两个可访问 Tab。项目继续保持 `Project → Session` 层级；任务是扁平的独立工作，一个任务严格对应一个持久 Session，并使用独立、应用私有的隐藏 Runtime 工作目录。Renderer 只消费显式 `workspaceKind: project | task` 与稳定 `taskKey`，不得把隐藏路径渲染为 Project 或通过路径前缀猜作用域。Tab 切换恢复各类别最后目标，已运行 Runtime 保持后台 ownership；任务中的 `Ctrl+N` 创建新任务，项目中的 `Ctrl+N` 仍在当前 Project 新建对话。
+- 原因：系统操作、跨项目工作和普通查询若强行归入某个真实 Project，会加载并可能污染无关的项目级 Agent、Skill、Extension、设置与长期上下文；若把隐藏目录伪装成特殊 Project，又会错误继承路径、排序、置顶、trust 与 `@` 文件索引等产品语义。
+- 影响：Task registry 独立持久化于 XDG state，Project config 仍只记录用户添加的真实 Project。任务首条 prompt 前继续使用不可见 provisional identity，重复新建保持幂等；首条 prompt 被 Runtime 接受后才进入任务列表。Task Runtime 使用显式应用信任，不触发 Project resource trust；Project `@` 搜索、Project scope 设置/Agent/Skill 和同目录 Fork 在任务中不可用。用户级 Package、Agent、Skill、附件、绝对路径、模型、Subagent、归档与导出继续可用。为避免顶层“任务”与 Agent 内部运行混淆，Subagent 可见文案统一称“子任务”。
+
+## D-060 — 缺少全部后台统计时省略空运行摘要
+
+- 日期：2026-07-29
+- 状态：Accepted；替代 D-055 中“后台 completion 缺少 model/usage 时始终显示 unavailable 分区”的 Renderer 展示规则，不改变 Main 投影和禁止推断边界
+- 决策：后台 completion 通知同时没有实际 model、canonical usage、token、turn/tool count 和 duration 时，Subagent 详情不渲染只有缺失说明的“运行摘要”分区。只要任一实际摘要字段存在，分区仍显示，并将其余缺失项标为“尚未报告”。前台 `subagent` 工具详情继续始终保留运行摘要。
+- 原因：完全无统计的后台通知已经通过结果与状态表达其可用内容，额外空分区只重复协议限制并占据阅读层级；但部分字段存在时隐藏整个分区又会丢失真实信息。
+- 影响：Renderer 不再显示“该后台完成通知未携带模型与消耗信息”文案。Main 仍保留 nullable typed 字段；GUI 不从 Agent definition、调用参数、名称、配置或 child Session 猜测 model/usage，也不把缺失值伪装为 0。未来版本化 completion 协议提供真实字段后，现有分区会自动恢复显示。
+
+## D-061 — P3 适配优先复用 Pi 原生能力并保持薄桥接
+
+- 日期：2026-07-30
+- 状态：Accepted；纠正历史 Prompt 分支与生态接入中的过度设计，不改变 Pi Session 事实源或 P3 阶段状态
+- 决策：历史 Prompt 编辑直接复用 Pi Tree：GUI 只解析当前可见活动路径上的 user turn，调用受控 `navigate_tree`，再复用现有 `prompt` 并刷新真实 Tree；失败时保留草稿，导航已经成功则只重试 prompt。不得为该交互恢复 atomic navigate+prompt、projection watermark、第二份 Conversation projection stream 或另一套 Session 数据库。Package、Extension、Skill、MCP 和 Git 也优先复用固定 Pi 版本、成熟依赖或已安装 Package 的真实能力；GUI 只增加实际界面所需的 typed bridge 和状态投影。
+- 原因：Pi TUI 已经证明 Tree 分支语义可用。此前为假设性的并发边界设计新的原子协议、watermark 和 artifact admission，扩大了实现、验证与打包面，却没有真实产品失败证明这些机制必要，违反 KISS、YAGNI 和 Fail Fast。
+- 影响：没有可复现失败证据时，不增加第二套协议、capability 自证明或平行事实源。当前 Git Main/IPC、Capability Inventory 和通用 Right Sidebar 只是 P3 前置基础，不表示 Git 工作台、Capability Center、MCP 管理或 P3 已完成；各产品面只有在真实调用链和对应 UI 落地后才能单独验收。

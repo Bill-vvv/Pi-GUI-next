@@ -1,11 +1,16 @@
 export type IconName =
   | 'archive'
   | 'appearance'
+  | 'arrow-left'
   | 'arrow-right'
   | 'attach'
   | 'check'
   | 'chevron-down'
+  | 'chevron-left'
+  | 'chevron-right'
+  | 'close'
   | 'copy'
+  | 'edit'
   | 'enter'
   | 'export'
   | 'extensions'
@@ -62,6 +67,13 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
           <path d="M9.25 12h5.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
         </svg>
       )
+    case 'arrow-left':
+      return (
+        <svg {...common}>
+          <path d="M19 12H5.5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+          <path d="m11 6-6 6 6 6" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
     case 'arrow-right':
       return (
         <svg {...common}>
@@ -88,11 +100,36 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
           <path d="m6.5 9.5 5.5 5 5.5-5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       )
+    case 'chevron-left':
+      return (
+        <svg {...common}>
+          <path d="m14.5 6.5-5 5.5 5 5.5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'chevron-right':
+      return (
+        <svg {...common}>
+          <path d="m9.5 6.5 5 5.5-5 5.5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'close':
+      return (
+        <svg {...common}>
+          <path d="m6.5 6.5 11 11M17.5 6.5l-11 11" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+        </svg>
+      )
     case 'copy':
       return (
         <svg {...common}>
           <rect x="8" y="8" width="11" height="11" rx="2.25" stroke="currentColor" strokeWidth="1.8" />
           <path d="M16 8V6.25A2.25 2.25 0 0 0 13.75 4h-7.5A2.25 2.25 0 0 0 4 6.25v7.5A2.25 2.25 0 0 0 6.25 16H8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      )
+    case 'edit':
+      return (
+        <svg {...common}>
+          <path d="M5 19h3.5L18.75 8.75a2.47 2.47 0 0 0-3.5-3.5L5 15.5V19Z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="m13.75 6.75 3.5 3.5M11.5 19H19" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
         </svg>
       )
     case 'enter':

@@ -119,7 +119,10 @@ export function TooltipProvider({ children }: { children: ReactNode }): React.JS
     }
 
     const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') hideTooltip()
+      if (event.key !== 'Escape' || activeRef.current === null) return
+      event.preventDefault()
+      event.stopPropagation()
+      hideTooltip()
     }
 
     const handleViewportChange = (): void => hideTooltip()

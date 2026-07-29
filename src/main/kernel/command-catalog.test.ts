@@ -15,6 +15,7 @@ import {
   SET_SESSION_NAME_COMMAND_ID,
   SET_THINKING_COMMAND_ID
 } from './command-catalog.ts'
+import { QUIESCENCE_COMMAND_NAME } from '../runtime/runtime-quiescence.ts'
 
 test('builds the typed GUI and Pi RPC command catalog', () => {
   const catalog = createCommandCatalog()
@@ -96,4 +97,16 @@ test('normalizes dynamic commands and keeps typed names authoritative', () => {
     }
   ])
   assert.notStrictEqual(catalog[8]?.sourceInfo, reviewSourceInfo)
+})
+
+test('filters the internal runtime quiescence command from the user catalog', () => {
+  const catalog = createCommandCatalog([
+    {
+      name: QUIESCENCE_COMMAND_NAME,
+      description: 'Internal only',
+      source: 'extension',
+      sourceInfo: { source: 'pi-gui-runtime-quiescence', scope: 'temporary', origin: 'top-level' }
+    }
+  ])
+  assert.equal(catalog.some(({ name }) => name === QUIESCENCE_COMMAND_NAME), false)
 })

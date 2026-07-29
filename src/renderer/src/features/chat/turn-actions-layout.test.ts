@@ -4,6 +4,7 @@ import { test } from 'node:test'
 
 const appSource = await readFile(new URL('../../App.tsx', import.meta.url), 'utf8')
 const timelineSource = await readFile(new URL('./Timeline.tsx', import.meta.url), 'utf8')
+const workbenchSource = await readFile(new URL('../../composition/Workbench.tsx', import.meta.url), 'utf8')
 const chatStyles = await readFile(new URL('./chat.css', import.meta.url), 'utf8')
 
 test('completed turn action slots reserve layout space while icons are hidden', () => {
@@ -32,6 +33,31 @@ test('a new copy, export or fork action clears stale completion feedback', () =>
       new RegExp(`async function ${action}\\([\\s\\S]*?setCompletedAction\\(null\\)[\\s\\S]*?setPendingAction\\(`)
     )
   }
+})
+
+test('historical prompt editing stays in place and retries only the native prompt after navigation', () => {
+  assert.match(timelineSource, /visibleCompletedTurns\.slice\(0, editingTurnIndex \+ 1\)/)
+  assert.match(
+    timelineSource,
+    /if \(!readyToSend\) \{[\s\S]*?await onNavigateHistoryPrompt\(historyPromptEdit\.messageId\)[\s\S]*?readyToSend = true[\s\S]*?\}[\s\S]*?await onSendHistoryPrompt\(message\)/
+  )
+  assert.match(
+    timelineSource,
+    /error: unknownErrorMessage\(error\), readyToSend/
+  )
+  assert.match(timelineSource, /data-history-prompt-edit-id=\{historyPrompt\.messageId\}/)
+  assert.match(timelineSource, /querySelectorAll<HTMLButtonElement>[\s\S]*?data-history-prompt-edit-id[\s\S]*?trigger\?\.focus\(\)/)
+  assert.match(timelineSource, /requestAnimationFrame\(\(\) => historyPromptTextareaRef\.current\?\.focus\(\)\)/)
+  assert.match(timelineSource, /readOnly=\{busy\}/)
+  assert.match(timelineSource, /aria-busy=\{busy\}/)
+  assert.match(timelineSource, /event\.nativeEvent\.keyCode === 229/)
+  assert.match(timelineSource, /event\.nativeEvent\.isComposing/)
+  assert.match(timelineSource, /event\.key === 'Escape'/)
+  assert.match(timelineSource, /event\.metaKey \|\| event\.ctrlKey/)
+  assert.match(workbenchSource, /onNavigateHistoryPrompt\(activeSessionKey, messageId\)/)
+  assert.match(workbenchSource, /onPrompt\(message, undefined, activeSessionKey\)/)
+  assert.match(workbenchSource, /conversationActionBusy=\{busy\}/)
+  assert.match(workbenchSource, /<Composer[\s\S]*?busy=\{interactionBusy\}/)
 })
 
 test('conversation action feedback stays with its initiating turn without growing the slot', () => {

@@ -74,10 +74,32 @@ type LoadedSubagentDefinition = {
   parsed: ParsedAgentFile
 }
 
+type ParsedSubagentOverride = {
+  model?: string | false
+  fallbackModels?: string[] | false
+  thinking?: ThinkingLevel | false
+  systemPromptMode?: 'replace' | 'append'
+  inheritProjectContext?: boolean
+  inheritSkills?: boolean
+  defaultContext?: 'fresh' | 'fork' | false
+  disabled?: boolean
+  systemPrompt?: string
+  skills?: string[] | false
+  tools?: string[] | false
+}
+
 type ParsedSubagentSettings = {
   raw: Record<string, unknown>
-  overrides: Record<string, Record<string, unknown>>
+  overrides: Record<string, ParsedSubagentOverride>
   disableBuiltins: boolean | undefined
+  disableThinking: boolean | undefined
+  defaultModel: string | undefined
+  defaultThinking: ThinkingLevel | undefined
+}
+
+type EffectiveSubagentOverride = {
+  scope: KernelSubagentEditableScope
+  value: ParsedSubagentOverride
 }
 
 export type SubagentDefinitionStoreOptions = {
@@ -256,10 +278,7 @@ export class SubagentDefinitionStore {
     ])
     return [...builtin, ...user, ...project].map((loaded) => ({
       ...loaded,
-      definition: {
-        ...loaded.definition,
-        enabled: isDefinitionEnabled(loaded.definition, userSettings, projectSettings)
-      }
+      definition: applySubagentSettings(loaded, userSettings, projectSettings)
     }))
   }
 
@@ -298,6 +317,7 @@ async function loadScope(
   let fileCount = 0
   for (const directory of directories) {
     for (const filePath of await listAgentFiles(directory)) {
+      if (isLegacyAgentSkillPath(directory, filePath)) continue
       fileCount += 1
       if (fileCount > MAX_AGENT_FILES) {
         throw new Error(`Too many ${scope} Subagent definition files.`)
@@ -335,8 +355,23 @@ async function listAgentFiles(directory: string): Promise<string[]> {
   return files.sort()
 }
 
+function isLegacyAgentSkillPath(rootDirectory: string, filePath: string): boolean {
+  const parts = relative(rootDirectory, filePath)
+    .split(/[/\\]/u)
+    .map((part) => part.toLocaleLowerCase())
+  if (basename(rootDirectory).toLocaleLowerCase() === '.agents') parts.unshift('.agents')
+  return parts.some((part, index) => part === '.agents' && parts[index + 1] === 'skills')
+}
+
 function emptySubagentSettings(): ParsedSubagentSettings {
-  return { raw: {}, overrides: {}, disableBuiltins: undefined }
+  return {
+    raw: {},
+    overrides: {},
+    disableBuiltins: undefined,
+    disableThinking: undefined,
+    defaultModel: undefined,
+    defaultThinking: undefined
+  }
 }
 
 async function readSubagentSettings(filePath: string): Promise<ParsedSubagentSettings> {
@@ -349,55 +384,330 @@ async function readSubagentSettings(filePath: string): Promise<ParsedSubagentSet
   }
   const raw = recordValue(parsed)
   if (raw === null) throw new Error(`Subagent settings '${filePath}' must contain a JSON object.`)
-  if (raw.subagents === undefined) return { raw, overrides: {}, disableBuiltins: undefined }
+  if (raw.subagents === undefined) return { ...emptySubagentSettings(), raw }
   const subagents = recordValue(raw.subagents)
   if (subagents === null) {
     throw new Error(`Subagent settings '${filePath}' has invalid 'subagents'.`)
   }
-  const disableBuiltins = subagents.disableBuiltins
-  if (disableBuiltins !== undefined && typeof disableBuiltins !== 'boolean') {
-    throw new Error(`Subagent settings '${filePath}' has invalid 'disableBuiltins'.`)
-  }
+  const disableBuiltins = optionalSettingBoolean(
+    subagents.disableBuiltins,
+    'disableBuiltins',
+    filePath
+  )
+  const disableThinking = optionalSettingBoolean(
+    subagents.disableThinking,
+    'disableThinking',
+    filePath
+  )
+  const defaultModel = optionalSettingText(subagents.defaultModel, 'defaultModel', filePath)
+  const defaultThinking = optionalSettingThinking(
+    subagents.defaultThinking,
+    'defaultThinking',
+    filePath
+  )
   const rawOverrides = subagents.agentOverrides
   if (rawOverrides === undefined) {
-    return { raw, overrides: {}, disableBuiltins }
+    return {
+      raw,
+      overrides: {},
+      disableBuiltins,
+      disableThinking,
+      defaultModel,
+      defaultThinking
+    }
   }
   const overrides = recordValue(rawOverrides)
   if (overrides === null) {
     throw new Error(`Subagent settings '${filePath}' has invalid 'agentOverrides'.`)
   }
-  const parsedOverrides: Record<string, Record<string, unknown>> = {}
+  const parsedOverrides: Record<string, ParsedSubagentOverride> = {}
   for (const [name, value] of Object.entries(overrides)) {
-    const entry = recordValue(value)
-    if (entry === null) {
-      throw new Error(`Subagent override '${name}' in '${filePath}' must be an object.`)
-    }
-    if (entry.disabled !== undefined && typeof entry.disabled !== 'boolean') {
-      throw new Error(`Subagent override '${name}' in '${filePath}' has invalid 'disabled'.`)
-    }
-    parsedOverrides[name] = entry
+    parsedOverrides[name] = parseSubagentOverride(name, value, filePath)
   }
-  return { raw, overrides: parsedOverrides, disableBuiltins }
+  return {
+    raw,
+    overrides: parsedOverrides,
+    disableBuiltins,
+    disableThinking,
+    defaultModel,
+    defaultThinking
+  }
 }
 
-function isDefinitionEnabled(
-  definition: KernelSubagentDefinition,
+function applySubagentSettings(
+  loaded: LoadedSubagentDefinition,
   userSettings: ParsedSubagentSettings,
   projectSettings: ParsedSubagentSettings
-): boolean {
-  const projectOverride = projectSettings.overrides[definition.name]
-  if (projectOverride !== undefined) return projectOverride.disabled !== true
-  if (definition.scope === 'builtin' && projectSettings.disableBuiltins === true) return false
-  const userOverride = userSettings.overrides[definition.name]
-  if (userOverride !== undefined) return userOverride.disabled !== true
+): KernelSubagentDefinition {
+  let definition = applySubagentDefaults(loaded, userSettings, projectSettings)
+  const effectiveOverride = loaded.definition.scope === 'builtin'
+    ? builtinOverride(loaded.definition.name, userSettings, projectSettings)
+    : customOverride(loaded.definition.name, userSettings, projectSettings)
+  if (effectiveOverride !== null) {
+    definition = loaded.definition.scope === 'builtin'
+      ? applyBuiltinDefinitionOverride(definition, effectiveOverride.value)
+      : applyCustomDefinitionOverride(loaded, definition, effectiveOverride.value)
+  }
+  if (loaded.definition.scope === 'builtin') {
+    const projectThinkingConfigured = projectSettings.disableThinking !== undefined
+    const disableThinking = projectThinkingConfigured
+      ? projectSettings.disableThinking === true
+      : userSettings.disableThinking === true
+    const explicitThinkingSurvives = effectiveOverride !== null &&
+      effectiveOverride.value.thinking !== undefined &&
+      !(effectiveOverride.scope === 'user' && projectThinkingConfigured)
+    if (disableThinking && !explicitThinkingSurvives) definition.thinking = null
+  }
+  return definition
+}
+
+function applySubagentDefaults(
+  loaded: LoadedSubagentDefinition,
+  userSettings: ParsedSubagentSettings,
+  projectSettings: ParsedSubagentSettings
+): KernelSubagentDefinition {
+  const definition = { ...loaded.definition }
+  if (!loaded.parsed.frontmatter.has('model')) {
+    definition.model = projectSettings.defaultModel ?? userSettings.defaultModel ?? null
+  }
+  if (!loaded.parsed.frontmatter.has('thinking')) {
+    definition.thinking = projectSettings.defaultThinking ?? userSettings.defaultThinking ?? null
+  }
+  return definition
+}
+
+function builtinOverride(
+  name: string,
+  userSettings: ParsedSubagentSettings,
+  projectSettings: ParsedSubagentSettings
+): EffectiveSubagentOverride | null {
+  const projectOverride = projectSettings.overrides[name]
+  if (projectOverride !== undefined) return { scope: 'project', value: projectOverride }
+  if (projectSettings.disableBuiltins === true) {
+    return { scope: 'project', value: { disabled: true } }
+  }
+  const userOverride = userSettings.overrides[name]
+  if (userOverride !== undefined) return { scope: 'user', value: userOverride }
   if (
-    definition.scope === 'builtin' &&
     projectSettings.disableBuiltins === undefined &&
     userSettings.disableBuiltins === true
   ) {
-    return false
+    return { scope: 'user', value: { disabled: true } }
   }
-  return true
+  return null
+}
+
+function customOverride(
+  name: string,
+  userSettings: ParsedSubagentSettings,
+  projectSettings: ParsedSubagentSettings
+): EffectiveSubagentOverride | null {
+  const projectOverride = projectSettings.overrides[name]
+  if (projectOverride !== undefined) return { scope: 'project', value: projectOverride }
+  const userOverride = userSettings.overrides[name]
+  return userOverride === undefined ? null : { scope: 'user', value: userOverride }
+}
+
+function applyBuiltinDefinitionOverride(
+  definition: KernelSubagentDefinition,
+  override: ParsedSubagentOverride
+): KernelSubagentDefinition {
+  const next = { ...definition }
+  applyDefinitionOverride(next, override, () => true, true)
+  return next
+}
+
+function applyCustomDefinitionOverride(
+  loaded: LoadedSubagentDefinition,
+  definition: KernelSubagentDefinition,
+  override: ParsedSubagentOverride
+): KernelSubagentDefinition {
+  const next = { ...definition }
+  applyDefinitionOverride(
+    next,
+    override,
+    (...keys) => !keys.some((key) => loaded.parsed.frontmatter.has(key)),
+    false
+  )
+  return next
+}
+
+function applyDefinitionOverride(
+  definition: KernelSubagentDefinition,
+  override: ParsedSubagentOverride,
+  canApply: (...frontmatterKeys: string[]) => boolean,
+  includeSystemPrompt: boolean
+): void {
+  if (override.model !== undefined && canApply('model')) {
+    definition.model = override.model === false ? null : override.model
+  }
+  if (override.fallbackModels !== undefined && canApply('fallbackModels')) {
+    definition.fallbackModels = override.fallbackModels === false
+      ? null
+      : [...override.fallbackModels]
+  }
+  if (override.thinking !== undefined && canApply('thinking')) {
+    definition.thinking = override.thinking === false ? null : override.thinking
+  }
+  if (override.systemPromptMode !== undefined && canApply('systemPromptMode')) {
+    definition.systemPromptMode = override.systemPromptMode
+  }
+  if (
+    override.inheritProjectContext !== undefined &&
+    canApply('inheritProjectContext')
+  ) {
+    definition.inheritProjectContext = override.inheritProjectContext
+  }
+  if (override.inheritSkills !== undefined && canApply('inheritSkills')) {
+    definition.inheritSkills = override.inheritSkills
+  }
+  if (override.defaultContext !== undefined && canApply('defaultContext')) {
+    definition.defaultContext = override.defaultContext === false ? null : override.defaultContext
+  }
+  if (override.disabled !== undefined) definition.enabled = override.disabled !== true
+  if (includeSystemPrompt && override.systemPrompt !== undefined) {
+    definition.systemPrompt = override.systemPrompt
+  }
+  if (override.skills !== undefined && canApply('skill', 'skills')) {
+    definition.skills = override.skills === false ? null : [...override.skills]
+  }
+  if (override.tools !== undefined && canApply('tools')) {
+    definition.tools = override.tools === false ? [] : [...override.tools]
+  }
+}
+
+function parseSubagentOverride(
+  name: string,
+  value: unknown,
+  filePath: string
+): ParsedSubagentOverride {
+  const entry = recordValue(value)
+  if (entry === null) {
+    throw new Error(`Subagent override '${name}' in '${filePath}' must be an object.`)
+  }
+  const prefix = `Subagent override '${name}' in '${filePath}'`
+  const override: ParsedSubagentOverride = {}
+  if (entry.model !== undefined) {
+    override.model = settingTextOrFalse(entry.model, 'model', prefix)
+  }
+  if (entry.fallbackModels !== undefined) {
+    override.fallbackModels = settingListOrFalse(entry.fallbackModels, 'fallbackModels', prefix)
+  }
+  if (entry.thinking !== undefined) {
+    override.thinking = settingThinkingOrFalse(entry.thinking, 'thinking', prefix)
+  }
+  if (entry.systemPromptMode !== undefined) {
+    if (entry.systemPromptMode !== 'replace' && entry.systemPromptMode !== 'append') {
+      throw new Error(`${prefix} has invalid 'systemPromptMode'.`)
+    }
+    override.systemPromptMode = entry.systemPromptMode
+  }
+  if (entry.inheritProjectContext !== undefined) {
+    override.inheritProjectContext = settingBoolean(
+      entry.inheritProjectContext,
+      'inheritProjectContext',
+      prefix
+    )
+  }
+  if (entry.inheritSkills !== undefined) {
+    override.inheritSkills = settingBoolean(entry.inheritSkills, 'inheritSkills', prefix)
+  }
+  if (entry.defaultContext !== undefined) {
+    if (
+      entry.defaultContext !== 'fresh' &&
+      entry.defaultContext !== 'fork' &&
+      entry.defaultContext !== false
+    ) {
+      throw new Error(`${prefix} has invalid 'defaultContext'.`)
+    }
+    override.defaultContext = entry.defaultContext
+  }
+  if (entry.disabled !== undefined) {
+    override.disabled = settingBoolean(entry.disabled, 'disabled', prefix)
+  }
+  if (entry.systemPrompt !== undefined) {
+    if (typeof entry.systemPrompt !== 'string') {
+      throw new Error(`${prefix} has invalid 'systemPrompt'.`)
+    }
+    override.systemPrompt = entry.systemPrompt
+  }
+  if (entry.skills !== undefined) {
+    override.skills = settingListOrFalse(entry.skills, 'skills', prefix)
+  }
+  if (entry.tools !== undefined) {
+    override.tools = settingListOrFalse(entry.tools, 'tools', prefix)
+  }
+  return override
+}
+
+function optionalSettingBoolean(
+  value: unknown,
+  field: string,
+  filePath: string
+): boolean | undefined {
+  if (value === undefined) return undefined
+  return settingBoolean(value, field, `Subagent settings '${filePath}'`)
+}
+
+function optionalSettingText(
+  value: unknown,
+  field: string,
+  filePath: string
+): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`Subagent settings '${filePath}' has invalid '${field}'.`)
+  }
+  return value.trim()
+}
+
+function optionalSettingThinking(
+  value: unknown,
+  field: string,
+  filePath: string
+): ThinkingLevel | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !SUPPORTED_THINKING_LEVELS.has(value as ThinkingLevel)) {
+    throw new Error(`Subagent settings '${filePath}' has invalid '${field}'.`)
+  }
+  return value as ThinkingLevel
+}
+
+function settingBoolean(value: unknown, field: string, prefix: string): boolean {
+  if (typeof value !== 'boolean') throw new Error(`${prefix} has invalid '${field}'.`)
+  return value
+}
+
+function settingTextOrFalse(value: unknown, field: string, prefix: string): string | false {
+  if (value === false) return false
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`${prefix} has invalid '${field}'.`)
+  }
+  return value.trim()
+}
+
+function settingThinkingOrFalse(
+  value: unknown,
+  field: string,
+  prefix: string
+): ThinkingLevel | false {
+  if (value === false) return false
+  if (typeof value !== 'string' || !SUPPORTED_THINKING_LEVELS.has(value as ThinkingLevel)) {
+    throw new Error(`${prefix} has invalid '${field}'.`)
+  }
+  return value as ThinkingLevel
+}
+
+function settingListOrFalse(
+  value: unknown,
+  field: string,
+  prefix: string
+): string[] | false {
+  if (value === false) return false
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+    throw new Error(`${prefix} has invalid '${field}'.`)
+  }
+  return value.map((item) => item.trim()).filter(Boolean)
 }
 
 async function loadAgentFile(

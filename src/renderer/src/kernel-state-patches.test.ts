@@ -377,6 +377,8 @@ function subagentTool(
         agent: 'reviewer',
         status: 'running',
         task: 'Review renderer',
+        model: null,
+        usage: null,
         currentTool: 'read',
         currentPath: '/tmp/project/src/App.tsx',
         toolCount: 1,
@@ -384,7 +386,8 @@ function subagentTool(
         tokens: 100,
         durationMs: 1000,
         error: null,
-        finalOutput: null
+        finalOutput: null,
+        outputReferences: []
       }]
     }
   }

@@ -1,6 +1,5 @@
 export type TimelineScrollMode = 'following' | 'reading'
 
-export const TIMELINE_LAYOUT_CHANGE_EVENT = 'pi-gui:timeline-layout-change'
 export const OUTPUT_END_EPSILON_PX = 2
 
 export function timelineScrollModeAfterScroll({

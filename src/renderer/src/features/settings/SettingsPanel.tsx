@@ -7,9 +7,6 @@ import {
 import type {
   AppearanceSettings,
   GeneralSettings,
-  KernelAdvisorConfiguration,
-  KernelAdvisorDefinitionInput,
-  KernelAdvisorEditableScope,
   KernelExtensionSelectionKind,
   KernelInstalledPackage,
   KernelModelPricingFetchResult,
@@ -36,8 +33,6 @@ import { CredentialsPanel } from './CredentialsPanel'
 import { ModelSettings } from './ModelSettings'
 import { ShortcutSettingsPanel } from './ShortcutSettingsPanel'
 import { AdaptedExtensionPackageControl } from './AdaptedExtensionPackageControl'
-import { AdvisorExtensionPackageControl } from './AdvisorExtensionPackageControl'
-import { AdvisorSettings } from './AdvisorSettings'
 import { SubagentSettings } from './SubagentSettings'
 import { SkillSettings } from './SkillSettings'
 import type { SettingsSection } from './SettingsNavigation'
@@ -45,12 +40,16 @@ import {
   TOOL_DISPLAY_DENSITIES,
   type ToolDisplayDensity
 } from '../../tool-display-density'
+import {
+  isWorkbenchAction,
+  type WorkbenchOperation
+} from '../../workbench-actions'
 
 type SettingsPanelProps = {
   state: KernelState
   busy: boolean
   section: SettingsSection
-  pendingAction: string | null
+  pendingAction: WorkbenchOperation | null
   extensionActionError: string | null
   actionError: string | null
   systemFonts: string[] | null
@@ -94,16 +93,6 @@ type SettingsPanelProps = {
   onSetGeneral: (settings: GeneralSettings) => Promise<void>
   onSetSubagentEnabled: (enabled: boolean) => Promise<void>
   onSetMagicContextEnabled: (enabled: boolean) => Promise<void>
-  onSetAdvisorSystemEnabled: (enabled: boolean) => Promise<void>
-  onSetAdvisorExtensionEnabled: (enabled: boolean) => Promise<void>
-  onListAdvisorDefinitions: () => Promise<KernelAdvisorConfiguration>
-  onSaveAdvisorDefinition: (
-    definition: KernelAdvisorDefinitionInput
-  ) => Promise<KernelAdvisorConfiguration>
-  onRemoveAdvisorDefinition: (
-    slug: string,
-    scope: KernelAdvisorEditableScope
-  ) => Promise<KernelAdvisorConfiguration>
   onListSubagentDefinitions: () => Promise<KernelSubagentDefinition[]>
   onSaveSubagentDefinition: (
     definition: KernelSubagentDefinitionInput
@@ -160,11 +149,6 @@ export function SettingsPanel({
   onSetGeneral,
   onSetSubagentEnabled,
   onSetMagicContextEnabled,
-  onSetAdvisorSystemEnabled,
-  onSetAdvisorExtensionEnabled,
-  onListAdvisorDefinitions,
-  onSaveAdvisorDefinition,
-  onRemoveAdvisorDefinition,
   onListSubagentDefinitions,
   onSaveSubagentDefinition,
   onSetSubagentDefinitionEnabled,
@@ -514,7 +498,7 @@ export function SettingsPanel({
                     density="standard"
                     selected={toolDisplayDensity === 'standard'}
                     title="标准"
-                    description="过程正文与单行状态"
+                    description="过程正文与工具分组"
                   />
                   <DensityExample
                     density="detailed"
@@ -700,11 +684,6 @@ export function SettingsPanel({
               onSetEnabled={onSetMagicContextEnabled}
               onOpenExternal={onOpenExternal}
             />
-            <AdvisorExtensionPackageControl
-              busy={busy}
-              onListPiPackages={onListPiPackages}
-              onSetEnabled={onSetAdvisorExtensionEnabled}
-            />
             <PiDevCatalog
               kind="extension"
               busy={busy}
@@ -744,9 +723,10 @@ export function SettingsPanel({
                   </button>
                 </div>
               </article>
-              {pendingAction === 'install-extension' || pendingAction === 'remove-extension' ? (
+              {isWorkbenchAction(pendingAction, 'install-extension') ||
+              isWorkbenchAction(pendingAction, 'remove-extension') ? (
                 <p className="settings-extension-status" role="status" aria-live="polite">
-                  {pendingAction === 'install-extension' ? '正在安装…' : '正在卸载…'}
+                  {isWorkbenchAction(pendingAction, 'install-extension') ? '正在安装…' : '正在卸载…'}
                 </p>
               ) : null}
               {extensionActionError === null ? null : (
@@ -801,20 +781,6 @@ export function SettingsPanel({
             onRemoveSubagentDefinition={onRemoveSubagentDefinition}
             onSetSubagent={onSetSubagent}
             onDirtyChange={onDirtyChange}
-          />
-        ) : null}
-
-        {section === 'advisor' ? (
-          <AdvisorSettings
-            advisor={state.advisor}
-            runtimeStatus={state.runtime.status}
-            activeProjectKey={state.activeProjectKey}
-            availableModels={state.availableModels}
-            busy={busy}
-            onSetSystemEnabled={onSetAdvisorSystemEnabled}
-            onListDefinitions={onListAdvisorDefinitions}
-            onSaveDefinition={onSaveAdvisorDefinition}
-            onRemoveDefinition={onRemoveAdvisorDefinition}
           />
         ) : null}
 

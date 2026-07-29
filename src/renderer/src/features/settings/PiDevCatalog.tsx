@@ -6,11 +6,15 @@ import type {
 } from '../../../../shared/kernel-contract'
 import piDevLogoUrl from '../../assets/pi-dev-logo.svg'
 import { unknownErrorMessage as errorMessage } from '../../unknown-error-message'
+import {
+  isWorkbenchAction,
+  type WorkbenchOperation
+} from '../../workbench-actions'
 
 type PiDevCatalogProps = {
   kind: 'package' | 'extension'
   busy: boolean
-  pendingAction: string | null
+  pendingAction: WorkbenchOperation | null
   revision: number
   onSearch: (query: string) => Promise<KernelPiDevCatalog>
   onInstall: (name: string) => Promise<void>
@@ -86,7 +90,8 @@ export function PiDevCatalog({
   }
 
   const packageActionPending =
-    pendingAction === 'install-pi-dev-package' || pendingAction === 'remove-pi-package'
+    isWorkbenchAction(pendingAction, 'install-pi-dev-package') ||
+    isWorkbenchAction(pendingAction, 'remove-pi-package')
   const catalogLabel = kind === 'extension' ? 'Extension 类型 Package' : 'Package'
   const catalogUrl = kind === 'extension'
     ? 'https://pi.dev/packages?type=extension'

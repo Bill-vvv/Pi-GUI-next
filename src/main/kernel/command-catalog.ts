@@ -5,6 +5,7 @@ import {
   type KernelCommandDescriptor
 } from '../../shared/kernel-contract.ts'
 import type { PiRpcSlashCommand } from '../pi-rpc/pi-rpc-client.ts'
+import { isInternalQuiescenceCommandName } from '../runtime/runtime-quiescence.ts'
 
 export const NEW_SESSION_COMMAND_ID = 'gui.new-session'
 export const RELOAD_SESSION_COMMAND_ID = 'gui.reload'
@@ -98,6 +99,8 @@ export function createCommandCatalog(
   const knownNames = new Set(catalog.map(({ name }) => name.toLocaleLowerCase()))
 
   for (const command of piCommands) {
+    // App-owned internal runtime commands are invoked only by RuntimeHost, never offered to users.
+    if (isInternalQuiescenceCommandName(command.name)) continue
     const normalizedName = command.name.toLocaleLowerCase()
     if (knownNames.has(normalizedName)) continue
     knownNames.add(normalizedName)

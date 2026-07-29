@@ -83,22 +83,25 @@ export function subagentCoordinationNoticePresentation(
   }
 }
 
+export function isInternalSubagentCoordinationTool(entry: KernelToolEntry): boolean {
+  const name = toolLeafName(entry.name)
+  const args = parseToolArgs(entry.args)
+  if (name === 'subagent_wait') return true
+  if (name === 'subagent') {
+    const action = stringValue(args?.action)
+    return action === 'list' || action === 'status'
+  }
+  if (name !== 'subagent_supervisor' && name !== 'intercom') return false
+  const action = stringValue(args?.action)
+  return action === 'pending' || action === 'status' || action === 'list'
+}
+
 export function subagentCoordinationToolPresentation(
   entry: KernelToolEntry
 ): SubagentCoordinationToolPresentation | null {
+  if (isInternalSubagentCoordinationTool(entry)) return null
   const name = toolLeafName(entry.name)
   const args = parseToolArgs(entry.args)
-
-  if (name === 'subagent_wait') {
-    return {
-      text: statusText(entry, {
-        running: '正在等待 Subagent',
-        success: 'Subagent 等待已结束',
-        error: '等待 Subagent 失败'
-      }),
-      groupLabel: '等待 Subagent'
-    }
-  }
 
   if (name === 'subagent_supervisor' || name === 'intercom') {
     const action = stringValue(args?.action)
@@ -110,16 +113,6 @@ export function subagentCoordinationToolPresentation(
           error: '回复 Subagent 请求失败'
         }),
         groupLabel: '回复 Subagent 请求'
-      }
-    }
-    if (action === 'pending' || action === 'status' || action === 'list') {
-      return {
-        text: statusText(entry, {
-          running: '正在检查 Subagent 请求',
-          success: '已检查 Subagent 请求',
-          error: '检查 Subagent 请求失败'
-        }),
-        groupLabel: '检查 Subagent 请求'
       }
     }
     return {
@@ -134,16 +127,14 @@ export function subagentCoordinationToolPresentation(
 
   if (name !== 'subagent') return null
   const action = stringValue(args?.action)
-  const labels = action === 'status'
-    ? ['正在检查 Subagent 状态', '已检查 Subagent 状态', '检查 Subagent 状态失败', '检查 Subagent 状态']
-    : action === 'steer'
-      ? ['正在调整 Subagent 任务', '已调整 Subagent 任务', '调整 Subagent 任务失败', '调整 Subagent 任务']
-      : action === 'resume'
-        ? ['正在继续 Subagent 任务', '已继续 Subagent 任务', '继续 Subagent 任务失败', '继续 Subagent 任务']
+  const labels = action === 'steer'
+    ? ['正在调整子任务', '已调整子任务', '调整子任务失败', '调整子任务']
+    : action === 'resume'
+      ? ['正在继续子任务', '已继续子任务', '继续子任务失败', '继续子任务']
         : action === 'interrupt'
-          ? ['正在暂停 Subagent 任务', '已暂停 Subagent 任务', '暂停 Subagent 任务失败', '暂停 Subagent 任务']
+          ? ['正在暂停子任务', '已暂停子任务', '暂停子任务失败', '暂停子任务']
           : action === 'stop'
-            ? ['正在停止 Subagent 任务', '已停止 Subagent 任务', '停止 Subagent 任务失败', '停止 Subagent 任务']
+            ? ['正在停止子任务', '已停止子任务', '停止子任务失败', '停止子任务']
             : null
   if (labels === null) return null
   return {

@@ -30,15 +30,19 @@ canonical Git checkout
 对应 Slice 落地后，统一命令为：
 
 ```bash
+pnpm install --frozen-lockfile
+(cd extensions/pi-gui-ask && pnpm install --ignore-workspace --frozen-lockfile --config.strict-dep-builds=false)
 pnpm typecheck
 pnpm test:core
 pnpm smoke:pi
 pnpm build
 pnpm package:linux
 pnpm verify:linux
+# S26 在同一个真实 UI verifier 上增加内存证据
+pnpm verify:linux -- --memory-diagnostics
 ```
 
-自动测试只覆盖三组高价值边界：LF JSONL framing、RPC request/response correlation、Runtime lifecycle/crash transition。不设置覆盖率目标。
+`pi-gui-ask` 是拥有独立 frozen lock 的本地 Package；根 `tsconfig` 会检查其源码，因此 clean clone 必须先按该 Package 自己的 lock 安装 peer/type 依赖。该安装显式保持传递依赖 build scripts 禁用；`strict-dep-builds=false` 只把已知 ignored-build 状态从安装错误降为警告，不执行 `@google/genai` 或 `protobufjs` 脚本。`pnpm test:core` 已包含仓库内 ask、runtime-quiescence、task-notify 与历史 multi-advisor quiescence 合同测试。Magic Context 与 pi-subagents 的当前安装版本由真实 AppImage Gate 通过 Pi Runtime 加载并验证；不得依赖已退役的项目 `node_modules/@aliou/pi-subagents` 或 npm 产物未发布的测试目录。自动测试保持定向，不设置覆盖率目标。
 
 ## P1 真实产物回归
 

@@ -14,6 +14,7 @@ import type {
   KernelProviderInput,
   KernelProviderTestResult
 } from '../../../../shared/kernel-contract'
+import { useModalDialog } from '../../components/useModalDialog'
 import { ProviderSettings } from './ProviderSettings'
 import './credentials-panel.css'
 
@@ -99,8 +100,6 @@ export function CredentialsPanel({
   const mountedRef = useRef(true)
   const operationRef = useRef<AuthOperation | null>(null)
   const promptRef = useRef<AuthPromptState | null>(null)
-  const promptInputRef = useRef<HTMLInputElement>(null)
-  const promptOptionsRef = useRef<HTMLDivElement>(null)
   const cancelRequestedRef = useRef(false)
 
   function updateOperation(next: AuthOperation | null): void {
@@ -189,15 +188,6 @@ export function CredentialsPanel({
       notice: event.notice
     })
   }), [onSubscribeProviderAuth])
-
-  useEffect(() => {
-    if (promptState === null) return
-    if (promptState.prompt.type === 'select') {
-      promptOptionsRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
-    } else {
-      promptInputRef.current?.focus()
-    }
-  }, [promptState?.promptId])
 
   const controlsDisabled = busy || loading || action !== null || operation !== null
   const configuredCredentials = credentials.filter((credential) => credential.configured)
@@ -421,10 +411,9 @@ export function CredentialsPanel({
 
       {promptState === null ? null : createPortal(
         <AuthPromptDialog
+          key={promptState.promptId}
           state={promptState}
           value={promptValue}
-          inputRef={promptInputRef}
-          optionsRef={promptOptionsRef}
           onValueChange={setPromptValue}
           onSubmit={submitPrompt}
           onCancel={() => void cancelLogin()}
@@ -510,16 +499,12 @@ function AuthNotice({
 function AuthPromptDialog({
   state,
   value,
-  inputRef,
-  optionsRef,
   onValueChange,
   onSubmit,
   onCancel
 }: {
   state: AuthPromptState
   value: string
-  inputRef: React.RefObject<HTMLInputElement | null>
-  optionsRef: React.RefObject<HTMLDivElement | null>
   onValueChange: (value: string) => void
   onSubmit: (value: string) => Promise<void>
   onCancel: () => void
@@ -528,42 +513,16 @@ function AuthPromptDialog({
   const descriptionId = `provider-auth-prompt-description-${state.promptId}`
   const prompt = state.prompt
   const dialogRef = useRef<HTMLElement>(null)
-  useEffect(() => {
-    const returnFocus = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null
-    return () => {
-      if (returnFocus?.isConnected) returnFocus.focus()
-    }
-  }, [state.promptId])
+  // Escape continues to cancel the provider login while prompt submission is pending.
+  useModalDialog({
+    open: true,
+    dialogRef,
+    onDismiss: onCancel
+  })
   return (
     <div
       className="credential-auth-dialog-backdrop"
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          event.preventDefault()
-          onCancel()
-          return
-        }
-        if (event.key !== 'Tab') return
-        const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-          'button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])'
-        )
-        if (focusable === undefined || focusable.length === 0) {
-          event.preventDefault()
-          return
-        }
-        const first = focusable[0]
-        const last = focusable[focusable.length - 1]
-        if (first === undefined || last === undefined) return
-        if (event.shiftKey && document.activeElement === first) {
-          event.preventDefault()
-          last.focus()
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault()
-          first.focus()
-        }
-      }}
+      onPointerDown={(event) => event.stopPropagation()}
     >
       <section
         ref={dialogRef}
@@ -573,11 +532,12 @@ function AuthPromptDialog({
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         aria-busy={state.submitting}
+        tabIndex={-1}
       >
         <h2 id={titleId}>登录 {state.providerId}</h2>
         <p id={descriptionId}>{prompt.message}</p>
         {prompt.type === 'select' ? (
-          <div className="credential-auth-options" ref={optionsRef}>
+          <div className="credential-auth-options">
             {prompt.options.map((option) => (
               <button
                 type="button"
@@ -603,7 +563,6 @@ function AuthPromptDialog({
                 : prompt.type === 'manual_code' ? '授权码' : '输入'}
             </label>
             <input
-              ref={inputRef}
               id={`provider-auth-input-${state.promptId}`}
               type={prompt.type === 'secret' ? 'password' : 'text'}
               value={value}

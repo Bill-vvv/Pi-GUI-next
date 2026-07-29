@@ -88,6 +88,73 @@ test('an already-live target only clears its preview shell', async () => {
   assert.equal(harness.snapshot.sessionPreview, null)
 })
 
+test('a prompt-time activation joins the same Session startup already in flight', async () => {
+  const activation = deferred<KernelMutationAck>()
+  const harness = createHarness(kernelState(), {
+    activateSession: () => activation.promise
+  })
+  await harness.controller.preview(SESSION_A)
+
+  const opening = harness.controller.activate(SESSION_A)
+  harness.emitKernelState(kernelState({
+    activeSessionKey: SESSION_A,
+    runtimeStatus: 'starting'
+  }))
+  let promptGateSettled = false
+  const promptGate = harness.controller.activate(SESSION_A).then(() => {
+    promptGateSettled = true
+  })
+
+  await Promise.resolve()
+  assert.equal(promptGateSettled, false)
+  assert.deepEqual(harness.activateCalls, [SESSION_A])
+
+  harness.emitKernelState(kernelState({
+    activeSessionKey: SESSION_A,
+    runtimeStatus: 'ready'
+  }))
+  activation.resolve({ revision: 1 })
+  await Promise.all([opening, promptGate])
+
+  assert.equal(promptGateSettled, true)
+  assert.deepEqual(harness.activateCalls, [SESSION_A])
+})
+
+test('a Session removed by the latest Project refresh never reaches preview or activation IPC', async () => {
+  let previewCalls = 0
+  const harness = createHarness(withoutSession(kernelState(), SESSION_A), {
+    previewSession: async (sessionKey) => {
+      previewCalls += 1
+      return sessionPreview(sessionKey)
+    }
+  })
+
+  await harness.controller.preview(SESSION_A)
+  await harness.controller.activate(SESSION_A, 'settled')
+
+  assert.equal(previewCalls, 0)
+  assert.deepEqual(harness.activateCalls, [])
+  assert.equal(harness.timers.size, 0)
+  assert.equal(harness.snapshot.sessionViewTarget, null)
+  assert.deepEqual(harness.errors, [])
+  assert.deepEqual(harness.completedActions, [])
+})
+
+test('a Session removed while activation is settling does not reach activation IPC', async () => {
+  const harness = createHarness(kernelState())
+  await harness.controller.preview(SESSION_A)
+  const waiting = harness.controller.activate(SESSION_A, 'settled')
+
+  harness.emitKernelState(withoutSession(kernelState(), SESSION_A))
+  harness.runOnlyTimer()
+  await waiting
+
+  assert.deepEqual(harness.activateCalls, [])
+  assert.equal(harness.snapshot.sessionViewTarget, null)
+  assert.deepEqual(harness.errors, [])
+  assert.deepEqual(harness.completedActions, [])
+})
+
 test('a stale preview response cannot replace the latest target', async () => {
   const previewA = deferred<KernelSessionPreview>()
   const harness = createHarness(kernelState(), {
@@ -236,10 +303,11 @@ test('cold start keeps the restored Session target and reports resume failures',
   ])
 })
 
-test('materializing a provisional Session exits the synthetic new view', async () => {
+test('the synthetic new view remains until the first prompt lists the provisional Session', async () => {
   const provisionalState = kernelState({
     activeSessionKey: '/tmp/provisional-session.jsonl',
-    runtimeStatus: 'starting'
+    activeSessionListed: false,
+    runtimeStatus: 'ready'
   })
   let harness!: ReturnType<typeof createHarness>
   harness = createHarness(kernelState({
@@ -258,8 +326,20 @@ test('materializing a provisional Session exits the synthetic new view', async (
   assert.equal(harness.snapshot.sessionViewTarget?.kind, 'new')
   await start
 
-  assert.equal(harness.snapshot.sessionViewTarget, null)
+  assert.deepEqual(harness.snapshot.sessionViewTarget, {
+    kind: 'new',
+    projectKey: PROJECT_A,
+    prepared: true,
+    sawProvisional: true
+  })
   assert.equal(harness.currentState, provisionalState)
+
+  harness.emitKernelState(kernelState({
+    activeSessionKey: '/tmp/provisional-session.jsonl',
+    activeSessionListed: true,
+    runtimeStatus: 'running'
+  }))
+  assert.equal(harness.snapshot.sessionViewTarget, null)
 })
 
 type HarnessOptions = {
@@ -367,6 +447,7 @@ function createHarness(initialState: KernelState, options: HarnessOptions = {}) 
 
 function kernelState(options: {
   activeSessionKey?: string | null
+  activeSessionListed?: boolean
   runtimeStatus?: 'stopped' | 'starting' | 'ready' | 'running' | 'stopping' | 'crashed'
 } = {}): KernelState {
   const activeSessionKey = options.activeSessionKey ?? null
@@ -376,10 +457,18 @@ function kernelState(options: {
     SESSION_B,
     ...(activeSessionKey === null ? [] : [activeSessionKey])
   ])
+  const sessions = [...sessionKeys].map((key) => ({ key, runtimeStatus }))
+  const listedSessionKeys = [...sessionKeys].filter((key) =>
+    options.activeSessionListed !== false || key !== activeSessionKey
+  )
   return {
+    projects: [{
+      path: PROJECT_A,
+      sessions: listedSessionKeys.map((key) => ({ key, runtimeStatus }))
+    }],
     activeProjectKey: PROJECT_A,
     activeSessionKey,
-    sessions: [...sessionKeys].map((key) => ({ key, runtimeStatus })),
+    sessions,
     runtime: { status: runtimeStatus },
     conversation: { entries: [], activeRunStartIndex: null }
   } as unknown as KernelState
@@ -390,6 +479,17 @@ function sessionPreview(sessionKey: string): KernelSessionPreview {
     projectKey: PROJECT_A,
     sessionKey
   } as unknown as KernelSessionPreview
+}
+
+function withoutSession(state: KernelState, sessionKey: string): KernelState {
+  return {
+    ...state,
+    sessions: state.sessions.filter(({ key }) => key !== sessionKey),
+    projects: state.projects.map((project) => ({
+      ...project,
+      sessions: project.sessions?.filter(({ key }) => key !== sessionKey)
+    }))
+  }
 }
 
 function deferred<T>(): {

@@ -254,7 +254,9 @@ export function FontSelect({
                   onClick={() => selectCandidate(candidate)}
                 >
                   <span>{candidate.label}</span>
-                  <span className="font-select-check" aria-hidden="true">{selected ? '✓' : ''}</span>
+                  <span className="font-select-check" aria-hidden="true">
+                    {selected ? <Icon name="check" size="sm" /> : null}
+                  </span>
                 </button>
               )
             })}

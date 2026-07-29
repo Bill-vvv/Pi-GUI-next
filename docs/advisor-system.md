@@ -1,8 +1,8 @@
 # OMP 多 Advisor 系统设计
 
-> 状态：S18-1 / S18-2 / S18-3 Complete；S18-4 Ready
-> 目标 Slice：S18 — OMP 多 Advisor Extension 与 GUI 适配
-> 最后更新：2026-07-26
+> 状态：Retired；用户级 Package 已卸载，GUI 控制面已移除，仅保留历史 advisory 只读兼容
+> 原目标 Slice：S18 — OMP 多 Advisor Extension 与 GUI 适配
+> 最后更新：2026-07-28
 
 ## 1. 文档用途
 
@@ -234,9 +234,9 @@ S18-3 将 capability 升级为 protocol v2，严格声明 multi-advisor、roster
 同一个 strict projector。配置通过固定 typed IPC 读写 WATCHDOG，不透传 raw YAML。当前
 capability 已将 `usage` 置为 true；每次 review 通过 Pi shared event bus 发布版本化的
 `pi-gui.multi-advisor/usage`，只含 Advisor/model identity、结果、耗时、token/cache/reasoning
-和 provider-reported cost，不含 prompt、transcript、advice 或 tool output。该事件当前供同进程
-调试扩展消费，不持久化到 Session，也尚未进入 Renderer；status/notice 同样不会提前进入
-Renderer。其中 advisory 投影只保留：
+和 provider-reported cost，不含 prompt、transcript、advice 或 tool output。该事件不持久化到
+Session，也尚未进入 Renderer；当前没有常驻调试聚合器，只有未来接入正式 GUI 可观测性时
+才消费该旁路事件。status/notice 同样不会提前进入 Renderer。其中 advisory 投影只保留：
 
 ```text
 id
@@ -388,7 +388,7 @@ list/save/remove，使用 YAML AST 保留注释和 GUI 未管理字段；Rendere
 `pnpm typecheck`、生产 build、diff check 与 npm pack dry-run 通过；S18-4 下一步处理更完整的
 交付、backlog、重试与健康状态。
 
-S18-5 的第一条调试遥测已局部接通：protocol v2 `usage:true`，每个 Advisor review 发布
-prompt-free realtime usage event，并由项目级 `usage-debug` 扩展聚合。完整 GUI
+S18-5 的第一条调试遥测生产端已局部接通：protocol v2 `usage:true`，每个 Advisor review
+发布 prompt-free realtime usage event。临时项目级聚合探针已在完成链路验证后移除；完整 GUI
 usage/context/backlog 投影、dump、独立 transcript、发布与 AppImage 验证仍未完成，因此
 S18-5 整体继续保持 Pending。

@@ -29,8 +29,8 @@ test('tool image UI reuses the message lightbox contract and excludes subagent t
   assert.match(timelineTurnsSource, /message-image-viewer-backdrop/)
   assert.match(timelineTurnsSource, /role="dialog"/)
   assert.match(timelineTurnsSource, /aria-modal="true"/)
-  assert.match(timelineTurnsSource, /event\.key === 'Escape'/)
-  assert.match(timelineTurnsSource, /previousFocus\.focus\(\)/)
+  assert.equal([...timelineTurnsSource.matchAll(/useModalDialog\(\{/g)].length, 2)
+  assert.match(timelineTurnsSource, /initialFocus: \(\) => closeButtonRef\.current/)
   // Subagent tools short-circuit before ordinary ToolDetailContent.
   assert.match(
     timelineTurnsSource,

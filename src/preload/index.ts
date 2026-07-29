@@ -13,6 +13,7 @@ import {
   WINDOW_TOGGLE_MAXIMIZE_CHANNEL,
   type KernelApi,
   type KernelAdvisorConfiguration,
+  type KernelAskAnswer,
   type KernelArchiveResult,
   type KernelCommand,
   type KernelEvent,
@@ -23,7 +24,9 @@ import {
   type KernelPiDevCatalog,
   type KernelMessageImage,
   type KernelMutationAck,
+  type KernelNavigatorKind,
   type KernelSnapshot,
+  type KernelRuntimeMemoryDiagnostics,
   type KernelPromptAttachment,
   type KernelProjectPathSearchResult,
   type KernelProviderConfig,
@@ -34,6 +37,50 @@ import {
   type KernelSessionPreview,
   type KernelSubagentDefinition
 } from '../shared/kernel-contract'
+import {
+  GIT_COMMAND_CHANNEL,
+  type GitApi,
+  type GitCommand,
+  type GitDiffResponse,
+  type GitMutationResponse,
+  type GitRefreshResponse
+} from '../shared/git-contract'
+
+const gitApi: GitApi = {
+  refresh: (projectKey) => {
+    const command: GitCommand = { type: 'git.refresh', projectKey }
+    return ipcRenderer.invoke(GIT_COMMAND_CHANNEL, command) as Promise<GitRefreshResponse>
+  },
+  authorizeAncestorRepository: (projectKey, repositoryRoot, expectedStatusRevision) => {
+    const command: GitCommand = {
+      type: 'git.authorize-ancestor-repository',
+      projectKey,
+      repositoryRoot,
+      expectedStatusRevision
+    }
+    return ipcRenderer.invoke(GIT_COMMAND_CHANNEL, command) as Promise<GitRefreshResponse>
+  },
+  getDiff: (projectKey, request) => {
+    const command: GitCommand = { type: 'git.get-diff', projectKey, request }
+    return ipcRenderer.invoke(GIT_COMMAND_CHANNEL, command) as Promise<GitDiffResponse>
+  },
+  stageFile: (projectKey, request) => {
+    const command: GitCommand = {
+      type: 'git.mutate-file',
+      projectKey,
+      request: { ...request, action: 'stage' }
+    }
+    return ipcRenderer.invoke(GIT_COMMAND_CHANNEL, command) as Promise<GitMutationResponse>
+  },
+  unstageFile: (projectKey, request) => {
+    const command: GitCommand = {
+      type: 'git.mutate-file',
+      projectKey,
+      request: { ...request, action: 'unstage' }
+    }
+    return ipcRenderer.invoke(GIT_COMMAND_CHANNEL, command) as Promise<GitMutationResponse>
+  }
+}
 
 const kernelApi: KernelApi = {
   getPathForFile: (file) => webUtils.getPathForFile(file),
@@ -41,6 +88,14 @@ const kernelApi: KernelApi = {
     const command: KernelCommand = { type: 'kernel.get-state' }
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelSnapshot>
+  },
+  getRuntimeMemoryDiagnostics: () => {
+    const command: KernelCommand = { type: 'kernel.get-runtime-memory-diagnostics' }
+
+    return ipcRenderer.invoke(
+      KERNEL_COMMAND_CHANNEL,
+      command
+    ) as Promise<KernelRuntimeMemoryDiagnostics>
   },
   listSystemFonts: () => {
     const command: KernelCommand = { type: 'kernel.list-system-fonts' }
@@ -54,6 +109,21 @@ const kernelApi: KernelApi = {
   },
   activateProject: (projectKey) => {
     const command: KernelCommand = { type: 'kernel.activate-project', projectKey }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
+  },
+  selectNavigator: (kind: KernelNavigatorKind) => {
+    const command: KernelCommand = { type: 'kernel.select-navigator', kind }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
+  },
+  createTask: () => {
+    const command: KernelCommand = { type: 'kernel.create-task' }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
+  },
+  activateTask: (taskKey) => {
+    const command: KernelCommand = { type: 'kernel.activate-task', taskKey }
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
@@ -106,6 +176,15 @@ const kernelApi: KernelApi = {
     const command: KernelCommand = { type: 'kernel.fork-session', entryId }
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelForkResult>
+  },
+  navigateHistoryPrompt: (sessionKey, messageId) => {
+    const command: KernelCommand = {
+      type: 'kernel.navigate-history-prompt',
+      sessionKey,
+      messageId
+    }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
   exportSession: () => {
     const command: KernelCommand = { type: 'kernel.export-session' }
@@ -319,11 +398,31 @@ const kernelApi: KernelApi = {
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelPromptAttachment[]>
   },
-  prompt: (message, attachments) => {
+  submitAsk: (sessionKey, toolCallId, answers) => {
+    const command: KernelCommand = {
+      type: 'kernel.submit-ask',
+      sessionKey,
+      toolCallId,
+      answers: answers.map((answer: KernelAskAnswer) => ({
+        questionId: answer.questionId,
+        value: Array.isArray(answer.value) ? [...answer.value] : answer.value,
+        ...(answer.customValue === undefined ? {} : { customValue: answer.customValue })
+      }))
+    }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
+  },
+  cancelAsk: (sessionKey, toolCallId) => {
+    const command: KernelCommand = { type: 'kernel.cancel-ask', sessionKey, toolCallId }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
+  },
+  prompt: (message, attachments, expectedSessionKey) => {
     const command: KernelCommand = {
       type: 'kernel.prompt',
       message,
-      ...(attachments !== undefined && attachments.length > 0 ? { attachments } : {})
+      ...(attachments !== undefined && attachments.length > 0 ? { attachments } : {}),
+      ...(expectedSessionKey === undefined ? {} : { expectedSessionKey })
     }
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
@@ -446,3 +545,4 @@ const kernelApi: KernelApi = {
 }
 
 contextBridge.exposeInMainWorld('piGui', kernelApi)
+contextBridge.exposeInMainWorld('piGit', gitApi)

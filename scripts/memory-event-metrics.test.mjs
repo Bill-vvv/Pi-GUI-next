@@ -27,11 +27,24 @@ test('replace-tool-metadata payload counts expected and metadata together', () =
 })
 
 test('verify-linux-release probe counts expected+metadata for replace-tool-metadata', async () => {
-  const source = await import('node:fs/promises').then((fs) =>
-    fs.readFile(new URL('./verify-linux-release.mjs', import.meta.url), 'utf8')
-  )
+  const source = await verifierSource()
   assert.match(
     source,
     /replace-tool-metadata'[\s\S]*stringChars\(patch\.expected\)\s*\+\s*stringChars\(patch\.metadata\)/
   )
 })
+
+test('verify-linux-release reports and enforces bounded state batches', async () => {
+  const source = await verifierSource()
+  assert.match(source, /stateBatchEvents/)
+  assert.match(source, /stateBatchMembers/)
+  assert.match(source, /maxStateBatchSize/)
+  assert.match(source, /maxBatchSize\s*>\s*64/)
+  assert.match(source, /E_MEMORY_STATE_BATCH_BOUNDS/)
+})
+
+async function verifierSource() {
+  return import('node:fs/promises').then((fs) =>
+    fs.readFile(new URL('./verify-linux-release.mjs', import.meta.url), 'utf8')
+  )
+}

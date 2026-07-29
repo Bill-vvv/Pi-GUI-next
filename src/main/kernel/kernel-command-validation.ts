@@ -5,6 +5,7 @@ import {
   type GeneralSettings,
   type KernelCommand,
   type KernelAdvisorDefinitionInput,
+  type KernelAskAnswer,
   type KernelPromptAttachment,
   type KernelProjectTrustChoice,
   type KernelProviderInput,
@@ -22,8 +23,10 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
   if (!isRecord(value) || typeof value.type !== 'string') return false
   if (
     value.type === 'kernel.get-state' ||
+    value.type === 'kernel.get-runtime-memory-diagnostics' ||
     value.type === 'kernel.list-system-fonts' ||
     value.type === 'kernel.add-project' ||
+    value.type === 'kernel.create-task' ||
     value.type === 'kernel.start-session' ||
     value.type === 'kernel.reload-session' ||
     value.type === 'kernel.list-fork-candidates' ||
@@ -41,6 +44,12 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
   }
   if (value.type === 'kernel.activate-project') {
     return typeof value.projectKey === 'string' && Object.keys(value).length === 2
+  }
+  if (value.type === 'kernel.select-navigator') {
+    return (value.kind === 'project' || value.kind === 'task') && Object.keys(value).length === 2
+  }
+  if (value.type === 'kernel.activate-task') {
+    return isTaskKey(value.taskKey) && Object.keys(value).length === 2
   }
   if (value.type === 'kernel.resolve-project-trust') {
     return typeof value.requestId === 'string' &&
@@ -62,6 +71,17 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
   }
   if (value.type === 'kernel.fork-session') {
     return typeof value.entryId === 'string' && Object.keys(value).length === 2
+  }
+  if (value.type === 'kernel.navigate-history-prompt') {
+    return typeof value.sessionKey === 'string' &&
+      value.sessionKey.length > 0 &&
+      value.sessionKey.length <= 4096 &&
+      !value.sessionKey.includes('\0') &&
+      typeof value.messageId === 'string' &&
+      value.messageId.length > 0 &&
+      value.messageId.length <= 256 &&
+      !value.messageId.includes('\0') &&
+      Object.keys(value).length === 3
   }
   if (value.type === 'kernel.get-message-image') {
     return typeof value.sessionKey === 'string' &&
@@ -177,14 +197,38 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
   if (value.type === 'kernel.cancel-provider-login') {
     return isProviderAuthId(value.operationId) && Object.keys(value).length === 2
   }
+  if (value.type === 'kernel.submit-ask') {
+    return isAskIdentity(value.sessionKey) &&
+      isAskIdentity(value.toolCallId) &&
+      isAskAnswers(value.answers) &&
+      Object.keys(value).length === 4
+  }
+  if (value.type === 'kernel.cancel-ask') {
+    return isAskIdentity(value.sessionKey) &&
+      isAskIdentity(value.toolCallId) &&
+      Object.keys(value).length === 3
+  }
   if (value.type === 'kernel.logout-provider') {
     return isProviderId(value.providerId) && Object.keys(value).length === 2
   }
-  if (
-    value.type === 'kernel.prompt' ||
-    value.type === 'kernel.steer' ||
-    value.type === 'kernel.follow-up'
-  ) {
+  if (value.type === 'kernel.prompt') {
+    const hasAttachments = Object.hasOwn(value, 'attachments')
+    const hasExpectedSessionKey = Object.hasOwn(value, 'expectedSessionKey')
+    return typeof value.message === 'string' &&
+      (!hasAttachments || (
+        Array.isArray(value.attachments) &&
+        value.attachments.length > 0 &&
+        value.attachments.every(isPromptAttachment)
+      )) &&
+      (!hasExpectedSessionKey || (
+        typeof value.expectedSessionKey === 'string' &&
+        value.expectedSessionKey.length > 0 &&
+        value.expectedSessionKey.length <= 4096 &&
+        !value.expectedSessionKey.includes('\0')
+      )) &&
+      Object.keys(value).length === 2 + Number(hasAttachments) + Number(hasExpectedSessionKey)
+  }
+  if (value.type === 'kernel.steer' || value.type === 'kernel.follow-up') {
     return typeof value.message === 'string' &&
       (
         Object.keys(value).length === 2 ||
@@ -230,6 +274,62 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
     isThinkingLevel(value.level) &&
     Object.keys(value).length === 2
   )
+}
+
+function isAskIdentity(value: unknown): value is string {
+  return typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 4_096 &&
+    !value.includes('\0')
+}
+
+function isAskAnswers(value: unknown): value is KernelAskAnswer[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 8) return false
+  const questionIds = new Set<string>()
+  for (const answer of value) {
+    if (!isRecord(answer)) return false
+    const keys = Object.keys(answer)
+    if (
+      (keys.length !== 2 && keys.length !== 3) ||
+      (keys.length === 3 && !keys.includes('customValue')) ||
+      !isAskQuestionId(answer.questionId) ||
+      questionIds.has(answer.questionId)
+    ) return false
+    questionIds.add(answer.questionId)
+    const customValue = answer.customValue
+    const hasCustomValue = customValue !== undefined
+    if (hasCustomValue && !isAskAnswerString(customValue)) return false
+    if (typeof answer.value === 'string') {
+      if (answer.value.length === 0) {
+        if (!hasCustomValue) return false
+      } else if (!isAskAnswerString(answer.value)) {
+        return false
+      }
+      continue
+    }
+    if (
+      !Array.isArray(answer.value) ||
+      answer.value.length > 12 ||
+      (!hasCustomValue && answer.value.length === 0) ||
+      !answer.value.every(isAskAnswerString) ||
+      new Set(answer.value).size !== answer.value.length
+    ) return false
+  }
+  return true
+}
+
+function isAskQuestionId(value: unknown): value is string {
+  return typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 64 &&
+    /^[A-Za-z0-9][A-Za-z0-9_-]*$/u.test(value)
+}
+
+function isAskAnswerString(value: unknown): value is string {
+  return typeof value === 'string' &&
+    value.trim().length > 0 &&
+    value.length <= 4_000 &&
+    !value.includes('\0')
 }
 
 function isProjectPathQuery(value: unknown): value is string {
@@ -539,6 +639,11 @@ function isSessionNamingSettings(value: unknown): value is SessionNamingSettings
     value.provider.trim().length > 0 &&
     typeof value.modelId === 'string' &&
     value.modelId.trim().length > 0
+}
+
+function isTaskKey(value: unknown): value is string {
+  return typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value)
 }
 
 function isStringArray(value: unknown): value is string[] {

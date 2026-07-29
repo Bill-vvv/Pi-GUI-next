@@ -1,5 +1,6 @@
 import {
   createContext,
+  Fragment,
   memo,
   useContext,
   useEffect,
@@ -26,9 +27,12 @@ import type {
   KernelToolImageAttachment
 } from '../../../../shared/kernel-contract'
 import { Icon } from '../../components/Icon'
+import { IconButton } from '../../components/IconButton'
+import { useModalDialog } from '../../components/useModalDialog'
 import { formatDuration } from '../../format-duration.ts'
 import { unknownErrorMessage } from '../../unknown-error-message'
 import { MarkdownMessage } from './MarkdownMessage'
+import { AskToolCard, AskToolInteractionContext } from './AskToolCard'
 import {
   SubagentTaskCapsule,
   SubagentTaskInteractionContext
@@ -43,10 +47,29 @@ import {
   subagentParticipantStatusLabel
 } from './subagent-task-detail-model'
 import {
+  isInternalSubagentCoordinationTool,
   subagentCoordinationNoticePresentation,
   subagentCoordinationToolPresentation,
   type SubagentCoordinationToolPresentation
 } from './subagent-coordination-presentation'
+import {
+  compactToolName,
+  fileBasename,
+  groupAdjacentThinking,
+  latestThinkingSummaryLabel,
+  parseToolArgs,
+  standardProcessItems,
+  standardToolSummaryParts,
+  stringArgument,
+  summarizeTools,
+  thinkingGroupDetailText,
+  thinkingGroupElapsedMs,
+  thinkingSummaryEntryLabel,
+  toolFileInfo,
+  type CommentaryEntry,
+  type ProcessEntry,
+  type ToolFileInfo
+} from './timeline-process-model'
 
 export const TimelineSessionKeyContext = createContext<string | null>(null)
 
@@ -55,14 +78,10 @@ export type ConversationTurn = {
   entries: KernelConversationEntry[]
 }
 
-type CommentaryEntry = KernelMessageEntry & {
-  role: 'assistant'
-  phase: 'commentary'
+type ToolTargetPresentation = {
+  text: string
+  code: boolean
 }
-
-type ProcessEntry = KernelThinkingEntry | KernelToolEntry | CommentaryEntry
-type NarrativeEntry = KernelThinkingEntry | CommentaryEntry
-type PromotedLiveEntry = NarrativeEntry | KernelToolEntry
 
 type ContentEntry =
   | KernelMessageEntry
@@ -79,18 +98,6 @@ type LiveChunk =
       kind: 'entry'
       entry: ContentEntry
     }
-
-type ToolFileOperation = 'read' | 'modify'
-
-type ToolFileInfo = {
-  operation: ToolFileOperation
-  path: string
-  detail: string | null
-}
-
-type ToolFileReference = ToolFileInfo & {
-  entry: KernelToolEntry
-}
 
 export const CompletedTurn = memo(function CompletedTurn({
   turn,
@@ -113,7 +120,10 @@ export const CompletedTurn = memo(function CompletedTurn({
   }
 
   const { user, responseEntries } = splitTurn(turn)
-  const processEntries = responseEntries.filter(isProcessEntry)
+  const displayedRunElapsedMs = runElapsedMs ?? transcriptTurnElapsedMs(user, responseEntries)
+  const processEntries = responseEntries.filter(
+    (entry): entry is ProcessEntry => isProcessEntry(entry) && isVisibleProcessEntry(entry)
+  )
   const answerEntries = responseEntries.filter(
     (entry): entry is ContentEntry =>
       (entry.kind === 'message' && entry.phase !== 'commentary') ||
@@ -132,7 +142,7 @@ export const CompletedTurn = memo(function CompletedTurn({
           <CompletedProcess
             entries={processEntries}
             toolDisplayDensity={toolDisplayDensity}
-            runElapsedMs={runElapsedMs}
+            runElapsedMs={displayedRunElapsedMs}
             thinkingElapsedByEntryId={thinkingElapsedByEntryId}
           />
         ) : null}
@@ -220,9 +230,10 @@ function CompletedProcess({
       onToggle={(event) => setExpanded(event.currentTarget.open)}
     >
       <summary className="completed-process-summary">
-        <span className="completed-process-title">
-          已处理{runElapsedMs === null ? '' : ` ${formatDuration(runElapsedMs)}`}
-        </span>
+        <span className="completed-process-title">已处理</span>
+        {runElapsedMs === null ? null : (
+          <span className="completed-process-duration">{formatDuration(runElapsedMs)}</span>
+        )}
         <span className="completed-process-expand" aria-hidden="true" />
       </summary>
       {processExpanded ? (
@@ -248,6 +259,7 @@ function LiveProcess({
   thinkingElapsedByEntryId: ReadonlyMap<string, number>
 }): React.JSX.Element {
   const activeEntry = currentRunningEntry(entries)
+  const askInteraction = useContext(AskToolInteractionContext)
   if (toolDisplayDensity === 'detailed') {
     return (
       <ProcessSequence
@@ -260,43 +272,71 @@ function LiveProcess({
     )
   }
 
-  const promotedEntries = entries.filter((entry): entry is PromotedLiveEntry => {
-    if (entry.kind === 'tool') return entry.subagent !== null
-    if (toolDisplayDensity !== 'standard') return false
-    return entry.kind === 'message' || (entry.kind === 'thinking' && !entry.summary)
-  })
+  if (toolDisplayDensity === 'standard') {
+    const hiddenEntryIds = new Set(entries.flatMap((entry) => {
+      if (entry.kind === 'thinking' && thinkingSummaryEntryLabel(entry) !== null) return [entry.id]
+      if (
+        entry.kind === 'tool' &&
+        entry.ask !== undefined &&
+        (askInteraction?.sessionKey === null || askInteraction?.sessionKey === undefined)
+      ) return [entry.id]
+      return []
+    }))
+    const detailEntries = entries.filter((entry) => hiddenEntryIds.has(entry.id))
+    const activeEntryVisible = activeEntry !== undefined && !hiddenEntryIds.has(activeEntry.id)
+
+    return (
+      <ol
+        className="process-step-list live-process-condensed tool-density-standard"
+        aria-label="当前工作过程"
+      >
+        <StandardProcessEntries
+          activeEntryId={activeEntry?.id ?? null}
+          entries={entries}
+          hiddenEntryIds={hiddenEntryIds}
+          thinkingElapsedByEntryId={thinkingElapsedByEntryId}
+          pinThinking
+        />
+        {!activeEntryVisible ? (
+          <LiveProcessStatus
+            activeEntryId={activeEntry?.id ?? null}
+            detailEntries={detailEntries}
+            entries={entries}
+            toolDisplayDensity="standard"
+            thinkingElapsedByEntryId={thinkingElapsedByEntryId}
+          />
+        ) : null}
+      </ol>
+    )
+  }
+
+  const promotedEntries = entries.filter((entry): entry is KernelToolEntry => (
+    entry.kind === 'tool' && (
+      entry.subagent !== null || (
+        entry.ask !== undefined &&
+        askInteraction?.sessionKey !== null &&
+        askInteraction?.sessionKey !== undefined
+      )
+    )
+  ))
   const promotedIds = new Set(promotedEntries.map((entry) => entry.id))
   const detailEntries = entries.filter((entry) => !promotedIds.has(entry.id))
   const promotedEntryIsCurrent = activeEntry !== undefined && promotedIds.has(activeEntry.id)
 
   return (
     <ol
-      className={`process-step-list live-process-condensed tool-density-${toolDisplayDensity}`}
+      className="process-step-list live-process-condensed tool-density-compact"
       aria-label="当前工作过程"
     >
-      {promotedEntries.map((entry) => {
-        if (entry.kind === 'thinking') {
-          return (
-            <ThinkingStep
-              active={entry.id === activeEntry?.id}
-              entry={entry}
-              elapsedMs={thinkingElapsedByEntryId.get(entry.id) ?? null}
-              key={entry.id}
-              pinned
-            />
-          )
-        }
-        if (entry.kind === 'message') {
-          return <CommentaryStep entry={entry} key={entry.id} />
-        }
-        return <ToolStep entry={entry} detailed={false} key={entry.id} />
-      })}
+      {promotedEntries.map((entry) => (
+        <ToolStep entry={entry} detailed={false} key={entry.id} />
+      ))}
       {!promotedEntryIsCurrent ? (
         <LiveProcessStatus
           activeEntryId={activeEntry?.id ?? null}
           detailEntries={detailEntries}
           entries={entries}
-          toolDisplayDensity={toolDisplayDensity}
+          toolDisplayDensity="compact"
           thinkingElapsedByEntryId={thinkingElapsedByEntryId}
         />
       ) : null}
@@ -319,20 +359,29 @@ function ProcessSequence({
 }): React.JSX.Element {
   const tools = entries.filter((entry): entry is KernelToolEntry => entry.kind === 'tool')
   const firstToolId = tools[0]?.id ?? null
+  const items = groupAdjacentThinking(entries)
   return (
     <ol className={`process-step-list tool-density-${toolDisplayDensity}`} aria-label="工作过程">
-      {entries.map((entry) => {
-        if (entry.kind === 'thinking') {
+      {toolDisplayDensity === 'standard' ? (
+        <StandardProcessEntries
+          activeEntryId={activeEntryId}
+          entries={entries}
+          thinkingElapsedByEntryId={thinkingElapsedByEntryId}
+          pinThinking={pinThinking}
+        />
+      ) : items.map((item) => {
+        if (item.type === 'thinking-group') {
           return (
-            <ThinkingStep
-              active={entry.id === activeEntryId}
-              entry={entry}
-              elapsedMs={thinkingElapsedByEntryId.get(entry.id) ?? null}
+            <ThinkingGroup
+              activeEntryId={activeEntryId}
+              entries={item.entries}
+              thinkingElapsedByEntryId={thinkingElapsedByEntryId}
               pinned={pinThinking}
-              key={entry.id}
+              key={item.entries[0]!.id}
             />
           )
         }
+        const { entry } = item
         if (entry.kind === 'message') {
           return <CommentaryStep entry={entry} key={entry.id} />
         }
@@ -341,15 +390,55 @@ function ProcessSequence({
             ? <ToolGroupSummary entries={tools} key={`tools:${entry.id}`} />
             : null
         }
-        return (
-          <ToolStep
-            entry={entry}
-            detailed={toolDisplayDensity === 'detailed'}
-            key={entry.id}
-          />
-        )
+        return <ToolStep entry={entry} detailed key={entry.id} />
       })}
     </ol>
+  )
+}
+
+function StandardProcessEntries({
+  activeEntryId,
+  entries,
+  thinkingElapsedByEntryId,
+  hiddenEntryIds,
+  pinThinking = false
+}: {
+  activeEntryId: string | null
+  entries: ProcessEntry[]
+  thinkingElapsedByEntryId: ReadonlyMap<string, number>
+  hiddenEntryIds?: ReadonlySet<string>
+  pinThinking?: boolean
+}): React.JSX.Element {
+  const items = standardProcessItems(entries, hiddenEntryIds)
+
+  return (
+    <>
+      {items.map((item) => {
+        if (item.type === 'tool-group') {
+          return (
+            <ToolGroupSummary
+              entries={item.entries}
+              key={`standard-tools:${item.entries[0]!.id}`}
+              variant="standard"
+            />
+          )
+        }
+        if (item.type === 'thinking-group') {
+          return (
+            <ThinkingGroup
+              activeEntryId={activeEntryId}
+              entries={item.entries}
+              thinkingElapsedByEntryId={thinkingElapsedByEntryId}
+              key={item.entries[0]!.id}
+              pinned={pinThinking}
+            />
+          )
+        }
+        const { entry } = item
+        if (entry.kind === 'message') return <CommentaryStep entry={entry} key={entry.id} />
+        return <ToolStep entry={entry} detailed={false} key={entry.id} />
+      })}
+    </>
   )
 }
 
@@ -367,8 +456,15 @@ function LiveProcessStatus({
   thinkingElapsedByEntryId: ReadonlyMap<string, number>
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
-  const status = <ThinkingStatus label={liveProcessStatusLabel(entries)} />
-  if (detailEntries.length === 0) {
+  const presentation = liveProcessStatusPresentation(entries)
+  const status = <ThinkingStatus label={presentation.label} target={presentation.target} />
+  const thinkingEntries = detailEntries.every(
+    (entry): entry is KernelThinkingEntry => entry.kind === 'thinking'
+  ) ? detailEntries : null
+  const thinkingDetailText = thinkingEntries === null
+    ? null
+    : thinkingGroupDetailText(thinkingEntries, latestThinkingSummaryLabel(thinkingEntries))
+  if (detailEntries.length === 0 || thinkingDetailText === '') {
     return <li className="live-process-status-row">{status}</li>
   }
   return (
@@ -384,12 +480,21 @@ function LiveProcessStatus({
         </summary>
         {expanded ? (
           <div className="live-process-status-detail">
-            <ProcessSequence
-              activeEntryId={activeEntryId}
-              entries={detailEntries}
-              toolDisplayDensity={toolDisplayDensity}
-              thinkingElapsedByEntryId={thinkingElapsedByEntryId}
-            />
+            {thinkingEntries === null || thinkingDetailText === null ? (
+              <ProcessSequence
+                activeEntryId={activeEntryId}
+                entries={detailEntries}
+                toolDisplayDensity={toolDisplayDensity}
+                thinkingElapsedByEntryId={thinkingElapsedByEntryId}
+              />
+            ) : (
+              <div className="process-thinking-detail">
+                <MarkdownMessage
+                  text={thinkingDetailText}
+                  streaming={thinkingEntries.some((entry) => entry.streaming)}
+                />
+              </div>
+            )}
           </div>
         ) : null}
       </details>
@@ -405,55 +510,122 @@ function CommentaryStep({ entry }: { entry: CommentaryEntry }): React.JSX.Elemen
   )
 }
 
-function ToolGroupSummary({ entries }: { entries: KernelToolEntry[] }): React.JSX.Element {
+function ToolGroupSummary({
+  entries,
+  variant = 'compact'
+}: {
+  entries: KernelToolEntry[]
+  variant?: 'compact' | 'standard'
+}): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const running = entries.some((entry) => entry.status === 'pending' || entry.status === 'running')
-  const failed = entries.some((entry) => entry.status === 'error')
+  const failureCount = entries.filter((entry) => entry.status === 'error').length
+  const failed = failureCount > 0
+  const singleEntry = entries.length === 1 ? entries[0]! : null
+  const expandable = singleEntry === null || hasToolDetailContent(singleEntry)
+  const meta = variant === 'standard'
+    ? failureCount > 0 ? `${failureCount} 项失败` : null
+    : running ? '进行中' : failed ? '部分失败' : '完成'
+  const className = `tool-group-summary${variant === 'standard' ? ' standard' : ''}${running ? ' running' : ''}${failed ? ' failed' : ''}`
+  const content = (
+    <>
+      <span className={`process-step-text${running ? ' activity-text-shimmer' : ''}`}>
+        {variant === 'standard' ? (
+          <StandardToolSummary entries={entries} />
+        ) : summarizeTools(entries)}
+      </span>
+      {meta === null ? null : <span className="process-step-meta">{meta}</span>}
+    </>
+  )
+  if (!expandable) {
+    return (
+      <li className={className}>
+        <div className="tool-group-summary-row static">{content}</div>
+      </li>
+    )
+  }
   return (
-    <li className={`tool-group-summary${running ? ' running' : ''}${failed ? ' failed' : ''}`}>
+    <li className={className}>
       <details
         className="tool-group-details"
         open={expanded}
         onToggle={(event) => setExpanded(event.currentTarget.open)}
       >
         <summary className="tool-group-summary-row">
-          <span className="process-step-text">{summarizeTools(entries)}</span>
-          <span className="process-step-meta">
-            {running ? '进行中' : failed ? '部分失败' : '完成'}
-          </span>
+          {content}
           <span className="process-step-expand" aria-hidden="true" />
         </summary>
-        {expanded ? (
-          <ol className="tool-group-entries" aria-label="工具调用">
-            {entries.map((entry) => (
-              <ToolStep entry={entry} detailed={false} key={entry.id} />
-            ))}
-          </ol>
-        ) : null}
+        {expanded ? <ToolGroupExpandedContent entries={entries} /> : null}
       </details>
     </li>
   )
 }
 
-function ThinkingStep({
-  active = false,
-  entry,
-  elapsedMs,
+export function ToolGroupExpandedContent({
+  entries
+}: {
+  entries: KernelToolEntry[]
+}): React.JSX.Element | null {
+  const singleEntry = entries.length === 1 ? entries[0]! : null
+  if (singleEntry !== null) {
+    return (
+      <div className="tool-group-single-detail">
+        <ToolDetailContent
+          entry={singleEntry}
+          detail={singleEntry.output || singleEntry.details}
+        />
+      </div>
+    )
+  }
+  if (entries.length === 0) return null
+  return (
+    <ol className="tool-group-entries" aria-label="工具调用">
+      {entries.map((entry) => (
+        <ToolStep entry={entry} detailed={false} key={entry.id} />
+      ))}
+    </ol>
+  )
+}
+
+function StandardToolSummary({
+  entries
+}: {
+  entries: KernelToolEntry[]
+}): React.JSX.Element {
+  const parts = standardToolSummaryParts(entries)
+  return (
+    <>
+      {parts.map((part, index) => (
+        <Fragment key={`${part.action}:${part.detail}:${index}`}>
+          {index === 0 ? null : <span className="standard-tool-summary-separator">，</span>}
+          <span className="standard-tool-summary-action">{part.action}</span>{' '}
+          <span className={`standard-tool-summary-detail ${part.detailKind}`}>{part.detail}</span>
+        </Fragment>
+      ))}
+    </>
+  )
+}
+
+function ThinkingGroup({
+  activeEntryId,
+  entries,
+  thinkingElapsedByEntryId,
   pinned = false
 }: {
-  active?: boolean
-  entry: KernelThinkingEntry
-  elapsedMs: number | null
+  activeEntryId: string | null
+  entries: KernelThinkingEntry[]
+  thinkingElapsedByEntryId: ReadonlyMap<string, number>
   pinned?: boolean
 }): React.JSX.Element {
+  const active = entries.some((entry) => entry.id === activeEntryId)
   const status = active ? 'running' : 'completed'
-  const activeSummaryLabel = active && entry.summary
-    ? latestThinkingSummaryLabel([entry])
-    : null
-  const hasText = entry.text.trim().length > 0
-  const showDetail = hasText && (
-    activeSummaryLabel === null || thinkingSummarySemanticLineCount(entry.text) > 1
-  )
+  const activeSummaryLabel = active ? latestThinkingSummaryLabel(entries) : null
+  const detailText = thinkingGroupDetailText(entries, activeSummaryLabel)
+  const showDetail = detailText.length > 0
+  const elapsedMs = thinkingGroupElapsedMs(entries, thinkingElapsedByEntryId)
+  const narrative = entries.some((entry) => (
+    !entry.summary && thinkingSummaryEntryLabel(entry) === null
+  ))
   const title = active
     ? <ThinkingStatus label={activeSummaryLabel ?? '正在思考'} />
     : elapsedMs === null ? '思考' : `思考了 ${formatDuration(elapsedMs)}`
@@ -467,9 +639,22 @@ function ThinkingStep({
     }
     previousActiveRef.current = active
   }, [active, pinned])
+  const showShortDetail = !active && showDetail && isSingleLineThinkingDetail(detailText)
   return (
-    <li className={`process-step thinking ${entry.summary ? 'summary' : 'narrative'} ${status}`}>
-      {showDetail ? (
+    <li className={`process-step thinking ${narrative ? 'narrative' : 'summary'} ${status}`}>
+      {showShortDetail ? (
+        <div className="process-thinking short">
+          <div className="process-thinking-detail">
+            <MarkdownMessage
+              text={detailText}
+              streaming={entries.some((entry) => entry.streaming)}
+            />
+          </div>
+          {elapsedMs === null ? null : (
+            <span className="process-step-meta">{formatDuration(elapsedMs)}</span>
+          )}
+        </div>
+      ) : showDetail ? (
         <details
           className="process-thinking"
           open={expanded}
@@ -481,7 +666,10 @@ function ThinkingStep({
           </summary>
           {expanded ? (
             <div className="process-thinking-detail">
-              <MarkdownMessage text={entry.text} streaming={active} />
+              <MarkdownMessage
+                text={detailText}
+                streaming={entries.some((entry) => entry.streaming)}
+              />
             </div>
           ) : null}
         </details>
@@ -504,6 +692,14 @@ function ToolStep({
   detailed: boolean
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
+  const askInteraction = useContext(AskToolInteractionContext)
+  if (entry.ask !== undefined) {
+    return (
+      <li className="process-step tool ask running">
+        <AskToolCard ask={entry.ask} entry={entry} interaction={askInteraction} />
+      </li>
+    )
+  }
   if (entry.subagent !== null) {
     return (
       <SubagentToolStep
@@ -525,7 +721,7 @@ function ToolStep({
   }
   const status = activityStatus(entry)
   const file = toolFileInfo(entry)
-  const target = file?.path ?? toolTarget(entry)
+  const target = toolTarget(entry)
   const detail = entry.output || entry.details
   if (!detailed) {
     const args = parseToolArgs(entry.args)
@@ -545,7 +741,7 @@ function ToolStep({
                 {entry.status === 'error'
                   ? '运行失败'
                   : entry.status === 'success' ? '已运行' : '正在运行'}{' '}
-                {compactTarget(command)}
+                <span className="process-step-code-target">{compactTarget(command)}</span>
               </span>
               {entry.status === 'success' ? null : (
                 <span className="process-step-meta">{toolStatusLabel(entry)}</span>
@@ -571,7 +767,11 @@ function ToolStep({
           <summary className="process-step-summary tool-standard-summary standard-tool-summary">
             <span className="process-step-text">
               {toolActivityPrefix(entry, file)}{' '}
-              {file ? <FileReference file={{ ...file, entry }} basenameOnly /> : target}
+              {file ? (
+                <FileReference file={{ ...file, entry }} basenameOnly />
+              ) : target.code ? (
+                <span className="process-step-code-target">{target.text}</span>
+              ) : target.text}
             </span>
             {entry.status === 'success' ? null : (
               <span className="process-step-meta">{toolStatusLabel(entry)}</span>
@@ -677,7 +877,7 @@ function DetailedToolStep({
 }: {
   entry: KernelToolEntry
   file: ToolFileInfo | null
-  target: string
+  target: ToolTargetPresentation
   detail: string
   status: ReturnType<typeof activityStatus>
 }): React.JSX.Element {
@@ -693,7 +893,11 @@ function DetailedToolStep({
           <span className="process-step-tool">{compactToolName(entry.name)}</span>
           <span className="process-step-text">
             {toolActivityPrefix(entry, file)}{' '}
-            {file ? <FileReference file={{ ...file, entry }} basenameOnly /> : target}
+            {file ? (
+              <FileReference file={{ ...file, entry }} basenameOnly />
+            ) : target.code ? (
+              <span className="process-step-code-target">{target.text}</span>
+            ) : target.text}
           </span>
           <span className="process-step-meta">
             {entry.durationMs === null ? toolStatusLabel(entry) : formatDuration(entry.durationMs)}
@@ -704,6 +908,14 @@ function DetailedToolStep({
       </details>
     </li>
   )
+}
+
+function hasToolDetailContent(entry: KernelToolEntry): boolean {
+  return entry.args.trim().length > 0 ||
+    entry.output.trim().length > 0 ||
+    entry.details.trim().length > 0 ||
+    (entry.attachments?.length ?? 0) > 0 ||
+    entry.truncated
 }
 
 function ToolDetailContent({
@@ -765,58 +977,23 @@ function ToolResultAttachments({
   } | null>(null)
   const dialogRef = useRef<HTMLElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
-  const previousFocusRef = useRef<HTMLElement | null>(null)
+
+  function closeViewer(): void {
+    requestSequenceRef.current += 1
+    setViewer(null)
+  }
+
+  useModalDialog({
+    open: viewer !== null,
+    dialogRef,
+    initialFocus: () => closeButtonRef.current,
+    onDismiss: closeViewer
+  })
 
   useLayoutEffect(() => {
     requestSequenceRef.current += 1
     setViewer(null)
   }, [sessionKey, toolCallId, attachmentIdentity])
-
-  useEffect(() => {
-    if (viewer === null) return
-    previousFocusRef.current = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null
-    closeButtonRef.current?.focus()
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        event.stopPropagation()
-        requestSequenceRef.current += 1
-        setViewer(null)
-        return
-      }
-      if (event.key !== 'Tab') return
-
-      const dialog = dialogRef.current
-      const focusable = dialog === null
-        ? []
-        : Array.from(dialog.querySelectorAll<HTMLElement>(
-            'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
-          ))
-      if (focusable.length === 0) {
-        event.preventDefault()
-        return
-      }
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      const active = document.activeElement
-      if (
-        !dialog?.contains(active) ||
-        (event.shiftKey && active === first) ||
-        (!event.shiftKey && active === last)
-      ) {
-        event.preventDefault()
-        ;(event.shiftKey ? last : first).focus()
-      }
-    }
-    document.addEventListener('keydown', handleKeyDown, true)
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown, true)
-      const previousFocus = previousFocusRef.current
-      if (previousFocus !== null && previousFocus.isConnected) previousFocus.focus()
-    }
-  }, [viewer !== null])
 
   async function openToolImage(contentIndex: number, name: string): Promise<void> {
     const request: ToolImageRequestIdentity = {
@@ -894,10 +1071,7 @@ function ToolResultAttachments({
         <div
           className="message-image-viewer-backdrop"
           onPointerDown={(event) => {
-            if (event.target === event.currentTarget) {
-              requestSequenceRef.current += 1
-              setViewer(null)
-            }
+            if (event.target === event.currentTarget) closeViewer()
           }}
         >
           <section
@@ -908,22 +1082,19 @@ function ToolResultAttachments({
             aria-labelledby={titleId}
             aria-busy={viewer.status === 'loading' ? true : undefined}
             data-tool-image-viewer="true"
+            tabIndex={-1}
           >
             <header className="message-image-viewer-header">
               <div className="message-image-viewer-copy">
                 <h2 id={titleId}>{viewer.name}</h2>
               </div>
-              <button
+              <IconButton
                 ref={closeButtonRef}
                 className="message-image-viewer-close"
-                type="button"
-                onClick={() => {
-                  requestSequenceRef.current += 1
-                  setViewer(null)
-                }}
-              >
-                关闭
-              </button>
+                icon="close"
+                label="关闭图像预览"
+                onClick={closeViewer}
+              />
             </header>
             <div className="message-image-viewer-body">
               {viewer.status === 'loading' ? (
@@ -952,7 +1123,7 @@ function FileReference({
   file,
   basenameOnly = false
 }: {
-  file: ToolFileReference
+  file: ToolFileInfo & { entry: KernelToolEntry }
   basenameOnly?: boolean
 }): React.JSX.Element {
   const operation = file.operation === 'read' ? '读取' : '修改'
@@ -1139,52 +1310,17 @@ export function MessageAttachments({
   } | null>(null)
   const dialogRef = useRef<HTMLElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
-  const previousFocusRef = useRef<HTMLElement | null>(null)
 
-  useEffect(() => {
-    if (viewer === null) return
-    previousFocusRef.current = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null
-    closeButtonRef.current?.focus()
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        event.stopPropagation()
-        setViewer(null)
-        return
-      }
-      if (event.key !== 'Tab') return
+  function closeViewer(): void {
+    setViewer(null)
+  }
 
-      const dialog = dialogRef.current
-      const focusable = dialog === null
-        ? []
-        : Array.from(dialog.querySelectorAll<HTMLElement>(
-            'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
-          ))
-      if (focusable.length === 0) {
-        event.preventDefault()
-        return
-      }
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      const active = document.activeElement
-      if (
-        !dialog?.contains(active) ||
-        (event.shiftKey && active === first) ||
-        (!event.shiftKey && active === last)
-      ) {
-        event.preventDefault()
-        ;(event.shiftKey ? last : first).focus()
-      }
-    }
-    document.addEventListener('keydown', handleKeyDown, true)
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown, true)
-      const previousFocus = previousFocusRef.current
-      if (previousFocus !== null && previousFocus.isConnected) previousFocus.focus()
-    }
-  }, [viewer !== null])
+  useModalDialog({
+    open: viewer !== null && attachments.length > 0,
+    dialogRef,
+    initialFocus: () => closeButtonRef.current,
+    onDismiss: closeViewer
+  })
 
   if (attachments.length === 0) return null
 
@@ -1269,7 +1405,7 @@ export function MessageAttachments({
         <div
           className="message-image-viewer-backdrop"
           onPointerDown={(event) => {
-            if (event.target === event.currentTarget) setViewer(null)
+            if (event.target === event.currentTarget) closeViewer()
           }}
         >
           <section
@@ -1279,6 +1415,7 @@ export function MessageAttachments({
             aria-modal="true"
             aria-labelledby="message-image-viewer-title"
             aria-busy={viewer.status === 'loading' ? true : undefined}
+            tabIndex={-1}
           >
             <header className="message-image-viewer-header">
               <div className="message-image-viewer-copy">
@@ -1289,14 +1426,13 @@ export function MessageAttachments({
                   </p>
                 ) : null}
               </div>
-              <button
+              <IconButton
                 ref={closeButtonRef}
                 className="message-image-viewer-close"
-                type="button"
-                onClick={() => setViewer(null)}
-              >
-                关闭
-              </button>
+                icon="close"
+                label="关闭图像预览"
+                onClick={closeViewer}
+              />
             </header>
             <div className="message-image-viewer-body">
               {viewer.status === 'loading' ? (
@@ -1321,13 +1457,20 @@ export function MessageAttachments({
   )
 }
 
-export function ThinkingStatus({ label }: { label: string }): React.JSX.Element {
+export function ThinkingStatus({
+  label,
+  target = null
+}: {
+  label: string
+  target?: { prefix: string; value: string } | null
+}): React.JSX.Element {
   return (
     <span className="thinking-status" aria-label={`Pi ${label}`} role="status">
-      <span className="thinking-visual" aria-hidden="true">
-        <span className="thinking-core" />
+      <span className="thinking-status-label activity-text-shimmer">
+        {target === null ? label : (
+          <>{target.prefix} <span className="thinking-status-code">{target.value}</span></>
+        )}
       </span>
-      <span>{label}</span>
     </span>
   )
 }
@@ -1395,6 +1538,20 @@ export function splitTurn(turn: ConversationTurn): {
   return { user: null, responseEntries: turn.entries }
 }
 
+function transcriptTurnElapsedMs(
+  user: KernelMessageEntry | null,
+  responseEntries: KernelConversationEntry[]
+): number | null {
+  if (user === null) return null
+  const finalAssistant = responseEntries.findLast((entry) =>
+    entry.kind === 'message' &&
+    entry.role === 'assistant' &&
+    entry.phase !== 'commentary'
+  )
+  const terminalEntry = finalAssistant ?? responseEntries.at(-1)
+  return terminalEntry === undefined ? null : Math.max(0, terminalEntry.timestamp - user.timestamp)
+}
+
 export function turnFinalAnswerText(turn: ConversationTurn): string | null {
   const parts: string[] = []
   for (const entry of turn.entries) {
@@ -1411,11 +1568,21 @@ export function turnFinalAnswerText(turn: ConversationTurn): string | null {
   return parts.length === 0 ? null : parts.join('\n\n')
 }
 
-export function turnForkUserText(turn: ConversationTurn): string | null {
+export type TurnHistoryPrompt = {
+  turnId: string
+  messageId: string
+  text: string
+}
+
+export function turnHistoryPrompt(turn: ConversationTurn): TurnHistoryPrompt | null {
   const { user } = splitTurn(turn)
   if (user === null || user.text.trim().length === 0) return null
   if (user.attachments?.some((attachment) => attachment.type === 'image')) return null
-  return user.text
+  return { turnId: turn.id, messageId: user.id, text: user.text }
+}
+
+export function turnForkUserText(turn: ConversationTurn): string | null {
+  return turnHistoryPrompt(turn)?.text ?? null
 }
 
 function buildLiveChunks(entries: KernelConversationEntry[]): LiveChunk[] {
@@ -1429,7 +1596,7 @@ function buildLiveChunks(entries: KernelConversationEntry[]): LiveChunk[] {
 
   for (const entry of entries) {
     if (isProcessEntry(entry)) {
-      processEntries.push(entry)
+      if (isVisibleProcessEntry(entry)) processEntries.push(entry)
       continue
     }
     flushProcess()
@@ -1454,6 +1621,10 @@ export function isProcessEntry(entry: KernelConversationEntry): entry is Process
     (entry.kind === 'message' && entry.role === 'assistant' && entry.phase === 'commentary')
 }
 
+function isVisibleProcessEntry(entry: ProcessEntry): boolean {
+  return entry.kind !== 'tool' || !isInternalSubagentCoordinationTool(entry)
+}
+
 export function hasCurrentRunningEntry(entries: KernelConversationEntry[]): boolean {
   return currentRunningEntry(entries) !== undefined
 }
@@ -1466,67 +1637,41 @@ function isVisibleEntry(entry: KernelConversationEntry): boolean {
   return true
 }
 
-function liveProcessStatusLabel(entries: readonly KernelConversationEntry[]): string {
+function liveProcessStatusPresentation(entries: readonly KernelConversationEntry[]): {
+  label: string
+  target: { prefix: string; value: string } | null
+} {
   const activeEntry = currentRunningEntry(entries)
   if (activeEntry?.kind === 'thinking') {
-    return latestThinkingSummaryLabel([activeEntry]) ?? '正在思考'
+    return {
+      label: latestThinkingSummaryLabel([activeEntry]) ?? '正在思考',
+      target: null
+    }
   }
-  if (activeEntry?.kind === 'message') return '正在继续'
+  if (activeEntry?.kind === 'message') return { label: '正在继续', target: null }
   if (activeEntry?.kind === 'tool') {
     const file = toolFileInfo(activeEntry)
-    if (file?.operation === 'read') return `正在阅读 ${fileBasename(file.path)}`
-    if (file?.operation === 'modify') return `正在修改 ${fileBasename(file.path)}`
+    if (file?.operation === 'read' || file?.operation === 'modify') {
+      const prefix = file.operation === 'read' ? '正在阅读' : '正在修改'
+      const value = fileBasename(file.path)
+      return { label: `${prefix} ${value}`, target: { prefix, value } }
+    }
     const coordination = subagentCoordinationToolPresentation(activeEntry)
-    if (coordination !== null) return coordination.text
-    return compactToolName(activeEntry.name) === 'bash'
-      ? '正在运行命令'
-      : `正在调用 ${compactToolName(activeEntry.name)}`
-  }
-  return latestThinkingSummaryLabel(entries) ?? '正在继续'
-}
-
-export function latestThinkingSummaryLabel(
-  entries: readonly KernelConversationEntry[]
-): string | null {
-  for (let entryIndex = entries.length - 1; entryIndex >= 0; entryIndex -= 1) {
-    const entry = entries[entryIndex]
-    if (entry?.kind !== 'thinking' || !entry.summary) continue
-    const lines = entry.text.split(/\r?\n/u)
-    for (let lineIndex = lines.length - 1; lineIndex >= 0; lineIndex -= 1) {
-      const label = thinkingSummaryLineLabel(lines[lineIndex] ?? '')
-      if (label !== null) return label
+    if (coordination !== null) return { label: coordination.text, target: null }
+    if (compactToolName(activeEntry.name) === 'bash') {
+      return { label: '正在运行命令', target: null }
+    }
+    const value = compactToolName(activeEntry.name)
+    return {
+      label: `正在调用 ${value}`,
+      target: { prefix: '正在调用', value }
     }
   }
-  return null
+  return { label: latestThinkingSummaryLabel(entries) ?? '正在继续', target: null }
 }
 
-function thinkingSummaryLineLabel(line: string): string | null {
-  let label = line.trim()
-  if (label.length === 0) return null
-  label = label
-    .replace(/^#{1,6}\s+/u, '')
-    .replace(/^[-+]\s+/u, '')
-    .trim()
-  for (const wrapper of [
-    /^(\*\*)(.+)\1$/u,
-    /^(__)(.+)\1$/u,
-    /^(\*)(.+)\1$/u,
-    /^(_)(.+)\1$/u,
-    /^(`)(.+)\1$/u
-  ]) {
-    const match = wrapper.exec(label)
-    if (match?.[2] !== undefined) {
-      label = match[2].trim()
-      break
-    }
-  }
-  return label.length === 0 ? null : label
-}
-
-function thinkingSummarySemanticLineCount(text: string): number {
-  return text.split(/\r?\n/u).reduce((count, line) => (
-    thinkingSummaryLineLabel(line) === null ? count : count + 1
-  ), 0)
+function isSingleLineThinkingDetail(text: string): boolean {
+  return text.split(/\r?\n/u).filter((line) => line.trim().length > 0).length === 1
 }
 
 function currentRunningEntry<T extends KernelConversationEntry>(
@@ -1542,76 +1687,6 @@ function currentRunningEntry<T extends KernelConversationEntry>(
     lastEntry.streaming
     ? lastEntry
     : undefined
-}
-
-function uniqueToolFiles(tools: KernelToolEntry[]): ToolFileReference[] {
-  const files = new Map<string, ToolFileReference>()
-  for (const entry of tools) {
-    const file = toolFileInfo(entry)
-    if (file === null) continue
-    files.set(`${file.operation}:${file.path}`, { ...file, entry })
-  }
-  return [...files.values()]
-}
-
-function summarizeTools(tools: KernelToolEntry[]): string {
-  const files = uniqueToolFiles(tools)
-  const readCount = files.filter((file) => file.operation === 'read').length
-  const modifiedCount = files.filter((file) => file.operation === 'modify').length
-  const fileToolIds = new Set(
-    tools.filter((entry) => toolFileInfo(entry) !== null).map((entry) => entry.id)
-  )
-  const commandCount = tools.filter(
-    (entry) => !fileToolIds.has(entry.id) && compactToolName(entry.name) === 'bash'
-  ).length
-  const coordinationTools = tools.filter((entry) =>
-    !fileToolIds.has(entry.id) && subagentCoordinationToolPresentation(entry) !== null
-  )
-  const coordinationIds = new Set(coordinationTools.map((entry) => entry.id))
-  const otherToolCount = tools.filter((entry) =>
-    !fileToolIds.has(entry.id) &&
-    compactToolName(entry.name) !== 'bash' &&
-    !coordinationIds.has(entry.id)
-  ).length
-  const coordinationLabel = coordinationTools.length === 1
-    ? subagentCoordinationToolPresentation(coordinationTools[0]!)?.groupLabel ?? null
-    : coordinationTools.length > 1 ? `处理 ${coordinationTools.length} 次 Subagent 协作` : null
-  return [
-    readCount > 0 ? `读取 ${readCount} 个文件` : null,
-    modifiedCount > 0 ? `修改 ${modifiedCount} 个文件` : null,
-    commandCount > 0 ? `运行 ${commandCount} 条命令` : null,
-    coordinationLabel,
-    otherToolCount > 0 ? `调用 ${otherToolCount} 个工具` : null
-  ].filter((part): part is string => part !== null).join('，') || '处理工具调用'
-}
-
-function toolFileInfo(entry: KernelToolEntry): ToolFileInfo | null {
-  const name = compactToolName(entry.name)
-  const args = parseToolArgs(entry.args)
-  if (args === null) return null
-  const path = stringArgument(args, ['path', 'file_path'])
-  if (path === null) return null
-
-  if (name === 'read' || name === 'read_file') {
-    const offset = numericArgument(args.offset)
-    const limit = numericArgument(args.limit)
-    const start = offset ?? 1
-    const detail = offset === null && limit === null
-      ? null
-      : limit === null ? `从第 ${start} 行开始` : `第 ${start}–${start + limit - 1} 行`
-    return { operation: 'read', path, detail }
-  }
-
-  if (name === 'edit' || name === 'write' || name === 'write_file' || name === 'apply_patch') {
-    let detail: string | null = null
-    if (name === 'edit' && Array.isArray(args.edits)) detail = `${args.edits.length} 处修改`
-    if ((name === 'write' || name === 'write_file') && typeof args.content === 'string') {
-      detail = `${lineCount(args.content)} 行内容`
-    }
-    return { operation: 'modify', path, detail }
-  }
-
-  return null
 }
 
 function toolActivityPrefix(entry: KernelToolEntry, file: ToolFileInfo | null): string {
@@ -1701,57 +1776,24 @@ function toolStatusLabel(entry: KernelToolEntry): string {
   return '运行中'
 }
 
-function toolTarget(entry: KernelToolEntry): string {
+function toolTarget(entry: KernelToolEntry): ToolTargetPresentation {
   const args = parseToolArgs(entry.args)
   if (args !== null) {
     const target = stringArgument(args, ['command', 'path', 'file_path', 'query', 'url'])
-    if (target !== null) return compactTarget(target)
+    if (target !== null) return { text: compactTarget(target), code: true }
   }
   const first = entry.args.split('\n', 1)[0]?.trim()
-  if (first && first !== '{' && first !== '[') return compactTarget(first)
-  return compactToolName(entry.name) === 'bash' ? '命令' : '相关内容'
-}
-
-function parseToolArgs(value: string): Record<string, unknown> | null {
-  if (value.trim().length === 0) return null
-  try {
-    const parsed: unknown = JSON.parse(value)
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : null
-  } catch {
-    return null
+  if (first && first !== '{' && first !== '[') {
+    return { text: compactTarget(first), code: true }
   }
-}
-
-function stringArgument(args: Record<string, unknown>, keys: string[]): string | null {
-  for (const key of keys) {
-    if (typeof args[key] === 'string' && args[key].trim().length > 0) return args[key]
+  return {
+    text: compactToolName(entry.name) === 'bash' ? '命令' : '相关内容',
+    code: false
   }
-  return null
-}
-
-function numericArgument(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
 }
 
 function compactTarget(value: string): string {
   const normalized = value.replace(/\s+/g, ' ').trim()
   if (normalized.length <= 96) return normalized
   return `${normalized.slice(0, 95)}…`
-}
-
-function compactToolName(name: string): string {
-  const normalized = name.trim().toLowerCase()
-  return normalized.split(/[.:/]/u).at(-1) || normalized || 'tool'
-}
-
-function fileBasename(path: string): string {
-  const parts = path.split(/[\\/]/).filter(Boolean)
-  return parts.at(-1) ?? path
-}
-
-function lineCount(value: string): number {
-  if (value.length === 0) return 0
-  return value.split('\n').length
 }

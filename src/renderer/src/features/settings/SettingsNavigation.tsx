@@ -1,5 +1,6 @@
 import type { IconName } from '../../components/Icon'
 import { Icon } from '../../components/Icon'
+import { IconButton } from '../../components/IconButton'
 
 export type SettingsSection =
   | 'general'
@@ -9,7 +10,6 @@ export type SettingsSection =
   | 'appearance'
   | 'packages'
   | 'extensions'
-  | 'advisor'
   | 'subagent'
   | 'skills'
   | 'preferences'
@@ -27,7 +27,6 @@ const SETTINGS_SECTIONS: ReadonlyArray<{
   { section: 'packages', label: 'Package', icon: 'packages' },
   { section: 'extensions', label: '拓展', icon: 'extensions' },
   { section: 'subagent', label: 'Subagent', icon: 'subagents' },
-  { section: 'advisor', label: 'Advisor', icon: 'preferences' },
   { section: 'skills', label: '技能', icon: 'skills' },
   { section: 'preferences', label: '偏好', icon: 'preferences' }
 ]
@@ -43,16 +42,20 @@ export function SettingsNavigation({
 }): React.JSX.Element {
   return (
     <>
-      <button className="settings-back" type="button" onClick={onBack}>
-        <span aria-hidden="true">←</span>
-        <span>返回</span>
-      </button>
+      <IconButton
+        className="settings-back"
+        icon="arrow-left"
+        label="返回对话"
+        onClick={onBack}
+      />
       <nav className="settings-nav" aria-label="设置分类">
         {SETTINGS_SECTIONS.map((item) => (
           <button
             type="button"
             className={section === item.section ? 'selected' : ''}
+            aria-label={item.label}
             aria-current={section === item.section ? 'page' : undefined}
+            data-tooltip={item.label}
             onClick={() => onSectionChange(item.section)}
             key={item.section}
           >

@@ -31,14 +31,18 @@ const todos: KernelTodoItem[] = [
   { id: 'old', content: '废弃旧方案', status: 'cancelled', priority: 'low' }
 ]
 
-test('renders the compact Todo panel expanded with accessible disclosure state', () => {
+test('renders the compact Todo panel collapsed by default with accessible disclosure state', () => {
   const html = renderToStaticMarkup(createElement(TodoPanel, { todos }))
 
+  assert.match(html, /class="composer-todo-panel collapsed"/)
   assert.match(html, /aria-label="当前任务"/)
-  assert.match(html, /aria-expanded="true"/)
+  assert.match(html, /aria-label="展开任务清单"/)
+  assert.match(html, /aria-expanded="false"/)
+  assert.match(html, /aria-hidden="true"/)
   assert.match(html, /1\/4/)
   assert.match(html, /composer-todo-state-icon active/)
   assert.match(html, /aria-label="正在处理"/)
+  assert.match(html, /composer-todo-current/)
   assert.match(html, /aria-current="step"/)
   assert.match(html, /composer-todo-item-index[^>]*>2</)
   assert.match(html, /实现 Todo 面板，进行中/)

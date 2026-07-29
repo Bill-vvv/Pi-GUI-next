@@ -43,9 +43,15 @@ test('an empty todowrite list clears the panel for the current turn', () => {
 })
 
 test('namespaced todowrite tools use the same exact suffix match', () => {
-  const entry = todoTool('namespaced', todos, 'success', 'functions.todowrite')
-  assert.equal(isTodoWriteToolEntry(entry), true)
-  assert.deepEqual(currentTurnTodos([user('user', 1), entry]), todos)
+  for (const [index, name] of [
+    'functions.todowrite',
+    'functions:todowrite',
+    'functions/todowrite'
+  ].entries()) {
+    const entry = todoTool(`namespaced-${index}`, todos, 'success', name)
+    assert.equal(isTodoWriteToolEntry(entry), true)
+    assert.deepEqual(currentTurnTodos([user(`user-${index}`, 1), entry]), todos)
+  }
 })
 
 function user(id: string, timestamp: number): KernelConversationEntry {

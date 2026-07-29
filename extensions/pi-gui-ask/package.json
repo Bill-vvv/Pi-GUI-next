@@ -1,0 +1,27 @@
+{
+  "name": "pi-gui-ask",
+  "version": "0.1.0",
+  "description": "Batch user questions into one interactive Pi tool call",
+  "license": "MIT",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "^0.80.0",
+    "@earendil-works/pi-coding-agent": "^0.80.0"
+  },
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ]
+}

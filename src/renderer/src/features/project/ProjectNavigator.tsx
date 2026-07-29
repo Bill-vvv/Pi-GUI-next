@@ -1,7 +1,18 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import {
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState
+} from 'react'
 import { createPortal } from 'react-dom'
 
 import type { KernelState } from '../../../../shared/kernel-contract'
+import {
+  isWorkbenchAction,
+  type WorkbenchOperation
+} from '../../workbench-actions'
 import { Icon } from '../../components/Icon'
 import { IconButton } from '../../components/IconButton'
 import { useViewportPopoverPosition } from '../../components/useViewportPopoverPosition'
@@ -9,6 +20,12 @@ import { formatUsd } from '../../format-usd'
 import { formatTokenCount } from '../../usage-formatters'
 import { formatSessionActivityAge } from './session-activity-time'
 import { sessionLifecycleLabel } from './session-lifecycle-presentation'
+import {
+  indexSessionActivity,
+  reconcileUnreadSessionKeys,
+  type SessionActivityObservation,
+  type SessionActivitySnapshot
+} from './session-unread-state'
 import {
   COLLAPSED_SESSION_LIMIT,
   nextVisibleSessionCountWithRetained,
@@ -19,6 +36,28 @@ import {
 /** Match TooltipProvider: only reveal after a deliberate hover dwell. */
 const HOVER_CARD_SHOW_DELAY_MS = 600
 const HOVER_CARD_CLOSE_DELAY_MS = 120
+const PROJECT_DRAG_START_DISTANCE_PX = 5
+
+type ProjectDragGesture = {
+  projectKey: string
+  pointerId: number
+  startX: number
+  startY: number
+  previewLeft: number
+  previewWidth: number
+  previewHeight: number
+  previewPointerOffsetY: number
+  initialOrder: string[]
+  started: boolean
+}
+
+type ProjectDragPreviewState = {
+  projectKey: string
+  top: number
+  left: number
+  width: number
+  height: number
+}
 
 type ProjectHoverCardState = {
   projectKey: string
@@ -32,6 +71,7 @@ type ProjectNavigatorProps = {
   hidden: boolean
   projects: KernelState['projects']
   activeProjectKey: string | null
+  activeSessionKey: string | null
   sessions: KernelState['sessions']
   displayedSessionKey: string | null
   viewedSessionKey: string | null
@@ -40,7 +80,7 @@ type ProjectNavigatorProps = {
   busy: boolean
   canChangeProjectOrSession: boolean
   sessionPreviewPending: boolean
-  pendingAction: string | null
+  pendingAction: WorkbenchOperation | null
   contextActionStatus: string | null
   tokenCountFormat: KernelState['appearance']['tokenCountFormat']
   pinnedProjectKeys: Set<string>
@@ -61,6 +101,7 @@ export function ProjectNavigator({
   hidden,
   projects,
   activeProjectKey,
+  activeSessionKey,
   sessions,
   displayedSessionKey,
   viewedSessionKey,
@@ -82,9 +123,9 @@ export function ProjectNavigator({
   onArchiveSession,
   onReorderProjects
 }: ProjectNavigatorProps): React.JSX.Element {
-  const [dragArmedProjectKey, setDragArmedProjectKey] = useState<string | null>(null)
   const [draggedProjectKey, setDraggedProjectKey] = useState<string | null>(null)
-  const [dragOverProjectKey, setDragOverProjectKey] = useState<string | null>(null)
+  const [projectDragPreview, setProjectDragPreview] = useState<ProjectDragPreviewState | null>(null)
+  const [projectOrderOverride, setProjectOrderOverride] = useState<string[] | null>(null)
   const [activityClock, setActivityClock] = useState(() => Date.now())
   const [unreadSessionKeys, setUnreadSessionKeys] = useState<Set<string>>(() => new Set())
   const [expandedProjectKeys, setExpandedProjectKeys] = useState<Set<string>>(() =>
@@ -98,7 +139,12 @@ export function ProjectNavigator({
   const projectHoverCardId = `${useId()}-project-information`
   const sessionHoverCardId = `${useId()}-session-information`
   const previousActiveProjectKeyRef = useRef(activeProjectKey)
-  const sessionRunningByKeyRef = useRef(new Map<string, boolean>())
+  const sessionActivityByIdentityRef = useRef(new Map<string, SessionActivitySnapshot>())
+  const projectListRef = useRef<HTMLElement>(null)
+  const projectDragGestureRef = useRef<ProjectDragGesture | null>(null)
+  const projectDragPreviewRef = useRef<HTMLDivElement>(null)
+  const projectOrderOverrideRef = useRef<string[] | null>(null)
+  const suppressedProjectClickRef = useRef<string | null>(null)
   const projectCardAnchorRef = useRef<HTMLElement>(null)
   const sessionCardAnchorRef = useRef<HTMLElement>(null)
   const projectCardCloseTimerRef = useRef<number | null>(null)
@@ -131,15 +177,16 @@ export function ProjectNavigator({
   }, [])
 
   useEffect(() => {
-    const disarmDrag = (): void => {
-      setDragArmedProjectKey(null)
+    const cancelDrag = (): void => {
+      if (projectDragGestureRef.current === null) return
+      projectDragGestureRef.current = null
+      projectOrderOverrideRef.current = null
+      setDraggedProjectKey(null)
+      setProjectDragPreview(null)
+      setProjectOrderOverride(null)
     }
-    window.addEventListener('pointerup', disarmDrag)
-    window.addEventListener('pointercancel', disarmDrag)
-    return () => {
-      window.removeEventListener('pointerup', disarmDrag)
-      window.removeEventListener('pointercancel', disarmDrag)
-    }
+    window.addEventListener('blur', cancelDrag)
+    return () => window.removeEventListener('blur', cancelDrag)
   }, [])
 
   useEffect(() => {
@@ -149,13 +196,22 @@ export function ProjectNavigator({
       }
     }
     if (activeProjectKey !== null) {
-      sessionCountsByProjectRef.current.set(activeProjectKey, sessions.length)
+      const activeProject = projects.find(({ path }) => path === activeProjectKey)
+      sessionCountsByProjectRef.current.set(
+        activeProjectKey,
+        activeProject?.sessionCount ?? activeProject?.sessions?.length ?? sessions.length
+      )
     }
   }, [activeProjectKey, projects, sessions.length])
 
   useEffect(() => {
     if (!hidden) return
     clearHoverCardTimers()
+    projectDragGestureRef.current = null
+    projectOrderOverrideRef.current = null
+    setDraggedProjectKey(null)
+    setProjectDragPreview(null)
+    setProjectOrderOverride(null)
     setProjectHoverCard(null)
     setSessionHoverCard(null)
   }, [hidden])
@@ -179,38 +235,68 @@ export function ProjectNavigator({
   }, [activeProjectKey])
 
   useLayoutEffect(() => {
-    const summariesByKey = new Map<string, KernelState['sessions'][number]>()
+    const observationsByKey = new Map<string, SessionActivityObservation>()
     for (const project of projects) {
-      for (const summary of project.sessions ?? []) summariesByKey.set(summary.key, summary)
-    }
-    for (const summary of sessions) summariesByKey.set(summary.key, summary)
-
-    setUnreadSessionKeys((current) => {
-      let next = current
-      for (const summary of summariesByKey.values()) {
-        const status = summary.runtimeStatus
-        const running = status === 'running'
-        const wasRunning = sessionRunningByKeyRef.current.get(summary.key) === true
-
-        if (wasRunning && status === 'ready' && summary.key !== displayedSessionKey) {
-          if (!next.has(summary.key)) {
-            next = new Set(next)
-            next.add(summary.key)
-          }
-        } else if (summary.key === displayedSessionKey && next.has(summary.key)) {
-          next = new Set(next)
-          next.delete(summary.key)
-        }
-
-        sessionRunningByKeyRef.current.set(summary.key, running)
+      for (const summary of project.sessions ?? []) {
+        observationsByKey.set(summary.key, {
+          identity: sessionActivityIdentity(project.path, summary.id),
+          sessionKey: summary.key,
+          lastActivityAt: summary.lastActivityAt
+        })
       }
-      return next
-    })
-  }, [displayedSessionKey, projects, sessions])
+    }
+    if (activeProjectKey !== null) {
+      for (const summary of sessions) {
+        observationsByKey.set(summary.key, {
+          identity: sessionActivityIdentity(activeProjectKey, summary.id),
+          sessionKey: summary.key,
+          lastActivityAt: summary.lastActivityAt
+        })
+      }
+    }
+
+    const observations = [...observationsByKey.values()]
+    const previousActivityByIdentity = sessionActivityByIdentityRef.current
+    setUnreadSessionKeys((current) => reconcileUnreadSessionKeys(
+      current,
+      displayedSessionKey,
+      previousActivityByIdentity,
+      observations
+    ))
+    sessionActivityByIdentityRef.current = indexSessionActivity(observations)
+  }, [activeProjectKey, displayedSessionKey, projects, sessions])
+
+  useEffect(() => {
+    if (projectOrderOverride === null) return
+    if (!isStrictProjectOrder(projects, projectOrderOverride)) {
+      projectDragGestureRef.current = null
+      projectOrderOverrideRef.current = null
+      setDraggedProjectKey(null)
+      setProjectDragPreview(null)
+      setProjectOrderOverride(null)
+      return
+    }
+    if (projectDragGestureRef.current !== null) return
+    if (!sameOrder(projects.map(({ path }) => path), projectOrderOverride)) return
+    projectOrderOverrideRef.current = null
+    setProjectOrderOverride(null)
+  }, [projectOrderOverride, projects])
+
+  const orderedProjects = resolveProjectOrder(projects, projectOrderOverride)
+  const draggedProject = projectDragPreview === null
+    ? null
+    : projects.find((project) => project.path === projectDragPreview.projectKey) ?? null
 
   const hoveredProject = projectHoverCard === null
     ? null
     : projects.find((project) => project.path === projectHoverCard.projectKey) ?? null
+  const hoveredProjectSessions = hoveredProject?.sessions ?? (
+    hoveredProject?.path === activeProjectKey ? sessions : []
+  )
+  const hoveredProjectUnreadCount = countUnreadSessions(
+    hoveredProjectSessions,
+    unreadSessionKeys
+  )
 
   const hoveredSession = sessionHoverCard === null
     ? null
@@ -255,6 +341,151 @@ export function ProjectNavigator({
     clearHoverCardTimers()
     setProjectHoverCard(null)
     setSessionHoverCard(null)
+  }
+
+  const updateProjectOrderOverride = (order: string[]): void => {
+    projectOrderOverrideRef.current = order
+    setProjectOrderOverride(order)
+  }
+
+  const clearProjectOrderOverride = (expectedOrder?: string[]): void => {
+    if (
+      expectedOrder !== undefined &&
+      projectOrderOverrideRef.current !== expectedOrder
+    ) return
+    projectOrderOverrideRef.current = null
+    setProjectOrderOverride(null)
+  }
+
+  const handleProjectPointerDown = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    projectKey: string
+  ): void => {
+    if (
+      event.button !== 0 ||
+      !event.isPrimary ||
+      busy ||
+      orderedProjects.length <= 1
+    ) return
+    const row = event.currentTarget.closest('.project-row')
+    if (!(row instanceof HTMLElement)) return
+    const bounds = row.getBoundingClientRect()
+    projectDragGestureRef.current = {
+      projectKey,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      previewLeft: bounds.left,
+      previewWidth: bounds.width,
+      previewHeight: bounds.height,
+      previewPointerOffsetY: event.clientY - bounds.top,
+      initialOrder: orderedProjects.map(({ path }) => path),
+      started: false
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const handleProjectPointerMove = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    projectKey: string
+  ): boolean => {
+    const gesture = projectDragGestureRef.current
+    if (
+      gesture === null ||
+      gesture.projectKey !== projectKey ||
+      gesture.pointerId !== event.pointerId
+    ) return false
+
+    if (!gesture.started) {
+      const deltaX = event.clientX - gesture.startX
+      const deltaY = event.clientY - gesture.startY
+      if (
+        deltaX * deltaX + deltaY * deltaY <
+        PROJECT_DRAG_START_DISTANCE_PX * PROJECT_DRAG_START_DISTANCE_PX
+      ) return true
+      gesture.started = true
+      dismissHoverCards()
+      updateProjectOrderOverride(gesture.initialOrder)
+      setDraggedProjectKey(projectKey)
+      setProjectDragPreview({
+        projectKey,
+        top: event.clientY - gesture.previewPointerOffsetY,
+        left: gesture.previewLeft,
+        width: gesture.previewWidth,
+        height: gesture.previewHeight
+      })
+    }
+
+    event.preventDefault()
+    const previewTop = event.clientY - gesture.previewPointerOffsetY
+    if (projectDragPreviewRef.current !== null) {
+      projectDragPreviewRef.current.style.top = `${previewTop}px`
+    } else {
+      setProjectDragPreview((current) => current === null ? null : { ...current, top: previewTop })
+    }
+
+    const projectRows = Array.from(
+      projectListRef.current?.querySelectorAll<HTMLElement>(
+        '.project-session-group > .project-row'
+      ) ?? []
+    )
+      .map((row) => {
+        const group = row.closest<HTMLElement>('.project-session-group')
+        if (group === null || group.dataset.projectKey === undefined) return null
+        const bounds = row.getBoundingClientRect()
+        return {
+          key: group.dataset.projectKey,
+          midpoint: bounds.top + bounds.height / 2
+        }
+      })
+      .filter((row): row is { key: string; midpoint: number } => row !== null)
+      .sort((left, right) => left.midpoint - right.midpoint)
+
+    const stationaryRows = projectRows.filter(({ key }) => key !== projectKey)
+    if (stationaryRows.length !== projects.length - 1) return true
+    let insertionIndex = stationaryRows.length
+    for (let index = 0; index < stationaryRows.length; index += 1) {
+      if (event.clientY >= stationaryRows[index].midpoint) continue
+      insertionIndex = index
+      break
+    }
+    const nextOrder = stationaryRows.map(({ key }) => key)
+    nextOrder.splice(insertionIndex, 0, projectKey)
+    const currentOrder = projectOrderOverrideRef.current ?? gesture.initialOrder
+    if (!sameOrder(currentOrder, nextOrder)) updateProjectOrderOverride(nextOrder)
+    return true
+  }
+
+  const finishProjectPointerDrag = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    cancelled: boolean
+  ): void => {
+    const gesture = projectDragGestureRef.current
+    if (gesture === null || gesture.pointerId !== event.pointerId) return
+    projectDragGestureRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    if (!gesture.started) return
+
+    event.preventDefault()
+    setDraggedProjectKey(null)
+    setProjectDragPreview(null)
+    const finalOrder = projectOrderOverrideRef.current ?? gesture.initialOrder
+    if (cancelled || sameOrder(finalOrder, gesture.initialOrder)) {
+      clearProjectOrderOverride()
+      return
+    }
+
+    suppressedProjectClickRef.current = gesture.projectKey
+    window.setTimeout(() => {
+      if (suppressedProjectClickRef.current === gesture.projectKey) {
+        suppressedProjectClickRef.current = null
+      }
+    }, 0)
+    void onReorderProjects(finalOrder)
+      .catch(() => undefined)
+      .finally(() => clearProjectOrderOverride(finalOrder))
   }
 
   const scheduleProjectCardClose = (): void => {
@@ -400,9 +631,14 @@ export function ProjectNavigator({
   return (
     <>
       <section
+        id="project-navigator-panel"
+        ref={projectListRef}
         className="sidebar-section project-list-section"
-        aria-label="项目"
+        role="tabpanel"
+        aria-labelledby="project-navigator-tab"
         aria-busy={contextActionStatus !== null}
+        data-reorder-enabled={!busy && orderedProjects.length > 1 ? 'true' : undefined}
+        data-dragging={draggedProjectKey === null ? undefined : 'true'}
         hidden={hidden}
       >
         {projects.length === 0 ? (
@@ -416,8 +652,9 @@ export function ProjectNavigator({
             </span>
           </div>
         ) : (
-          projects.map((project) => {
+          projects.map((project, projectIndex) => {
             const selected = project.path === activeProjectKey
+            const projectHighlighted = selected && activeSessionKey === null
             const expanded = expandedProjectKeys.has(project.path)
             const pinned = pinnedProjectKeys.has(project.path)
             const projectLabel = basename(project.path) ?? project.path
@@ -426,6 +663,8 @@ export function ProjectNavigator({
               const status = summary.runtimeStatus
               return status === 'running' || status === 'stopping'
             }).length
+            const awaitingUserInputCount = countAwaitingUserInput(projectSessions)
+            const unreadSessionCount = countUnreadSessions(projectSessions, unreadSessionKeys)
             const requestedVisibleSessionCount = visibleSessionCountsByProject.get(project.path)
             const visibleSessionCount = resolveVisibleSessionCount(
               projectSessions.length,
@@ -438,6 +677,7 @@ export function ProjectNavigator({
                   summary.key === displayedSessionKey ||
                   summary.key === viewedSessionKey ||
                   summary.provisional === true ||
+                  summary.awaitingUserInput ||
                   unreadSessionKeys.has(summary.key) ||
                   (summary.runtimeStatus !== 'ready' && summary.runtimeStatus !== 'stopped')
                 )
@@ -463,38 +703,16 @@ export function ProjectNavigator({
             const sessionListId = `project-sessions-${encodeURIComponent(project.path)}`
             return (
               <article
-                className={`project-session-group${selected ? ' selected' : ''}${expanded ? ' expanded' : ''}`}
+                className={`project-session-group${projectHighlighted ? ' selected' : ''}${expanded ? ' expanded' : ''}${draggedProjectKey === project.path ? ' project-drag-placeholder' : ''}`}
+                data-project-key={project.path}
+                style={{
+                  order: projectOrderOverride === null
+                    ? projectIndex
+                    : projectOrderOverride.indexOf(project.path)
+                }}
                 key={project.path}
               >
-                <div
-                  className={`project-row${draggedProjectKey === project.path ? ' dragging' : ''}${dragOverProjectKey === project.path ? ' drag-over' : ''}`}
-                  draggable={!busy && projects.length > 1 && dragArmedProjectKey === project.path}
-                  onDragStart={(event) => {
-                    event.dataTransfer.effectAllowed = 'move'
-                    setDraggedProjectKey(project.path)
-                  }}
-                  onDragOver={(event) => {
-                    if (draggedProjectKey === null || draggedProjectKey === project.path) return
-                    event.preventDefault()
-                    event.dataTransfer.dropEffect = 'move'
-                    setDragOverProjectKey(project.path)
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault()
-                    if (draggedProjectKey === null || draggedProjectKey === project.path) return
-                    const nextOrder = moveKey(
-                      projects.map(({ path }) => path),
-                      draggedProjectKey,
-                      project.path
-                    )
-                    void onReorderProjects(nextOrder).catch(() => undefined)
-                  }}
-                  onDragEnd={() => {
-                    setDragArmedProjectKey(null)
-                    setDraggedProjectKey(null)
-                    setDragOverProjectKey(null)
-                  }}
-                >
+                <div className="project-row">
                   <button
                     className="project-select"
                     type="button"
@@ -509,14 +727,21 @@ export function ProjectNavigator({
                     disabled={!selected && !canChangeProjectOrSession}
                     onFocus={(event) => openProjectCard(project.path, event.currentTarget)}
                     onBlur={scheduleProjectCardClose}
-                    onPointerMove={(event) => requestProjectCard(project.path, event.currentTarget)}
-                    onPointerLeave={scheduleProjectCardClose}
-                    onPointerDown={(event) => {
-                      if (event.button === 0 && !busy && projects.length > 1) {
-                        setDragArmedProjectKey(project.path)
-                      }
+                    onPointerMove={(event) => {
+                      if (handleProjectPointerMove(event, project.path)) return
+                      requestProjectCard(project.path, event.currentTarget)
                     }}
-                    onClick={() => {
+                    onPointerLeave={scheduleProjectCardClose}
+                    onPointerDown={(event) => handleProjectPointerDown(event, project.path)}
+                    onPointerUp={(event) => finishProjectPointerDrag(event, false)}
+                    onPointerCancel={(event) => finishProjectPointerDrag(event, true)}
+                    onLostPointerCapture={(event) => finishProjectPointerDrag(event, true)}
+                    onClick={(event) => {
+                      if (suppressedProjectClickRef.current === project.path) {
+                        suppressedProjectClickRef.current = null
+                        event.preventDefault()
+                        return
+                      }
                       const expandingCollapsedSidebar = sidebarCollapsed
                       if (expandingCollapsedSidebar) {
                         dismissHoverCards()
@@ -550,7 +775,16 @@ export function ProjectNavigator({
                       <Icon name={expanded ? 'folder-open' : 'folder'} size="sm" />
                     </span>
                     <span className="project-name">{projectLabel}</span>
-                    {busySessionCount > 0 ? (
+                    {awaitingUserInputCount > 0 && (!expanded || sidebarCollapsed) ? (
+                      <span
+                        className="project-awaiting-summary"
+                        role="status"
+                        aria-label={`有 ${awaitingUserInputCount} 个对话等待回复`}
+                        data-tooltip={`有 ${awaitingUserInputCount} 个对话等待回复`}
+                      >
+                        ?
+                      </span>
+                    ) : busySessionCount > 0 ? (
                       <span
                         className="project-activity-summary"
                         role="status"
@@ -566,6 +800,13 @@ export function ProjectNavigator({
                           <span />
                         </span>
                       </span>
+                    ) : null}
+                    {awaitingUserInputCount === 0 && unreadSessionCount > 0 && (!expanded || sidebarCollapsed) ? (
+                      <span
+                        className="project-unread-summary"
+                        role="status"
+                        aria-label={`有 ${unreadSessionCount} 个未读对话`}
+                      />
                     ) : null}
                     <span className="project-initial" aria-hidden="true">
                       {projectLabel.slice(0, 1).toLocaleUpperCase()}
@@ -593,8 +834,8 @@ export function ProjectNavigator({
                       label="在此项目中启动对话"
                       draggable={false}
                       aria-busy={
-                        pendingAction === 'start-session' ||
-                        (!selected && pendingAction === 'activate-project')
+                        isWorkbenchAction(pendingAction, 'start-session') ||
+                        (!selected && isWorkbenchAction(pendingAction, 'activate-project'))
                           ? true
                           : undefined
                       }
@@ -693,11 +934,23 @@ export function ProjectNavigator({
                           </button>
                           <div
                             className="session-action-slot"
-                            data-tooltip={lifecycleLabel ?? (unread ? '有未读更新' : undefined)}
+                            data-tooltip={
+                              summary.awaitingUserInput
+                                ? '等待你的回复'
+                                : lifecycleLabel ?? (unread ? '有未读更新' : undefined)
+                            }
                             onPointerEnter={dismissHoverCards}
                             onFocusCapture={dismissHoverCards}
                           >
-                            {lifecycleLabel !== null ? (
+                            {summary.awaitingUserInput ? (
+                              <span
+                                className="session-awaiting-indicator"
+                                role="status"
+                                aria-label="等待你的回复"
+                              >
+                                ?
+                              </span>
+                            ) : lifecycleLabel !== null ? (
                               <SessionSpinner status={sessionRuntimeStatus} label={lifecycleLabel} />
                             ) : unread ? (
                               <span
@@ -713,31 +966,33 @@ export function ProjectNavigator({
                                 {activityLabel}
                               </time>
                             )}
-                            <IconButton
-                              className="session-archive"
-                              icon="archive"
-                              label="归档对话"
-                              draggable={false}
-                              aria-busy={pendingAction === 'archive-session' ? true : undefined}
-                              disabled={!canChangeProjectOrSession}
-                              onPointerDown={(event) => event.stopPropagation()}
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                void (async () => {
-                                  if (viewingArchivedSession) onClearArchivedSessionPreview()
-                                  if (!selected) {
-                                    await onActivateProject(project.path)
-                                    setExpandedProjectKeys((current) => {
-                                      if (current.has(project.path)) return current
-                                      const next = new Set(current)
-                                      next.add(project.path)
-                                      return next
-                                    })
-                                  }
-                                  await onArchiveSession(summary.key)
-                                })().catch(() => undefined)
-                              }}
-                            />
+                            <div className="session-row-actions">
+                              <IconButton
+                                className="session-archive"
+                                icon="archive"
+                                label="归档对话"
+                                draggable={false}
+                                aria-busy={isWorkbenchAction(pendingAction, 'archive-session') ? true : undefined}
+                                disabled={!canChangeProjectOrSession}
+                                onPointerDown={(event) => event.stopPropagation()}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  void (async () => {
+                                    if (viewingArchivedSession) onClearArchivedSessionPreview()
+                                    if (!selected) {
+                                      await onActivateProject(project.path)
+                                      setExpandedProjectKeys((current) => {
+                                        if (current.has(project.path)) return current
+                                        const next = new Set(current)
+                                        next.add(project.path)
+                                        return next
+                                      })
+                                    }
+                                    await onArchiveSession(summary.key)
+                                  })().catch(() => undefined)
+                                }}
+                              />
+                            </div>
                           </div>
                         </div>
                       )
@@ -791,6 +1046,41 @@ export function ProjectNavigator({
         )}
       </section>
 
+      {hidden || projectDragPreview === null || draggedProject === null
+        ? null
+        : createPortal(
+        <div
+          ref={projectDragPreviewRef}
+          className={`project-drag-preview${sidebarCollapsed ? ' collapsed' : ''}`}
+          style={{
+            top: projectDragPreview.top,
+            left: projectDragPreview.left,
+            width: projectDragPreview.width,
+            height: projectDragPreview.height
+          }}
+          aria-hidden="true"
+        >
+          {sidebarCollapsed ? (
+            <span className="project-initial">
+              {(basename(draggedProject.path) ?? draggedProject.path).slice(0, 1).toLocaleUpperCase()}
+            </span>
+          ) : (
+            <>
+              <span className="project-icon">
+                <Icon
+                  name={expandedProjectKeys.has(draggedProject.path) ? 'folder-open' : 'folder'}
+                  size="sm"
+                />
+              </span>
+              <span className="project-name">
+                {basename(draggedProject.path) ?? draggedProject.path}
+              </span>
+            </>
+          )}
+        </div>,
+        document.body
+      )}
+
       {hidden || hoveredProject === null || projectHoverCard === null || projectCardPosition === null
         ? null
         : createPortal(
@@ -839,7 +1129,7 @@ export function ProjectNavigator({
                   <Icon name="unread" size="sm" />
                 </span>
                 <span>未读</span>
-                <strong>{hoveredProject.unreadCount ?? 0}</strong>
+                <strong>{hoveredProjectUnreadCount}</strong>
               </div>
             </div>
           </div>
@@ -947,7 +1237,7 @@ export function sessionTitle(session: KernelState['sessions'][number]): string {
   return `对话 ${session.id.slice(0, 8)}`
 }
 
-function sessionAriaLabel(
+export function sessionAriaLabel(
   session: KernelState['sessions'][number],
   tokenCountFormat: KernelState['appearance']['tokenCountFormat']
 ): string {
@@ -966,6 +1256,29 @@ function sessionAriaLabel(
   ].join('。')
 }
 
+function sessionActivityIdentity(projectPath: string, sessionId: string): string {
+  return `${projectPath}\u0000${sessionId}`
+}
+
+function countAwaitingUserInput(sessions: KernelState['sessions']): number {
+  let count = 0
+  for (const session of sessions) {
+    if (session.awaitingUserInput) count += 1
+  }
+  return count
+}
+
+function countUnreadSessions(
+  sessions: KernelState['sessions'],
+  unreadSessionKeys: ReadonlySet<string>
+): number {
+  let count = 0
+  for (const session of sessions) {
+    if (unreadSessionKeys.has(session.key)) count += 1
+  }
+  return count
+}
+
 function findSessionSummary(
   sessionKey: string,
   projects: KernelState['projects'],
@@ -982,7 +1295,7 @@ function findSessionSummary(
   return null
 }
 
-function SessionSpinner({
+export function SessionSpinner({
   status,
   label
 }: {
@@ -1008,12 +1321,24 @@ function SessionSpinner({
   )
 }
 
-function moveKey(keys: string[], source: string, target: string): string[] {
-  const sourceIndex = keys.indexOf(source)
-  const targetIndex = keys.indexOf(target)
-  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return keys
-  const next = keys.slice()
-  const [moved] = next.splice(sourceIndex, 1)
-  next.splice(targetIndex, 0, moved)
-  return next
+function resolveProjectOrder(
+  projects: KernelState['projects'],
+  order: string[] | null
+): KernelState['projects'] {
+  if (order === null || !isStrictProjectOrder(projects, order)) return projects
+  const projectsByKey = new Map(projects.map((project) => [project.path, project]))
+  return order.map((projectKey) => projectsByKey.get(projectKey)!)
+}
+
+function isStrictProjectOrder(
+  projects: KernelState['projects'],
+  order: string[]
+): boolean {
+  if (projects.length !== order.length) return false
+  const projectKeys = new Set(projects.map(({ path }) => path))
+  return order.every((projectKey) => projectKeys.delete(projectKey)) && projectKeys.size === 0
+}
+
+function sameOrder(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((key, index) => key === right[index])
 }

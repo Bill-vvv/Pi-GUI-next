@@ -33,6 +33,20 @@ test('runtime does not add legacy subagent arguments', () => {
     () => new LinuxLocalRuntime({ cwd: '/tmp', subagent: { maxDepth: 4 as 1 } }),
     /Invalid subagent settings/u
   )
+  assert.throws(
+    () => new LinuxLocalRuntime({
+      cwd: '/tmp',
+      desktopNotification: { socketPath: 'relative.sock', token: 'x'.repeat(32) }
+    }),
+    /must be absolute/u
+  )
+  assert.throws(
+    () => new LinuxLocalRuntime({
+      cwd: '/tmp',
+      desktopNotification: { socketPath: '/tmp/notify.sock', token: 'too-short' }
+    }),
+    /token is invalid/u
+  )
 })
 
 test('runtime controls fast extension loading and merges it with subagent depth', async (t) => {
@@ -54,6 +68,8 @@ appendFileSync(${JSON.stringify(environmentLog)}, JSON.stringify({
   nativeCompiled: process.env.PI_NATIVE_COMPILED_EXTENSION_IMPORTS,
   jitiTryNative: process.env.JITI_TRY_NATIVE,
   nodeOptions: process.env.NODE_OPTIONS,
+  notificationSocket: process.env.PI_GUI_NOTIFICATION_SOCKET,
+  notificationToken: process.env.PI_GUI_NOTIFICATION_TOKEN,
   argv: process.argv.slice(2)
 }) + '\\n')
 let input = ''
@@ -79,10 +95,14 @@ process.stdin.on('data', (chunk) => {
   const inheritedParallelImports = process.env.PI_PARALLEL_EXTENSION_IMPORTS
   const inheritedNativeCompiledImports = process.env.PI_NATIVE_COMPILED_EXTENSION_IMPORTS
   const inheritedJitiTryNative = process.env.JITI_TRY_NATIVE
+  const inheritedNotificationSocket = process.env.PI_GUI_NOTIFICATION_SOCKET
+  const inheritedNotificationToken = process.env.PI_GUI_NOTIFICATION_TOKEN
   process.env.PI_SUBAGENT_MAX_DEPTH = '9'
   process.env.PI_PARALLEL_EXTENSION_IMPORTS = '1'
   process.env.PI_NATIVE_COMPILED_EXTENSION_IMPORTS = '1'
   process.env.JITI_TRY_NATIVE = '0'
+  process.env.PI_GUI_NOTIFICATION_SOCKET = '/tmp/inherited-notification.sock'
+  process.env.PI_GUI_NOTIFICATION_TOKEN = 'inherited-notification-token-that-must-be-removed'
   t.after(() => {
     if (inheritedDepth === undefined) delete process.env.PI_SUBAGENT_MAX_DEPTH
     else process.env.PI_SUBAGENT_MAX_DEPTH = inheritedDepth
@@ -95,6 +115,10 @@ process.stdin.on('data', (chunk) => {
     }
     if (inheritedJitiTryNative === undefined) delete process.env.JITI_TRY_NATIVE
     else process.env.JITI_TRY_NATIVE = inheritedJitiTryNative
+    if (inheritedNotificationSocket === undefined) delete process.env.PI_GUI_NOTIFICATION_SOCKET
+    else process.env.PI_GUI_NOTIFICATION_SOCKET = inheritedNotificationSocket
+    if (inheritedNotificationToken === undefined) delete process.env.PI_GUI_NOTIFICATION_TOKEN
+    else process.env.PI_GUI_NOTIFICATION_TOKEN = inheritedNotificationToken
   })
 
   const inheritedRuntime = new LinuxLocalRuntime({
@@ -103,11 +127,16 @@ process.stdin.on('data', (chunk) => {
   })
   await inheritedRuntime.start()
   await inheritedRuntime.stop()
+  const notificationToken = 'configured-notification-token-that-is-long-enough'
   const configuredRuntime = new LinuxLocalRuntime({
     cwd: directory,
     explicitExecutable: executable,
     subagent: { maxDepth: 2 },
-    fastExtensionLoading: true
+    fastExtensionLoading: true,
+    desktopNotification: {
+      socketPath: '/tmp/pi-gui-notification.sock',
+      token: notificationToken
+    }
   })
   await configuredRuntime.start()
   await configuredRuntime.stop()
@@ -121,6 +150,8 @@ process.stdin.on('data', (chunk) => {
       nativeCompiled?: string
       jitiTryNative?: string
       nodeOptions?: string
+      notificationSocket?: string
+      notificationToken?: string
       argv: string[]
     })
   assert.deepEqual(launches.map(({ depth }) => depth), ['9', '2'])
@@ -128,6 +159,14 @@ process.stdin.on('data', (chunk) => {
   assert.deepEqual(launches.map(({ nativeCompiled }) => nativeCompiled), [undefined, '1'])
   assert.deepEqual(launches.map(({ jitiTryNative }) => jitiTryNative), [undefined, '1'])
   assert.equal(launches[1]?.nodeOptions?.includes('--import=data:text/javascript,'), true)
+  assert.deepEqual(
+    launches.map(({ notificationSocket }) => notificationSocket),
+    [undefined, '/tmp/pi-gui-notification.sock']
+  )
+  assert.deepEqual(
+    launches.map(({ notificationToken }) => notificationToken),
+    [undefined, notificationToken]
+  )
   assert.equal(launches.some(({ argv }) => argv.some((argument) => argument.includes('subagent'))), false)
 })
 
@@ -305,6 +344,424 @@ process.stdin.on('data', (chunk) => {
   ])
 })
 
+test('runtime forwards P3 tree and extension commands and isolates extension events', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-runtime-tree-extension-'))
+  t.after(async () => rm(directory, { recursive: true, force: true }))
+  const executable = join(directory, 'pi')
+  const requestLog = join(directory, 'requests.jsonl')
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs')
+if (process.argv[2] === '--version') {
+  process.stdout.write('0.80.10\\n')
+  process.exit(0)
+}
+let input = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  input += chunk
+  let newline
+  while ((newline = input.indexOf('\\n')) >= 0) {
+    const request = JSON.parse(input.slice(0, newline))
+    input = input.slice(newline + 1)
+    appendFileSync(${JSON.stringify(requestLog)}, JSON.stringify(request) + '\\n')
+    const data = request.type === 'get_state'
+      ? {}
+      : request.type === 'get_tree'
+        ? {
+            tree: [{
+              entry: {
+                id: 'root', parentId: null, type: 'message',
+                timestamp: '2026-07-29T00:00:00.000Z',
+                message: { role: 'user', content: 'Original prompt' }
+              },
+              children: []
+            }],
+            leafId: 'root'
+          }
+        : request.type === 'navigate_tree'
+          ? {
+              targetEntryId: request.targetEntryId,
+              cancelled: false,
+              leafId: 'root',
+              editorText: 'Original prompt'
+            }
+          : request.type === 'subscribe_extension_events'
+            ? { channels: request.channels }
+            : undefined
+    let output = JSON.stringify({
+      type: 'response',
+      id: request.id,
+      command: request.type,
+      success: true,
+      ...(data === undefined ? {} : { data })
+    }) + '\\n'
+    if (request.type === 'subscribe_extension_events') {
+      output += JSON.stringify({ type: 'agent_start' }) + '\\n'
+      output += JSON.stringify({
+        type: 'extension_event', channel: request.channels[0], data: { ready: true }
+      }) + '\\n'
+      output += JSON.stringify({
+        type: 'extension_event_diagnostic', reason: 'record_too_large'
+      }) + '\\n'
+    }
+    process.stdout.write(output)
+  }
+})
+`,
+    { mode: 0o755 }
+  )
+  const runtime = new LinuxLocalRuntime({ cwd: directory, explicitExecutable: executable })
+  const ordinaryEvents: Array<Record<string, unknown>> = []
+  const extensionEvents: Array<Record<string, unknown>> = []
+  runtime.subscribe((event) => {
+    if (event.type === 'pi-event') ordinaryEvents.push(event.event)
+  })
+  runtime.subscribeExtensionEvents((event) => extensionEvents.push(event))
+
+  await runtime.start()
+  const tree = await runtime.send({ type: 'get_tree' })
+  const navigation = await runtime.send({ type: 'navigate_tree', targetEntryId: 'root' })
+  const invoked = await runtime.send({
+    type: 'invoke_extension_command',
+    name: 'status',
+    args: 'server-a'
+  })
+  const subscription = await runtime.send({
+    type: 'subscribe_extension_events',
+    channels: ['status/v1']
+  })
+  await runtime.stop()
+
+  assert.deepEqual(tree, {
+    type: 'tree',
+    tree: [{
+      entry: {
+        id: 'root', parentId: null, type: 'message',
+        timestamp: '2026-07-29T00:00:00.000Z',
+        message: { role: 'user', content: { text: 'Original prompt', hasImage: false } }
+      },
+      children: []
+    }],
+    leafId: 'root'
+  })
+  assert.deepEqual(navigation, {
+    type: 'tree-navigation',
+    targetEntryId: 'root',
+    cancelled: false,
+    leafId: 'root',
+    editorText: 'Original prompt'
+  })
+  assert.deepEqual(invoked, { type: 'accepted' })
+  assert.deepEqual(subscription, {
+    type: 'extension-event-subscription',
+    channels: ['status/v1']
+  })
+  assert.deepEqual(ordinaryEvents, [{ type: 'agent_start' }])
+  assert.deepEqual(extensionEvents, [
+    { type: 'extension_event', channel: 'status/v1', data: { ready: true } },
+    { type: 'extension_event_diagnostic', reason: 'record_too_large' }
+  ])
+
+  const requests = (await readFile(requestLog, 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .map(({ id: _id, ...request }) => request)
+  assert.deepEqual(requests.slice(-4), [
+    { type: 'get_tree' },
+    { type: 'navigate_tree', targetEntryId: 'root' },
+    { type: 'invoke_extension_command', name: 'status', args: 'server-a' },
+    { type: 'subscribe_extension_events', channels: ['status/v1'] }
+  ])
+})
+
+test('runtime drops extension events emitted after stop begins', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-runtime-extension-stop-'))
+  t.after(async () => rm(directory, { recursive: true, force: true }))
+  const executable = join(directory, 'pi')
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+if (process.argv[2] === '--version') {
+  process.stdout.write('0.80.10\\n')
+  process.exit(0)
+}
+let input = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  input += chunk
+  let newline
+  while ((newline = input.indexOf('\\n')) >= 0) {
+    const request = JSON.parse(input.slice(0, newline))
+    input = input.slice(newline + 1)
+    const data = request.type === 'get_state'
+      ? {}
+      : request.type === 'subscribe_extension_events'
+        ? { channels: request.channels }
+        : undefined
+    process.stdout.write(JSON.stringify({
+      type: 'response', id: request.id, command: request.type, success: true,
+      ...(data === undefined ? {} : { data })
+    }) + '\\n')
+  }
+})
+process.stdin.on('end', () => {
+  process.stdout.write(JSON.stringify({
+    type: 'extension_event', channel: 'status', data: { duringStop: true }
+  }) + '\\n')
+  setTimeout(() => process.exit(0), 20)
+})
+`,
+    { mode: 0o755 }
+  )
+  const runtime = new LinuxLocalRuntime({ cwd: directory, explicitExecutable: executable })
+  const extensionEvents: Array<Record<string, unknown>> = []
+  runtime.subscribeExtensionEvents((event) => extensionEvents.push(event))
+
+  await runtime.start()
+  await runtime.send({ type: 'subscribe_extension_events', channels: ['status'] })
+  await runtime.stop()
+
+  assert.deepEqual(extensionEvents, [])
+})
+
+test('old Pi unknown P3 commands reject without fallback or runtime restart', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-runtime-p3-unsupported-'))
+  t.after(async () => rm(directory, { recursive: true, force: true }))
+  const executable = join(directory, 'pi')
+  const requestLog = join(directory, 'requests.jsonl')
+  const launchLog = join(directory, 'launches.log')
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs')
+if (process.argv[2] === '--version') {
+  process.stdout.write('0.80.10\\n')
+  process.exit(0)
+}
+appendFileSync(${JSON.stringify(launchLog)}, String(process.pid) + '\\n')
+const unsupported = new Set([
+  'get_tree',
+  'navigate_tree',
+  'invoke_extension_command',
+  'subscribe_extension_events'
+])
+let input = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  input += chunk
+  let newline
+  while ((newline = input.indexOf('\\n')) >= 0) {
+    const request = JSON.parse(input.slice(0, newline))
+    input = input.slice(newline + 1)
+    appendFileSync(${JSON.stringify(requestLog)}, JSON.stringify(request) + '\\n')
+    if (unsupported.has(request.type)) {
+      process.stdout.write(JSON.stringify({
+        type: 'response', id: request.id, command: request.type,
+        success: false, error: 'Unknown command: ' + request.type
+      }) + '\\n')
+      continue
+    }
+    const data = request.type === 'get_state'
+      ? { sessionId: 'still-running' }
+      : request.type === 'get_messages'
+        ? { messages: [] }
+        : undefined
+    process.stdout.write(JSON.stringify({
+      type: 'response', id: request.id, command: request.type, success: true,
+      ...(data === undefined ? {} : { data })
+    }) + '\\n')
+  }
+})
+`,
+    { mode: 0o755 }
+  )
+  const runtime = new LinuxLocalRuntime({ cwd: directory, explicitExecutable: executable })
+
+  await runtime.start()
+  const pidBefore = runtime.getRpcPid()
+  const commands = [
+    { type: 'get_tree' as const },
+    { type: 'navigate_tree' as const, targetEntryId: 'root' },
+    { type: 'invoke_extension_command' as const, name: 'status' },
+    { type: 'subscribe_extension_events' as const, channels: ['status/v1'] }
+  ]
+  for (const command of commands) {
+    await assert.rejects(
+      runtime.send(command),
+      new RegExp(`Pi RPC ${command.type} failed: Unknown command: ${command.type}`, 'u')
+    )
+    assert.equal(runtime.getRpcPid(), pidBefore)
+    assert.equal(runtime.getState().lastError, null)
+  }
+  assert.deepEqual(await runtime.send({ type: 'get_messages' }), {
+    type: 'messages',
+    messages: []
+  })
+  assert.equal(runtime.getRpcPid(), pidBefore)
+  await runtime.stop()
+
+  assert.equal((await readFile(launchLog, 'utf8')).trim().split('\n').length, 1)
+  const requests = (await readFile(requestLog, 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .map(({ id: _id, ...request }) => request)
+  assert.deepEqual(requests, [
+    { type: 'get_state' },
+    { type: 'get_tree' },
+    { type: 'navigate_tree', targetEntryId: 'root' },
+    { type: 'invoke_extension_command', name: 'status' },
+    { type: 'subscribe_extension_events', channels: ['status/v1'] },
+    { type: 'get_messages' }
+  ])
+})
+
+test('runtime exposes the strict loaded-Extension inventory without routing through Kernel commands', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-runtime-extensions-'))
+  t.after(async () => rm(directory, { recursive: true, force: true }))
+  const executable = join(directory, 'pi')
+  const requestLog = join(directory, 'requests.jsonl')
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs')
+if (process.argv[2] === '--version') {
+  process.stdout.write('0.80.10\\n')
+  process.exit(0)
+}
+let input = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  input += chunk
+  let newline
+  while ((newline = input.indexOf('\\n')) >= 0) {
+    const request = JSON.parse(input.slice(0, newline))
+    input = input.slice(newline + 1)
+    appendFileSync(${JSON.stringify(requestLog)}, JSON.stringify(request) + '\\n')
+    const data = request.type === 'get_state'
+      ? {}
+      : request.type === 'get_extensions'
+        ? {
+            protocolVersion: 1,
+            complete: true,
+            loading: 'eager_complete',
+            extensions: [{ id: 'pi-subagents', capabilities: ['tool', 'event'] }],
+            loadErrorCount: 0
+          }
+        : undefined
+    process.stdout.write(JSON.stringify({
+      type: 'response',
+      id: request.id,
+      success: true,
+      ...(data === undefined ? {} : { data })
+    }) + '\\n')
+  }
+})
+`,
+    { mode: 0o755 }
+  )
+  const runtime = new LinuxLocalRuntime({ cwd: directory, explicitExecutable: executable })
+
+  await runtime.start()
+  const inventory = await runtime.getLoadedExtensions()
+  await runtime.stop()
+
+  assert.deepEqual(inventory, {
+    protocolVersion: 1,
+    complete: true,
+    loading: 'eager_complete',
+    extensions: [{ id: 'pi-subagents', capabilities: ['event', 'tool'] }],
+    loadErrorCount: 0
+  })
+  const requests = (await readFile(requestLog, 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .map(({ id: _id, ...request }) => request)
+  assert.deepEqual(requests.filter(({ type }) => type === 'get_extensions'), [
+    { type: 'get_extensions' }
+  ])
+})
+
+test('current Pi rejects get_extensions without fallback or restarting the usable runtime', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-runtime-extensions-unsupported-'))
+  t.after(async () => rm(directory, { recursive: true, force: true }))
+  const executable = join(directory, 'pi')
+  const requestLog = join(directory, 'requests.jsonl')
+  const launchLog = join(directory, 'launches.log')
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs')
+if (process.argv[2] === '--version') {
+  process.stdout.write('0.80.10\\n')
+  process.exit(0)
+}
+appendFileSync(${JSON.stringify(launchLog)}, String(process.pid) + '\\n')
+let input = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  input += chunk
+  let newline
+  while ((newline = input.indexOf('\\n')) >= 0) {
+    const request = JSON.parse(input.slice(0, newline))
+    input = input.slice(newline + 1)
+    appendFileSync(${JSON.stringify(requestLog)}, JSON.stringify(request) + '\\n')
+    if (request.type === 'get_extensions') {
+      process.stdout.write(JSON.stringify({
+        type: 'response',
+        id: request.id,
+        success: false,
+        error: 'Unknown command: get_extensions'
+      }) + '\\n')
+      continue
+    }
+    const data = request.type === 'get_state'
+      ? { sessionId: 'still-running' }
+      : request.type === 'get_messages'
+        ? { messages: [] }
+        : undefined
+    process.stdout.write(JSON.stringify({
+      type: 'response',
+      id: request.id,
+      success: true,
+      ...(data === undefined ? {} : { data })
+    }) + '\\n')
+  }
+})
+`,
+    { mode: 0o755 }
+  )
+  const runtime = new LinuxLocalRuntime({ cwd: directory, explicitExecutable: executable })
+
+  await runtime.start()
+  const pidBefore = runtime.getRpcPid()
+  await assert.rejects(
+    runtime.getLoadedExtensions(),
+    /Pi RPC get_extensions failed: Unknown command: get_extensions/u
+  )
+  assert.equal(runtime.getRpcPid(), pidBefore)
+  assert.equal(runtime.getState().lastError, null)
+  assert.deepEqual(await runtime.send({ type: 'get_messages' }), { type: 'messages', messages: [] })
+  assert.equal(runtime.getRpcPid(), pidBefore)
+  await runtime.stop()
+
+  assert.equal((await readFile(launchLog, 'utf8')).trim().split('\n').length, 1)
+  const requests = (await readFile(requestLog, 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .map(({ id: _id, ...request }) => request)
+  assert.deepEqual(requests, [
+    { type: 'get_state' },
+    { type: 'get_extensions' },
+    { type: 'get_messages' }
+  ])
+})
+
 test('runtime forwards get_session_stats through the Pi RPC client', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'pi-runtime-stats-'))
   t.after(async () => rm(directory, { recursive: true, force: true }))
@@ -477,6 +934,47 @@ process.stdin.on('data', (chunk) => {
   assert.equal(state.stderrSummary, `Pi stderr captured ${secret.length} characters.`)
   assert.equal(JSON.stringify(state).includes('SECRET'), false)
   assert.equal(JSON.stringify(state).includes('super-sensitive-value'), false)
+})
+
+test('getRpcPid exposes the live root Pi RPC pid and clears after stop', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-runtime-pid-'))
+  t.after(async () => rm(directory, { recursive: true, force: true }))
+  const executable = join(directory, 'pi')
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+if (process.argv[2] === '--version') {
+  process.stdout.write('0.80.10\\n')
+  process.exit(0)
+}
+let input = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  input += chunk
+  let newline
+  while ((newline = input.indexOf('\\n')) >= 0) {
+    const request = JSON.parse(input.slice(0, newline))
+    input = input.slice(newline + 1)
+    process.stdout.write(JSON.stringify({
+      type: 'response',
+      id: request.id,
+      success: true,
+      ...(request.type === 'get_state' ? { data: {} } : {})
+    }) + '\\n')
+  }
+})
+`,
+    { mode: 0o755 }
+  )
+  const runtime = new LinuxLocalRuntime({ cwd: directory, explicitExecutable: executable })
+
+  assert.equal(runtime.getRpcPid(), null)
+  await runtime.start()
+  const pid = runtime.getRpcPid()
+  assert.equal(typeof pid, 'number')
+  assert.ok(pid !== null && pid > 0)
+  await runtime.stop()
+  assert.equal(runtime.getRpcPid(), null)
 })
 
 test('stop during the version check cancels start before spawning RPC', async (t) => {

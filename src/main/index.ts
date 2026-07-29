@@ -29,13 +29,27 @@ import {
   type KernelEvent,
   type KernelProviderAuthEvent
 } from '../shared/kernel-contract.ts'
-import { normalizeExternalUrl } from '../shared/external-url.ts'
+import { GIT_COMMAND_CHANNEL } from '../shared/git-contract.ts'
+import { normalizeOpenTarget } from '../shared/external-url.ts'
 import { AdvisorDefinitionStore } from './advisor/advisor-definition-store.ts'
 import { PiExtensionStore } from './extension/pi-extension-store.ts'
 import { PiDevPackageService } from './extension/pi-dev-package-service.ts'
+import { resolveRuntimeExtensionPaths } from './runtime/runtime-quiescence.ts'
 import { createSessionExportHtml } from './export/session-export-html.ts'
+import {
+  createDesktopNotificationBroker,
+  type DesktopNotificationBroker
+} from './notification/desktop-notification-broker.ts'
+import { activateDesktopNotificationTarget } from './notification/desktop-notification-target.ts'
+import { createActiveRegisteredGitProjectResolver } from './git/git-active-project-resolver.ts'
+import { GitCapabilityController } from './git/git-capability-controller.ts'
+import { isGitCommand } from './git/git-command-validation.ts'
 import { isKernelCommand } from './kernel/kernel-command-validation.ts'
-import { WorkbenchKernel } from './kernel/workbench-kernel.ts'
+import { createKernelEventForwarder } from './kernel/kernel-event-forwarder.ts'
+import {
+  AUTO_HIBERNATE_SWEEP_INTERVAL_MS,
+  WorkbenchKernel
+} from './kernel/workbench-kernel.ts'
 import { readPromptAttachments } from './prompt/prompt-attachment-selection.ts'
 import { PiProviderStore } from './provider/pi-provider-store.ts'
 import { PiProviderAuth } from './provider/pi-provider-auth.ts'
@@ -61,8 +75,12 @@ const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 let mainWindow: BrowserWindow | null = null
 let kernel: WorkbenchKernel | null = null
 let providerAuth: PiProviderAuth | null = null
+let desktopNotificationBroker: DesktopNotificationBroker | null = null
 let shutdownPromise: Promise<void> | null = null
+let autoHibernateTimer: ReturnType<typeof setInterval> | null = null
 let allowQuit = false
+
+const kernelEventForwarder = createKernelEventForwarder({ send: sendKernelEvent })
 
 async function createMainWindow(rendererTarget: RendererTarget): Promise<void> {
   if (mainWindow !== null) {
@@ -146,6 +164,7 @@ async function startApplication(): Promise<void> {
   const projectStore = new ProjectStore()
   const general = await projectStore.loadGeneral()
   const storedProjects = await projectStore.loadProjects()
+  const storedTasks = await projectStore.loadTasks()
   const sessionNaming = await projectStore.loadSessionNaming()
   const appearance = await projectStore.loadAppearance()
   const subagent = await projectStore.loadSubagent()
@@ -171,23 +190,52 @@ async function startApplication(): Promise<void> {
     explicitExecutable: process.env.PI_GUI_PI_EXECUTABLE
   })
   const extensions = await extensionStore.list()
+  const runtimeWorkspaces = [
+    ...storedProjects.projects,
+    ...storedTasks.tasks.map((task) => ({
+      path: task.path,
+      workspaceKind: 'task' as const,
+      taskKey: task.key
+    }))
+  ]
   const sessionRegistries = new Map(await Promise.all(
-    storedProjects.projects.map(async (project) => [
-      project.path,
-      await projectStore.loadSessionRegistry(project.path)
+    runtimeWorkspaces.map(async (workspace) => [
+      workspace.path,
+      await projectStore.loadSessionRegistry(workspace.path)
     ] as const)
   ))
-  const projects = storedProjects.projects.map((project) => ({
-    ...project,
-    sessionCount: sessionRegistries.get(project.path)?.sessions.length ?? 0,
-    unreadCount: 0
+  const projects = runtimeWorkspaces.map((workspace) => ({
+    ...workspace,
+    sessionCount: sessionRegistries.get(workspace.path)?.sessions.length ?? 0
   }))
-  const projectRegistry = general.startupWorkspaceRestore === 'restore'
-    ? { projects, activeProjectKey: storedProjects.activeProjectKey }
-    : { projects, activeProjectKey: null }
-  const sessionRegistry = projectRegistry.activeProjectKey === null
+  const restoredTask = storedTasks.activeTaskKey === null
+    ? null
+    : storedTasks.tasks.find(({ key }) => key === storedTasks.activeTaskKey) ?? null
+  const restoredTaskRegistry = restoredTask === null
+    ? null
+    : sessionRegistries.get(restoredTask.path) ?? null
+  const restoreTask = general.startupWorkspaceRestore === 'restore' &&
+    storedTasks.navigatorKind === 'task' &&
+    restoredTask !== null &&
+    restoredTaskRegistry !== null &&
+    restoredTaskRegistry.activeSessionKey !== null
+  const navigatorKind = general.startupWorkspaceRestore === 'restore'
+    ? storedTasks.navigatorKind
+    : 'project'
+  const activeWorkspaceKey = restoreTask
+    ? restoredTask!.path
+    : navigatorKind === 'project' && general.startupWorkspaceRestore === 'restore'
+      ? storedProjects.activeProjectKey
+      : null
+  const projectRegistry = { projects, activeProjectKey: activeWorkspaceKey }
+  const sessionRegistry = activeWorkspaceKey === null
     ? { sessions: [], activeSessionKey: null }
-    : sessionRegistries.get(projectRegistry.activeProjectKey) ?? { sessions: [], activeSessionKey: null }
+    : sessionRegistries.get(activeWorkspaceKey) ?? { sessions: [], activeSessionKey: null }
+  const runtimeExtensionPaths = resolveRuntimeExtensionPaths({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath
+  })
+  const quiescenceExtensionPath = runtimeExtensionPaths[0]!
   kernel = new WorkbenchKernel(
     (project, launchOptions) =>
       new LinuxLocalRuntime({
@@ -196,7 +244,17 @@ async function startApplication(): Promise<void> {
         sessionFile: launchOptions.sessionFile,
         projectTrust: launchOptions.projectTrust,
         fastExtensionLoading: launchOptions.fastExtensionLoading,
-        ...(subagentPackageEnabled ? { subagent: launchOptions.subagent } : {})
+        quiescenceExtensionPath,
+        extensionPaths: runtimeExtensionPaths,
+        ...(subagentPackageEnabled ? { subagent: launchOptions.subagent } : {}),
+        ...(desktopNotificationBroker === null
+          ? {}
+          : {
+              desktopNotification: {
+                socketPath: desktopNotificationBroker.socketPath,
+                token: desktopNotificationBroker.token
+              }
+            })
       }),
     projectRegistry,
     {
@@ -209,6 +267,13 @@ async function startApplication(): Promise<void> {
       persistActiveProject: async (projectKey) => {
         await projectStore.activateProject(projectKey)
       },
+      persistActiveTask: async (taskKey) => {
+        await projectStore.activateTask(taskKey)
+      },
+      persistNavigatorKind: async (kind) => {
+        await projectStore.selectNavigator(kind)
+      },
+      navigatorKind,
       persistSession: (pointer) => projectStore.saveSession(pointer),
       persistArchivedSession: (projectPath, sessionKey) =>
         projectStore.archiveSession(projectPath, sessionKey),
@@ -235,6 +300,25 @@ async function startApplication(): Promise<void> {
   )
   await kernel.refreshSessionActivities()
   kernel.subscribe(forwardKernelEvent)
+  autoHibernateTimer = setInterval(() => {
+    const activeKernel = kernel
+    if (activeKernel === null || shutdownPromise !== null) return
+    void activeKernel.sweepAutomaticHibernation().catch(() => {
+      // Automatic reclaim is opportunistic and fail-closed; the next sweep retries.
+    })
+  }, AUTO_HIBERNATE_SWEEP_INTERVAL_MS)
+  autoHibernateTimer.unref()
+
+  const gitController = new GitCapabilityController(
+    createActiveRegisteredGitProjectResolver(kernel, projectStore)
+  )
+
+  ipcMain.handle(GIT_COMMAND_CHANNEL, async (event, command: unknown) => {
+    assertTrustedIpcSender(event, rendererTarget)
+    if (!isGitCommand(command)) throw new Error('Unsupported Git command.')
+    return await gitController.dispatch(command)
+  })
+
   ipcMain.handle(KERNEL_COMMAND_CHANNEL, async (event, command: unknown) => {
     assertTrustedIpcSender(event, rendererTarget)
     if (!isKernelCommand(command)) {
@@ -246,6 +330,8 @@ async function startApplication(): Promise<void> {
     switch (command.type) {
       case 'kernel.get-state':
         return kernel.getSnapshot()
+      case 'kernel.get-runtime-memory-diagnostics':
+        return kernel.getRuntimeMemoryDiagnostics()
       case 'kernel.list-system-fonts':
         return listSystemFonts()
       case 'kernel.add-project': {
@@ -266,11 +352,85 @@ async function startApplication(): Promise<void> {
         await kernel.activateProject(projectPath, await projectStore.loadSessionRegistry(projectPath))
         return kernel.acknowledge()
       }
+      case 'kernel.select-navigator': {
+        if (command.kind === 'project') {
+          const registry = await projectStore.loadProjects()
+          if (registry.activeProjectKey === null) {
+            await projectStore.selectNavigator('project')
+            await kernel.selectEmptyNavigator('project')
+          } else {
+            await kernel.activateProject(
+              registry.activeProjectKey,
+              await projectStore.loadSessionRegistry(registry.activeProjectKey)
+            )
+          }
+        } else {
+          const registry = await projectStore.loadTasks()
+          const task = registry.activeTaskKey === null
+            ? null
+            : registry.tasks.find(({ key }) => key === registry.activeTaskKey) ?? null
+          const sessions = task === null
+            ? null
+            : await projectStore.loadSessionRegistry(task.path)
+          if (task === null || sessions === null || sessions.activeSessionKey === null) {
+            await projectStore.selectNavigator('task')
+            await kernel.selectEmptyNavigator('task')
+          } else {
+            await kernel.activateTask(task.key, sessions)
+          }
+        }
+        return kernel.acknowledge()
+      }
+      case 'kernel.create-task': {
+        const state = kernel.getState()
+        const activeWorkspace = state.activeProjectKey === null
+          ? null
+          : state.projects.find(({ path }) => path === state.activeProjectKey) ?? null
+        const activeSession = state.activeSessionKey === null
+          ? null
+          : state.sessions.find(({ key }) => key === state.activeSessionKey) ?? null
+        const emptyProvisionalTask = activeWorkspace?.workspaceKind === 'task' &&
+          activeSession?.provisional === true &&
+          !(activeWorkspace.sessions ?? []).some(({ key }) => key === activeSession.key)
+        if (!emptyProvisionalTask) {
+          const task = await projectStore.createTask()
+          await kernel.addTask(
+            { path: task.path, taskKey: task.key },
+            await projectStore.loadSessionRegistry(task.path)
+          )
+        }
+        return kernel.acknowledge()
+      }
+      case 'kernel.activate-task': {
+        const registry = await projectStore.loadTasks()
+        const task = registry.tasks.find(({ key }) => key === command.taskKey)
+        if (task === undefined) throw new Error(`Task is not registered: ${command.taskKey}`)
+        const canonicalPath = await projectStore.validateProjectPath(task.path)
+        if (canonicalPath !== task.path) {
+          throw new Error(`Task workspace path no longer resolves canonically: ${task.path}`)
+        }
+        await kernel.activateTask(task.key, await projectStore.loadSessionRegistry(task.path))
+        return kernel.acknowledge()
+      }
       case 'kernel.start-session': {
-        const project = configuredProject(kernel.getState())
+        const state = kernel.getState()
+        const project = configuredProject(state)
         const canonicalPath = await projectStore.validateProjectPath(project.path)
         if (canonicalPath !== project.path) {
-          throw new Error(`Active project path no longer resolves canonically: ${project.path}`)
+          throw new Error(`Active Runtime workspace path no longer resolves canonically: ${project.path}`)
+        }
+        if (project.workspaceKind === 'task') {
+          const activeSummary = state.activeSessionKey === null
+            ? null
+            : state.sessions.find(({ key }) => key === state.activeSessionKey) ?? null
+          const emptyProvisional = activeSummary?.provisional === true &&
+            !(project.sessions ?? []).some(({ key }) => key === activeSummary.key)
+          if (!emptyProvisional && (
+            state.activeSessionKey !== null ||
+            await projectStore.taskOwnsSession(project.path)
+          )) {
+            throw new Error('A Task already owns its Session; create another Task instead.')
+          }
         }
         await kernel.start()
         return kernel.acknowledge()
@@ -287,18 +447,30 @@ async function startApplication(): Promise<void> {
         if (canonicalPath !== project.path) {
           throw new Error(`Active project path no longer resolves canonically: ${project.path}`)
         }
-        await kernel.activateSession(command.sessionKey)
+        await kernel.activateSession(
+          command.sessionKey,
+          await projectStore.loadSessionRegistry(project.path)
+        )
         return kernel.acknowledge()
       }
       case 'kernel.archive-session': {
-        const receipt = await kernel.archiveSession(command.sessionKey)
+        const project = configuredProject(kernel.getState())
+        const receipt = await kernel.archiveSession(
+          command.sessionKey,
+          await projectStore.loadSessionRegistry(project.path)
+        )
         return { ...kernel.acknowledge(), receipt }
       }
       case 'kernel.undo-archive-session':
         await kernel.undoArchiveSession(command.token)
         return kernel.acknowledge()
-      case 'kernel.preview-session':
-        return kernel.previewSession(command.sessionKey)
+      case 'kernel.preview-session': {
+        const project = configuredProject(kernel.getState())
+        return kernel.previewSession(
+          command.sessionKey,
+          await projectStore.loadSessionRegistry(project.path)
+        )
+      }
       case 'kernel.preview-archived-session':
         return kernel.previewArchivedSession(command.token)
       case 'kernel.list-fork-candidates':
@@ -342,7 +514,7 @@ async function startApplication(): Promise<void> {
         return { saved: true }
       }
       case 'kernel.search-project-paths': {
-        const project = configuredProject(kernel.getState())
+        const project = configuredUserProject(kernel.getState())
         const canonicalPath = await projectStore.validateProjectPath(project.path)
         if (canonicalPath !== project.path) {
           throw new Error(`Active project path no longer resolves canonically: ${project.path}`)
@@ -534,8 +706,17 @@ async function startApplication(): Promise<void> {
         if (selection.canceled) return []
         return readPromptAttachments(selection.filePaths)
       }
+      case 'kernel.submit-ask':
+        await kernel.submitAsk(command.sessionKey, command.toolCallId, command.answers)
+        return kernel.acknowledge()
+      case 'kernel.cancel-ask':
+        await kernel.cancelAsk(command.sessionKey, command.toolCallId)
+        return kernel.acknowledge()
       case 'kernel.prompt':
-        await kernel.prompt(command.message, command.attachments)
+        await kernel.prompt(command.message, command.attachments, command.expectedSessionKey)
+        return kernel.acknowledge()
+      case 'kernel.navigate-history-prompt':
+        await kernel.navigateHistoryPrompt(command.sessionKey, command.messageId)
         return kernel.acknowledge()
       case 'kernel.steer':
         await kernel.steer(command.message, command.attachments)
@@ -575,8 +756,13 @@ async function startApplication(): Promise<void> {
   ipcMain.handle(OPEN_EXTERNAL_CHANNEL, async (event, value: unknown) => {
     assertTrustedIpcSender(event, rendererTarget)
     if (typeof value !== 'string') throw new Error('External link must be a URL string.')
-    const url = normalizeExternalUrl(value)
-    if (url === null) throw new Error('External link protocol is not allowed.')
+    const url = normalizeOpenTarget(value)
+    if (url === null) throw new Error('Link target is not allowed.')
+    if (url.startsWith('file:')) {
+      const error = await shell.openPath(fileURLToPath(url))
+      if (error.length > 0) throw new Error(error)
+      return
+    }
     await shell.openExternal(url)
   })
   ipcMain.handle(WINDOW_TOGGLE_FULLSCREEN_CHANNEL, (event) => {
@@ -616,6 +802,7 @@ async function startApplication(): Promise<void> {
     return window.isMaximized()
   })
 
+  await startDesktopNotificationBroker(projectStore)
   await createMainWindow(rendererTarget)
 }
 
@@ -667,15 +854,54 @@ if (!canStartApplication) {
 }
 
 function forwardKernelEvent(event: KernelEvent): void {
-  if (mainWindow === null || mainWindow.isDestroyed()) {
-    return
-  }
-  mainWindow.webContents.send(KERNEL_EVENT_CHANNEL, event)
+  kernelEventForwarder.forward(event)
+}
+
+function sendKernelEvent(event: KernelEvent): void {
+  const window = mainWindow
+  if (window === null || window.isDestroyed()) return
+  window.webContents.send(KERNEL_EVENT_CHANNEL, event)
 }
 
 function forwardProviderAuthEvent(event: KernelProviderAuthEvent): void {
   if (mainWindow === null || mainWindow.isDestroyed()) return
   mainWindow.webContents.send(PROVIDER_AUTH_EVENT_CHANNEL, event)
+}
+
+async function startDesktopNotificationBroker(projectStore: ProjectStore): Promise<void> {
+  let candidate: DesktopNotificationBroker | null = null
+  try {
+    candidate = createDesktopNotificationBroker({
+      iconPath: app.isPackaged
+        ? join(process.resourcesPath, 'pi-notify.png')
+        : join(mainBundleDirectory, '../../extensions/pi-gui-task-notify/assets/pi-notify.png'),
+      activateTarget: async (target) => {
+        const activeKernel = kernel
+        if (activeKernel === null) throw new Error('Workbench kernel is unavailable.')
+        await activateDesktopNotificationTarget(target, {
+          projectStore,
+          kernel: activeKernel,
+          isAvailable: () =>
+            !allowQuit && shutdownPromise === null && kernel === activeKernel,
+          focusWindow: focusMainWindow
+        })
+      },
+      onError: (message) => console.error(`[Pi GUI] ${message}`)
+    })
+    await candidate.start()
+    desktopNotificationBroker = candidate
+  } catch {
+    console.error('[Pi GUI] Desktop notification broker is unavailable.')
+    await candidate?.close().catch(() => undefined)
+  }
+}
+
+function focusMainWindow(): void {
+  const window = mainWindow
+  if (window === null || window.isDestroyed()) return
+  if (window.isMinimized()) window.restore()
+  window.show()
+  window.focus()
 }
 
 async function listSystemFonts(): Promise<string[]> {
@@ -711,6 +937,14 @@ async function listSystemFonts(): Promise<string[]> {
 }
 
 async function stopKernel(): Promise<void> {
+  kernelEventForwarder.dispose()
+  if (autoHibernateTimer !== null) {
+    clearInterval(autoHibernateTimer)
+    autoHibernateTimer = null
+  }
+  const broker = desktopNotificationBroker
+  desktopNotificationBroker = null
+  await broker?.close()
   await providerAuth?.shutdown()
   await kernel?.stop()
 }
@@ -721,12 +955,38 @@ function requireProviderAuth(): PiProviderAuth {
 }
 
 function configuredProject(state: {
-  projects: Array<{ path: string }>
+  projects: Array<{
+    path: string
+    workspaceKind?: 'project' | 'task'
+    taskKey?: string
+    sessions?: Array<{ key: string }>
+  }>
+  activeProjectKey: string | null
+}): {
+  path: string
+  workspaceKind?: 'project' | 'task'
+  taskKey?: string
+  sessions?: Array<{ key: string }>
+} {
+  if (state.activeProjectKey === null) throw new Error('Select a Project or Task before starting.')
+  const project = state.projects.find(({ path }) => path === state.activeProjectKey)
+  if (project === undefined) throw new Error('Active Runtime workspace is not registered.')
+  return project
+}
+
+function configuredUserProject(state: {
+  projects: Array<{
+    path: string
+    workspaceKind?: 'project' | 'task'
+    taskKey?: string
+    sessions?: Array<{ key: string }>
+  }>
   activeProjectKey: string | null
 }): { path: string } {
-  if (state.activeProjectKey === null) throw new Error('Select a project directory before starting.')
-  const project = state.projects.find(({ path }) => path === state.activeProjectKey)
-  if (project === undefined) throw new Error('Active project is not registered.')
+  const project = configuredProject(state)
+  if (project.workspaceKind === 'task') {
+    throw new Error('Project path search is unavailable for Tasks.')
+  }
   return project
 }
 
@@ -737,6 +997,7 @@ async function activeProjectPath(
   const state = activeKernel.getState()
   if (state.activeProjectKey === null) return null
   const project = configuredProject(state)
+  if (project.workspaceKind === 'task') return null
   const canonicalPath = await projectStore.validateProjectPath(project.path)
   if (canonicalPath !== project.path) {
     throw new Error(`Active project path no longer resolves canonically: ${project.path}`)

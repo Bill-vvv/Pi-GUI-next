@@ -83,6 +83,39 @@ test('Timeline width and Composer clearance never interpolate intrinsic grid geo
   }
 })
 
+test('active status text replaces the three-bar glyph with a left-to-right shimmer that remains visible at rest', () => {
+  const timeline = read('features/chat/TimelineTurns.tsx')
+  const chat = read('features/chat/chat.css')
+
+  assert.match(timeline, /className="thinking-status-label activity-text-shimmer"/)
+  assert.ok(
+    timeline.includes("className={`process-step-text${running ? ' activity-text-shimmer' : ''}`}")
+  )
+  assert.doesNotMatch(timeline, /thinking-(?:visual|core)/)
+  assert.doesNotMatch(chat, /thinking-wave-breathe|\.thinking-(?:visual|core)/)
+
+  const shimmerRule = rule(chat, '.activity-text-shimmer')
+  assert.match(shimmerRule, /background-color:\s*var\(--color-text-muted\);/)
+  assert.match(shimmerRule, /var\(--color-text-soft\)/)
+  assert.match(shimmerRule, /var\(--color-text-primary\)/)
+  assert.match(
+    shimmerRule,
+    /animation:\s*activity-text-shimmer var\(--activity-text-shimmer-duration\) var\(--motion-easing-standard\) infinite;/
+  )
+
+  const keyframesStart = chat.indexOf('@keyframes activity-text-shimmer')
+  const keyframesEnd = chat.indexOf(
+    '\n}\n\n@media (prefers-reduced-motion: reduce), (forced-colors: active)',
+    keyframesStart
+  )
+  assert.notEqual(keyframesStart, -1, 'Missing activity-text-shimmer keyframes')
+  assert.notEqual(keyframesEnd, -1, 'Unclosed activity-text-shimmer keyframes')
+  const shimmerKeyframes = chat.slice(keyframesStart, keyframesEnd)
+  assert.match(shimmerKeyframes, /0%, 12%\s*\{\s*background-position:\s*100% 0;/)
+  assert.match(shimmerKeyframes, /78%, 100%\s*\{\s*background-position:\s*0% 0;/)
+  assert.doesNotMatch(shimmerKeyframes, /background-position:\s*-100% 0;/)
+})
+
 test('continuous activity animations have explicit static reduced-motion states', () => {
   const styles = read('styles.css')
   const composer = read('features/composer/composer.css')
@@ -99,7 +132,7 @@ test('continuous activity animations have explicit static reduced-motion states'
   )
   assert.match(
     chat,
-    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.thinking-core,[\s\S]*?animation:\s*none;/
+    /@media \(prefers-reduced-motion: reduce\), \(forced-colors: active\)[\s\S]*?\.activity-text-shimmer\s*\{[\s\S]*?animation:\s*none;/
   )
   assert.match(
     project,
@@ -111,7 +144,7 @@ test('continuous activity animations have explicit static reduced-motion states'
     'loading-pulse',
     'project-activity-trace',
     'session-orbit-turn',
-    'thinking-wave-breathe'
+    'activity-text-shimmer'
   ])
   for (const { path, source } of cssSources()) {
     for (const match of source.matchAll(/animation\s*:\s*([\w-]+)[^;]*\binfinite\b[^;]*;/g)) {
@@ -132,7 +165,7 @@ test('animated activity keeps text, ARIA, shape, or color semantics when motion 
 
   assert.match(app, /<main className="screen-loading">\s*正在连接 Pi Workbench…/)
   assert.match(todoPanel, /className=\{`composer-todo-state-icon \$\{status\.tone\}`\}[\s\S]*?role="status"[\s\S]*?aria-label=\{status\.label\}/)
-  assert.match(timeline, /className="thinking-status" aria-label=\{`Pi \$\{label\}`\} role="status"[\s\S]*?<span>\{label\}<\/span>/)
+  assert.match(timeline, /className="thinking-status" aria-label=\{`Pi \$\{label\}`\} role="status"[\s\S]*?className="thinking-status-label activity-text-shimmer"/)
   assert.match(navigator, /className="project-activity-summary"[\s\S]*?role="status"[\s\S]*?aria-label=\{`有 \$\{busySessionCount\} 个对话进行中`\}/)
   assert.match(navigator, /className=\{`session-lifecycle-indicator \$\{status\}`\}[\s\S]*?role="status"[\s\S]*?aria-label=\{label\}/)
 })

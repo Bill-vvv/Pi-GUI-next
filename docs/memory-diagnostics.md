@@ -1,8 +1,8 @@
 # Memory Diagnostics and Runtime Lifecycle
 
-> Slice: S26 — Memory Budget & Runtime Hibernation
+> Slice: S26 — Memory Budget & Automatic Runtime Hibernation
 > Status: In Progress
-> Last updated: 2026-07-28
+> Last updated: 2026-07-30
 
 ## 1. Purpose and evidence levels
 
@@ -27,6 +27,8 @@ A development run lasting about 1 hour 52 minutes reached:
 - direct Pi Runtime processes: 10, commonly about 280–500 MiB PSS each.
 
 The active Session JSONL was about 400 KiB and the largest Session JSONL was about 8 MiB. Raw transcript volume therefore could not explain the Renderer footprint.
+
+A later development Renderer reached about 7.0 GiB RSS, about 6.9 GiB private anonymous memory and roughly 35,000 `PartitionAlloc` mappings. V8 was only about 358 MiB before collection. A Chromium GC/JavaScript purge reduced V8 to about 93 MiB but paged swapped native allocator regions back in, raised RSS again and was followed by a full development-instance restart. Forced GC/purge must therefore not be used for live containment or release acceptance.
 
 ### 2.2 Restarted real-workload app
 
@@ -118,9 +120,9 @@ If sustained, the same event rate produces tens of GiB of allocation churn over 
 
 ### 4.1 Runtime retention
 
-`WorkbenchKernel` retains a complete `KernelState` inside every managed `RuntimeContext`. Inactive contexts continue receiving and projecting Runtime events. There is no idle eviction; contexts are removed only by explicit stop/cleanup paths such as archive, reload, failed launch cleanup or app shutdown.
+`WorkbenchKernel` retains a complete `KernelState` inside every warm managed `RuntimeContext`; inactive contexts continue receiving and projecting Runtime events until reclaimed. Automatic hibernation now uses a five-minute grace period, strict quiescence lease and a one-background-Runtime warm target, while busy, provisional, foreground and unknown-quiescence contexts remain protected.
 
-This makes process count the dominant current steady-state cost:
+Process count remains the dominant steady-state cost while contexts are warm:
 
 ```text
 visited/running Session count
@@ -129,25 +131,13 @@ visited/running Session count
   + retained RuntimeContext Conversation state
 ```
 
-### 4.2 Duplicate complete state transport
+### 4.2 State transport containment
 
-Many mutating commands both:
+Mutating commands now return narrow revision acknowledgements rather than a second complete `KernelState`, and identity-safe metadata patches cover the high-frequency tool/Subagent path. Remaining consecutive state events previously still crossed Main→Renderer as separate Electron messages, so Renderer-side RAF merging could not prevent their structured-clone/native allocation cost.
 
-1. publish `kernel.state-changed` or `kernel.state-patched`; and
-2. return another `kernel.getState()` through the invoke result.
+Main now coalesces only consecutive state events into an 8ms, maximum-64-member envelope. A newer full state supersedes older pending state work, later patches retain revision order, and domain events flush the queue as ordering barriers. Active stderr diagnostics publish a narrow runtime patch instead of copying the full Conversation. Renderer expands each envelope through the existing revision barrier and snapshot-resync path.
 
-The Renderer may logically ignore a stale invoke result after an event revision changes, but both deep copy and IPC structured clone have already happened.
-
-### 4.3 Metadata-only updates fall back to complete state
-
-`createConversationEntryPatch()` currently supports only:
-
-- entry insertion;
-- message text suffix append;
-- thinking text suffix append;
-- tool output suffix append.
-
-A tool/subagent status, participant, token, duration, current-tool or final-output metadata change with no tool-output growth returns `null`. `handlePiEvent()` then calls `emitState()`. This is the primary source-level explanation for hundreds of complete states during a parallel Subagent run.
+This is bounded Main send-side containment, not byte-level backpressure after Electron accepts a message. A future gate must still measure Renderer settled slope and native allocations under a real workload.
 
 ### 4.4 DOM mounting is not the main failure
 
@@ -171,11 +161,11 @@ For Pi GUI this becomes: Jupyter-style Session/Runtime separation, Chrome-style 
 ## 6. Accepted implementation order
 
 1. Keep the opt-in, redacted memory diagnostics in the single official verifier.
-2. Replace duplicate mutating invoke state returns with typed acknowledgements.
-3. Add identity/revision-safe metadata patches so Subagent/tool status updates do not fall back to complete state.
-4. Bound and coalesce Main→Renderer event delivery; overflow causes a targeted reset instead of an unbounded queue.
+2. Replace duplicate mutating invoke state returns with typed acknowledgements. **Complete.**
+3. Add identity/revision-safe metadata patches so Subagent/tool status updates do not fall back to complete state. **Complete for the high-frequency paths.**
+4. Bound and coalesce Main→Renderer event delivery. **Complete for the Main pre-send queue: 8ms / 64 state events with full-state supersession and revision resync.**
 5. Split Navigation, active Session metadata and active Conversation projections.
-6. Add user-explicit Session/Project/all-idle Runtime hibernation.
+6. Keep the single-Runtime stop/recovery primitive inside Main/Kernel only; do not expose Session, Project or all-idle hibernation as a user action.
 7. Define Kernel and Extension operation leases; unknown quiescence fails closed.
 8. Enable conservative automatic hibernation only for persisted, inactive, non-busy, non-provisional, lease-free Runtimes.
 9. Page and evict old Timeline data in Renderer.
@@ -199,7 +189,7 @@ Parallel busy work is allowed to exceed the steady-state budget. The required be
 
 ## 8. Diagnostic safety
 
-Electron 43.1.1 in this project fatally traps a Renderer if CDP `Memory.prepareForLeakDetection` is called without Chromium `--js-flags=--expose-gc`. Diagnostics must not call it. `Runtime.getHeapUsage`, `Memory.getDOMCounters`, `HeapProfiler.collectGarbage` and `Memory.forciblyPurgeJavaScriptMemory` were non-fatal in this environment, but forced GC/purge is not a product memory policy.
+Electron 43.1.1 in this project fatally traps a Renderer if CDP `Memory.prepareForLeakDetection` is called without Chromium `--js-flags=--expose-gc`. Diagnostics must not call it. `Runtime.getHeapUsage` and `Memory.getDOMCounters` are the safe read-only probes. Although `HeapProfiler.collectGarbage` and `Memory.forciblyPurgeJavaScriptMemory` were non-fatal in isolated probing, using them on a live multi-GiB Renderer paged native allocator memory back in and preceded a full development-instance restart; they must not be used for containment or release gates.
 
 The normal diagnostic command is:
 

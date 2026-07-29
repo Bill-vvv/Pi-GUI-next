@@ -6,6 +6,8 @@ const MAX_UNTERMINATED_PREVIEW_CHARS = 120
 
 export type JsonlParseBatch = {
   records: unknown[]
+  /** UTF-8 bytes for each parsed raw record, including its LF or CRLF terminator. */
+  recordByteLengths: number[]
   errors: Error[]
 }
 
@@ -44,7 +46,7 @@ export class LfJsonlParser {
   }
 
   private consume(text: string): JsonlParseBatch {
-    const batch: JsonlParseBatch = { records: [], errors: [] }
+    const batch: JsonlParseBatch = { records: [], recordByteLengths: [], errors: [] }
     this.buffer += text
 
     for (;;) {
@@ -53,7 +55,9 @@ export class LfJsonlParser {
         break
       }
 
-      let line = this.buffer.slice(0, newlineIndex)
+      const rawLine = this.buffer.slice(0, newlineIndex)
+      const recordByteLength = Buffer.byteLength(`${rawLine}\n`, 'utf8')
+      let line = rawLine
       this.buffer = this.buffer.slice(newlineIndex + 1)
       if (line.endsWith('\r')) {
         line = line.slice(0, -1)
@@ -64,6 +68,7 @@ export class LfJsonlParser {
 
       try {
         batch.records.push(JSON.parse(line))
+        batch.recordByteLengths.push(recordByteLength)
       } catch (error) {
         const detail = errorMessage(error)
         batch.errors.push(new Error(`Failed to parse Pi RPC JSONL record: ${detail}`))

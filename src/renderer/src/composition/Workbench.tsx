@@ -4,6 +4,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode
 } from 'react'
@@ -11,13 +12,12 @@ import {
 import type {
   AppearanceSettings,
   GeneralSettings,
-  KernelAdvisorConfiguration,
-  KernelAdvisorDefinitionInput,
-  KernelAdvisorEditableScope,
+  KernelAskAnswer,
   KernelExtensionSelectionKind,
   KernelForkCandidate,
   KernelInstalledPackage,
   KernelModelPricingFetchResult,
+  KernelNavigatorKind,
   KernelPiDevCatalog,
   KernelProjectTrustChoice,
   KernelPromptAttachment,
@@ -56,16 +56,16 @@ import {
   ProjectNavigator,
   sessionTitle
 } from '../features/project/ProjectNavigator'
+import {
+  orderTaskItems,
+  TaskNavigator
+} from '../features/project/TaskNavigator'
 import { SessionForkDialog } from '../features/session/SessionForkDialog'
 import { SettingsPanel } from '../features/settings/SettingsPanel'
-import {
-  SettingsNavigation,
-  type SettingsSection
-} from '../features/settings/SettingsNavigation'
+import { SettingsNavigation } from '../features/settings/SettingsNavigation'
 import { useSettingsWorkspace } from '../features/settings/settings-workspace'
 import { Timeline } from '../features/chat/Timeline'
 import { SubagentTaskDetail } from '../features/chat/SubagentTaskDetail'
-import { TIMELINE_LAYOUT_CHANGE_EVENT } from '../features/chat/timeline-scroll-stability'
 import {
   matchesSubagentTaskTrigger,
   reconcileSubagentTaskSelection,
@@ -77,12 +77,21 @@ import {
   type SubagentTaskTarget
 } from '../features/chat/subagent-task-detail-model'
 import { ProjectTrustDialog } from '../features/trust/ProjectTrustDialog'
+import { RIGHT_SIDEBAR_ID, RightSidebar } from './RightSidebar'
 import {
   DEFAULT_TOOL_DISPLAY_DENSITY,
   isToolDisplayDensity,
   type ToolDisplayDensity
 } from '../tool-display-density'
 import { currentTurnTodos } from '../todo-state'
+import {
+  isWorkbenchAction,
+  runtimeContextActionStatus,
+  type WorkbenchActionFailure,
+  type WorkbenchActionOrigin,
+  type WorkbenchCompletedAction,
+  type WorkbenchOperation
+} from '../workbench-actions'
 
 const TOOL_DISPLAY_DENSITY_STORAGE_KEY = 'pi-workbench.tool-display-density'
 const PINNED_PROJECTS_STORAGE_KEY = 'pi-workbench.pinned-projects'
@@ -99,9 +108,9 @@ type WorkbenchProps = {
   viewingNewSession: boolean
   newSessionPrepared: boolean
   sessionPreviewPending: boolean
-  pendingAction: string | null
-  completedAction: { action: string; succeeded: boolean } | null
-  actionError: string | null
+  pendingAction: WorkbenchOperation | null
+  completedAction: WorkbenchCompletedAction | null
+  actionFailure: WorkbenchActionFailure | null
   operationNotifications: ReactNode
   systemFonts: string[] | null
   systemFontsError: string | null
@@ -113,6 +122,9 @@ type WorkbenchProps = {
   forkPreferredUserText: string | null
   onAddProject: () => Promise<void>
   onActivateProject: (projectKey: string) => Promise<void>
+  onSelectNavigator: (kind: KernelNavigatorKind) => Promise<void>
+  onCreateTask: () => Promise<void>
+  onActivateTask: (taskKey: string, sessionKey: string) => Promise<void>
   onStartSession: () => Promise<void>
   onReloadSession: () => Promise<void>
   onWaitForSessionStart: () => Promise<void>
@@ -172,27 +184,32 @@ type WorkbenchProps = {
   ) => () => void
   onSelectPromptAttachments: () => Promise<KernelPromptAttachment[]>
   onSearchProjectPaths: (query: string) => Promise<KernelProjectPathSearchResult>
-  onPrompt: (message: string, attachments?: KernelPromptAttachment[]) => Promise<void>
+  onSubmitAsk: (
+    sessionKey: string,
+    toolCallId: string,
+    answers: KernelAskAnswer[]
+  ) => Promise<void>
+  onCancelAsk: (sessionKey: string, toolCallId: string) => Promise<void>
+  onPrompt: (
+    message: string,
+    attachments?: KernelPromptAttachment[],
+    expectedSessionKey?: string
+  ) => Promise<void>
+  onNavigateHistoryPrompt: (sessionKey: string, messageId: string) => Promise<void>
   onSteer: (message: string, attachments?: KernelPromptAttachment[]) => Promise<void>
   onFollowUp: (message: string, attachments?: KernelPromptAttachment[]) => Promise<void>
   onInvokeCommand: (commandId: string, argument: string) => Promise<void>
   onAbort: () => Promise<void>
-  onSetModel: (provider: string, modelId: string) => Promise<void>
+  onSetModel: (
+    provider: string,
+    modelId: string,
+    origin: WorkbenchActionOrigin
+  ) => Promise<void>
   onSetThinkingLevel: (level: ThinkingLevel) => Promise<void>
   onSetSessionNaming: (settings: SessionNamingSettings) => Promise<void>
   onSetGeneral: (settings: GeneralSettings) => Promise<void>
   onSetSubagentEnabled: (enabled: boolean) => Promise<void>
   onSetMagicContextEnabled: (enabled: boolean) => Promise<void>
-  onSetAdvisorSystemEnabled: (enabled: boolean) => Promise<void>
-  onSetAdvisorExtensionEnabled: (enabled: boolean) => Promise<void>
-  onListAdvisorDefinitions: () => Promise<KernelAdvisorConfiguration>
-  onSaveAdvisorDefinition: (
-    definition: KernelAdvisorDefinitionInput
-  ) => Promise<KernelAdvisorConfiguration>
-  onRemoveAdvisorDefinition: (
-    slug: string,
-    scope: KernelAdvisorEditableScope
-  ) => Promise<KernelAdvisorConfiguration>
   onListSubagentDefinitions: () => Promise<KernelSubagentDefinition[]>
   onSaveSubagentDefinition: (
     definition: KernelSubagentDefinitionInput
@@ -219,7 +236,7 @@ export function Workbench({
   sessionPreviewPending,
   pendingAction,
   completedAction,
-  actionError,
+  actionFailure,
   operationNotifications,
   systemFonts,
   systemFontsError,
@@ -231,6 +248,9 @@ export function Workbench({
   forkPreferredUserText,
   onAddProject,
   onActivateProject,
+  onSelectNavigator,
+  onCreateTask,
+  onActivateTask,
   onStartSession,
   onReloadSession,
   onWaitForSessionStart,
@@ -272,7 +292,10 @@ export function Workbench({
   onSubscribeProviderAuth,
   onSelectPromptAttachments,
   onSearchProjectPaths,
+  onSubmitAsk,
+  onCancelAsk,
   onPrompt,
+  onNavigateHistoryPrompt,
   onSteer,
   onFollowUp,
   onInvokeCommand,
@@ -283,11 +306,6 @@ export function Workbench({
   onSetGeneral,
   onSetSubagentEnabled,
   onSetMagicContextEnabled,
-  onSetAdvisorSystemEnabled,
-  onSetAdvisorExtensionEnabled,
-  onListAdvisorDefinitions,
-  onSaveAdvisorDefinition,
-  onRemoveAdvisorDefinition,
   onListSubagentDefinitions,
   onSaveSubagentDefinition,
   onSetSubagentDefinitionEnabled,
@@ -309,10 +327,22 @@ export function Workbench({
     onActiveOperationChange
   } = useSettingsWorkspace()
   const [shortcutRecording, setShortcutRecording] = useState(false)
+  useEffect(() => {
+    const compactWorkbench = window.matchMedia('(max-width: 700px)')
+    const syncCompactSidebar = (): void => {
+      if (compactWorkbench.matches && !settingsOpen) setSidebarCollapsed(true)
+    }
+    syncCompactSidebar()
+    compactWorkbench.addEventListener('change', syncCompactSidebar)
+    return () => compactWorkbench.removeEventListener('change', syncCompactSidebar)
+  }, [settingsOpen])
   const [composerControlRequest, setComposerControlRequest] =
     useState<ComposerControlRequest | null>(null)
+  const [historyPromptEditing, setHistoryPromptEditing] = useState(false)
   const [subagentTaskSelection, setSubagentTaskSelection] =
     useState<SubagentTaskSelection | null>(null)
+  const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false)
+  const [rightSidebarTabId, setRightSidebarTabId] = useState('subagent')
   const [toolDisplayDensity, setToolDisplayDensity] = useState<ToolDisplayDensity>(() => {
     const stored = window.localStorage.getItem(TOOL_DISPLAY_DENSITY_STORAGE_KEY)
     return isToolDisplayDensity(stored) ? stored : DEFAULT_TOOL_DISPLAY_DENSITY
@@ -338,24 +368,59 @@ export function Workbench({
     conversation
   } = state
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
+  const projectNavigatorTabRef = useRef<HTMLButtonElement>(null)
+  const taskNavigatorTabRef = useRef<HTMLButtonElement>(null)
   const mainChatRef = useRef<HTMLElement>(null)
+  const timelineStabilizeRef = useRef<(() => void) | null>(null)
   const subagentTaskDetailRef = useRef<HTMLElement>(null)
+  const handleComposerMeasuredHeightChange = useCallback((height: number) => {
+    const mainChat = mainChatRef.current
+    if (mainChat === null) return
+    if (height > 0) {
+      mainChat.style.setProperty('--composer-measured-clearance', `${height}px`)
+    } else {
+      mainChat.style.removeProperty('--composer-measured-clearance')
+    }
+    timelineStabilizeRef.current?.()
+  }, [])
+  const handleTimelineLayoutStabilizeReady = useCallback((stabilize: (() => void) | null) => {
+    timelineStabilizeRef.current = stabilize
+  }, [])
   const restoreSettingsFocusRef = useRef(false)
-  const settingsActionRef = useRef<string | null>(null)
   const composerControlRevisionRef = useRef(0)
-  const closeSubagentTaskDetail = useCallback((restoreFocus: boolean) => {
-    const selection = subagentTaskSelection
-    setSubagentTaskSelection(null)
-    if (!restoreFocus) return
+  const rightSidebarResizeCancelRef = useRef<(() => void) | null>(null)
+  const focusRestorationRevisionRef = useRef(0)
+  const invalidateRightSidebarFocusRestoration = useCallback(() => {
+    focusRestorationRevisionRef.current += 1
+  }, [])
+  const restoreSubagentTaskTriggerFocus = useCallback((selection: SubagentTaskSelection | null) => {
+    const requestRevision = ++focusRestorationRevisionRef.current
     requestAnimationFrame(() => {
       const mainChat = mainChatRef.current
+      if (
+        requestRevision !== focusRestorationRevisionRef.current ||
+        hasConnectedMeaningfulFocus(mainChat)
+      ) return
       const trigger = mainChat === null || selection === null
         ? null
         : findSubagentTaskTrigger(mainChat, selection)
       if (trigger !== null) trigger.focus()
       else mainChat?.focus()
     })
-  }, [subagentTaskSelection])
+  }, [])
+  const handleRightSidebarResizeCancelChange = useCallback((cancel: (() => void) | null) => {
+    rightSidebarResizeCancelRef.current = cancel
+  }, [])
+  const collapseRightSidebar = useCallback(() => {
+    setRightSidebarCollapsed(true)
+    restoreSubagentTaskTriggerFocus(subagentTaskSelection)
+  }, [restoreSubagentTaskTriggerFocus, subagentTaskSelection])
+  const closeRightSidebar = useCallback((restoreFocus: boolean) => {
+    const selection = subagentTaskSelection
+    setSubagentTaskSelection(null)
+    setRightSidebarCollapsed(false)
+    if (restoreFocus) restoreSubagentTaskTriggerFocus(selection)
+  }, [restoreSubagentTaskTriggerFocus, subagentTaskSelection])
   useEffect(() => {
     if (settingsOpen || !restoreSettingsFocusRef.current) return
     restoreSettingsFocusRef.current = false
@@ -363,11 +428,16 @@ export function Workbench({
   }, [settingsOpen])
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent): void => {
+      if (event.isComposing || event.keyCode === 229) return
+      if (event.key === 'Escape' && rightSidebarResizeCancelRef.current !== null) {
+        rightSidebarResizeCancelRef.current()
+        event.preventDefault()
+        event.stopPropagation()
+        return
+      }
       if (
         !document.hasFocus() ||
         event.defaultPrevented ||
-        event.isComposing ||
-        event.keyCode === 229 ||
         shortcutRecording ||
         hasVisibleShortcutBlockingSurface()
       ) return
@@ -377,8 +447,8 @@ export function Workbench({
         event.stopPropagation()
         return
       }
-      if (subagentTaskSelection !== null && event.key === 'Escape') {
-        closeSubagentTaskDetail(true)
+      if (subagentTaskSelection !== null && !rightSidebarCollapsed && event.key === 'Escape') {
+        closeRightSidebar(true)
         event.preventDefault()
         event.stopPropagation()
         return
@@ -404,7 +474,14 @@ export function Workbench({
     event.stopPropagation()
     void window.piGui.toggleMaximize().catch(() => undefined)
   }
-  const displayedProjects = projects
+  const userProjects = projects.filter((project) => project.workspaceKind !== 'task')
+  const taskWorkspaces = projects.filter((project) => project.workspaceKind === 'task')
+  const activeWorkspace = activeProjectKey === null
+    ? null
+    : projects.find((project) => project.path === activeProjectKey) ?? null
+  const navigatorKind: KernelNavigatorKind = state.navigatorKind ??
+    (activeWorkspace?.workspaceKind === 'task' ? 'task' : 'project')
+  const displayedProjects = userProjects
     .map((project, index) => ({ project, index }))
     .sort((left, right) => {
       const pinOrder = Number(pinnedProjectKeys.has(right.project.path)) -
@@ -412,9 +489,24 @@ export function Workbench({
       return pinOrder === 0 ? left.index - right.index : pinOrder
     })
     .map(({ project }) => project)
-  const activeProject = activeProjectKey === null
-    ? null
-    : projects.find((project) => project.path === activeProjectKey) ?? null
+  const activeProject = activeWorkspace?.workspaceKind === 'task' ? null : activeWorkspace
+  const taskItems = taskWorkspaces.flatMap((workspace) => {
+    if (workspace.taskKey === undefined) return []
+    return (workspace.sessions ?? []).map((session) => ({
+      taskKey: workspace.taskKey!,
+      workspaceKey: workspace.path,
+      session
+    }))
+  })
+  const orderedTaskItems = orderTaskItems(taskItems)
+  const projectBusyCount = userProjects.reduce(
+    (count, project) => count + (project.busySessionCount ?? 0),
+    0
+  )
+  const taskBusyCount = taskWorkspaces.reduce(
+    (count, task) => count + (task.busySessionCount ?? 0),
+    0
+  )
   const displayedSessionKey = viewingNewSession
     ? null
     : viewedSessionKey ?? activeSessionKey
@@ -424,12 +516,13 @@ export function Workbench({
     ? null
     : sessions.find((summary) => summary.key === displayedSessionKey) ?? null
   const viewingArchivedSession = archivedSessionPreview !== null
-  const projectName = basename(activeProject?.path ?? null) ?? '未选择项目'
+  const projectName = activeWorkspace?.workspaceKind === 'task'
+    ? '任务'
+    : basename(activeProject?.path ?? null) ?? '未选择项目'
   const busy = pendingAction !== null
-  const canChangeProjectOrSession = !busy
-  const canStartSession =
-    canChangeProjectOrSession &&
-    activeProject !== null
+  const interactionBusy = busy || historyPromptEditing
+  const canChangeProjectOrSession = !interactionBusy
+  const canStartSession = canChangeProjectOrSession && activeProject !== null
   const displayedConversation = archivedSessionPreview?.conversation ?? (
     viewingNewSession && !newSessionPrepared
     ? { entries: [], activeRunStartIndex: null }
@@ -444,6 +537,9 @@ export function Workbench({
     viewingNewSession,
     archivedSessionKey: archivedSessionPreview?.sessionKey ?? null
   })
+  useEffect(() => {
+    setHistoryPromptEditing(false)
+  }, [displayedConversationIdentity])
   const reconciledSubagentTaskSelection = settingsOpen
     ? null
     : reconcileSubagentTaskSelection(
@@ -459,20 +555,25 @@ export function Workbench({
   const selectedSubagentTaskKey = reconciledSubagentTaskSelection === null
     ? null
     : subagentTaskSelectionKey(reconciledSubagentTaskSelection)
+  const rightSidebarOpen = selectedSubagentTask !== null && !rightSidebarCollapsed
   useLayoutEffect(() => {
-    mainChatRef.current
-      ?.querySelector<HTMLElement>('.conversation-surface')
-      ?.dispatchEvent(new Event(TIMELINE_LAYOUT_CHANGE_EVENT))
-  }, [selectedSubagentTaskKey, sidebarCollapsed])
+    timelineStabilizeRef.current?.()
+  }, [rightSidebarOpen, selectedSubagentTaskKey, sidebarCollapsed])
+  useLayoutEffect(() => {
+    invalidateRightSidebarFocusRestoration()
+  }, [displayedConversationIdentity, invalidateRightSidebarFocusRestoration, settingsOpen])
   const openSubagentTaskDetail = useCallback((
     target: SubagentTaskTarget,
     _trigger: HTMLButtonElement
   ): void => {
+    invalidateRightSidebarFocusRestoration()
+    setRightSidebarCollapsed(false)
+    setRightSidebarTabId('subagent')
     setSubagentTaskSelection({
       conversationIdentity: displayedConversationIdentity,
       ...target
     })
-  }, [displayedConversationIdentity])
+  }, [displayedConversationIdentity, invalidateRightSidebarFocusRestoration])
   useEffect(() => {
     if (subagentTaskSelection === null) return
     if (
@@ -484,18 +585,19 @@ export function Workbench({
     }
     if (reconciledSubagentTaskSelection !== null) return
     setSubagentTaskSelection(null)
-    requestAnimationFrame(() => mainChatRef.current?.focus())
+    restoreSubagentTaskTriggerFocus(subagentTaskSelection)
   }, [
     displayedConversationIdentity,
     reconciledSubagentTaskSelection,
+    restoreSubagentTaskTriggerFocus,
     settingsOpen,
     subagentTaskSelection
   ])
   useEffect(() => {
-    if (selectedSubagentTaskKey === null) return
+    if (!rightSidebarOpen || selectedSubagentTaskKey === null) return
     subagentTaskDetailRef.current?.focus()
-  }, [selectedSubagentTaskKey])
-  const canForkSession =
+  }, [rightSidebarOpen, selectedSubagentTaskKey])
+  const canUseSettledSessionActions =
     !viewingArchivedSession &&
     sessionPreview === null &&
     !viewingInactiveSession &&
@@ -503,6 +605,7 @@ export function Workbench({
     activeSessionKey !== null &&
     runtime.status === 'ready' &&
     state.session.settled
+  const canForkSession = canUseSettledSessionActions && activeWorkspace?.workspaceKind !== 'task'
   const canExportSession =
     !viewingArchivedSession &&
     sessionPreview === null &&
@@ -514,7 +617,7 @@ export function Workbench({
     runtime.status !== 'stopping' &&
     state.session.settled
   const canCopyLastAnswer =
-    canForkSession &&
+    canUseSettledSessionActions &&
     displayedConversation.entries.some((entry) =>
       entry.kind === 'message' &&
       entry.role === 'assistant' &&
@@ -522,51 +625,43 @@ export function Workbench({
       (entry.phase === 'final_answer' || entry.phase == null) &&
       entry.text.trim().length > 0
     )
+  const settingsState = activeWorkspace?.workspaceKind === 'task'
+    ? { ...state, activeProjectKey: null }
+    : state
   const conversationActionStatus =
-    pendingAction === 'export-session'
+    isWorkbenchAction(pendingAction, 'export-session')
       ? '正在导出 HTML…'
-      : pendingAction === 'copy-last-answer'
+      : isWorkbenchAction(pendingAction, 'copy-last-answer')
         ? '正在复制回答…'
         : pendingAction === null &&
-          completedAction?.action === 'copy-last-answer' &&
+          completedAction !== null &&
+          isWorkbenchAction(completedAction.action, 'copy-last-answer') &&
           completedAction.succeeded
           ? '已复制回答'
           : null
   const contextActionStatus = sessionPreviewPending
     ? '正在读取对话…'
     : runtimeContextActionStatus(pendingAction)
-  const extensionActionError = completedAction !== null &&
-    !completedAction.succeeded &&
-    (completedAction.action === 'install-extension' || completedAction.action === 'remove-extension')
-    ? actionError
+  const extensionActionError = settingsOpen &&
+    settingsSection === 'extensions' &&
+    actionFailure?.owner === 'extension'
+    ? actionFailure.message
     : null
-  const failedAction = actionError !== null &&
-    completedAction !== null &&
-    !completedAction.succeeded
-    ? completedAction.action
-    : null
-  const failedSettingsSection = settingsSectionForAction(failedAction)
   const settingsActionError = settingsOpen &&
-    failedSettingsSection === settingsSection
-    ? actionError
+    actionFailure?.owner === settingsSection
+    ? actionFailure.message
     : null
-  const failedFromSettings = failedAction !== null &&
-    settingsActionRef.current === failedAction
   const timelineActionError = !settingsOpen &&
-    !failedFromSettings &&
-    isConversationAction(failedAction)
-    ? actionError
+    actionFailure?.owner === 'timeline'
+    ? actionFailure.message
     : null
   const conversationActionError = !settingsOpen &&
-    actionError !== null &&
-    (failedAction === 'copy-last-answer' || failedAction === 'export-session')
-    ? actionError
+    actionFailure?.owner === 'conversation-actions'
+    ? actionFailure.message
     : null
   const headerActionError = !settingsOpen &&
-    actionError !== null &&
-    timelineActionError === null &&
-    conversationActionError === null
-    ? actionError
+    actionFailure?.owner === 'header'
+    ? actionFailure.message
     : null
   const promptInDisplayedSession = async (
     message: string,
@@ -581,6 +676,7 @@ export function Workbench({
     sessionKey: string,
     runtimeStatus: KernelState['sessions'][number]['runtimeStatus']
   ): void => {
+    invalidateRightSidebarFocusRestoration()
     const isActive = sessionKey === activeSessionKey
     const isLive =
       runtimeStatus === 'ready' ||
@@ -621,21 +717,41 @@ export function Workbench({
       return next
     })
   }
+  const handleNavigatorTabKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    kind: KernelNavigatorKind
+  ): void => {
+    const targetKind = event.key === 'ArrowLeft' || event.key === 'Home'
+      ? 'project'
+      : event.key === 'ArrowRight' || event.key === 'End'
+        ? 'task'
+        : null
+    if (targetKind === null) return
+    event.preventDefault()
+    const target = targetKind === 'project' ? projectNavigatorTabRef.current : taskNavigatorTabRef.current
+    target?.focus()
+    if (targetKind !== kind && !interactionBusy) {
+      invalidateRightSidebarFocusRestoration()
+      void onSelectNavigator(targetKind).catch(() => undefined)
+    }
+  }
   const requestComposerControl = (action: ComposerControlRequest['action']): void => {
     composerControlRevisionRef.current += 1
     setComposerControlRequest({ id: composerControlRevisionRef.current, action })
   }
   const dispatchShortcutAction = (actionId: ShortcutActionId): boolean => {
     if (actionId === 'open-settings') {
+      invalidateRightSidebarFocusRestoration()
       if (viewingArchivedSession) onClearArchivedSessionPreview()
       setSidebarCollapsed(false)
       openSettings()
       return true
     }
     if (actionId === 'new-session') {
-      if (!canStartSession) return false
+      if (interactionBusy || (navigatorKind === 'project' && !canStartSession)) return false
       if (settingsOpen && !requestCloseSettings()) return false
-      void onStartSession().catch(() => undefined)
+      invalidateRightSidebarFocusRestoration()
+      void (navigatorKind === 'task' ? onCreateTask() : onStartSession()).catch(() => undefined)
       return true
     }
     if (actionId === 'focus-composer') {
@@ -643,9 +759,9 @@ export function Workbench({
         ? activeSession?.runtimeStatus ?? 'stopped'
         : runtime.status
       if (
-        busy ||
+        interactionBusy ||
         viewingArchivedSession ||
-        activeProject === null ||
+        activeWorkspace === null ||
         (displayedStatus !== 'ready' && displayedStatus !== 'running')
       ) return false
       if (settingsOpen && !requestCloseSettings()) return false
@@ -654,7 +770,7 @@ export function Workbench({
     }
     if (actionId === 'open-model-selector') {
       if (
-        busy ||
+        interactionBusy ||
         viewingArchivedSession ||
         viewingInactiveSession ||
         (viewingNewSession && !newSessionPrepared) ||
@@ -667,7 +783,7 @@ export function Workbench({
     }
     if (actionId === 'reload-session') {
       if (
-        busy ||
+        interactionBusy ||
         viewingArchivedSession ||
         viewingInactiveSession ||
         viewingNewSession ||
@@ -680,7 +796,7 @@ export function Workbench({
     }
     if (actionId === 'archive-session') {
       if (
-        busy ||
+        interactionBusy ||
         viewingArchivedSession ||
         viewingInactiveSession ||
         viewingNewSession ||
@@ -691,7 +807,7 @@ export function Workbench({
     }
     if (actionId === 'copy-last-answer') {
       if (
-        busy ||
+        interactionBusy ||
         viewingArchivedSession ||
         viewingInactiveSession ||
         viewingNewSession ||
@@ -703,15 +819,27 @@ export function Workbench({
       return true
     }
     if (actionId === 'previous-project' || actionId === 'next-project') {
-      if (busy || activeProjectKey === null) return false
+      if (interactionBusy || navigatorKind !== 'project' || activeProjectKey === null) return false
       const currentIndex = displayedProjects.findIndex(({ path }) => path === activeProjectKey)
       const targetIndex = currentIndex + (actionId === 'previous-project' ? -1 : 1)
       const target = displayedProjects[targetIndex]
       if (target === undefined) return false
+      invalidateRightSidebarFocusRestoration()
       void onActivateProject(target.path).catch(() => undefined)
       return true
     }
-    if (busy || displayedSessionKey === null) return false
+    if (interactionBusy || displayedSessionKey === null) return false
+    if (navigatorKind === 'task') {
+      const currentIndex = orderedTaskItems.findIndex(
+        ({ session }) => session.key === displayedSessionKey
+      )
+      const targetIndex = currentIndex + (actionId === 'previous-session' ? -1 : 1)
+      const target = orderedTaskItems[targetIndex]
+      if (target === undefined) return false
+      invalidateRightSidebarFocusRestoration()
+      void onActivateTask(target.taskKey, target.session.key).catch(() => undefined)
+      return true
+    }
     const currentIndex = sessions.findIndex(({ key }) => key === displayedSessionKey)
     const targetIndex = currentIndex + (actionId === 'previous-session' ? -1 : 1)
     const target = sessions[targetIndex]
@@ -720,7 +848,7 @@ export function Workbench({
     return true
   }
   return (
-    <main className={`app-shell${sidebarCollapsed ? ' left-sidebar-collapsed' : ''}${settingsOpen ? ' settings-open' : ''}${selectedSubagentTask === null ? '' : ' subagent-detail-open'}`}>
+    <main className={`app-shell${sidebarCollapsed ? ' left-sidebar-collapsed' : ''}${settingsOpen ? ' settings-open' : ''}${rightSidebarOpen ? ' right-sidebar-open' : ''}`}>
       {doubleClickBorderMaximize ? (
         <div className="window-edge-hit-layer" aria-hidden="true">
           <div className="window-edge-hit top" onDoubleClick={handleWindowEdgeDoubleClick} />
@@ -729,27 +857,77 @@ export function Workbench({
           <div className="window-edge-hit left" onDoubleClick={handleWindowEdgeDoubleClick} />
         </div>
       ) : null}
-      <aside className="left-sidebar" aria-label={settingsOpen ? '设置导航' : '项目与对话'}>
+      <aside className="left-sidebar" aria-label={settingsOpen ? '设置导航' : '项目与任务'}>
         <div className={`sidebar-content${settingsOpen ? ' settings-sidebar-content' : ''}`}>
           {settingsOpen ? (
             <SettingsNavigation
               section={settingsSection}
-              onSectionChange={requestSectionChange}
+              onSectionChange={(section) => {
+                invalidateRightSidebarFocusRestoration()
+                requestSectionChange(section)
+              }}
               onBack={() => {
                 if (requestCloseSettings()) restoreSettingsFocusRef.current = true
               }}
             />
           ) : null}
+          {settingsOpen ? null : (
+            <div className="workspace-navigator-tabs" role="tablist" aria-label="工作类型">
+              <button
+                ref={projectNavigatorTabRef}
+                id="project-navigator-tab"
+                className="workspace-navigator-tab"
+                type="button"
+                role="tab"
+                aria-controls="project-navigator-panel"
+                aria-selected={navigatorKind === 'project'}
+                tabIndex={navigatorKind === 'project' ? 0 : -1}
+                disabled={interactionBusy}
+                onKeyDown={(event) => handleNavigatorTabKeyDown(event, 'project')}
+                onClick={() => {
+                  if (navigatorKind !== 'project') {
+                    invalidateRightSidebarFocusRestoration()
+                    void onSelectNavigator('project').catch(() => undefined)
+                  }
+                }}
+              >
+                <span>项目</span>
+                {projectBusyCount > 0 ? <span className="navigator-busy-count">{projectBusyCount}</span> : null}
+              </button>
+              <button
+                ref={taskNavigatorTabRef}
+                id="task-navigator-tab"
+                className="workspace-navigator-tab"
+                type="button"
+                role="tab"
+                aria-controls="task-navigator-panel"
+                aria-selected={navigatorKind === 'task'}
+                tabIndex={navigatorKind === 'task' ? 0 : -1}
+                disabled={interactionBusy}
+                onKeyDown={(event) => handleNavigatorTabKeyDown(event, 'task')}
+                onClick={() => {
+                  if (navigatorKind !== 'task') {
+                    invalidateRightSidebarFocusRestoration()
+                    void onSelectNavigator('task').catch(() => undefined)
+                  }
+                }}
+              >
+                <span>任务</span>
+                {taskBusyCount > 0 ? <span className="navigator-busy-count">{taskBusyCount}</span> : null}
+              </button>
+            </div>
+          )}
           <ProjectNavigator
-            hidden={settingsOpen}
+            hidden={settingsOpen || navigatorKind !== 'project'}
             projects={displayedProjects}
-            activeProjectKey={activeProjectKey}
+            activeProjectKey={activeProject?.path ?? null}
+            activeSessionKey={activeSessionKey}
             sessions={sessions}
             displayedSessionKey={displayedSessionKey}
             viewedSessionKey={viewedSessionKey}
             viewingArchivedSession={viewingArchivedSession}
             sidebarCollapsed={sidebarCollapsed}
-            busy={busy}
+            busy={interactionBusy}
             canChangeProjectOrSession={canChangeProjectOrSession}
             sessionPreviewPending={sessionPreviewPending}
             pendingAction={pendingAction}
@@ -759,11 +937,42 @@ export function Workbench({
             onTogglePinnedProject={togglePinnedProject}
             onExpandSidebar={() => setSidebarCollapsed(false)}
             onClearArchivedSessionPreview={onClearArchivedSessionPreview}
-            onActivateProject={onActivateProject}
-            onStartSession={onStartSession}
+            onActivateProject={(projectKey) => {
+              invalidateRightSidebarFocusRestoration()
+              return onActivateProject(projectKey)
+            }}
+            onStartSession={() => {
+              invalidateRightSidebarFocusRestoration()
+              return onStartSession()
+            }}
             onOpenSession={openSession}
             onArchiveSession={onArchiveSession}
             onReorderProjects={onReorderProjects}
+          />
+          <TaskNavigator
+            hidden={settingsOpen || navigatorKind !== 'task'}
+            tasks={orderedTaskItems}
+            activeWorkspaceKey={activeWorkspace?.workspaceKind === 'task' ? activeWorkspace.path : null}
+            displayedSessionKey={displayedSessionKey}
+            viewedSessionKey={viewedSessionKey}
+            viewingArchivedSession={viewingArchivedSession}
+            busy={interactionBusy}
+            canChangeProjectOrSession={canChangeProjectOrSession}
+            sessionPreviewPending={sessionPreviewPending}
+            pendingAction={pendingAction}
+            contextActionStatus={contextActionStatus}
+            tokenCountFormat={state.appearance.tokenCountFormat}
+            onClearArchivedSessionPreview={onClearArchivedSessionPreview}
+            onCreateTask={() => {
+              invalidateRightSidebarFocusRestoration()
+              return onCreateTask()
+            }}
+            onActivateTask={(taskKey, sessionKey) => {
+              invalidateRightSidebarFocusRestoration()
+              return onActivateTask(taskKey, sessionKey)
+            }}
+            onOpenSession={openSession}
+            onArchiveSession={onArchiveSession}
           />
         </div>
 
@@ -776,16 +985,16 @@ export function Workbench({
               label="收起侧边栏"
               onClick={() => setSidebarCollapsed(true)}
             />
-            {projects.length === 0 ? (
+            {navigatorKind === 'task' ? null : userProjects.length === 0 ? (
               <button
                 className="add-project-entry add-project-empty-entry"
                 type="button"
-                aria-busy={pendingAction === 'add-project' ? true : undefined}
+                aria-busy={isWorkbenchAction(pendingAction, 'add-project') ? true : undefined}
                 disabled={!canChangeProjectOrSession}
                 onClick={() => void onAddProject().catch(() => undefined)}
               >
                 <Icon name="plus" size="control" />
-                <span>{pendingAction === 'add-project' ? '正在添加…' : '添加项目'}</span>
+                <span>{isWorkbenchAction(pendingAction, 'add-project') ? '正在添加…' : '添加项目'}</span>
               </button>
             ) : (
               <IconButton
@@ -793,7 +1002,7 @@ export function Workbench({
                 icon="plus"
                 iconSize="lg"
                 label="添加项目"
-                aria-busy={pendingAction === 'add-project' ? true : undefined}
+                aria-busy={isWorkbenchAction(pendingAction, 'add-project') ? true : undefined}
                 disabled={!canChangeProjectOrSession}
                 onClick={() => void onAddProject().catch(() => undefined)}
               />
@@ -806,6 +1015,7 @@ export function Workbench({
               label="设置"
               aria-pressed={false}
               onClick={() => {
+                invalidateRightSidebarFocusRestoration()
                 if (viewingArchivedSession) onClearArchivedSessionPreview()
                 setSidebarCollapsed(false)
                 openSettings()
@@ -819,7 +1029,7 @@ export function Workbench({
         className="main-chat"
         ref={mainChatRef}
         tabIndex={-1}
-        aria-label={`${projectName} 对话工作区`}
+        aria-label={`${projectName}${navigatorKind === 'task' ? '' : ' 对话'}工作区`}
       >
         {operationNotifications}
         {sidebarCollapsed ? (
@@ -832,10 +1042,23 @@ export function Workbench({
             />
           </div>
         ) : null}
+        {selectedSubagentTask !== null && rightSidebarCollapsed && !settingsOpen ? (
+          <IconButton
+            className="right-sidebar-reopen-trigger"
+            icon="chevron-left"
+            label="展开右侧栏"
+            aria-controls={RIGHT_SIDEBAR_ID}
+            aria-expanded={false}
+            onClick={() => {
+              invalidateRightSidebarFocusRestoration()
+              setRightSidebarCollapsed(false)
+            }}
+          />
+        ) : null}
 
         {settingsOpen ? (
           <SettingsPanel
-            state={state}
+            state={settingsState}
             busy={busy}
             section={settingsSection}
             pendingAction={pendingAction}
@@ -868,46 +1091,17 @@ export function Workbench({
             onCancelProviderLogin={onCancelProviderLogin}
             onLogoutProvider={onLogoutProvider}
             onSubscribeProviderAuth={onSubscribeProviderAuth}
-            onSetModel={(provider, modelId) => {
-              settingsActionRef.current = 'set-model'
-              return onSetModel(provider, modelId)
-            }}
-            onSetSessionNaming={(settings) => {
-              settingsActionRef.current = 'set-session-naming'
-              return onSetSessionNaming(settings)
-            }}
-            onSetGeneral={(settings) => {
-              settingsActionRef.current = 'set-general'
-              return onSetGeneral(settings)
-            }}
-            onSetSubagentEnabled={(enabled) => {
-              settingsActionRef.current = 'set-subagent-enabled'
-              return onSetSubagentEnabled(enabled)
-            }}
-            onSetMagicContextEnabled={(enabled) => {
-              settingsActionRef.current = 'set-magic-context-enabled'
-              return onSetMagicContextEnabled(enabled)
-            }}
-            onSetAdvisorSystemEnabled={(enabled) => {
-              settingsActionRef.current = 'set-advisor-system-enabled'
-              return onSetAdvisorSystemEnabled(enabled)
-            }}
-            onSetAdvisorExtensionEnabled={onSetAdvisorExtensionEnabled}
-            onListAdvisorDefinitions={onListAdvisorDefinitions}
-            onSaveAdvisorDefinition={onSaveAdvisorDefinition}
-            onRemoveAdvisorDefinition={onRemoveAdvisorDefinition}
+            onSetModel={(provider, modelId) => onSetModel(provider, modelId, 'settings')}
+            onSetSessionNaming={onSetSessionNaming}
+            onSetGeneral={onSetGeneral}
+            onSetSubagentEnabled={onSetSubagentEnabled}
+            onSetMagicContextEnabled={onSetMagicContextEnabled}
             onListSubagentDefinitions={onListSubagentDefinitions}
             onSaveSubagentDefinition={onSaveSubagentDefinition}
             onSetSubagentDefinitionEnabled={onSetSubagentDefinitionEnabled}
             onRemoveSubagentDefinition={onRemoveSubagentDefinition}
-            onSetSubagent={(settings) => {
-              settingsActionRef.current = 'set-subagent'
-              return onSetSubagent(settings)
-            }}
-            onSetAppearance={(settings) => {
-              settingsActionRef.current = 'set-appearance'
-              return onSetAppearance(settings)
-            }}
+            onSetSubagent={onSetSubagent}
+            onSetAppearance={onSetAppearance}
             onSetShortcuts={onSetShortcuts}
             onShortcutRecordingChange={setShortcutRecording}
             toolDisplayDensity={toolDisplayDensity}
@@ -921,23 +1115,31 @@ export function Workbench({
         ) : (
           <>
         <header className="workbench-session-header">
-          <strong className="workbench-session-title">
-            {archivedSessionPreview !== null
-              ? archivedSessionPreview.sessionName ?? `对话 ${archivedSessionPreview.sessionId.slice(0, 8)}`
-              : viewingNewSession
-              ? '新对话'
-              : activeSession === null ? '尚未选择对话' : sessionTitle(activeSession)}
-          </strong>
+          <div className="workbench-session-heading">
+            <span className="workbench-session-scope">
+              {navigatorKind === 'task' ? '任务' : projectName}
+            </span>
+            <span className="workbench-session-separator" aria-hidden="true">/</span>
+            <strong className="workbench-session-title">
+              {archivedSessionPreview !== null
+                ? archivedSessionPreview.sessionName ?? `对话 ${archivedSessionPreview.sessionId.slice(0, 8)}`
+                : viewingNewSession
+                ? navigatorKind === 'task' ? '新任务' : '新对话'
+                : activeSession === null
+                  ? navigatorKind === 'task' ? '尚未选择任务' : '尚未选择对话'
+                  : sessionTitle(activeSession)}
+            </strong>
+          </div>
           {archivedSessionPreview !== null ? (
             <span className="archived-preview-status" role="status">
               已归档 · 临时只读
-              <button
+              <IconButton
                 className="archived-preview-exit"
-                type="button"
+                icon="close"
+                iconSize="sm"
+                label="退出归档预览"
                 onClick={onClearArchivedSessionPreview}
-              >
-                退出预览
-              </button>
+              />
             </span>
           ) : sessionPreview !== null && viewingInactiveSession ? (
             <span className="runtime-context-status">历史预览</span>
@@ -974,17 +1176,41 @@ export function Workbench({
             sessionPreview?.sessionKey ??
             displayedSessionKey
           }
+          askSessionKey={
+            !viewingArchivedSession &&
+            !viewingInactiveSession &&
+            !viewingNewSession
+              ? activeSessionKey
+              : null
+          }
           canCopyAnswers={canCopyLastAnswer}
           canExportSession={canExportSession}
           canForkSession={canForkSession}
+          canEditHistoryPrompt={canForkSession}
           conversationActionBusy={busy}
           conversationActionStatus={conversationActionStatus}
           conversationActionError={conversationActionError}
           onCopyAnswer={onCopyAnswer}
           onExportSession={onExportSession}
           onForkTurn={onOpenForkDialog}
-          subagentTaskSelection={reconciledSubagentTaskSelection}
+          onNavigateHistoryPrompt={(messageId) => {
+            if (activeSessionKey === null) {
+              return Promise.reject(new Error('No active Session is available.'))
+            }
+            return onNavigateHistoryPrompt(activeSessionKey, messageId)
+          }}
+          onSendHistoryPrompt={(message) => {
+            if (activeSessionKey === null) {
+              return Promise.reject(new Error('No active Session is available.'))
+            }
+            return onPrompt(message, undefined, activeSessionKey)
+          }}
+          onHistoryPromptEditingChange={setHistoryPromptEditing}
+          subagentTaskSelection={rightSidebarOpen ? reconciledSubagentTaskSelection : null}
           onOpenSubagentTask={openSubagentTaskDetail}
+          onSubmitAsk={onSubmitAsk}
+          onCancelAsk={onCancelAsk}
+          onLayoutStabilizeReady={handleTimelineLayoutStabilizeReady}
           warning={
             timelineActionError ??
             (!viewingArchivedSession && runtime.status === 'crashed'
@@ -1002,7 +1228,7 @@ export function Workbench({
           viewingInactiveSession={viewingInactiveSession}
           viewingNewSession={viewingNewSession}
           newSessionPrepared={newSessionPrepared}
-          busy={busy}
+          busy={interactionBusy}
           pendingAction={pendingAction}
           completedAction={completedAction}
           todos={displayedTodos}
@@ -1021,27 +1247,37 @@ export function Workbench({
             await onInvokeCommand(commandId, argument)
           }}
           onAbort={onAbort}
-          globalEscapeAbortEnabled={selectedSubagentTask === null}
-          onSetModel={(provider, modelId) => {
-            settingsActionRef.current = null
-            return onSetModel(provider, modelId)
-          }}
-          onSetThinkingLevel={(level) => {
-            settingsActionRef.current = null
-            return onSetThinkingLevel(level)
-          }}
+          globalEscapeAbortEnabled={!rightSidebarOpen}
+          onSetModel={(provider, modelId) => onSetModel(provider, modelId, 'conversation')}
+          onSetThinkingLevel={onSetThinkingLevel}
+          onMeasuredHeightChange={handleComposerMeasuredHeightChange}
         />}
           </>
         )}
       </section>
 
-      {selectedSubagentTask === null ? null : (
-        <SubagentTaskDetail
-          entry={selectedSubagentTask.entry}
-          participant={selectedSubagentTask.participant}
-          tokenCountFormat={state.appearance.tokenCountFormat}
-          panelRef={subagentTaskDetailRef}
-          onClose={() => closeSubagentTaskDetail(true)}
+      {!rightSidebarOpen || selectedSubagentTask === null ? null : (
+        <RightSidebar
+          activeTabId={rightSidebarTabId}
+          tabs={[{
+            id: 'subagent',
+            label: '子任务',
+            content: (
+              <SubagentTaskDetail
+                entry={selectedSubagentTask.entry}
+                participant={selectedSubagentTask.participant}
+                tokenCountFormat={state.appearance.tokenCountFormat}
+                panelRef={subagentTaskDetailRef}
+              />
+            )
+          }]}
+          onTabChange={(tabId) => {
+            invalidateRightSidebarFocusRestoration()
+            setRightSidebarTabId(tabId)
+          }}
+          onCollapse={collapseRightSidebar}
+          onClose={() => closeRightSidebar(true)}
+          onResizeCancelChange={handleRightSidebarResizeCancelChange}
         />
       )}
 
@@ -1068,35 +1304,13 @@ export function Workbench({
   )
 }
 
-function runtimeContextActionStatus(action: string | null): string | null {
-  if (action === 'add-project') return '正在添加项目…'
-  if (action === 'activate-project') return '正在切换项目…'
-  if (action === 'activate-session') return '正在切换对话…'
-  if (action === 'preview-session') return '正在读取对话…'
-  if (action === 'archive-session') return '正在归档对话…'
-  if (action === 'reorder-projects') return '正在保存排序…'
-  return null
-}
-
-function isConversationAction(action: string | null): boolean {
-  return action === 'prompt' ||
-    action === 'steer' ||
-    action === 'follow-up' ||
-    action === 'invoke-command' ||
-    action === 'abort' ||
-    action === 'set-model' ||
-    action === 'set-thinking-level'
-}
-
-function settingsSectionForAction(action: string | null): SettingsSection | null {
-  if (action === 'set-general') return 'general'
-  if (action === 'set-appearance') return 'appearance'
-  if (action === 'set-model') return 'models'
-  if (action === 'set-magic-context-enabled') return 'extensions'
-  if (action === 'set-advisor-system-enabled') return 'advisor'
-  if (action === 'set-subagent-enabled' || action === 'set-subagent') return 'subagent'
-  if (action === 'set-session-naming') return 'preferences'
-  return null
+function hasConnectedMeaningfulFocus(mainChat: HTMLElement | null): boolean {
+  const active = document.activeElement
+  return active instanceof HTMLElement &&
+    active.isConnected &&
+    active !== document.body &&
+    active !== document.documentElement &&
+    active !== mainChat
 }
 
 function hasVisibleShortcutBlockingSurface(): boolean {

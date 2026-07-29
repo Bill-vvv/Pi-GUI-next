@@ -19,11 +19,22 @@ import {
   type ThinkingLevel
 } from '../../shared/kernel-contract'
 import { Workbench } from './composition/Workbench'
+import {
+  workbenchGlobalActionErrorOwner,
+  workbenchOp,
+  type WorkbenchActionFailure,
+  type WorkbenchCompletedAction,
+  type WorkbenchOperation
+} from './workbench-actions'
+import { IconButton } from './components/IconButton'
 import { useSessionRuntimeController } from './composition/useSessionRuntimeController'
 import type { ComposerDraftRequest } from './features/composer/Composer'
 import { awaitMutationAck as awaitKernelMutationAck } from './kernel/await-mutation-ack'
 import { applyStatePatches } from './kernel/kernel-state-patches'
-import { KernelRevisionBarrier } from './kernel/kernel-revision-barrier'
+import {
+  DEFAULT_RESYNC_TIMEOUT_MS,
+  KernelRevisionBarrier
+} from './kernel/kernel-revision-barrier'
 import { unknownErrorMessage as errorMessage } from './unknown-error-message'
 
 /** Dwell before starting a stopped historical Session after the last click. */
@@ -43,8 +54,8 @@ type ArchivedSessionPreview = {
 export function App(): React.JSX.Element {
   const [kernelState, setKernelState] = useState<KernelState | null>(null)
   const [ipcError, setIpcError] = useState<string | null>(null)
-  const [actionError, setActionError] = useState<string | null>(null)
-  const [pendingAction, setPendingAction] = useState<string | null>(null)
+  const [actionFailure, setActionFailure] = useState<WorkbenchActionFailure | null>(null)
+  const [pendingAction, setPendingAction] = useState<WorkbenchOperation | null>(null)
   const [archivedSessionPreview, setArchivedSessionPreview] =
     useState<ArchivedSessionPreview | null>(null)
   const [archiveNotifications, setArchiveNotifications] =
@@ -60,14 +71,11 @@ export function App(): React.JSX.Element {
   const [compactionNotice, setCompactionNotice] = useState<'cancelled' | 'failed' | null>(null)
   const [systemFonts, setSystemFonts] = useState<string[] | null>(null)
   const [systemFontsError, setSystemFontsError] = useState<string | null>(null)
-  const [completedAction, setCompletedAction] = useState<{
-    action: string
-    succeeded: boolean
-  } | null>(null)
+  const [completedAction, setCompletedAction] = useState<WorkbenchCompletedAction | null>(null)
   const [connectionAttempt, setConnectionAttempt] = useState(0)
   const kernelStateRef = useRef<KernelState | null>(null)
   const revisionBarrierRef = useRef<KernelRevisionBarrier | null>(null)
-  const pendingActionRef = useRef<string | null>(null)
+  const pendingActionRef = useRef<WorkbenchOperation | null>(null)
   const coldStartHandledRef = useRef(false)
   const actionPresentationRevision = useRef(0)
   const forkRequestRevision = useRef(0)
@@ -77,6 +85,14 @@ export function App(): React.JSX.Element {
     operation: () => Promise<T>
   ): Promise<T> {
     return awaitKernelMutationAck(operation, revisionBarrierRef.current)
+  }
+
+  function actionFailureFor(
+    action: WorkbenchOperation,
+    error: unknown
+  ): WorkbenchActionFailure | null {
+    const owner = workbenchGlobalActionErrorOwner(action)
+    return owner === null ? null : { owner, message: errorMessage(error) }
   }
 
   const {
@@ -105,8 +121,11 @@ export function App(): React.JSX.Element {
     },
     isActionPresentationCurrent: (revision) =>
       actionPresentationRevision.current === revision,
-    onError: (error) => setActionError(error === null ? null : errorMessage(error)),
-    onCompletedAction: (action, succeeded) => setCompletedAction({ action, succeeded }),
+    onError: (error) => setActionFailure(error === null
+      ? null
+      : { owner: 'header', message: errorMessage(error) }),
+    onCompletedAction: (action, succeeded) =>
+      setCompletedAction({ action: workbenchOp(action), succeeded }),
     onClearArchivedPreview: () => setArchivedSessionPreview(null)
   })
 
@@ -206,34 +225,52 @@ export function App(): React.JSX.Element {
     try {
       unsubscribe = window.piGui.subscribe((event) => {
         if (!active) return
-        barrier.handleEvent(event)
-        if (
-          event.type === 'kernel.compaction-ended' &&
-          event.outcome !== 'retrying'
-        ) {
-          const state = kernelStateRef.current
+        try {
+          barrier.handleEvent(event)
           if (
-            state?.activeProjectKey === event.projectKey &&
-            state.activeSessionKey === event.sessionKey &&
-            (event.outcome === 'failed' || event.outcome === 'cancelled')
+            event.type === 'kernel.compaction-ended' &&
+            event.outcome !== 'retrying'
           ) {
-            setCompactionNotice(event.outcome)
+            const state = kernelStateRef.current
+            if (
+              state?.activeProjectKey === event.projectKey &&
+              state.activeSessionKey === event.sessionKey &&
+              (event.outcome === 'failed' || event.outcome === 'cancelled')
+            ) {
+              setCompactionNotice(event.outcome)
+            }
           }
+          setIpcError(null)
+        } catch (error: unknown) {
+          setIpcError(errorMessage(error))
         }
-        setIpcError(null)
       })
 
-      void window.piGui.getState().then(
-        (snapshot) => {
+      void (async () => {
+        let timeoutHandle: number | null = null
+        try {
+          const snapshot = await Promise.race([
+            window.piGui.getState(),
+            new Promise<never>((_, reject) => {
+              timeoutHandle = window.setTimeout(() => {
+                reject(
+                  new Error(
+                    `Kernel snapshot timed out after ${DEFAULT_RESYNC_TIMEOUT_MS}ms.`
+                  )
+                )
+              }, DEFAULT_RESYNC_TIMEOUT_MS)
+            })
+          ])
           if (!active) return
           barrier.handleSnapshot(snapshot)
           setIpcError(null)
-        },
-        (error: unknown) => {
+        } catch (error: unknown) {
           if (!active) return
           setIpcError(errorMessage(error))
+        } finally {
+          if (timeoutHandle !== null) window.clearTimeout(timeoutHandle)
         }
-      )
+      })()
     } catch (error: unknown) {
       setIpcError(errorMessage(error))
     }
@@ -252,31 +289,42 @@ export function App(): React.JSX.Element {
     void ensureInitialRuntime().catch(() => undefined)
   }, [kernelState])
 
-  async function runAction(
-    action: string,
-    operation: () => Promise<KernelMutationAck>,
+  async function runActionResult<T extends KernelMutationAck>(
+    action: WorkbenchOperation,
+    operation: () => Promise<T>,
     exclusive = true
-  ): Promise<void> {
+  ): Promise<T> {
     if (exclusive) {
       if (pendingActionRef.current !== null) throw new Error('Another action is already running.')
       pendingActionRef.current = action
       setPendingAction(action)
     }
-    const presentationRevision = actionPresentationRevision.current + 1
-    actionPresentationRevision.current = presentationRevision
-    setActionError(null)
+    const globalErrorOwner = workbenchGlobalActionErrorOwner(action)
+    const presentationRevision = globalErrorOwner === null
+      ? null
+      : actionPresentationRevision.current + 1
+    if (presentationRevision !== null) actionPresentationRevision.current = presentationRevision
+    setActionFailure(null)
     let succeeded = false
     try {
       // Mutating invokes return a narrow ack. Settle only after the ack revision is applied.
-      await awaitMutationAck(operation)
+      const result = await awaitMutationAck(operation)
       succeeded = true
+      return result
     } catch (error) {
-      if (actionPresentationRevision.current === presentationRevision) {
-        setActionError(errorMessage(error))
+      if (
+        globalErrorOwner !== null &&
+        presentationRevision !== null &&
+        actionPresentationRevision.current === presentationRevision
+      ) {
+        setActionFailure({ owner: globalErrorOwner, message: errorMessage(error) })
       }
       throw error
     } finally {
-      if (actionPresentationRevision.current === presentationRevision) {
+      if (
+        presentationRevision !== null &&
+        actionPresentationRevision.current === presentationRevision
+      ) {
         setCompletedAction({ action, succeeded })
       }
       if (exclusive) {
@@ -286,9 +334,17 @@ export function App(): React.JSX.Element {
     }
   }
 
+  async function runAction(
+    action: WorkbenchOperation,
+    operation: () => Promise<KernelMutationAck>,
+    exclusive = true
+  ): Promise<void> {
+    await runActionResult(action, operation, exclusive)
+  }
+
   /** Domain/catalog operations that intentionally do not return KernelMutationAck. */
   async function runPlainAction(
-    action: string,
+    action: WorkbenchOperation,
     operation: () => Promise<unknown>,
     exclusive = true
   ): Promise<void> {
@@ -297,20 +353,30 @@ export function App(): React.JSX.Element {
       pendingActionRef.current = action
       setPendingAction(action)
     }
-    const presentationRevision = actionPresentationRevision.current + 1
-    actionPresentationRevision.current = presentationRevision
-    setActionError(null)
+    const globalErrorOwner = workbenchGlobalActionErrorOwner(action)
+    const presentationRevision = globalErrorOwner === null
+      ? null
+      : actionPresentationRevision.current + 1
+    if (presentationRevision !== null) actionPresentationRevision.current = presentationRevision
+    setActionFailure(null)
     let succeeded = false
     try {
       await operation()
       succeeded = true
     } catch (error) {
-      if (actionPresentationRevision.current === presentationRevision) {
-        setActionError(errorMessage(error))
+      if (
+        globalErrorOwner !== null &&
+        presentationRevision !== null &&
+        actionPresentationRevision.current === presentationRevision
+      ) {
+        setActionFailure({ owner: globalErrorOwner, message: errorMessage(error) })
       }
       throw error
     } finally {
-      if (actionPresentationRevision.current === presentationRevision) {
+      if (
+        presentationRevision !== null &&
+        actionPresentationRevision.current === presentationRevision
+      ) {
         setCompletedAction({ action, succeeded })
       }
       if (exclusive) {
@@ -357,9 +423,10 @@ export function App(): React.JSX.Element {
       !state.session.settled ||
       getSessionViewTarget() !== null
     ) {
-      setActionError('当前对话暂时不能分叉。')
+      setActionFailure({ owner: 'header', message: '当前对话暂时不能分叉。' })
       return
     }
+    setActionFailure(null)
     setForkPreferredUserText(
       preferredUserText !== undefined && preferredUserText.trim().length > 0
         ? preferredUserText
@@ -373,12 +440,13 @@ export function App(): React.JSX.Element {
   async function forkSession(entryId: string): Promise<void> {
     if (forkSubmitting || !forkCandidates.some((candidate) => candidate.entryId === entryId)) return
     if (pendingActionRef.current !== null) throw new Error('Another action is already running.')
+    const action = workbenchOp('fork-session')
     setCompletedAction(null)
-    pendingActionRef.current = 'fork-session'
-    setPendingAction('fork-session')
+    pendingActionRef.current = action
+    setPendingAction(action)
     setForkSubmitting(true)
     setForkError(null)
-    setActionError(null)
+    setActionFailure(null)
     try {
       const result = await awaitMutationAck(() => window.piGui.forkSession(entryId))
       if (result.cancelled) {
@@ -393,10 +461,10 @@ export function App(): React.JSX.Element {
         text: result.draft
       })
       closeForkDialog()
-      setCompletedAction({ action: 'fork-session', succeeded: true })
+      setCompletedAction({ action, succeeded: true })
     } catch (error) {
       setForkError(errorMessage(error))
-      setCompletedAction({ action: 'fork-session', succeeded: false })
+      setCompletedAction({ action, succeeded: false })
       throw error
     } finally {
       pendingActionRef.current = null
@@ -407,18 +475,19 @@ export function App(): React.JSX.Element {
 
   async function exportSession(): Promise<void> {
     if (pendingActionRef.current !== null) throw new Error('Another action is already running.')
+    const action = workbenchOp('export-session')
     setCompletedAction(null)
-    pendingActionRef.current = 'export-session'
-    setPendingAction('export-session')
-    setActionError(null)
+    pendingActionRef.current = action
+    setPendingAction(action)
+    setActionFailure(null)
     try {
       const result = await window.piGui.exportSession()
       if (result.saved) {
-        setCompletedAction({ action: 'export-session', succeeded: true })
+        setCompletedAction({ action, succeeded: true })
       }
     } catch (error) {
-      setActionError(errorMessage(error))
-      setCompletedAction({ action: 'export-session', succeeded: false })
+      setActionFailure(actionFailureFor(action, error))
+      setCompletedAction({ action, succeeded: false })
     } finally {
       pendingActionRef.current = null
       setPendingAction(null)
@@ -430,16 +499,17 @@ export function App(): React.JSX.Element {
     const answer = text.trim()
     if (answer.length === 0) throw new Error('当前对话暂时没有可复制的最终回答。')
 
+    const action = workbenchOp('copy-last-answer')
     setCompletedAction(null)
-    pendingActionRef.current = 'copy-last-answer'
-    setPendingAction('copy-last-answer')
-    setActionError(null)
+    pendingActionRef.current = action
+    setPendingAction(action)
+    setActionFailure(null)
     try {
       await navigator.clipboard.writeText(text)
-      setCompletedAction({ action: 'copy-last-answer', succeeded: true })
+      setCompletedAction({ action, succeeded: true })
     } catch (error) {
-      setActionError(errorMessage(error))
-      setCompletedAction({ action: 'copy-last-answer', succeeded: false })
+      setActionFailure(actionFailureFor(action, error))
+      setCompletedAction({ action, succeeded: false })
       throw error
     } finally {
       pendingActionRef.current = null
@@ -461,6 +531,16 @@ export function App(): React.JSX.Element {
     const answer = lastAssistantFinalAnswer(state)
     if (answer === null) throw new Error('当前对话暂时没有可复制的最终回答。')
     await copyAnswer(answer)
+  }
+
+  async function navigateHistoryPrompt(
+    sessionKey: string,
+    messageId: string
+  ): Promise<void> {
+    await runAction(
+      workbenchOp('edit-history-prompt'),
+      () => window.piGui.navigateHistoryPrompt(sessionKey, messageId)
+    )
   }
 
   async function invokeCommand(commandId: string, argument: string): Promise<void> {
@@ -487,14 +567,15 @@ export function App(): React.JSX.Element {
       return
     }
 
-    await runAction('invoke-command', () => window.piGui.invokeCommand(commandId, argument))
+    await runAction(workbenchOp('invoke-command'), () => window.piGui.invokeCommand(commandId, argument))
   }
 
   async function archiveSession(sessionKey: string): Promise<void> {
     if (pendingActionRef.current !== null) throw new Error('Another action is already running.')
-    pendingActionRef.current = 'archive-session'
-    setPendingAction('archive-session')
-    setActionError(null)
+    const action = workbenchOp('archive-session')
+    pendingActionRef.current = action
+    setPendingAction(action)
+    setActionFailure(null)
     setArchivedSessionPreview(null)
     let succeeded = false
     try {
@@ -511,10 +592,10 @@ export function App(): React.JSX.Element {
       }
       succeeded = true
     } catch (error) {
-      setActionError(errorMessage(error))
+      setActionFailure(actionFailureFor(action, error))
       throw error
     } finally {
-      setCompletedAction({ action: 'archive-session', succeeded })
+      setCompletedAction({ action, succeeded })
       pendingActionRef.current = null
       setPendingAction(null)
     }
@@ -544,16 +625,17 @@ export function App(): React.JSX.Element {
       return
     }
     setArchiveNotificationPending(token, 'undo')
-    setActionError(null)
+    setActionFailure(null)
     try {
       await waitForRuntimeEnsureIdle()
       await awaitMutationAck(() => window.piGui.undoArchiveSession(token))
       removeArchiveNotification(token)
-      setCompletedAction({ action: 'undo-archive-session', succeeded: true })
+      setCompletedAction({ action: workbenchOp('undo-archive-session'), succeeded: true })
     } catch (error) {
       removeArchiveNotification(token)
-      setActionError(errorMessage(error))
-      setCompletedAction({ action: 'undo-archive-session', succeeded: false })
+      const action = workbenchOp('undo-archive-session')
+      setActionFailure(actionFailureFor(action, error))
+      setCompletedAction({ action, succeeded: false })
     }
   }
 
@@ -564,7 +646,7 @@ export function App(): React.JSX.Element {
       return
     }
     setArchiveNotificationPending(token, 'preview')
-    setActionError(null)
+    setActionFailure(null)
     try {
       const preview = await window.piGui.previewArchivedSession(token)
       removeArchiveNotification(token)
@@ -575,11 +657,12 @@ export function App(): React.JSX.Element {
           expiresAt: notification.expiresAt
         })
       }
-      setCompletedAction({ action: 'preview-archived-session', succeeded: true })
+      setCompletedAction({ action: workbenchOp('preview-archived-session'), succeeded: true })
     } catch (error) {
       removeArchiveNotification(token)
-      setActionError(errorMessage(error))
-      setCompletedAction({ action: 'preview-archived-session', succeeded: false })
+      const action = workbenchOp('preview-archived-session')
+      setActionFailure(actionFailureFor(action, error))
+      setCompletedAction({ action, succeeded: false })
     }
   }
 
@@ -588,13 +671,13 @@ export function App(): React.JSX.Element {
     choice: KernelProjectTrustChoice
   ): Promise<void> {
     await runAction(
-      'resolve-project-trust',
+      workbenchOp('resolve-project-trust'),
       () => window.piGui.resolveProjectTrust(requestId, choice)
     )
   }
 
   async function setShortcuts(settings: ShortcutSettings): Promise<void> {
-    await runAction('set-shortcuts', () => window.piGui.setShortcuts(settings))
+    await runAction(workbenchOp('set-shortcuts'), () => window.piGui.setShortcuts(settings))
   }
 
   if (kernelState === null) {
@@ -624,7 +707,10 @@ export function App(): React.JSX.Element {
   }
 
   const operationNotifications =
-    archiveNotifications.length === 0 && compactionNotice === null ? null : (
+    archiveNotifications.length === 0 &&
+      compactionNotice === null
+      ? null
+      : (
       <section
         className="archive-notification-region"
         aria-label="操作通知"
@@ -673,7 +759,13 @@ export function App(): React.JSX.Element {
               </span>
             </div>
             <div className="archive-notification-actions">
-              <button type="button" onClick={() => setCompactionNotice(null)}>关闭</button>
+              <IconButton
+                className="archive-notification-dismiss"
+                icon="close"
+                iconSize="sm"
+                label="关闭通知"
+                onClick={() => setCompactionNotice(null)}
+              />
             </div>
           </article>
         )}
@@ -699,7 +791,9 @@ export function App(): React.JSX.Element {
       }
       pendingAction={pendingAction}
       completedAction={completedAction}
-      actionError={actionError ?? ipcError}
+      actionFailure={actionFailure ?? (ipcError === null
+        ? null
+        : { owner: 'header', message: ipcError })}
       operationNotifications={operationNotifications}
       systemFonts={systemFonts}
       systemFontsError={systemFontsError}
@@ -712,17 +806,47 @@ export function App(): React.JSX.Element {
       onAddProject={async () => {
         setArchivedSessionPreview(null)
         await waitForRuntimeEnsureIdle()
-        await runAction('add-project', () => window.piGui.addProject())
+        await runAction(workbenchOp('add-project'), () => window.piGui.addProject())
       }}
       onActivateProject={async (projectKey) => {
         setArchivedSessionPreview(null)
         await waitForRuntimeEnsureIdle()
-        await runAction('activate-project', () => window.piGui.activateProject(projectKey))
+        await runAction(
+          workbenchOp('activate-project'),
+          () => window.piGui.activateProject(projectKey)
+        )
         clearSessionView()
+      }}
+      onSelectNavigator={async (kind) => {
+        setArchivedSessionPreview(null)
+        await waitForRuntimeEnsureIdle()
+        await runAction(
+          workbenchOp('select-navigator'),
+          () => window.piGui.selectNavigator(kind)
+        )
+        clearSessionView()
+        const sessionKey = kernelStateRef.current?.activeSessionKey ?? null
+        if (sessionKey !== null) await ensureSessionRuntime(sessionKey, 'immediate')
+      }}
+      onCreateTask={async () => {
+        setArchivedSessionPreview(null)
+        await waitForRuntimeEnsureIdle()
+        await runAction(workbenchOp('create-task'), () => window.piGui.createTask())
+        await startSession()
+      }}
+      onActivateTask={async (taskKey, sessionKey) => {
+        setArchivedSessionPreview(null)
+        await waitForRuntimeEnsureIdle()
+        await runAction(
+          workbenchOp('activate-task'),
+          () => window.piGui.activateTask(taskKey)
+        )
+        clearSessionView()
+        await ensureSessionRuntime(sessionKey, 'immediate')
       }}
       onStartSession={startSession}
       onReloadSession={() =>
-        runAction('reload-session', () => window.piGui.reloadSession())}
+        runAction(workbenchOp('reload-session'), () => window.piGui.reloadSession())}
       onWaitForSessionStart={waitForSessionStart}
       onResolveProjectTrust={resolveProjectTrust}
       onActivateSession={(sessionKey) => ensureSessionRuntime(sessionKey, 'immediate')}
@@ -739,37 +863,39 @@ export function App(): React.JSX.Element {
       onCopyLastAnswer={copyLastAnswer}
       onArchiveSession={archiveSession}
       onReorderProjects={(projectKeys) =>
-        runAction('reorder-projects', () => window.piGui.reorderProjects(projectKeys))
+        runAction(
+          workbenchOp('reorder-projects'),
+          () => window.piGui.reorderProjects(projectKeys)
+        )
       }
       onInstallExtension={(kind) =>
-        runAction('install-extension', () => window.piGui.installExtension(kind))
+        runAction(workbenchOp('install-extension'), () => window.piGui.installExtension(kind))
       }
       onRemoveExtension={(path) =>
-        runAction('remove-extension', () => window.piGui.removeExtension(path))
+        runAction(workbenchOp('remove-extension'), () => window.piGui.removeExtension(path))
       }
       onSearchPiDevExtensions={(query) => window.piGui.searchPiDevExtensions(query)}
       onSearchPiDevPackages={(query) => window.piGui.searchPiDevPackages(query)}
       onListPiPackages={() => window.piGui.listPiPackages()}
-      onListAdvisorDefinitions={() => window.piGui.listAdvisorDefinitions()}
-      onSaveAdvisorDefinition={(definition) => window.piGui.saveAdvisorDefinition(definition)}
-      onRemoveAdvisorDefinition={(slug, scope) =>
-        window.piGui.removeAdvisorDefinition(slug, scope)}
       onListSubagentDefinitions={() => window.piGui.listSubagentDefinitions()}
       onSaveSubagentDefinition={(definition) => window.piGui.saveSubagentDefinition(definition)}
       onSetSubagentDefinitionEnabled={(id, scope, enabled) =>
         window.piGui.setSubagentDefinitionEnabled(id, scope, enabled)}
       onRemoveSubagentDefinition={(id) => window.piGui.removeSubagentDefinition(id)}
       onInstallPiDevPackage={(name) =>
-        runAction('install-pi-dev-package', () => window.piGui.installPiDevPackage(name))
+        runAction(
+          workbenchOp('install-pi-dev-package'),
+          () => window.piGui.installPiDevPackage(name)
+        )
       }
       onRemovePiPackage={(source) =>
-        runAction('remove-pi-package', () => window.piGui.removePiPackage(source))
+        runAction(workbenchOp('remove-pi-package'), () => window.piGui.removePiPackage(source))
       }
       onUpdatePiPackage={(source) =>
-        runAction('update-pi-package', () => window.piGui.updatePiPackage(source))
+        runAction(workbenchOp('update-pi-package'), () => window.piGui.updatePiPackage(source))
       }
       onUpdatePiPackages={() =>
-        runAction('update-pi-packages', () => window.piGui.updatePiPackages())
+        runAction(workbenchOp('update-pi-packages'), () => window.piGui.updatePiPackages())
       }
       onOpenExternal={(url) => window.piGui.openExternal(url)}
       onListProviders={window.piGui.listProviders}
@@ -785,49 +911,80 @@ export function App(): React.JSX.Element {
       onSubscribeProviderAuth={window.piGui.subscribeProviderAuth}
       onSelectPromptAttachments={() => window.piGui.selectPromptAttachments()}
       onSearchProjectPaths={(query) => window.piGui.searchProjectPaths(query)}
-      onPrompt={(message, attachments?: KernelPromptAttachment[]) =>
-        runAction('prompt', () => window.piGui.prompt(message, attachments), false)}
+      onSubmitAsk={(sessionKey, toolCallId, answers) =>
+        runAction(
+          workbenchOp('submit-ask'),
+          () => window.piGui.submitAsk(sessionKey, toolCallId, answers),
+          false
+        )}
+      onCancelAsk={(sessionKey, toolCallId) =>
+        runAction(
+          workbenchOp('cancel-ask'),
+          () => window.piGui.cancelAsk(sessionKey, toolCallId),
+          false
+        )}
+      onPrompt={(
+        message,
+        attachments?: KernelPromptAttachment[],
+        expectedSessionKey?: string
+      ) => runAction(
+        workbenchOp('prompt'),
+        () => window.piGui.prompt(message, attachments, expectedSessionKey),
+        false
+      )}
+      onNavigateHistoryPrompt={navigateHistoryPrompt}
       onSteer={(message, attachments?: KernelPromptAttachment[]) =>
-        runAction('steer', () => window.piGui.steer(message, attachments), false)}
+        runAction(
+          workbenchOp('steer'),
+          () => window.piGui.steer(message, attachments),
+          false
+        )}
       onFollowUp={(message, attachments?: KernelPromptAttachment[]) =>
-        runAction('follow-up', () => window.piGui.followUp(message, attachments), false)}
+        runAction(
+          workbenchOp('follow-up'),
+          () => window.piGui.followUp(message, attachments),
+          false
+        )}
       onInvokeCommand={invokeCommand}
-      onAbort={() => runAction('abort', () => window.piGui.abort(), false)}
-      onSetModel={(provider, modelId) =>
-        runAction('set-model', () => window.piGui.setModel(provider, modelId))
+      onAbort={() => runAction(workbenchOp('abort'), () => window.piGui.abort(), false)}
+      onSetModel={(provider, modelId, origin) =>
+        runAction(
+          workbenchOp('set-model', origin),
+          () => window.piGui.setModel(provider, modelId)
+        )
       }
       onSetThinkingLevel={(level: ThinkingLevel) =>
-        runAction('set-thinking-level', () => window.piGui.setThinkingLevel(level))
+        runAction(
+          workbenchOp('set-thinking-level'),
+          () => window.piGui.setThinkingLevel(level)
+        )
       }
       onSetSessionNaming={(settings: SessionNamingSettings) =>
-        runAction('set-session-naming', () => window.piGui.setSessionNaming(settings))
+        runAction(
+          workbenchOp('set-session-naming'),
+          () => window.piGui.setSessionNaming(settings)
+        )
       }
       onSetGeneral={(settings: GeneralSettings) =>
-        runAction('set-general', () => window.piGui.setGeneral(settings))
+        runAction(workbenchOp('set-general'), () => window.piGui.setGeneral(settings))
       }
       onSetSubagentEnabled={(enabled) =>
-        runPlainAction('set-subagent-enabled', () => window.piGui.setSubagentEnabled(enabled))
+        runPlainAction(
+          workbenchOp('set-subagent-enabled'),
+          () => window.piGui.setSubagentEnabled(enabled)
+        )
       }
       onSetMagicContextEnabled={(enabled) =>
         runPlainAction(
-          'set-magic-context-enabled',
+          workbenchOp('set-magic-context-enabled'),
           () => window.piGui.setMagicContextEnabled(enabled)
         )
       }
-      onSetAdvisorSystemEnabled={(enabled) =>
-        runAction(
-          'set-advisor-system-enabled',
-          () => window.piGui.setAdvisorSystemEnabled(enabled)
-        )
-      }
-      onSetAdvisorExtensionEnabled={async (enabled) => {
-        await window.piGui.setAdvisorExtensionEnabled(enabled)
-      }}
       onSetSubagent={(settings: SubagentSettings) =>
-        runAction('set-subagent', () => window.piGui.setSubagent(settings))
+        runAction(workbenchOp('set-subagent'), () => window.piGui.setSubagent(settings))
       }
       onSetAppearance={(settings: AppearanceSettings) =>
-        runAction('set-appearance', () => window.piGui.setAppearance(settings))
+        runAction(workbenchOp('set-appearance'), () => window.piGui.setAppearance(settings))
       }
       onSetShortcuts={setShortcuts}
     />

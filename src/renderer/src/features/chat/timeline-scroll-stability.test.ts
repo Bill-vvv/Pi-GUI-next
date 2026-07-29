@@ -94,7 +94,9 @@ test('Timeline stabilizes entries, resize, and measured Composer layout through 
   assert.doesNotMatch(stabilization, /setTimeout|requestAnimationFrame/)
   assert.match(timelineSource, /new ResizeObserver\(handleLayoutChange\)/)
   assert.match(timelineSource, /window\.addEventListener\('resize', handleLayoutChange\)/)
-  assert.match(timelineSource, /TIMELINE_LAYOUT_CHANGE_EVENT/)
+  assert.match(timelineSource, /onLayoutStabilizeReady\(stabilizeTimelineLayout\)/)
+  assert.doesNotMatch(timelineSource, /TIMELINE_LAYOUT_CHANGE_EVENT/)
+  assert.doesNotMatch(timelineSource, /addEventListener\([^)]*layout-change/)
 })
 
 test('chrome changes refresh the reading line before stabilization', () => {
@@ -116,23 +118,43 @@ test('caret fallback keeps stable turn identity when Markdown descendants are re
   )
 })
 
-test('Workbench notifies Timeline after sidebar and detail layout commits', () => {
+test('Workbench owns composer clearance and synchronously stabilizes external layout commits', () => {
+  const heightHandler = workbenchSource.slice(
+    workbenchSource.indexOf('const handleComposerMeasuredHeightChange'),
+    workbenchSource.indexOf('const handleTimelineLayoutStabilizeReady')
+  )
+  assert.match(heightHandler, /mainChat\.style\.setProperty\('--composer-measured-clearance'/)
+  assert.match(heightHandler, /mainChat\.style\.removeProperty\('--composer-measured-clearance'\)/)
+  assert.match(heightHandler, /timelineStabilizeRef\.current\?\.\(\)/)
+  assert.doesNotMatch(heightHandler, /setState|setComposerMeasuredHeight/)
+
   const layoutEffect = workbenchSource.slice(
     workbenchSource.indexOf('useLayoutEffect(() => {', workbenchSource.indexOf('selectedSubagentTaskKey')),
     workbenchSource.indexOf('const openSubagentTaskDetail')
   )
-  assert.match(layoutEffect, /TIMELINE_LAYOUT_CHANGE_EVENT/)
-  assert.match(layoutEffect, /\[selectedSubagentTaskKey, sidebarCollapsed\]/)
+  assert.match(layoutEffect, /timelineStabilizeRef\.current\?\.\(\)/)
+  assert.match(layoutEffect, /\[rightSidebarOpen, selectedSubagentTaskKey, sidebarCollapsed\]/)
   assert.doesNotMatch(layoutEffect, /setTimeout|requestAnimationFrame/)
+  assert.doesNotMatch(workbenchSource, /querySelector(?:All)?(?:<[^>]+>)?\(['"`]\.conversation-surface['"`]\)/)
+  assert.doesNotMatch(workbenchSource, /timeline-scroll-stability/)
+  assert.doesNotMatch(workbenchSource, /TIMELINE_LAYOUT_CHANGE_EVENT/)
+  assert.match(workbenchSource, /onLayoutStabilizeReady=\{handleTimelineLayoutStabilizeReady\}/)
+  assert.match(workbenchSource, /onMeasuredHeightChange=\{handleComposerMeasuredHeightChange\}/)
 })
 
-test('Composer publishes measured clearance without scrolling into Timeline tail space', () => {
+test('Composer reports measured height without owning Workbench or Timeline DOM', () => {
   const clearanceEffect = composerSource.slice(
-    composerSource.indexOf('const notifyTimelineLayoutChange'),
+    composerSource.indexOf('const updateMeasuredHeight'),
     composerSource.indexOf('const handleKeyDown')
   )
-  assert.match(clearanceEffect, /--composer-measured-clearance/)
-  assert.match(clearanceEffect, /TIMELINE_LAYOUT_CHANGE_EVENT/)
+  assert.match(clearanceEffect, /onMeasuredHeightChange\(height\)/)
+  assert.match(clearanceEffect, /onMeasuredHeightChange\(0\)/)
+  assert.match(clearanceEffect, /new ResizeObserver\(updateMeasuredHeight\)/)
+  assert.doesNotMatch(composerSource, /timeline-scroll-stability/)
+  assert.doesNotMatch(composerSource, /TIMELINE_LAYOUT_CHANGE_EVENT/)
+  assert.doesNotMatch(composerSource, /closest(?:<[^>]+>)?\(['"`]\.main-chat['"`]\)/)
+  assert.doesNotMatch(composerSource, /querySelector(?:All)?(?:<[^>]+>)?\(['"`]\.conversation-surface['"`]\)/)
+  assert.doesNotMatch(composerSource, /--composer-measured-clearance/)
   assert.doesNotMatch(clearanceEffect, /scrollHeight\s*-\s*conversation\.scrollTop/)
   assert.doesNotMatch(clearanceEffect, /conversation\.scrollTop\s*=/)
 })

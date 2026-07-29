@@ -186,6 +186,7 @@ const previewProjects = {
           name: 'S12 UI 视觉收敛',
           lastActivityAt: timestamp + 3_000,
           runtimeStatus: 'ready',
+          awaitingUserInput: false,
           statistics: previewStatistics
         },
         display: {
@@ -268,6 +269,7 @@ const previewProjects = {
           name: 'Slash Command',
           lastActivityAt: timestamp - 28 * 60_000,
           runtimeStatus: 'stopped',
+          awaitingUserInput: false,
           statistics: previewStatistics
         },
         display: {
@@ -293,6 +295,7 @@ const previewProjects = {
           name: 'P1 发布复核',
           lastActivityAt: timestamp - 3 * 60 * 60_000,
           runtimeStatus: 'stopped',
+          awaitingUserInput: false,
           statistics: previewStatistics
         },
         display: {
@@ -323,6 +326,7 @@ const previewProjects = {
           name: '阅读器布局',
           lastActivityAt: timestamp - 16 * 60_000,
           runtimeStatus: 'stopped',
+          awaitingUserInput: false,
           statistics: previewStatistics
         },
         display: {
@@ -348,6 +352,7 @@ const previewProjects = {
           name: '文档导入',
           lastActivityAt: timestamp - 2 * 60 * 60_000,
           runtimeStatus: 'stopped',
+          awaitingUserInput: false,
           statistics: previewStatistics
         },
         display: {
@@ -378,6 +383,7 @@ const previewProjects = {
           name: '检索质量复核',
           lastActivityAt: timestamp - 44 * 60_000,
           runtimeStatus: 'stopped',
+          awaitingUserInput: false,
           statistics: previewStatistics
         },
         display: {
@@ -428,7 +434,6 @@ const initialState: KernelState = {
   projects: (Object.keys(previewProjects) as PreviewProjectKey[]).map((path) => ({
     path,
     sessionCount: previewProjects[path].sessions.length,
-    unreadCount: 0,
     sessions: previewProjects[path].sessions.map(({ summary }) => summary)
   })),
   activeProjectKey: initialProjectKey,
@@ -775,12 +780,19 @@ export function createPreviewKernelApi(): KernelApi {
 
   return {
     getState: current,
+    getRuntimeMemoryDiagnostics: async () => ({
+      sampledAt: Date.now(),
+      runtimes: []
+    }),
     listSystemFonts: async () => {
       throw new Error('System font discovery is unavailable in browser preview.')
     },
     addProject: currentAck,
     activateProject: (projectKey) =>
       projectKey in previewProjects ? activateSelection(projectKey as PreviewProjectKey) : currentAck(),
+    selectNavigator: (kind) => commit({ ...state, navigatorKind: kind }),
+    createTask: currentAck,
+    activateTask: currentAck,
     startSession: currentAck,
     reloadSession: async () => {
       throw new Error('Session reload is unavailable in browser preview.')
@@ -926,6 +938,7 @@ export function createPreviewKernelApi(): KernelApi {
             name: '分叉预览',
             lastActivityAt: Date.now(),
             runtimeStatus: 'ready',
+            awaitingUserInput: false,
             statistics: previewStatistics
           },
           ...state.sessions
@@ -1235,6 +1248,9 @@ export function createPreviewKernelApi(): KernelApi {
     },
     selectPromptAttachments: async () => [],
     getPathForFile: (file) => `/preview/${file.name}`,
+    submitAsk: currentAck,
+    cancelAsk: currentAck,
+    navigateHistoryPrompt: currentAck,
     prompt: currentAck,
     steer: currentAck,
     followUp: currentAck,

@@ -217,6 +217,12 @@
   color: var(--color-text-primary);
 }
 
+.archive-notification-dismiss {
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+}
+
 .archived-preview-status {
   display: inline-flex;
   justify-self: start;
@@ -228,13 +234,13 @@
 }
 
 .archived-preview-exit {
+  width: 1.75rem;
+  height: 1.75rem;
   justify-self: start;
   border-color: transparent;
   background: transparent;
   color: var(--color-text-muted);
-  font-size: var(--text-control);
-  line-height: var(--line-control);
-  padding: 0.3rem 0.45rem;
+  padding: 0;
 }
 
 .archived-preview-exit:hover:not(:disabled) {

@@ -204,7 +204,7 @@ export function Select({
                   >
                     <span>{option.label}</span>
                     <span className="select-control-check" aria-hidden="true">
-                      {selected ? '✓' : ''}
+                      {selected ? <Icon name="check" size="sm" /> : null}
                     </span>
                   </button>
                 )

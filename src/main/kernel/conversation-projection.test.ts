@@ -220,6 +220,23 @@ test('projects strict todowrite arguments for history and live tool events', () 
     liveTool?.kind === 'tool' ? liveTool.todos : null,
     historicalTool?.kind === 'tool' ? historicalTool.todos : null
   )
+
+  for (const [index, toolName] of [
+    'functions:todowrite',
+    'functions/todowrite'
+  ].entries()) {
+    const namespaced = projectPiEvent([], {
+      type: 'tool_execution_start',
+      toolCallId: `todo-namespaced-${index}`,
+      toolName,
+      args: input
+    }, 21 + index)
+    const namespacedTool = namespaced.find((entry) => entry.kind === 'tool')
+    assert.deepEqual(
+      namespacedTool?.kind === 'tool' ? namespacedTool.todos : null,
+      historicalTool?.kind === 'tool' ? historicalTool.todos : null
+    )
+  }
 })
 
 test('rejects malformed todowrite lists without exposing a partial projection', () => {
@@ -326,10 +343,28 @@ test('projects structured subagent progress without exposing child transcripts',
         results: [
           {
             agent: 'researcher',
+            model: 'vvqq-cpa/gpt-5.6-luna',
+            usage: {
+              input: 900,
+              output: 300,
+              cacheRead: 400,
+              cacheWrite: 20,
+              cost: 0.012,
+              turns: 1
+            },
             finalOutput: 'Protocol notes ready.'
           },
           {
             agent: 'reviewer',
+            model: 'vvqq-cpa/gpt-5.6-sol',
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              cost: 0,
+              turns: 0
+            },
             finalOutput: 'UI review ready.'
           }
         ]
@@ -346,6 +381,14 @@ test('projects structured subagent progress without exposing child transcripts',
       agent: 'researcher',
       status: 'running',
       task: 'Inspect the protocol.',
+      model: 'vvqq-cpa/gpt-5.6-luna',
+      usage: {
+        inputTokens: 900,
+        outputTokens: 300,
+        cacheReadTokens: 400,
+        cacheWriteTokens: 20,
+        costUsd: 0.012
+      },
       currentTool: 'read',
       currentPath: '/tmp/protocol.ts',
       toolCount: 2,
@@ -353,13 +396,22 @@ test('projects structured subagent progress without exposing child transcripts',
       tokens: 1200,
       durationMs: 1500,
       error: null,
-      finalOutput: 'Protocol notes ready.'
+      finalOutput: 'Protocol notes ready.',
+      outputReferences: []
     },
     {
       index: 1,
       agent: 'reviewer',
       status: 'pending',
       task: 'Review the UI boundary.',
+      model: 'vvqq-cpa/gpt-5.6-sol',
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        costUsd: 0
+      },
       currentTool: null,
       currentPath: null,
       toolCount: 0,
@@ -367,7 +419,8 @@ test('projects structured subagent progress without exposing child transcripts',
       tokens: 0,
       durationMs: 0,
       error: null,
-      finalOutput: 'UI review ready.'
+      finalOutput: 'UI review ready.',
+      outputReferences: []
     }
   ])
   assert.equal(JSON.stringify(tool).includes('private child transcript'), false)
@@ -404,7 +457,7 @@ test('projects visible pi-subagents custom messages as dedicated notices', () =>
     {
       kind: 'subagent-notice',
       noticeType: 'completion',
-      text: 'Background task completed: **researcher**\n\nUI review ready.'
+      text: 'UI review ready.'
     },
     {
       kind: 'subagent-notice',
@@ -419,7 +472,9 @@ test('projects visible pi-subagents custom messages as dedicated notices', () =>
     index: 0,
     agent: 'researcher',
     status: 'completed',
-    task: '后台任务结果',
+    task: '后台任务',
+    model: null,
+    usage: null,
     currentTool: null,
     currentPath: null,
     toolCount: 0,
@@ -427,8 +482,73 @@ test('projects visible pi-subagents custom messages as dedicated notices', () =>
     tokens: 0,
     durationMs: 0,
     error: null,
-    finalOutput: 'Background task completed: **researcher**\n\nUI review ready.'
+    finalOutput: 'UI review ready.',
+    outputReferences: []
   })
+})
+
+test('normalizes parallel background output references without exposing the completion envelope', () => {
+  const content = [
+    'Background task completed: **parallel:reviewer+reviewer+reviewer**',
+    '',
+    'reviewer: Output saved to: /tmp/s26-runtime-safety-review.md (4.5 KB, 11 lines). Read this file if needed.',
+    '',
+    'reviewer: Output saved to: /tmp/s26-ack-review.md (9.6 KB, 49 lines). Read this file if needed.',
+    '',
+    'reviewer: Output saved to: /tmp/s26-hibernate-ui-review.md (7.9 KB, 23 lines). Read this file if needed.',
+    '',
+    'Session file: /tmp/private-child-session/session.jsonl'
+  ].join('\n')
+  const entries = projectMessages([{
+    role: 'custom',
+    customType: 'subagent-notify',
+    content,
+    display: true,
+    timestamp: 202.5
+  }])
+  const completion = entries[0]
+
+  assert.equal(completion?.kind, 'subagent-notice')
+  if (completion?.kind !== 'subagent-notice') return
+  assert.equal(completion.text, '')
+  assert.deepEqual(completion.completion, {
+    index: 0,
+    agent: 'parallel:reviewer+reviewer+reviewer',
+    status: 'completed',
+    task: '并行后台任务',
+    model: null,
+    usage: null,
+    currentTool: null,
+    currentPath: null,
+    toolCount: 0,
+    turnCount: 0,
+    tokens: 0,
+    durationMs: 0,
+    error: null,
+    finalOutput: null,
+    outputReferences: [
+      {
+        agent: 'reviewer',
+        path: '/tmp/s26-runtime-safety-review.md',
+        sizeLabel: '4.5 KB',
+        lines: 11
+      },
+      {
+        agent: 'reviewer',
+        path: '/tmp/s26-ack-review.md',
+        sizeLabel: '9.6 KB',
+        lines: 49
+      },
+      {
+        agent: 'reviewer',
+        path: '/tmp/s26-hibernate-ui-review.md',
+        sizeLabel: '7.9 KB',
+        lines: 23
+      }
+    ]
+  })
+  assert.equal(JSON.stringify(completion).includes('private-child-session'), false)
+  assert.equal(JSON.stringify(completion).includes('Background task completed'), false)
 })
 
 test('coalesces repeated live Subagent completion lifecycle events by stable message identity', () => {
@@ -449,13 +569,15 @@ test('coalesces repeated live Subagent completion lifecycle events by stable mes
     id: 'subagent-notice:subagent-notify:203',
     kind: 'subagent-notice',
     noticeType: 'completion',
-    text: message.content,
+    text: 'Review complete.',
     timestamp: 203,
     completion: {
       index: 0,
       agent: 'parallel:explorer+reviewer',
       status: 'completed',
-      task: '后台任务结果',
+      task: '并行后台任务',
+      model: null,
+      usage: null,
       currentTool: null,
       currentPath: null,
       toolCount: 0,
@@ -463,7 +585,8 @@ test('coalesces repeated live Subagent completion lifecycle events by stable mes
       tokens: 0,
       durationMs: 0,
       error: null,
-      finalOutput: message.content
+      finalOutput: 'Review complete.',
+      outputReferences: []
     }
   }])
 })

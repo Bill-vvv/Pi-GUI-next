@@ -2,10 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 
 import type { KernelInstalledPackage } from '../../../../shared/kernel-contract'
 import { unknownErrorMessage as errorMessage } from '../../unknown-error-message'
+import {
+  isWorkbenchAction,
+  type WorkbenchOperation
+} from '../../workbench-actions'
 
 type InstalledPackagesProps = {
   busy: boolean
-  pendingAction: string | null
+  pendingAction: WorkbenchOperation | null
   revision: number
   onList: () => Promise<KernelInstalledPackage[]>
   onRemove: (source: string) => Promise<void>
@@ -72,9 +76,9 @@ export function InstalledPackages({
   }
 
   const packageActionPending =
-    pendingAction === 'remove-pi-package' ||
-    pendingAction === 'update-pi-package' ||
-    pendingAction === 'update-pi-packages'
+    isWorkbenchAction(pendingAction, 'remove-pi-package') ||
+    isWorkbenchAction(pendingAction, 'update-pi-package') ||
+    isWorkbenchAction(pendingAction, 'update-pi-packages')
 
   return (
     <section className="settings-group" aria-labelledby="settings-installed-packages-heading">
@@ -91,7 +95,7 @@ export function InstalledPackages({
             })
           }}
         >
-          {pendingAction === 'update-pi-packages' ? '更新中…' : '全部更新'}
+          {isWorkbenchAction(pendingAction, 'update-pi-packages') ? '更新中…' : '全部更新'}
         </button>
       </div>
 
@@ -120,7 +124,8 @@ export function InstalledPackages({
                     disabled={busy || packageActionPending}
                     onClick={() => void updatePackage(pkg.source)}
                   >
-                    {actingSource === pkg.source && pendingAction === 'update-pi-package'
+                    {actingSource === pkg.source &&
+                    isWorkbenchAction(pendingAction, 'update-pi-package')
                       ? '更新中…'
                       : '更新'}
                   </button>
@@ -130,7 +135,8 @@ export function InstalledPackages({
                     disabled={busy || packageActionPending}
                     onClick={() => void removePackage(pkg.source)}
                   >
-                    {actingSource === pkg.source && pendingAction === 'remove-pi-package'
+                    {actingSource === pkg.source &&
+                    isWorkbenchAction(pendingAction, 'remove-pi-package')
                       ? '卸载中…'
                       : '卸载'}
                   </button>

@@ -6,6 +6,7 @@ import type {
   KernelToolEntry
 } from '../../../../shared/kernel-contract.ts'
 import {
+  isInternalSubagentCoordinationTool,
   subagentCoordinationNoticePresentation,
   subagentCoordinationToolPresentation
 } from './subagent-coordination-presentation.ts'
@@ -83,10 +84,37 @@ test('reserves alert semantics for structured completion guards', () => {
   })
 })
 
-test('uses concise labels for Subagent coordination tools', () => {
-  assert.deepEqual(
+test('identifies internal Subagent polling that should not occupy the Timeline', () => {
+  assert.equal(isInternalSubagentCoordinationTool(tool('subagent_wait', 'success')), true)
+  assert.equal(isInternalSubagentCoordinationTool(tool('subagent', 'success', {
+    action: 'list'
+  })), true)
+  assert.equal(isInternalSubagentCoordinationTool(tool('subagent', 'success', {
+    action: 'status',
+    id: 'run-1'
+  })), true)
+  assert.equal(isInternalSubagentCoordinationTool(tool('intercom', 'success', {
+    action: 'pending'
+  })), true)
+  assert.equal(isInternalSubagentCoordinationTool(tool('subagent', 'success', {
+    action: 'stop',
+    id: 'run-1'
+  })), false)
+  assert.equal(isInternalSubagentCoordinationTool(tool('subagent_supervisor', 'success', {
+    action: 'reply',
+    replyTo: 'request-1',
+    message: '状态已提供。'
+  })), false)
+})
+
+test('only presents meaningful Subagent coordination tools', () => {
+  assert.equal(
     subagentCoordinationToolPresentation(tool('subagent_wait', 'running', { all: true })),
-    { text: '正在等待 Subagent', groupLabel: '等待 Subagent' }
+    null
+  )
+  assert.equal(
+    subagentCoordinationToolPresentation(tool('subagent', 'success', { action: 'list' })),
+    null
   )
   assert.deepEqual(
     subagentCoordinationToolPresentation(tool('subagent_supervisor', 'success', {
@@ -98,10 +126,10 @@ test('uses concise labels for Subagent coordination tools', () => {
   )
   assert.deepEqual(
     subagentCoordinationToolPresentation(tool('subagent', 'success', {
-      action: 'status',
+      action: 'stop',
       id: 'run-1'
     })),
-    { text: '已检查 Subagent 状态', groupLabel: '检查 Subagent 状态' }
+    { text: '已停止子任务', groupLabel: '停止子任务' }
   )
   assert.equal(subagentCoordinationToolPresentation(tool('read', 'success')), null)
 })

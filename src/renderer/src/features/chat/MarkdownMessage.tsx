@@ -9,7 +9,7 @@ import {
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-import { normalizeExternalUrl } from '../../../../shared/external-url'
+import { normalizeOpenTarget } from '../../../../shared/external-url'
 import {
   buildStreamingMarkdownModel,
   type StreamingMarkdownBlock
@@ -122,5 +122,5 @@ function openExternalLink(event: MouseEvent<HTMLAnchorElement>, href: string): v
 }
 
 function normalizeMarkdownUrl(url: string): string {
-  return normalizeExternalUrl(url) ?? ''
+  return normalizeOpenTarget(url) ?? ''
 }

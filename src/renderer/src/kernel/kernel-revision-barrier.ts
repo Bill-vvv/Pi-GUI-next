@@ -74,6 +74,10 @@ export class KernelRevisionBarrier {
 
   handleEvent(event: KernelEvent): void {
     if (this.disposed) return
+    if (event.type === 'kernel.state-batch') {
+      for (const stateEvent of event.events) this.handleEvent(stateEvent)
+      return
+    }
     if (event.type === 'kernel.state-changed') {
       this.commitState(event.state, event.revision, this.currentState === null)
       return

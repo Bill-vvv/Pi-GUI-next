@@ -14,15 +14,19 @@ export type PiPackageRootOptions = {
   versionTimeoutMs?: number
 }
 
-export async function importVerifiedPiPackageRoot(
-  cwd: string,
+export type VerifiedPiPackageRoot = Readonly<{
+  executablePath: string
+  packageRoot: string
+  sdkEntryPath: string
+}>
+
+export async function resolvePiPackageRootLayout(
   options: PiPackageRootOptions = {}
-): Promise<Record<string, unknown>> {
+): Promise<VerifiedPiPackageRoot> {
   const executable = resolvePiExecutable({
     explicitPath: options.explicitExecutable,
     path: options.path
   })
-  await checkPiVersion({ executable, cwd, timeoutMs: options.versionTimeoutMs })
   const resolvedExecutable = await realpath(executable)
   const packageRoot = dirname(dirname(resolvedExecutable))
   const packageJsonPath = resolve(packageRoot, 'package.json')
@@ -38,7 +42,32 @@ export async function importVerifiedPiPackageRoot(
   if (!isWithin(packageRoot, canonicalEntryPath)) {
     throw new Error('Pi package root export resolves outside its package root.')
   }
-  const imported: unknown = await import(pathToFileURL(canonicalEntryPath).href)
+  return Object.freeze({
+    executablePath: resolvedExecutable,
+    packageRoot,
+    sdkEntryPath: canonicalEntryPath
+  })
+}
+
+export async function resolveVerifiedPiPackageRoot(
+  cwd: string,
+  options: PiPackageRootOptions = {}
+): Promise<VerifiedPiPackageRoot> {
+  const verified = await resolvePiPackageRootLayout(options)
+  await checkPiVersion({
+    executable: verified.executablePath,
+    cwd,
+    timeoutMs: options.versionTimeoutMs
+  })
+  return verified
+}
+
+export async function importVerifiedPiPackageRoot(
+  cwd: string,
+  options: PiPackageRootOptions = {}
+): Promise<Record<string, unknown>> {
+  const verified = await resolveVerifiedPiPackageRoot(cwd, options)
+  const imported: unknown = await import(pathToFileURL(verified.sdkEntryPath).href)
   if (typeof imported !== 'object' || imported === null || Array.isArray(imported)) {
     throw new Error('Pi package root export must be an object.')
   }

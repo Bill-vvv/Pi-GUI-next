@@ -1,7 +1,15 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { createPortal } from 'react-dom'
 
 import type {
+  KernelAskAnswer,
   KernelConversationEntry,
   KernelMessageEntry,
   RuntimeStatus
@@ -10,30 +18,36 @@ import { IconButton } from '../../components/IconButton'
 import { useViewportPopoverPosition } from '../../components/useViewportPopoverPosition'
 import { isTodoWriteToolEntry } from '../../todo-state'
 import type { ToolDisplayDensity } from '../../tool-display-density'
+import { unknownErrorMessage } from '../../unknown-error-message'
 import {
   SubagentTaskInteractionContext,
   type SubagentTaskInteraction
 } from './SubagentTaskDetail'
 import type { SubagentTaskSelection } from './subagent-task-detail-model'
 import {
+  AskToolInteractionContext,
+  type AskToolInteraction
+} from './AskToolCard'
+import {
   anchoredTimelineScrollTop,
   isTimelineViewportMeasurable,
-  TIMELINE_LAYOUT_CHANGE_EVENT,
   timelineScrollModeAfterScroll,
   type TimelineScrollMode
 } from './timeline-scroll-stability'
+import { latestThinkingSummaryLabel } from './timeline-process-model'
 import {
   CompletedTurn,
   groupConversationTurns,
   hasCurrentRunningEntry,
   isProcessEntry,
-  latestThinkingSummaryLabel,
   LiveTurn,
   splitTurn,
   ThinkingStatus,
   TimelineSessionKeyContext,
   turnFinalAnswerText,
-  turnForkUserText
+  turnForkUserText,
+  turnHistoryPrompt,
+  type TurnHistoryPrompt
 } from './TimelineTurns'
 
 type TimelineProps = {
@@ -44,17 +58,29 @@ type TimelineProps = {
   showPromptNavigation: boolean
   toolDisplayDensity: ToolDisplayDensity
   sessionKey: string | null
+  askSessionKey: string | null
   canCopyAnswers: boolean
   canExportSession: boolean
   canForkSession: boolean
+  canEditHistoryPrompt: boolean
   conversationActionBusy: boolean
   conversationActionStatus: string | null
   conversationActionError: string | null
   onCopyAnswer: (text: string) => Promise<void>
   onExportSession: () => Promise<void>
   onForkTurn: (userText: string) => void
+  onNavigateHistoryPrompt: (messageId: string) => Promise<void>
+  onSendHistoryPrompt: (message: string) => Promise<void>
+  onHistoryPromptEditingChange: (editing: boolean) => void
   subagentTaskSelection: SubagentTaskSelection | null
   onOpenSubagentTask: SubagentTaskInteraction['onOpen']
+  onSubmitAsk: (
+    sessionKey: string,
+    toolCallId: string,
+    answers: KernelAskAnswer[]
+  ) => Promise<void>
+  onCancelAsk: (sessionKey: string, toolCallId: string) => Promise<void>
+  onLayoutStabilizeReady: (stabilize: (() => void) | null) => void
   title?: string
   warning: string | null
 }
@@ -63,6 +89,11 @@ type PromptNavigationItem = {
   turnId: string
   prompt: KernelMessageEntry
   ordinal: number
+}
+
+type PromptNavigationMarkerPosition = {
+  index: number
+  centerY: number
 }
 
 type TimelineReadingAnchorTarget =
@@ -79,6 +110,8 @@ type TimelineReadingAnchor = {
 const COMPLETED_TURN_WINDOW_SIZE = 60
 const ACTIVE_PROMPT_SWITCH_GAP = 8
 const PROMPT_NAVIGATION_PREVIEW_DELAY_MS = 360
+const PROMPT_NAVIGATION_FOCUS_SIGMA = 1.35
+const PROMPT_NAVIGATION_FOCUS_SCALE_SPAN = 2
 const MAGIC_CONTEXT_LIVE_STATUS_ID = 'extension-status:magic-context'
 const EMPTY_STATE_SLOGANS = [
   '从一个想法开始。',
@@ -97,17 +130,25 @@ export function Timeline({
   showPromptNavigation,
   toolDisplayDensity,
   sessionKey,
+  askSessionKey,
   canCopyAnswers,
   canExportSession,
   canForkSession,
+  canEditHistoryPrompt,
   conversationActionBusy,
   conversationActionStatus,
   conversationActionError,
   onCopyAnswer,
   onExportSession,
   onForkTurn,
+  onNavigateHistoryPrompt,
+  onSendHistoryPrompt,
+  onHistoryPromptEditingChange,
   subagentTaskSelection,
   onOpenSubagentTask,
+  onSubmitAsk,
+  onCancelAsk,
+  onLayoutStabilizeReady,
   title,
   warning
 }: TimelineProps): React.JSX.Element {
@@ -128,9 +169,14 @@ export function Timeline({
   const revealScrollHeightRef = useRef<number | null>(null)
   const observedRunRef = useRef<{ startedAt: number; turnId: string | null } | null>(null)
   const observedThinkingStartsRef = useRef(new Map<string, number>())
+  const historyPromptTextareaRef = useRef<HTMLTextAreaElement>(null)
   const [completedTurnWindow, setCompletedTurnWindow] = useState(COMPLETED_TURN_WINDOW_SIZE)
   const [actionTurnId, setActionTurnId] = useState<string | null>(null)
   const [actionFeedbackTurnId, setActionFeedbackTurnId] = useState<string | null>(null)
+  const [historyPromptEdit, setHistoryPromptEdit] = useState<
+    (TurnHistoryPrompt & { draft: string; error: string | null; readyToSend: boolean }) | null
+  >(null)
+  const [historyPromptSubmitting, setHistoryPromptSubmitting] = useState(false)
   const [activePromptTurnId, setActivePromptTurnId] = useState<string | null>(null)
   const [runElapsedByTurnId, setRunElapsedByTurnId] = useState<ReadonlyMap<string, number>>(
     () => new Map()
@@ -176,11 +222,33 @@ export function Timeline({
     () => completedTurns.slice(Math.max(0, completedTurns.length - completedTurnWindow)),
     [completedTurnWindow, completedTurns]
   )
+  const editingTurnIndex = historyPromptEdit === null
+    ? -1
+    : visibleCompletedTurns.findIndex(
+        (turn) => turnHistoryPrompt(turn)?.messageId === historyPromptEdit.messageId
+      )
+  const renderedCompletedTurns = editingTurnIndex < 0
+    ? visibleCompletedTurns
+    : visibleCompletedTurns.slice(0, editingTurnIndex + 1)
+  const detachedHistoryPromptEditor = historyPromptEdit !== null && editingTurnIndex < 0
+  const isHistoryPromptEditing = historyPromptEdit !== null
   const hiddenCompletedTurnCount = completedTurns.length - visibleCompletedTurns.length
   const subagentTaskInteraction = useMemo<SubagentTaskInteraction>(() => ({
     selection: subagentTaskSelection,
     onOpen: onOpenSubagentTask
   }), [onOpenSubagentTask, subagentTaskSelection])
+  const askToolInteraction = useMemo<AskToolInteraction | null>(
+    () => askSessionKey === null
+      ? null
+      : { sessionKey: askSessionKey, onSubmit: onSubmitAsk, onCancel: onCancelAsk },
+    [askSessionKey, onCancelAsk, onSubmitAsk]
+  )
+  useEffect(() => {
+    onHistoryPromptEditingChange(isHistoryPromptEditing)
+    return () => {
+      if (isHistoryPromptEditing) onHistoryPromptEditingChange(false)
+    }
+  }, [isHistoryPromptEditing, onHistoryPromptEditingChange])
   useEffect(() => {
     if (actionTurnId === null) return
     if (visibleCompletedTurns.some((turn) => turn.id === actionTurnId)) return
@@ -466,11 +534,9 @@ export function Timeline({
     const observer = new ResizeObserver(handleLayoutChange)
     observer.observe(viewport)
     observer.observe(messageList)
-    viewport.addEventListener(TIMELINE_LAYOUT_CHANGE_EVENT, handleLayoutChange)
     window.addEventListener('resize', handleLayoutChange)
     return () => {
       observer.disconnect()
-      viewport.removeEventListener(TIMELINE_LAYOUT_CHANGE_EVENT, handleLayoutChange)
       window.removeEventListener('resize', handleLayoutChange)
     }
   }, [
@@ -479,6 +545,11 @@ export function Timeline({
     runtimeStatus,
     stabilizeTimelineLayout
   ])
+
+  useLayoutEffect(() => {
+    onLayoutStabilizeReady(stabilizeTimelineLayout)
+    return () => onLayoutStabilizeReady(null)
+  }, [onLayoutStabilizeReady, stabilizeTimelineLayout])
 
   useLayoutEffect(() => {
     if (
@@ -566,8 +637,56 @@ export function Timeline({
     pendingPromptNavigationTargetRef.current = null
   }, [completedTurnWindow, scrollToMountedPrompt])
 
+  const startHistoryPromptEdit = (prompt: TurnHistoryPrompt): void => {
+    setHistoryPromptEdit({ ...prompt, draft: prompt.text, error: null, readyToSend: false })
+    setActionTurnId(null)
+    setActionFeedbackTurnId(null)
+  }
+  const cancelHistoryPromptEdit = (): void => {
+    if (historyPromptSubmitting || historyPromptEdit === null) return
+    const { messageId, turnId } = historyPromptEdit
+    setActionTurnId(turnId)
+    setHistoryPromptEdit(null)
+    requestAnimationFrame(() => {
+      const trigger = [...(shellRef.current?.querySelectorAll<HTMLButtonElement>(
+        '[data-history-prompt-edit-id]'
+      ) ?? [])].find((button) => button.dataset.historyPromptEditId === messageId)
+      trigger?.focus()
+    })
+  }
+  const submitHistoryPromptEdit = async (): Promise<void> => {
+    if (historyPromptEdit === null || historyPromptSubmitting) return
+    const message = historyPromptEdit.draft
+    if (message.trim().length === 0) {
+      setHistoryPromptEdit({ ...historyPromptEdit, error: '消息不能为空。' })
+      return
+    }
+    setHistoryPromptSubmitting(true)
+    setHistoryPromptEdit({ ...historyPromptEdit, error: null })
+    let readyToSend = historyPromptEdit.readyToSend
+    try {
+      if (!readyToSend) {
+        await onNavigateHistoryPrompt(historyPromptEdit.messageId)
+        readyToSend = true
+        setHistoryPromptEdit((current) => current === null
+          ? null
+          : { ...current, error: null, readyToSend: true })
+      }
+      await onSendHistoryPrompt(message)
+      setHistoryPromptEdit(null)
+    } catch (error: unknown) {
+      setHistoryPromptEdit((current) => current === null
+        ? null
+        : { ...current, error: unknownErrorMessage(error), readyToSend })
+      requestAnimationFrame(() => historyPromptTextareaRef.current?.focus())
+    } finally {
+      setHistoryPromptSubmitting(false)
+    }
+  }
+
   return (
     <TimelineSessionKeyContext.Provider value={sessionKey}>
+    <AskToolInteractionContext.Provider value={askToolInteraction}>
     <SubagentTaskInteractionContext.Provider value={subagentTaskInteraction}>
     <div className="conversation-shell" ref={shellRef}>
       {title || warning ? (
@@ -579,7 +698,7 @@ export function Timeline({
         </div>
       ) : null}
 
-      {showPromptNavigation && promptNavigationItems.length > 0 ? (
+      {historyPromptEdit === null && showPromptNavigation && promptNavigationItems.length > 0 ? (
         <PromptNavigationRail
           activeTurnId={activePromptTurnId}
           items={promptNavigationItems}
@@ -609,7 +728,7 @@ export function Timeline({
           scheduleActivePromptTurnUpdate()
         }}
       >
-        {hasVisibleContent || runtimeStatus === 'running' || compactionActive ? (
+        {hasVisibleContent || historyPromptEdit !== null || runtimeStatus === 'running' || compactionActive ? (
           <>
             <div
               className="message-list"
@@ -617,7 +736,7 @@ export function Timeline({
               aria-live={runtimeStatus === 'running' ? 'polite' : 'off'}
               aria-label="对话时间线"
             >
-              {hiddenCompletedTurnCount > 0 ? (
+              {historyPromptEdit === null && hiddenCompletedTurnCount > 0 ? (
                 <button
                   className="conversation-history-reveal"
                   type="button"
@@ -634,12 +753,17 @@ export function Timeline({
                   显示更早的 {Math.min(COMPLETED_TURN_WINDOW_SIZE, hiddenCompletedTurnCount)} 轮
                 </button>
               ) : null}
-              {visibleCompletedTurns.map((turn) => {
+              {renderedCompletedTurns.map((turn) => {
+                const historyPrompt = turnHistoryPrompt(turn)
+                const editingThisPrompt = historyPromptEdit !== null &&
+                  historyPrompt?.messageId === historyPromptEdit.messageId
                 const answerText = canCopyAnswers ? turnFinalAnswerText(turn) : null
                 const forkUserText = canForkSession ? turnForkUserText(turn) : null
                 const canCopyTurn = answerText !== null
                 const canForkTurn = forkUserText !== null
-                const canShowTurnActions = canCopyTurn || canForkTurn || canExportSession
+                const canEditTurn = canEditHistoryPrompt && historyPrompt !== null
+                const canShowTurnActions = historyPromptEdit === null &&
+                  (canEditTurn || canCopyTurn || canForkTurn || canExportSession)
                 const showTurnActions = actionTurnId === turn.id && canShowTurnActions
                 const showTurnFeedback = actionFeedbackTurnId === turn.id &&
                   (conversationActionStatus !== null || conversationActionError !== null)
@@ -667,17 +791,44 @@ export function Timeline({
                       setActionTurnId((current) => (current === turn.id ? null : current))
                     }}
                   >
-                    <CompletedTurn
-                      turn={turn}
-                      toolDisplayDensity={toolDisplayDensity}
-                      runElapsedMs={runElapsedByTurnId.get(turn.id) ?? null}
-                      thinkingElapsedByEntryId={thinkingElapsedByEntryId}
-                    />
+                    {editingThisPrompt && historyPromptEdit !== null ? (
+                      <HistoryPromptEditor
+                        textareaRef={historyPromptTextareaRef}
+                        draft={historyPromptEdit.draft}
+                        error={historyPromptEdit.error}
+                        busy={historyPromptSubmitting || conversationActionBusy}
+                        onChange={(draft) => setHistoryPromptEdit({
+                          ...historyPromptEdit,
+                          draft,
+                          error: null
+                        })}
+                        onCancel={cancelHistoryPromptEdit}
+                        onSubmit={submitHistoryPromptEdit}
+                      />
+                    ) : (
+                      <CompletedTurn
+                        turn={turn}
+                        toolDisplayDensity={toolDisplayDensity}
+                        runElapsedMs={runElapsedByTurnId.get(turn.id) ?? null}
+                        thinkingElapsedByEntryId={thinkingElapsedByEntryId}
+                      />
+                    )}
                     {canShowTurnActions ? (
                       <div
                         className={`conversation-turn-actions${showTurnActionSurface ? ' is-visible' : ''}`}
                         aria-label="对话操作"
                       >
+                        {canEditTurn && historyPrompt !== null ? (
+                          <IconButton
+                            className="conversation-action-button"
+                            data-history-prompt-edit-id={historyPrompt.messageId}
+                            icon="edit"
+                            iconSize="sm"
+                            label="编辑并重新发送这条消息"
+                            disabled={conversationActionBusy}
+                            onClick={() => startHistoryPromptEdit(historyPrompt)}
+                          />
+                        ) : null}
                         {canCopyTurn ? (
                           <IconButton
                             className="conversation-action-button"
@@ -733,7 +884,24 @@ export function Timeline({
                   </div>
                 )
               })}
-              {activeTurns.map((turn) => (
+              {detachedHistoryPromptEditor && historyPromptEdit !== null ? (
+                <div className="conversation-virtual-row conversation-turn-shell">
+                  <HistoryPromptEditor
+                    textareaRef={historyPromptTextareaRef}
+                    draft={historyPromptEdit.draft}
+                    error={historyPromptEdit.error}
+                    busy={historyPromptSubmitting || conversationActionBusy}
+                    onChange={(draft) => setHistoryPromptEdit({
+                      ...historyPromptEdit,
+                      draft,
+                      error: null
+                    })}
+                    onCancel={cancelHistoryPromptEdit}
+                    onSubmit={submitHistoryPromptEdit}
+                  />
+                </div>
+              ) : null}
+              {historyPromptEdit === null ? activeTurns.map((turn) => (
                 <div className="conversation-virtual-row" key={`active:${turn.id}`}>
                   <LiveTurn
                     turn={turn}
@@ -741,7 +909,7 @@ export function Timeline({
                     thinkingElapsedByEntryId={thinkingElapsedByEntryId}
                   />
                 </div>
-              ))}
+              )) : null}
               {actionFeedbackTurnId === null &&
               (conversationActionStatus !== null || conversationActionError !== null) ? (
                 <div className="conversation-actions" aria-label="对话操作反馈">
@@ -757,7 +925,7 @@ export function Timeline({
                   ) : null}
                 </div>
               ) : null}
-              {compactionActive ? (
+              {historyPromptEdit === null && compactionActive ? (
                 <div
                   className="conversation-compaction-status"
                   role="status"
@@ -766,7 +934,8 @@ export function Timeline({
                   <ThinkingStatus label="正在整理上下文" />
                 </div>
               ) : null}
-              {runtimeStatus === 'running' &&
+              {historyPromptEdit === null &&
+                runtimeStatus === 'running' &&
                 !compactionActive &&
                 !hasRunningStep &&
                 (toolDisplayDensity === 'detailed' || !hasActiveProcess) ? (
@@ -796,7 +965,69 @@ export function Timeline({
       </div>
     </div>
     </SubagentTaskInteractionContext.Provider>
+    </AskToolInteractionContext.Provider>
     </TimelineSessionKeyContext.Provider>
+  )
+}
+
+function HistoryPromptEditor({
+  textareaRef,
+  draft,
+  error,
+  busy,
+  onChange,
+  onCancel,
+  onSubmit
+}: {
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>
+  draft: string
+  error: string | null
+  busy: boolean
+  onChange: (draft: string) => void
+  onCancel: () => void
+  onSubmit: () => Promise<void>
+}): React.JSX.Element {
+  return (
+    <section className="history-prompt-editor" aria-label="编辑历史消息" aria-busy={busy}>
+      <label className="history-prompt-editor-field">
+        <span>编辑并重新发送</span>
+        <textarea
+          ref={textareaRef}
+          autoFocus
+          rows={4}
+          value={draft}
+          readOnly={busy}
+          onChange={(event) => onChange(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.nativeEvent.keyCode === 229 || event.nativeEvent.isComposing) return
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              onCancel()
+              return
+            }
+            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault()
+              void onSubmit()
+            }
+          }}
+        />
+      </label>
+      {error === null ? null : (
+        <p className="history-prompt-editor-error" role="alert">{error}</p>
+      )}
+      <div className="history-prompt-editor-actions">
+        <small>旧分支会保留。⌘/Ctrl + Enter 重新发送。</small>
+        <button type="button" disabled={busy} onClick={onCancel}>取消</button>
+        <button
+          className="primary"
+          type="button"
+          disabled={busy || draft.trim().length === 0}
+          onClick={() => void onSubmit()}
+        >
+          {busy ? '正在重新发送…' : '重新发送'}
+        </button>
+      </div>
+    </section>
   )
 }
 
@@ -810,7 +1041,10 @@ function PromptNavigationRail({
   onNavigate: (turnId: string) => void
 }): React.JSX.Element {
   const markerRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const markerPositionsRef = useRef<PromptNavigationMarkerPosition[]>([])
   const previewDelayRef = useRef<number | null>(null)
+  const focusFrameRef = useRef<number | null>(null)
+  const pendingFocusPositionRef = useRef<number | null>(null)
   const previewModeRef = useRef(false)
   const [preview, setPreview] = useState<{
     item: PromptNavigationItem
@@ -822,28 +1056,57 @@ function PromptNavigationRail({
     window.clearTimeout(previewDelayRef.current)
     previewDelayRef.current = null
   }, [])
+  const clearNavigationFocus = useCallback(() => {
+    if (focusFrameRef.current !== null) {
+      window.cancelAnimationFrame(focusFrameRef.current)
+      focusFrameRef.current = null
+    }
+    pendingFocusPositionRef.current = null
+    markerPositionsRef.current = []
+    applyPromptNavigationFocus(markerRefs.current, null)
+  }, [])
+  const scheduleNavigationFocus = useCallback((position: number) => {
+    pendingFocusPositionRef.current = position
+    if (focusFrameRef.current !== null) return
+    focusFrameRef.current = window.requestAnimationFrame(() => {
+      focusFrameRef.current = null
+      const nextPosition = pendingFocusPositionRef.current
+      pendingFocusPositionRef.current = null
+      if (nextPosition !== null) {
+        applyPromptNavigationFocus(markerRefs.current, nextPosition)
+      }
+    })
+  }, [])
   const closePreview = useCallback(() => {
     clearPreviewDelay()
+    clearNavigationFocus()
     previewModeRef.current = false
     setPreview(null)
-  }, [clearPreviewDelay])
+  }, [clearNavigationFocus, clearPreviewDelay])
   const showPreview = useCallback((
     item: PromptNavigationItem,
+    index: number,
     trigger: HTMLButtonElement,
     immediate: boolean
   ) => {
     clearPreviewDelay()
     if (immediate) {
       previewModeRef.current = true
+      if (markerPositionsRef.current.length === 0) {
+        markerPositionsRef.current = measurePromptNavigationMarkers(markerRefs.current)
+      }
+      scheduleNavigationFocus(index)
       setPreview({ item, trigger })
       return
     }
     previewDelayRef.current = window.setTimeout(() => {
       previewDelayRef.current = null
       previewModeRef.current = true
+      markerPositionsRef.current = measurePromptNavigationMarkers(markerRefs.current)
+      scheduleNavigationFocus(index)
       setPreview({ item, trigger })
     }, PROMPT_NAVIGATION_PREVIEW_DELAY_MS)
-  }, [clearPreviewDelay])
+  }, [clearPreviewDelay, scheduleNavigationFocus])
 
   useEffect(() => {
     if (preview === null) return
@@ -854,7 +1117,10 @@ function PromptNavigationRail({
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [closePreview, preview])
 
-  useEffect(() => () => clearPreviewDelay(), [clearPreviewDelay])
+  useEffect(() => () => {
+    clearPreviewDelay()
+    clearNavigationFocus()
+  }, [clearNavigationFocus, clearPreviewDelay])
 
   const focusMarker = (index: number): void => {
     markerRefs.current[Math.max(0, Math.min(items.length - 1, index))]?.focus()
@@ -869,7 +1135,17 @@ function PromptNavigationRail({
         if (!event.currentTarget.contains(event.relatedTarget)) closePreview()
       }}
     >
-      <ol className="prompt-navigation-list">
+      <ol
+        className="prompt-navigation-list"
+        onPointerMove={(event) => {
+          if (!previewModeRef.current || event.pointerType === 'touch') return
+          const position = promptNavigationPointerPosition(
+            event.clientY,
+            markerPositionsRef.current
+          )
+          if (position !== null) scheduleNavigationFocus(position)
+        }}
+      >
         {items.map((item, index) => {
           const active = item.turnId === activeTurnId
           const described = preview?.item.turnId === item.turnId
@@ -885,9 +1161,10 @@ function PromptNavigationRail({
                 aria-current={active ? 'location' : undefined}
                 aria-describedby={described ? 'prompt-navigation-preview' : undefined}
                 aria-label={`跳转到提示词 ${item.ordinal}：${promptNavigationLabel(item.prompt)}`}
+                data-navigation-focus={described ? 'true' : undefined}
                 onPointerEnter={(event) =>
-                  showPreview(item, event.currentTarget, previewModeRef.current)}
-                onFocus={(event) => showPreview(item, event.currentTarget, true)}
+                  showPreview(item, index, event.currentTarget, previewModeRef.current)}
+                onFocus={(event) => showPreview(item, index, event.currentTarget, true)}
                 onClick={() => onNavigate(item.turnId)}
                 onKeyDown={(event) => {
                   if (event.key === 'ArrowUp') {
@@ -915,12 +1192,68 @@ function PromptNavigationRail({
       {preview ? (
         <PromptNavigationPreview
           item={preview.item}
-          key={preview.item.turnId}
           trigger={preview.trigger}
         />
       ) : null}
     </nav>
   )
+}
+
+function applyPromptNavigationFocus(
+  markers: Array<HTMLButtonElement | null>,
+  focusedPosition: number | null
+): void {
+  markers.forEach((marker, index) => {
+    if (marker === null) return
+    if (focusedPosition === null) {
+      marker.style.removeProperty('--prompt-navigation-marker-opacity')
+      marker.style.removeProperty('--prompt-navigation-marker-scale')
+      return
+    }
+    const distance = Math.abs(index - focusedPosition)
+    const weight = Math.exp(
+      -(distance ** 2) / (2 * PROMPT_NAVIGATION_FOCUS_SIGMA ** 2)
+    )
+    marker.style.setProperty(
+      '--prompt-navigation-marker-opacity',
+      (0.3 + weight * 0.58).toFixed(3)
+    )
+    marker.style.setProperty(
+      '--prompt-navigation-marker-scale',
+      (1 + weight * PROMPT_NAVIGATION_FOCUS_SCALE_SPAN).toFixed(3)
+    )
+  })
+}
+
+function measurePromptNavigationMarkers(
+  markers: Array<HTMLButtonElement | null>
+): PromptNavigationMarkerPosition[] {
+  return markers.flatMap((marker, index) => {
+    if (marker === null) return []
+    const rect = marker.getBoundingClientRect()
+    return [{ index, centerY: rect.top + rect.height / 2 }]
+  })
+}
+
+function promptNavigationPointerPosition(
+  clientY: number,
+  positions: PromptNavigationMarkerPosition[]
+): number | null {
+  const first = positions[0]
+  const last = positions.at(-1)
+  if (first === undefined || last === undefined) return null
+  if (clientY <= first.centerY) return first.index
+  if (clientY >= last.centerY) return last.index
+
+  for (let positionIndex = 1; positionIndex < positions.length; positionIndex += 1) {
+    const previous = positions[positionIndex - 1]!
+    const next = positions[positionIndex]!
+    if (clientY > next.centerY) continue
+    const span = Math.max(1, next.centerY - previous.centerY)
+    const progress = (clientY - previous.centerY) / span
+    return previous.index + (next.index - previous.index) * progress
+  }
+  return last.index
 }
 
 function PromptNavigationPreview({
@@ -930,7 +1263,10 @@ function PromptNavigationPreview({
   item: PromptNavigationItem
   trigger: HTMLButtonElement
 }): React.JSX.Element | null {
-  const triggerRef = useRef<HTMLElement | null>(trigger)
+  const triggerRef = useMemo<{ current: HTMLElement | null }>(
+    () => ({ current: trigger }),
+    [trigger]
+  )
   const { popoverRef, position } = useViewportPopoverPosition(
     true,
     triggerRef,

@@ -1,4 +1,4 @@
-import { access, chmod, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
@@ -161,6 +161,24 @@ export type ProjectRegistry = {
   activeProjectKey: string | null
 }
 
+export type TaskWorkspace = {
+  key: string
+  path: string
+}
+
+export type TaskRegistry = {
+  tasks: TaskWorkspace[]
+  activeTaskKey: string | null
+  navigatorKind: 'project' | 'task'
+}
+
+type TaskStateFile = {
+  version: 1
+  tasks: TaskWorkspace[]
+  activeTaskKey: string | null
+  navigatorKind: 'project' | 'task'
+}
+
 type ProjectConfiguration = ProjectRegistry & {
   sessionNaming: SessionNamingSettings
   appearance: AppearanceSettings
@@ -220,17 +238,85 @@ export type ProjectStoreOptions = {
 export class ProjectStore {
   private readonly configFile: string
   private readonly stateFile: string
+  private readonly taskStateFile: string
+  private readonly taskRoot: string
   private saveQueue: Promise<void> = Promise.resolve()
 
   constructor(options: ProjectStoreOptions = {}) {
     const configHome = options.configHome ?? xdgHome('XDG_CONFIG_HOME', join(homedir(), '.config'))
-    const stateHome = options.stateHome ?? xdgHome('XDG_STATE_HOME', join(homedir(), '.local', 'state'))
+    const stateHome = assertAbsolute(
+      options.stateHome ?? xdgHome('XDG_STATE_HOME', join(homedir(), '.local', 'state')),
+      'XDG state home'
+    )
     this.configFile = join(assertAbsolute(configHome, 'XDG config home'), 'pi-gui-next', 'config.json')
-    this.stateFile = join(assertAbsolute(stateHome, 'XDG state home'), 'pi-gui-next', 'state.json')
+    this.stateFile = join(stateHome, 'pi-gui-next', 'state.json')
+    this.taskStateFile = join(stateHome, 'pi-gui-next', 'tasks.json')
+    this.taskRoot = join(stateHome, 'pi-gui-next', 'tasks')
   }
 
   async loadProjects(): Promise<ProjectRegistry> {
     return copyRegistry(await this.readConfiguration())
+  }
+
+  async loadTasks(): Promise<TaskRegistry> {
+    return copyTaskRegistry(await this.readTaskState())
+  }
+
+  createTask(): Promise<TaskWorkspace> {
+    return this.enqueueSave(async () => {
+      const [taskState, sessionState] = await Promise.all([
+        this.readTaskState(),
+        this.readSessionState()
+      ])
+      const retainedTasks = taskState.tasks.filter((task) =>
+        sessionState.sessions.some((pointer) => pointer.projectPath === task.path)
+      )
+      const retainedTaskKeys = new Set(retainedTasks.map(({ key }) => key))
+      for (const task of taskState.tasks) {
+        if (!retainedTaskKeys.has(task.key)) {
+          await rm(task.path, { recursive: true, force: true })
+        }
+      }
+      const key = randomUUID()
+      const task = { key, path: join(this.taskRoot, key) }
+      await mkdir(this.taskRoot, { recursive: true, mode: 0o700 })
+      await chmod(this.taskRoot, 0o700)
+      await mkdir(task.path, { recursive: false, mode: 0o700 })
+      await writeJson(this.taskStateFile, {
+        version: 1,
+        tasks: [...retainedTasks, task],
+        activeTaskKey: key,
+        navigatorKind: 'task'
+      } satisfies TaskStateFile)
+      return { ...task }
+    })
+  }
+
+  activateTask(taskKey: string): Promise<TaskRegistry> {
+    assertTaskKey(taskKey)
+    return this.enqueueSave(async () => {
+      const state = await this.readTaskState()
+      if (!state.tasks.some(({ key }) => key === taskKey)) {
+        throw new Error(`Task is not registered: ${taskKey}`)
+      }
+      const next: TaskStateFile = {
+        ...state,
+        activeTaskKey: taskKey,
+        navigatorKind: 'task'
+      }
+      await writeJson(this.taskStateFile, next)
+      return copyTaskRegistry(next)
+    })
+  }
+
+  selectNavigator(kind: 'project' | 'task'): Promise<TaskRegistry> {
+    return this.enqueueSave(async () => {
+      const state = await this.readTaskState()
+      if (state.navigatorKind === kind) return copyTaskRegistry(state)
+      const next: TaskStateFile = { ...state, navigatorKind: kind }
+      await writeJson(this.taskStateFile, next)
+      return copyTaskRegistry(next)
+    })
   }
 
   async loadSessionNaming(): Promise<SessionNamingSettings> {
@@ -286,13 +372,20 @@ export class ProjectStore {
   activateProject(projectKey: string): Promise<ProjectRegistry> {
     assertAbsolute(projectKey, 'Project key')
     return this.enqueueSave(async () => {
-      const configuration = await this.readConfiguration()
+      const [configuration, taskState] = await Promise.all([
+        this.readConfiguration(),
+        this.readTaskState()
+      ])
       if (!configuration.projects.some(({ path }) => path === projectKey)) {
         throw new Error(`Project is not registered: ${projectKey}`)
       }
-      if (configuration.activeProjectKey === projectKey) return copyRegistry(configuration)
-      const next: ProjectConfiguration = { ...configuration, activeProjectKey: projectKey }
-      await writeJson(this.configFile, toProjectConfigFile(next))
+      const next: ProjectConfiguration = configuration.activeProjectKey === projectKey
+        ? configuration
+        : { ...configuration, activeProjectKey: projectKey }
+      if (next !== configuration) await writeJson(this.configFile, toProjectConfigFile(next))
+      if (taskState.navigatorKind !== 'project') {
+        await writeJson(this.taskStateFile, { ...taskState, navigatorKind: 'project' } satisfies TaskStateFile)
+      }
       return copyRegistry(next)
     })
   }
@@ -525,6 +618,16 @@ export class ProjectStore {
     return canonicalPath
   }
 
+  async taskOwnsSession(taskPath: string): Promise<boolean> {
+    assertAbsolute(taskPath, 'Task workspace path')
+    const [tasks, state] = await Promise.all([
+      this.readTaskState(),
+      this.readSessionState()
+    ])
+    if (!tasks.tasks.some(({ path }) => path === taskPath)) return false
+    return state.sessions.some(({ projectPath }) => projectPath === taskPath)
+  }
+
   async loadSessionRegistry(projectPath: string): Promise<ProjectSessionRegistry> {
     assertAbsolute(projectPath, 'Project path')
     const state = await this.readSessionState()
@@ -550,9 +653,15 @@ export class ProjectStore {
     if (!isSessionPointer(pointer)) {
       throw new Error('Invalid Pi GUI session pointer.')
     }
-    const registry = await this.loadProjects()
-    if (!registry.projects.some(({ path }) => path === pointer.projectPath)) {
-      throw new Error(`Project is not registered: ${pointer.projectPath}`)
+    const [registry, taskRegistry] = await Promise.all([
+      this.loadProjects(),
+      this.loadTasks()
+    ])
+    if (
+      !registry.projects.some(({ path }) => path === pointer.projectPath) &&
+      !taskRegistry.tasks.some(({ path }) => path === pointer.projectPath)
+    ) {
+      throw new Error(`Project is not registered as a Project or Task Runtime workspace: ${pointer.projectPath}`)
     }
     const canonicalSessionFile = await realpath(pointer.sessionFile)
     const sessionStat = await stat(canonicalSessionFile)
@@ -569,7 +678,19 @@ export class ProjectStore {
     }
     return this.enqueueSave(async () => {
       const canonicalPointer = await this.validateSession(pointer)
-      const state = await this.readSessionState()
+      const [state, taskState] = await Promise.all([
+        this.readSessionState(),
+        this.readTaskState()
+      ])
+      const task = taskState.tasks.find(({ path }) => path === canonicalPointer.projectPath)
+      if (
+        task !== undefined &&
+        state.sessions.some((pointer) =>
+          pointer.projectPath === task.path && pointer.sessionFile !== canonicalPointer.sessionFile
+        )
+      ) {
+        throw new Error(`Task already owns another session: ${task.key}`)
+      }
       if (state.archivedSessionKeys.some((selection) =>
         selection.projectPath === canonicalPointer.projectPath &&
         selection.sessionKey === canonicalPointer.sessionFile
@@ -652,6 +773,29 @@ export class ProjectStore {
       } satisfies ProjectStateFile)
       return this.loadSessionRegistry(projectPath)
     })
+  }
+
+  private async readTaskState(): Promise<TaskStateFile> {
+    let text: string
+    try {
+      text = await readFile(this.taskStateFile, 'utf8')
+    } catch (error) {
+      if (isNodeError(error) && error.code === 'ENOENT') {
+        return {
+          version: 1,
+          tasks: [],
+          activeTaskKey: null,
+          navigatorKind: 'project'
+        }
+      }
+      throw error
+    }
+
+    const value: unknown = JSON.parse(text)
+    if (!isTaskStateFile(value, this.taskRoot)) {
+      throw new Error(`Invalid Pi GUI task state: ${this.taskStateFile}`)
+    }
+    return copyTaskState(value)
   }
 
   private async readSessionState(): Promise<ProjectStateFile> {
@@ -1235,6 +1379,53 @@ function isSessionNaming(value: unknown): value is SessionNamingSettings {
 
 function assertProject(project: { path: string }): void {
   if (!isProject(project)) throw new Error('Invalid Pi GUI project registration.')
+}
+
+function assertTaskKey(value: string): void {
+  if (!isTaskKey(value)) throw new Error('Invalid Pi GUI task key.')
+}
+
+function isTaskKey(value: unknown): value is string {
+  return typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value)
+}
+
+function isTaskStateFile(value: unknown, taskRoot: string): value is TaskStateFile {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 4 ||
+    value.version !== 1 ||
+    !Array.isArray(value.tasks) ||
+    (typeof value.activeTaskKey !== 'string' && value.activeTaskKey !== null) ||
+    (value.navigatorKind !== 'project' && value.navigatorKind !== 'task')
+  ) return false
+  const tasks = value.tasks
+  if (!tasks.every((task): task is TaskWorkspace =>
+    isRecord(task) &&
+    Object.keys(task).length === 2 &&
+    isTaskKey(task.key) &&
+    task.path === join(taskRoot, task.key)
+  )) return false
+  return new Set(tasks.map(({ key }) => key)).size === tasks.length &&
+    new Set(tasks.map(({ path }) => path)).size === tasks.length &&
+    (value.activeTaskKey === null || tasks.some(({ key }) => key === value.activeTaskKey))
+}
+
+function copyTaskState(state: TaskStateFile): TaskStateFile {
+  return {
+    version: 1,
+    tasks: state.tasks.map((task) => ({ ...task })),
+    activeTaskKey: state.activeTaskKey,
+    navigatorKind: state.navigatorKind
+  }
+}
+
+function copyTaskRegistry(state: TaskRegistry): TaskRegistry {
+  return {
+    tasks: state.tasks.map((task) => ({ ...task })),
+    activeTaskKey: state.activeTaskKey,
+    navigatorKind: state.navigatorKind
+  }
 }
 
 function isProject(value: unknown): value is { path: string } {

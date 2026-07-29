@@ -57,7 +57,7 @@ test('SubagentTaskCapsule SSR exposes button, selection and stable trigger ident
 
   assert.match(html, /^<button /)
   assert.match(html, /type="button"/)
-  assert.match(html, /aria-label="查看 Subagent 任务：Review renderer"/)
+  assert.match(html, /aria-label="查看子任务：Review renderer"/)
   assert.match(html, /aria-pressed="true"/)
   assert.match(html, /aria-controls="subagent-task-detail"/)
   assert.match(html, /data-selected="true"/)
@@ -101,6 +101,57 @@ test('a selected completed Subagent keeps its process expanded and capsule mount
   assert.match(html, /data-subagent-tool-call-id="subagent-call"/)
   assert.match(html, /data-subagent-participant-index="2"/)
   assert.match(html, /aria-pressed="true"/)
+})
+
+test('internal Subagent polling stays hidden while the task capsule remains visible', () => {
+  const current = participant({ status: 'running' })
+  const internalTools: KernelToolEntry[] = [
+    {
+      ...toolEntry(current),
+      id: 'tool:list',
+      toolCallId: 'list',
+      status: 'success',
+      args: JSON.stringify({ action: 'list' }),
+      subagent: null,
+      durationMs: 4
+    },
+    {
+      ...toolEntry(current),
+      id: 'tool:wait',
+      toolCallId: 'wait',
+      name: 'subagent_wait',
+      status: 'success',
+      args: JSON.stringify({ all: true }),
+      subagent: null,
+      durationMs: 10
+    },
+    {
+      ...toolEntry(current),
+      id: 'tool:status',
+      toolCallId: 'status',
+      status: 'success',
+      args: JSON.stringify({ action: 'status', id: 'run-1' }),
+      subagent: null,
+      durationMs: 8
+    }
+  ]
+  const html = renderToStaticMarkup(createElement(
+    SubagentTaskInteractionContext.Provider,
+    { value: { selection: null, onOpen: () => undefined } },
+    createElement(LiveTurn, {
+      turn: {
+        id: 'subagent-polling-turn',
+        entries: [toolEntry(current), ...internalTools]
+      },
+      toolDisplayDensity: 'standard',
+      thinkingElapsedByEntryId: new Map()
+    })
+  ))
+
+  assert.match(html, /data-subagent-tool-call-id="subagent-call"/)
+  assert.equal(html.match(/process-step tool standard/g)?.length ?? 0, 0)
+  assert.doesNotMatch(html, /Subagent 等待已结束/)
+  assert.doesNotMatch(html, /已检查 Subagent 状态/)
 })
 
 test('pending and running Subagents stay visible outside the live process disclosure', () => {
@@ -148,7 +199,7 @@ test('Timeline keeps the Agent name on a clickable completion capsule without th
     index: 0,
     agent: 'researcher',
     status: 'completed',
-    task: '后台任务结果',
+    task: '后台任务',
     finalOutput: 'Private completion preview that belongs in task detail.'
   })
   const completion: KernelSubagentNoticeEntry = {
@@ -172,7 +223,7 @@ test('Timeline keeps the Agent name on a clickable completion capsule without th
 
   assert.match(html, /data-subagent-task-kind="notice"/)
   assert.match(html, /data-subagent-notice-id="subagent-notice:completion"/)
-  assert.match(html, /aria-label="查看 Subagent 任务：researcher"/)
+  assert.match(html, /aria-label="查看子任务：researcher"/)
   assert.match(html, /subagent-run-chip-kind">Agent<\/span>/)
   assert.match(html, /subagent-run-chip-label">researcher<\/span>/)
   assert.doesNotMatch(html, />后台任务结果</)
@@ -182,11 +233,12 @@ test('Timeline keeps the Agent name on a clickable completion capsule without th
   const detailHtml = renderToStaticMarkup(createElement(SubagentTaskDetail, {
     entry: completion,
     participant: completionParticipant,
-    tokenCountFormat: 'full',
-    onClose: () => undefined
+    tokenCountFormat: 'full'
   }))
   assert.match(detailHtml, /Private completion preview/)
-  assert.doesNotMatch(detailHtml, />用量</)
+  assert.doesNotMatch(detailHtml, />运行摘要</)
+  assert.doesNotMatch(detailHtml, /该后台完成通知未携带模型与消耗信息/)
+  assert.doesNotMatch(detailHtml, />当前活动</)
 
   const actionableHtml = renderToStaticMarkup(createElement(CompletedTurn, {
     turn: {
@@ -204,6 +256,93 @@ test('Timeline keeps the Agent name on a clickable completion capsule without th
     thinkingElapsedByEntryId: new Map()
   }))
   assert.match(actionableHtml, /Reviewer needs a decision\./)
+})
+
+test('SubagentTaskDetail keeps a reported background summary visible', () => {
+  const completionParticipant = participant({
+    index: 0,
+    agent: 'researcher',
+    status: 'completed',
+    task: '后台任务',
+    model: 'vvqq-cpa/gpt-5.6-luna',
+    usage: {
+      inputTokens: 900,
+      outputTokens: 300,
+      cacheReadTokens: 400,
+      cacheWriteTokens: 20,
+      costUsd: 0.012
+    },
+    turnCount: 1,
+    toolCount: 2,
+    durationMs: 1500,
+    finalOutput: 'Review complete.'
+  })
+  const completion: KernelSubagentNoticeEntry = {
+    id: 'subagent-notice:reported-completion',
+    kind: 'subagent-notice',
+    noticeType: 'completion',
+    text: completionParticipant.finalOutput!,
+    timestamp: 1,
+    completion: completionParticipant
+  }
+  const html = renderToStaticMarkup(createElement(SubagentTaskDetail, {
+    entry: completion,
+    participant: completionParticipant,
+    tokenCountFormat: 'full'
+  }))
+
+  assert.match(html, />运行摘要</)
+  assert.match(html, /vvqq-cpa\/gpt-5\.6-luna/)
+  assert.match(html, /<dt>输入 Token<\/dt><dd>900<\/dd>/)
+  assert.match(html, /<dt>耗时<\/dt><dd>1\.5s<\/dd>/)
+})
+
+test('SubagentTaskDetail presents parallel completion output references without the raw envelope', () => {
+  const completionParticipant = participant({
+    index: 0,
+    agent: 'parallel:reviewer+reviewer+reviewer',
+    status: 'completed',
+    task: '并行后台任务',
+    finalOutput: null,
+    outputReferences: [
+      {
+        agent: 'reviewer',
+        path: '/tmp/s26-runtime-safety-review.md',
+        sizeLabel: '4.5 KB',
+        lines: 11
+      },
+      {
+        agent: 'reviewer',
+        path: '/tmp/s26-ack-review.md',
+        sizeLabel: '9.6 KB',
+        lines: 49
+      }
+    ]
+  })
+  const completion: KernelSubagentNoticeEntry = {
+    id: 'subagent-notice:parallel-completion',
+    kind: 'subagent-notice',
+    noticeType: 'completion',
+    text: '',
+    timestamp: 1,
+    completion: completionParticipant
+  }
+  const html = renderToStaticMarkup(createElement(SubagentTaskDetail, {
+    entry: completion,
+    participant: completionParticipant,
+    tokenCountFormat: 'full'
+  }))
+
+  assert.match(html, /<h2 id="subagent-task-detail-title">并行后台任务<\/h2>/)
+  assert.match(html, /<strong>reviewer ×3<\/strong>/)
+  assert.match(html, />输出文件</)
+  assert.match(html, /s26-runtime-safety-review\.md/)
+  assert.match(html, /4\.5 KB · 11 行/)
+  assert.match(html, /aria-label="打开输出文件：s26-runtime-safety-review\.md"/)
+  assert.match(html, />技术信息</)
+  assert.match(html, /parallel:reviewer\+reviewer\+reviewer/)
+  assert.doesNotMatch(html, />当前活动</)
+  assert.doesNotMatch(html, /Background task completed/)
 })
 
 test('Timeline renders supervisor coordination as a concise status lifecycle', () => {
@@ -261,9 +400,17 @@ test('Timeline renders supervisor coordination as a concise status lifecycle', (
   assert.doesNotMatch(handledHtml, /role="alert"/)
 })
 
-test('SubagentTaskDetail SSR renders normalized fields, controls and error before output', () => {
+test('SubagentTaskDetail SSR renders normalized domain fields and error before output', () => {
   const normalized = participant({
     status: 'failed',
+    model: 'vvqq-cpa/gpt-5.6-luna',
+    usage: {
+      inputTokens: 900,
+      outputTokens: 350,
+      cacheReadTokens: 400,
+      cacheWriteTokens: 20,
+      costUsd: 0.0087
+    },
     currentTool: 'read',
     currentPath: '/tmp/project/src/App.tsx',
     turnCount: 3,
@@ -276,23 +423,27 @@ test('SubagentTaskDetail SSR renders normalized fields, controls and error befor
   const html = renderToStaticMarkup(createElement(SubagentTaskDetail, {
     entry: toolEntry(normalized),
     participant: normalized,
-    tokenCountFormat: 'full',
-    onClose: () => undefined
+    tokenCountFormat: 'full'
   }))
 
   assert.match(html, /id="subagent-task-detail"/)
   assert.match(html, /tabindex="-1"/)
   assert.match(html, /aria-labelledby="subagent-task-detail-title"/)
-  assert.match(html, /<button[^>]*>返回对话<\/button>/)
-  assert.match(html, /aria-label="关闭 Subagent 任务详情"/)
+  assert.doesNotMatch(html, /aria-label="返回对话"/)
+  assert.doesNotMatch(html, /aria-label="关闭子任务详情"/)
   assert.match(html, /Review renderer/)
   assert.match(html, /<strong>reviewer<\/strong>/)
   assert.match(html, />失败</)
   assert.match(html, /<code>read<\/code>/)
   assert.match(html, /<code>\/tmp\/project\/src\/App\.tsx<\/code>/)
+  assert.match(html, /<code>vvqq-cpa\/gpt-5\.6-luna<\/code>/)
+  assert.match(html, /<dt>输入 Token<\/dt><dd>900<\/dd>/)
+  assert.match(html, /<dt>输出 Token<\/dt><dd>350<\/dd>/)
+  assert.match(html, /<dt>缓存读取<\/dt><dd>400<\/dd>/)
+  assert.match(html, /<dt>缓存写入<\/dt><dd>20<\/dd>/)
+  assert.match(html, /<dt>费用<\/dt><dd>\$0\.0087<\/dd>/)
   assert.match(html, /<dt>轮次<\/dt><dd>3<\/dd>/)
   assert.match(html, /<dt>工具<\/dt><dd>4<\/dd>/)
-  assert.match(html, /<dt>Token<\/dt><dd>1,250<\/dd>/)
   assert.match(html, /<dt>耗时<\/dt><dd>2\.3s<\/dd>/)
   assert.match(html, /role="alert"/)
   assert.match(html, /<strong>Failure<\/strong>/)
@@ -315,8 +466,7 @@ test('SubagentTaskDetail SSR uses the safe Markdown pipeline for final output', 
   const html = renderToStaticMarkup(createElement(SubagentTaskDetail, {
     entry: { ...toolEntry(completed), truncated: true },
     participant: completed,
-    tokenCountFormat: 'full',
-    onClose: () => undefined
+    tokenCountFormat: 'full'
   }))
 
   assert.match(html, /<strong>Review complete\.<\/strong>/)
@@ -328,19 +478,20 @@ test('SubagentTaskDetail SSR uses the safe Markdown pipeline for final output', 
   assert.match(html, /工具输出已截断。/)
 })
 
-test('Workbench preserves Escape priority, locator focus restoration and responsive placement', () => {
+test('Workbench migrates Subagent detail into the generic right sidebar without moving domain content', () => {
   assert.match(
     workbenchSource,
-    /if \(settingsOpen && event\.key === 'Escape'\)[\s\S]*?if \(subagentTaskSelection !== null && event\.key === 'Escape'\)/
+    /if \(settingsOpen && event\.key === 'Escape'\)[\s\S]*?if \(subagentTaskSelection !== null && !rightSidebarCollapsed && event\.key === 'Escape'\)/
   )
   assert.match(workbenchSource, /addEventListener\('keydown', handleShortcut, \{ capture: true \}\)/)
   assert.match(workbenchSource, /findSubagentTaskTrigger\(mainChat, selection\)/)
   assert.match(workbenchSource, /SUBAGENT_TASK_TRIGGER_SELECTOR/)
-  assert.match(workbenchSource, /globalEscapeAbortEnabled=\{selectedSubagentTask === null\}/)
-  assert.match(workbenchStyles, /\.app-shell\.subagent-detail-open \.main-chat \{\s*display: none;/)
-  assert.match(workbenchStyles, /@media \(min-width: 1280px\)[\s\S]*?grid-template-columns:[\s\S]*?clamp\(20rem, 26vw, 25rem\)/)
-  assert.match(workbenchStyles, /\.app-shell > \.subagent-task-detail \{\s*grid-column: 3;/)
-  assert.match(chatStyles, /@media \(max-width: 1279px\)[\s\S]*?\.subagent-task-detail-back \{\s*display: inline-flex;/)
+  assert.match(workbenchSource, /globalEscapeAbortEnabled=\{!rightSidebarOpen\}/)
+  assert.match(workbenchSource, /<RightSidebar[\s\S]*?label: '子任务'[\s\S]*?<SubagentTaskDetail/)
+  assert.match(workbenchStyles, /\.app-shell\.right-sidebar-open \.main-chat \{\s*display: none;/)
+  assert.match(workbenchStyles, /@media \(min-width: 1280px\)[\s\S]*?\.app-shell\.right-sidebar-open \.main-chat \{\s*display: grid;/)
+  assert.match(workbenchStyles, /\.app-shell > \.workbench-right-sidebar \{\s*grid-column: 3;/)
+  assert.doesNotMatch(chatStyles, /subagent-task-detail-(?:back|close)/)
 })
 
 function participant(
@@ -351,6 +502,8 @@ function participant(
     agent: 'reviewer',
     status: 'running',
     task: 'Review renderer',
+    model: null,
+    usage: null,
     currentTool: null,
     currentPath: null,
     toolCount: 0,
@@ -359,6 +512,7 @@ function participant(
     durationMs: 0,
     error: null,
     finalOutput: null,
+    outputReferences: [],
     ...overrides
   }
 }

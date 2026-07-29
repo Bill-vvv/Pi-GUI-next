@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import type {
   KernelProjectTrustChoice,
   KernelProjectTrustRequest
 } from '../../../../shared/kernel-contract'
+import { useModalDialog } from '../../components/useModalDialog'
 import { unknownErrorMessage } from '../../unknown-error-message'
 import './project-trust-dialog.css'
 
@@ -29,7 +30,6 @@ export function ProjectTrustDialog({
 }: ProjectTrustDialogProps): React.JSX.Element {
   const dialogRef = useRef<HTMLElement>(null)
   const firstDecisionRef = useRef<HTMLButtonElement>(null)
-  const previousFocusRef = useRef<HTMLElement | null>(null)
   const pendingRef = useRef(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -48,53 +48,13 @@ export function ProjectTrustDialog({
     }
   }
 
-  useEffect(() => {
-    previousFocusRef.current = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null
-    firstDecisionRef.current?.focus()
-
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        if (pendingRef.current) return
-        event.preventDefault()
-        event.stopPropagation()
-        void resolve('cancel')
-        return
-      }
-      if (event.key !== 'Tab') return
-
-      const dialog = dialogRef.current
-      const focusableButtons = dialog === null
-        ? []
-        : Array.from(dialog.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
-      if (pendingRef.current || focusableButtons.length === 0) {
-        event.preventDefault()
-        event.stopPropagation()
-        return
-      }
-
-      const firstButton = focusableButtons[0]
-      const lastButton = focusableButtons[focusableButtons.length - 1]
-      const activeElement = document.activeElement
-      if (
-        !dialog?.contains(activeElement)
-        || (event.shiftKey && activeElement === firstButton)
-        || (!event.shiftKey && activeElement === lastButton)
-      ) {
-        event.preventDefault()
-        event.stopPropagation()
-        const focusTarget = event.shiftKey ? lastButton : firstButton
-        focusTarget.focus()
-      }
-    }
-    document.addEventListener('keydown', handleKeyDown, true)
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown, true)
-      const previousFocus = previousFocusRef.current
-      if (previousFocus !== null && previousFocus.isConnected) previousFocus.focus()
-    }
-  }, [])
+  useModalDialog({
+    open: true,
+    dialogRef,
+    initialFocus: () => firstDecisionRef.current,
+    dismissDisabled: pending,
+    onDismiss: () => void resolve('cancel')
+  })
 
   return createPortal(
     <div
@@ -109,6 +69,7 @@ export function ProjectTrustDialog({
         aria-labelledby="project-trust-dialog-title"
         aria-describedby="project-trust-dialog-description"
         aria-busy={pending}
+        tabIndex={-1}
       >
         <header className="project-trust-dialog-header">
           <h2 id="project-trust-dialog-title">加载此 Project 的项目资源？</h2>

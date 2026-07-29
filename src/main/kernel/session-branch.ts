@@ -1,4 +1,8 @@
-import type { KernelForkCandidate } from '../../shared/kernel-contract.ts'
+import type {
+  KernelConversationEntry,
+  KernelForkCandidate,
+  KernelMessageEntry
+} from '../../shared/kernel-contract.ts'
 import type { PiRpcSessionEntry } from '../pi-rpc/pi-rpc-client.ts'
 
 export function forkCandidatesOnActivePath(
@@ -11,6 +15,48 @@ export function forkCandidatesOnActivePath(
       ? [{ entryId: entry.id, text: content.text, timestamp: entry.timestamp }]
       : []
   })
+}
+
+export function resolveVisiblePromptCandidate(
+  entries: readonly KernelConversationEntry[],
+  candidates: readonly KernelForkCandidate[],
+  messageId: string
+): KernelForkCandidate | null {
+  const visiblePrompts = entries.filter((entry): entry is KernelMessageEntry =>
+    entry.kind === 'message' &&
+    entry.role === 'user' &&
+    !entry.streaming &&
+    !(entry.attachments ?? []).some(({ type }) => type === 'image')
+  )
+  const targetPromptIndex = visiblePrompts.findIndex(({ id }) => id === messageId)
+  if (targetPromptIndex < 0) return null
+
+  const earliestMatches: number[] = []
+  let candidateIndex = 0
+  for (const prompt of visiblePrompts) {
+    while (candidateIndex < candidates.length && candidates[candidateIndex]!.text !== prompt.text) {
+      candidateIndex += 1
+    }
+    if (candidateIndex >= candidates.length) return null
+    earliestMatches.push(candidateIndex)
+    candidateIndex += 1
+  }
+
+  const latestMatches = new Array<number>(visiblePrompts.length)
+  candidateIndex = candidates.length - 1
+  for (let promptIndex = visiblePrompts.length - 1; promptIndex >= 0; promptIndex -= 1) {
+    const prompt = visiblePrompts[promptIndex]!
+    while (candidateIndex >= 0 && candidates[candidateIndex]!.text !== prompt.text) {
+      candidateIndex -= 1
+    }
+    if (candidateIndex < 0) return null
+    latestMatches[promptIndex] = candidateIndex
+    candidateIndex -= 1
+  }
+
+  const targetCandidateIndex = earliestMatches[targetPromptIndex]
+  if (targetCandidateIndex !== latestMatches[targetPromptIndex]) return null
+  return candidates[targetCandidateIndex] ?? null
 }
 
 export function sessionEntriesOnActivePath(

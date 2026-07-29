@@ -14,10 +14,11 @@ import {
   rename,
   rm,
   stat,
+  symlink,
   writeFile
 } from 'node:fs/promises'
 import { createServer } from 'node:net'
-import { arch, platform, release as kernelRelease, tmpdir } from 'node:os'
+import { arch, homedir, platform, release as kernelRelease, tmpdir } from 'node:os'
 import { delimiter, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
@@ -36,8 +37,26 @@ const VERIFY_ACTIVE_DEV_OVERRIDE = 'PI_GUI_VERIFY_ALLOW_ACTIVE_DEV'
 const MEMORY_DIAGNOSTICS_ENABLED = process.argv.includes('--memory-diagnostics') ||
   process.env.PI_GUI_VERIFY_MEMORY_DIAGNOSTICS === '1'
 const MEMORY_DIAGNOSTICS_SAMPLE_LIMIT = 12
+const MEBIBYTE = 1024 * 1024
+const GIBIBYTE = 1024 * MEBIBYTE
+const MEMORY_BUDGET_LIMITS = Object.freeze({
+  peakTotalPssBytes: 4 * GIBIBYTE,
+  peakRendererPssBytes: 512 * MEBIBYTE,
+  peakRendererHeapUsedBytes: 128 * MEBIBYTE,
+  peakRendererStateJsonBytes: 2 * MEBIBYTE,
+  reactivatedTotalPssBytes: 3 * GIBIBYTE,
+  postHibernatePssToleranceBytes: 256 * MEBIBYTE,
+  settledToRunningPssPercent: 80,
+  peakRendererFullStateEvents: 256,
+  maxSwapBytes: 0
+})
 const NON_RUN_GUARD_CODES = new Set(['E_VERIFY_ALREADY_RUNNING', 'E_DEV_GUI_RUNNING'])
 const PI_VERSION = '0.80.10'
+const APP_OWNED_PI_PACKAGE_NAMES = new Set([
+  'pi-gui-ask',
+  'pi-gui-runtime-quiescence',
+  'pi-gui-task-notify'
+])
 const CWD_MARKER_NAME = '.pi-gui-s7-cwd-ok'
 const CWD_MARKER_CONTENT = 'pi-gui-s7-tool-ok'
 const TOOL_PROMPT =
@@ -45,6 +64,7 @@ const TOOL_PROMPT =
 const ABORT_PROMPT =
   'Use the bash tool to run exactly `for i in $(seq 1 60); do sleep 1; done`, and wait for it to finish.'
 const CONTINUATION_PROMPT = 'Reply briefly that this recovered conversation can continue.'
+const SECOND_PROJECT_PROMPT = 'Reply briefly that this secondary release-verification project is ready.'
 const SECOND_SESSION_PROMPT = 'Reply briefly that this second release-verification conversation is ready.'
 const S19_MARKERS = [
   ['s19-alpha.txt', 'alpha'],
@@ -54,9 +74,9 @@ const S19_MARKERS = [
 const S19_PROMPT = [
   'Use the subagent tool exactly once with one parallel invocation containing exactly three independent tasks.',
   'Every task must use agent "worker"; do not use Oracle, Advisor, planner, scout, reviewer, or explorer. The workers must not edit any file.',
-  'Task 1: MUST first call bash with the exact command sleep 45; do not skip it. Then read s19-alpha.txt and return only its one-word value.',
-  'Task 2: MUST first call bash with the exact command sleep 45; do not skip it. Then read s19-beta.txt and return only its one-word value.',
-  'Task 3: MUST first call bash with the exact command sleep 45; do not skip it. Then read s19-gamma.txt and return only its one-word value.',
+  'Task 1: call bash exactly once with `sleep 20; cat s19-alpha.txt`, then return only its one-word output.',
+  'Task 2: call bash exactly once with `sleep 20; cat s19-beta.txt`, then return only its one-word output.',
+  'Task 3: call bash exactly once with `sleep 20; cat s19-gamma.txt`, then return only its one-word output.',
   'Set concurrency to 3 and wait for all three tasks before replying. Do not perform the tasks yourself.'
 ].join('\n')
 const STARTED_AT = new Date().toISOString()
@@ -65,6 +85,8 @@ const TIMEOUT = {
   page: 30_000,
   ready: 45_000,
   turn: 180_000,
+  subagent: 300_000,
+  hibernate: 7 * 60_000,
   abort: 45_000,
   crash: 30_000,
   close: 30_000
@@ -92,12 +114,27 @@ let artifactMetadata = null
 let piExecutable = null
 let runtimeElectronVersion = null
 let projectPaths = []
+let primarySecondSessionKey = null
 const steps = []
 const screenshotFiles = []
 const processTotals = { stdoutChars: 0, stderrChars: 0 }
 const memoryDiagnostics = {
   enabled: MEMORY_DIAGNOSTICS_ENABLED,
-  samples: []
+  samples: [],
+  budgets: {
+    evaluated: false,
+    passed: false,
+    limits: MEMORY_BUDGET_LIMITS,
+    observed: null
+  },
+  hibernation: {
+    observed: false,
+    target: null,
+    runtimeCountBefore: 3,
+    runtimeCountAfter: null,
+    reactivated: false,
+    conversationPreserved: false
+  }
 }
 const p2Summary = {
   projects: { configured: 0, discovered: 0, switched: false },
@@ -126,7 +163,8 @@ const s19Summary = {
   wideLayout: false,
   narrowLayout: false,
   focusRestoration: { close: false, back: false, escape: false },
-  reducedMotion: false
+  reducedMotion: false,
+  completionObservation: null
 }
 
 class VerificationError extends Error {
@@ -139,6 +177,98 @@ class VerificationError extends Error {
 
 function fail(code) {
   throw new VerificationError(code)
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+async function readPackageName(packagePath) {
+  try {
+    const manifest = JSON.parse(await readFile(join(packagePath, 'package.json'), 'utf8'))
+    return isRecord(manifest) && typeof manifest.name === 'string' ? manifest.name : null
+  } catch {
+    return null
+  }
+}
+
+async function normalizePiResourceSpecifiers(sourceAgentDirectory, value) {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) {
+    fail('E_PI_AGENT_SETTINGS')
+  }
+  const normalized = []
+  for (const specifier of value) {
+    if (specifier.startsWith('npm:')) {
+      normalized.push(specifier)
+      continue
+    }
+    const absolutePath = resolve(sourceAgentDirectory, specifier)
+    const packageName = await readPackageName(absolutePath)
+    if (packageName !== null && APP_OWNED_PI_PACKAGE_NAMES.has(packageName)) continue
+    normalized.push(absolutePath)
+  }
+  return normalized
+}
+
+async function copyPiAgentFile(sourceAgentDirectory, targetAgentDirectory, name, required) {
+  try {
+    const content = await readFile(join(sourceAgentDirectory, name))
+    await writeFile(join(targetAgentDirectory, name), content, { mode: 0o600 })
+  } catch (error) {
+    if (!required && error?.code === 'ENOENT') return
+    fail('E_PI_AGENT_STATE')
+  }
+}
+
+async function prepareIsolatedPiAgentDirectory(targetAgentDirectory) {
+  const sourceAgentDirectory = resolve(
+    process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent')
+  )
+  let settings
+  try {
+    settings = JSON.parse(await readFile(join(sourceAgentDirectory, 'settings.json'), 'utf8'))
+  } catch {
+    fail('E_PI_AGENT_SETTINGS')
+  }
+  if (!isRecord(settings)) fail('E_PI_AGENT_SETTINGS')
+
+  const packages = await normalizePiResourceSpecifiers(sourceAgentDirectory, settings.packages)
+  const extensions = await normalizePiResourceSpecifiers(sourceAgentDirectory, settings.extensions)
+  if (packages !== undefined) settings.packages = packages
+  if (extensions !== undefined) settings.extensions = extensions
+
+  // S19 validates the GUI's Subagent lifecycle, not ambient user model routing.
+  // Inherit the already-proven parent model inside the isolated run so a stale
+  // user worker override cannot turn a UI gate into an unrelated auth probe.
+  const subagents = isRecord(settings.subagents) ? { ...settings.subagents } : {}
+  const agentOverrides = isRecord(subagents.agentOverrides)
+    ? { ...subagents.agentOverrides }
+    : {}
+  agentOverrides.worker = { thinking: 'low', defaultContext: 'fresh' }
+  subagents.agentOverrides = agentOverrides
+  delete subagents.defaultModel
+  settings.subagents = subagents
+
+  await mkdir(targetAgentDirectory, { recursive: true, mode: 0o700 })
+  await writeFile(
+    join(targetAgentDirectory, 'settings.json'),
+    `${JSON.stringify(settings, null, 2)}\n`,
+    { mode: 0o600 }
+  )
+  await copyPiAgentFile(sourceAgentDirectory, targetAgentDirectory, 'auth.json', true)
+  await copyPiAgentFile(sourceAgentDirectory, targetAgentDirectory, 'models.json', true)
+  for (const name of ['AGENTS.md', 'mcp.json', 'mcp-onboarding.json', 'trust.json']) {
+    await copyPiAgentFile(sourceAgentDirectory, targetAgentDirectory, name, false)
+  }
+
+  const sourceNpmDirectory = join(sourceAgentDirectory, 'npm')
+  const npmDirectoryStat = await stat(sourceNpmDirectory).catch(() => null)
+  if (npmDirectoryStat?.isDirectory()) {
+    await symlink(sourceNpmDirectory, join(targetAgentDirectory, 'npm'), 'dir')
+  } else if (packages?.some((specifier) => specifier.startsWith('npm:'))) {
+    fail('E_PI_AGENT_STATE')
+  }
 }
 
 async function main() {
@@ -341,11 +471,13 @@ async function prepareRun() {
     config: join(temporaryRoot, 'config'),
     state: join(temporaryRoot, 'state'),
     cache: join(temporaryRoot, 'cache'),
+    piAgent: join(temporaryRoot, 'pi-agent'),
     project: join(temporaryRoot, 'project'),
     secondProject: join(temporaryRoot, 'project-secondary')
   }
   await Promise.all(Object.values(paths).map((path) => mkdir(path, { recursive: true, mode: 0o700 })))
   await mkdir(join(paths.config, 'pi-gui-next'), { recursive: true, mode: 0o700 })
+  await prepareIsolatedPiAgentDirectory(paths.piAgent)
   await writeFile(
     join(paths.config, 'pi-gui-next', 'config.json'),
     `${JSON.stringify({
@@ -370,6 +502,7 @@ function xdgEnvironment() {
     XDG_CONFIG_HOME: join(temporaryRoot, 'config'),
     XDG_STATE_HOME: join(temporaryRoot, 'state'),
     XDG_CACHE_HOME: join(temporaryRoot, 'cache'),
+    PI_CODING_AGENT_DIR: join(temporaryRoot, 'pi-agent'),
     PI_GUI_PI_EXECUTABLE: piExecutable
   }
 }
@@ -424,7 +557,10 @@ async function exerciseUi() {
       activeCdp,
       `document.querySelector('.composer-start-action') !== null`
     )
-    if (startRequired) await clickSelector(activeCdp, '.composer-start-action')
+    if (startRequired) {
+      await clickSelector(activeCdp, '.composer-start-action')
+      await resolveProjectTrustIfRequested(activeCdp, TIMEOUT.page)
+    }
     await waitForRuntime(activeCdp, 'ready', TIMEOUT.ready)
     const runtimeIdentity = await evaluateValue(
       activeCdp,
@@ -624,6 +760,19 @@ async function exerciseUi() {
     )
     await waitForExpression(
       activeCdp,
+      `window.piGui.getState().then(({ state }) => {
+        const primaryButton = Array.from(document.querySelectorAll('.project-select'))
+          .find((candidate) => candidate.getAttribute('data-project-key') === ${JSON.stringify(primaryProjectPath)})
+        return state.activeProjectKey === ${JSON.stringify(secondaryProjectPath)} &&
+          primaryButton instanceof HTMLButtonElement &&
+          !primaryButton.disabled &&
+          document.querySelector('.runtime-context-status[role="status"]') === null
+      })`,
+      TIMEOUT.ready,
+      'E_P2_PROJECT_SWITCH_SETTLE'
+    )
+    await waitForExpression(
+      activeCdp,
       `document.querySelector('.conversation-empty-state[role="status"]') !== null`,
       TIMEOUT.page,
       'E_P2_EMPTY_CONVERSATION'
@@ -631,12 +780,24 @@ async function exerciseUi() {
     p2Summary.interaction.emptyConversationVisible = true
 
     await clickButtonText(activeCdp, '.composer-start-action', '启动 Pi')
+    await resolveProjectTrustIfRequested(activeCdp, TIMEOUT.page)
     await waitForRuntime(activeCdp, 'ready', TIMEOUT.ready)
     await assertConfiguredProjectRuntimeCounts(new Map([
       [primaryProjectPath, 1],
       [secondaryProjectPath, 1]
     ]))
     await waitForComposerFocus(activeCdp)
+    const secondaryBaseline = await conversationCounts(activeCdp)
+    await submitPrompt(activeCdp, SECOND_PROJECT_PROMPT)
+    await waitForAssistantSettled(activeCdp, secondaryBaseline.assistant, TIMEOUT.turn)
+    await waitForCondition(
+      async () => Number(await evaluateValue(
+        activeCdp,
+        `document.querySelectorAll('.session-item').length`
+      )) >= 1,
+      TIMEOUT.ready,
+      'E_P2_SECONDARY_SESSION_MATERIALIZATION'
+    )
 
     await clickTitledButton(activeCdp, '.project-select', primaryProjectPath)
     await waitForTitledSelection(
@@ -709,6 +870,7 @@ async function exerciseUi() {
     ) {
       fail('E_P2_SESSION_MATERIALIZATION')
     }
+    primarySecondSessionKey = secondSessionKey
     p2Summary.sessions.materialized = 2
     p2Summary.sessions.listed = listed
 
@@ -978,26 +1140,28 @@ async function exerciseUi() {
       `(() => {
         const shell = document.querySelector('.app-shell')
         const main = document.querySelector('.main-chat')
+        const rightSidebar = document.querySelector('.workbench-right-sidebar')
         const detail = document.querySelector('.subagent-task-detail')
         const sidebar = document.querySelector('.left-sidebar')
         if (!(shell instanceof HTMLElement) || !(main instanceof HTMLElement) ||
-            !(detail instanceof HTMLElement) || !(sidebar instanceof HTMLElement)) return null
+            !(rightSidebar instanceof HTMLElement) || !(detail instanceof HTMLElement) ||
+            !(sidebar instanceof HTMLElement)) return null
         const mainRect = main.getBoundingClientRect()
-        const detailRect = detail.getBoundingClientRect()
+        const rightSidebarRect = rightSidebar.getBoundingClientRect()
         return {
           width: window.innerWidth,
-          shellOpen: shell.classList.contains('subagent-detail-open'),
+          shellOpen: shell.classList.contains('right-sidebar-open'),
           mainDisplay: getComputedStyle(main).display,
           mainWidth: Math.round(mainRect.width),
-          detailWidth: Math.round(detailRect.width),
-          detailAfterMain: detailRect.left >= mainRect.right - 1,
+          rightSidebarWidth: Math.round(rightSidebarRect.width),
+          rightSidebarAfterMain: rightSidebarRect.left >= mainRect.right - 1,
           selectedCount: document.querySelectorAll('.subagent-run-chip[aria-pressed="true"]').length
         }
       })()`
     )
     if (!wideLayout || wideLayout.width < 1280 || !wideLayout.shellOpen ||
         wideLayout.mainDisplay !== 'grid' || wideLayout.mainWidth < 640 ||
-        wideLayout.detailWidth < 320 || !wideLayout.detailAfterMain ||
+        wideLayout.rightSidebarWidth < 320 || !wideLayout.rightSidebarAfterMain ||
         wideLayout.selectedCount !== 1) {
       fail('E_S19_WIDE_LAYOUT')
     }
@@ -1008,7 +1172,9 @@ async function exerciseUi() {
     await dispatchKey(activeCdp, 'Escape', 'Escape')
     await waitForExpression(
       activeCdp,
-      `document.querySelector('.subagent-task-detail') === null`,
+      `document.querySelector('.workbench-right-sidebar') === null &&
+       document.querySelector('.subagent-task-detail') === null &&
+       document.querySelector('.right-sidebar-reopen-trigger') === null`,
       TIMEOUT.page,
       'E_S19_ESCAPE_CLOSE'
     )
@@ -1029,18 +1195,42 @@ async function exerciseUi() {
 
     await openSubagentParticipant(activeCdp, first)
     let completedRun = null
-    await waitForCondition(async () => {
+    try {
+      await waitForCondition(async () => {
+        completedRun = await latestParallelSubagentRun(activeCdp)
+        return completedRun?.toolCallId === first.toolCallId && completedRun.runtime === 'ready' &&
+          completedRun.participants.length === 3 &&
+          completedRun.participants.every((participant) =>
+            participant.status === 'completed' && participant.hasFinalOutput
+          )
+      }, TIMEOUT.subagent, 'E_S19_COMPLETION')
+    } catch {
       completedRun = await latestParallelSubagentRun(activeCdp)
-      return completedRun?.toolCallId === first.toolCallId && completedRun.runtime === 'ready' &&
-        completedRun.participants.length === 3 &&
-        completedRun.participants.every((participant) =>
-          participant.status === 'completed' && participant.hasFinalOutput
-        )
-    }, TIMEOUT.turn, 'E_S19_COMPLETION')
+      s19Summary.completionObservation = completedRun === null
+        ? null
+        : {
+            runtime: completedRun.runtime,
+            toolStatus: completedRun.toolStatus,
+            participants: completedRun.participants.map((participant) => ({
+              status: participant.status,
+              hasFinalOutput: participant.hasFinalOutput
+            }))
+          }
+      if (completedRun?.toolCallId === first.toolCallId && completedRun.runtime === 'ready') {
+        if (completedRun.participants.some((participant) => participant.status !== 'completed')) {
+          fail('E_S19_PARTICIPANT_TERMINAL')
+        }
+        if (completedRun.participants.some((participant) => !participant.hasFinalOutput)) {
+          fail('E_S19_FINAL_OUTPUT')
+        }
+      }
+      fail('E_S19_COMPLETION')
+    }
     const completedFirstLookup = subagentParticipantLookupExpression(first)
     await waitForExpression(
       activeCdp,
-      `document.querySelector('.subagent-task-detail') !== null &&
+      `document.querySelector('.workbench-right-sidebar') !== null &&
+       document.querySelector('.subagent-task-detail') !== null &&
        document.querySelectorAll('.subagent-run-chip[aria-pressed="true"]').length === 1 &&
        (${completedFirstLookup})?.getAttribute('aria-pressed') === 'true'`,
       TIMEOUT.page,
@@ -1050,10 +1240,31 @@ async function exerciseUi() {
     await captureScreenshot(activeCdp, 's19-wide-completed.png')
     await captureMemorySample('three-subagents-completed')
 
-    await clickSelector(activeCdp, '.subagent-task-detail-close')
+    await clickSelector(activeCdp, '.right-sidebar-collapse')
     await waitForExpression(
       activeCdp,
-      `document.querySelector('.subagent-task-detail') === null`,
+      `document.querySelector('.workbench-right-sidebar') === null &&
+       document.querySelector('.subagent-task-detail') === null &&
+       document.querySelector('.right-sidebar-reopen-trigger') !== null`,
+      TIMEOUT.page,
+      'E_S19_COLLAPSE'
+    )
+    await waitForSubagentFocus(activeCdp, first, 'E_S19_COLLAPSE_FOCUS')
+    await clickSelector(activeCdp, '.right-sidebar-reopen-trigger')
+    await waitForExpression(
+      activeCdp,
+      `document.querySelector('.workbench-right-sidebar') !== null &&
+       document.querySelector('.subagent-task-detail') !== null &&
+       (${completedFirstLookup})?.getAttribute('aria-pressed') === 'true'`,
+      TIMEOUT.page,
+      'E_S19_WIDE_REOPEN'
+    )
+    await clickSelector(activeCdp, '.right-sidebar-close')
+    await waitForExpression(
+      activeCdp,
+      `document.querySelector('.workbench-right-sidebar') === null &&
+       document.querySelector('.subagent-task-detail') === null &&
+       document.querySelector('.right-sidebar-reopen-trigger') === null`,
       TIMEOUT.page,
       'E_S19_CLOSE'
     )
@@ -1066,46 +1277,74 @@ async function exerciseUi() {
       activeCdp,
       `(() => {
         const main = document.querySelector('.main-chat')
+        const rightSidebar = document.querySelector('.workbench-right-sidebar')
         const detail = document.querySelector('.subagent-task-detail')
         const sidebar = document.querySelector('.left-sidebar')
-        const back = document.querySelector('.subagent-task-detail-back')
-        const close = document.querySelector('.subagent-task-detail-close')
-        if (!(main instanceof HTMLElement) || !(detail instanceof HTMLElement) ||
-            !(sidebar instanceof HTMLElement) || !(back instanceof HTMLElement) ||
+        const back = document.querySelector('.right-sidebar-back')
+        const collapse = document.querySelector('.right-sidebar-collapse')
+        const close = document.querySelector('.right-sidebar-close')
+        if (!(main instanceof HTMLElement) || !(rightSidebar instanceof HTMLElement) ||
+            !(detail instanceof HTMLElement) || !(sidebar instanceof HTMLElement) ||
+            !(back instanceof HTMLElement) || !(collapse instanceof HTMLElement) ||
             !(close instanceof HTMLElement)) return null
         return {
           width: window.innerWidth,
           mainDisplay: getComputedStyle(main).display,
-          detailWidth: Math.round(detail.getBoundingClientRect().width),
+          rightSidebarWidth: Math.round(rightSidebar.getBoundingClientRect().width),
           sidebarWidth: Math.round(sidebar.getBoundingClientRect().width),
           backDisplay: getComputedStyle(back).display,
+          collapseDisplay: getComputedStyle(collapse).display,
           closeDisplay: getComputedStyle(close).display
         }
       })()`
     )
     if (!narrowLayout || narrowLayout.width >= 1280 || narrowLayout.mainDisplay !== 'none' ||
-        narrowLayout.detailWidth < 600 || narrowLayout.sidebarWidth < 280 ||
-        narrowLayout.backDisplay === 'none' || narrowLayout.closeDisplay !== 'none') {
+        narrowLayout.rightSidebarWidth < 600 || narrowLayout.sidebarWidth < 280 ||
+        narrowLayout.backDisplay === 'none' || narrowLayout.collapseDisplay !== 'none' ||
+        narrowLayout.closeDisplay === 'none') {
       fail('E_S19_NARROW_LAYOUT')
     }
     s19Summary.narrowLayout = true
     await captureScreenshot(activeCdp, 's19-narrow-completed.png')
 
-    await clickSelector(activeCdp, '.subagent-task-detail-back')
+    await clickSelector(activeCdp, '.right-sidebar-back')
     await waitForExpression(
       activeCdp,
-      `document.querySelector('.subagent-task-detail') === null`,
+      `document.querySelector('.workbench-right-sidebar') === null &&
+       document.querySelector('.subagent-task-detail') === null &&
+       document.querySelector('.right-sidebar-reopen-trigger') !== null`,
       TIMEOUT.page,
       'E_S19_BACK'
     )
     await waitForSubagentFocus(activeCdp, second, 'E_S19_BACK_FOCUS')
     s19Summary.focusRestoration.back = true
 
+    await clickSelector(activeCdp, '.right-sidebar-reopen-trigger')
+    await waitForExpression(
+      activeCdp,
+      `document.querySelector('.workbench-right-sidebar') !== null &&
+       document.querySelector('.subagent-task-detail') !== null &&
+       (${subagentParticipantLookupExpression(second)})?.getAttribute('aria-pressed') === 'true'`,
+      TIMEOUT.page,
+      'E_S19_REOPEN'
+    )
+    await clickSelector(activeCdp, '.right-sidebar-close')
+    await waitForExpression(
+      activeCdp,
+      `document.querySelector('.workbench-right-sidebar') === null &&
+       document.querySelector('.right-sidebar-reopen-trigger') === null`,
+      TIMEOUT.page,
+      'E_S19_NARROW_CLOSE'
+    )
+    await waitForSubagentFocus(activeCdp, second, 'E_S19_NARROW_CLOSE_FOCUS')
+
     await openSubagentParticipant(activeCdp, third)
     await dispatchKey(activeCdp, 'Escape', 'Escape')
     await waitForExpression(
       activeCdp,
-      `document.querySelector('.subagent-task-detail') === null`,
+      `document.querySelector('.workbench-right-sidebar') === null &&
+       document.querySelector('.subagent-task-detail') === null &&
+       document.querySelector('.right-sidebar-reopen-trigger') === null`,
       TIMEOUT.page,
       'E_S19_NARROW_ESCAPE'
     )
@@ -1121,11 +1360,16 @@ async function exerciseUi() {
       activeCdp,
       `(() => {
         const shell = document.querySelector('.app-shell')
+        const rightSidebar = document.querySelector('.workbench-right-sidebar')
+        const separator = document.querySelector('.right-sidebar-separator')
         const chip = document.querySelector('.subagent-run-chip[aria-pressed="true"]')
-        if (!(shell instanceof HTMLElement) || !(chip instanceof HTMLElement)) return null
+        if (!(shell instanceof HTMLElement) || !(rightSidebar instanceof HTMLElement) ||
+            !(separator instanceof HTMLElement) || !(chip instanceof HTMLElement)) return null
         return {
           matches: matchMedia('(prefers-reduced-motion: reduce)').matches,
           shellTransitionDuration: getComputedStyle(shell).transitionDuration,
+          rightSidebarTransitionDuration: getComputedStyle(rightSidebar).transitionDuration,
+          separatorTransitionDuration: getComputedStyle(separator, '::before').transitionDuration,
           chipTransitionDuration: getComputedStyle(chip).transitionDuration,
           chipAnimationDuration: getComputedStyle(chip).animationDuration,
           scrollBehavior: getComputedStyle(document.documentElement).scrollBehavior
@@ -1136,15 +1380,94 @@ async function exerciseUi() {
       value.split(',').every((part) => Number.parseFloat(part) <= 0.001)
     if (!reducedMotion || !reducedMotion.matches ||
         !nearZeroDuration(reducedMotion.shellTransitionDuration) ||
+        !nearZeroDuration(reducedMotion.rightSidebarTransitionDuration) ||
+        !nearZeroDuration(reducedMotion.separatorTransitionDuration) ||
         !nearZeroDuration(reducedMotion.chipTransitionDuration) ||
         !nearZeroDuration(reducedMotion.chipAnimationDuration) ||
         reducedMotion.scrollBehavior !== 'auto') {
       fail('E_S19_REDUCED_MOTION')
     }
     s19Summary.reducedMotion = true
-    await clickSelector(activeCdp, '.subagent-task-detail-close')
+    await clickSelector(activeCdp, '.right-sidebar-close')
     await activeCdp.send('Emulation.setEmulatedMedia', { features: [] })
   })
+
+  if (MEMORY_DIAGNOSTICS_ENABLED) {
+    await runStep('s26_runtime_hibernation', async () => {
+      const [primaryProjectPath, secondaryProjectPath] = projectPaths
+      let hibernatedCounts = null
+      await waitForCondition(async () => {
+        hibernatedCounts = await configuredProjectRuntimeCounts()
+        const primaryCount = hibernatedCounts.get(primaryProjectPath) ?? 0
+        const secondaryCount = hibernatedCounts.get(secondaryProjectPath) ?? 0
+        return primaryCount + secondaryCount === 2 && primaryCount >= 1
+      }, TIMEOUT.hibernate, 'E_S26_RUNTIME_HIBERNATION')
+
+      const primaryCount = hibernatedCounts?.get(primaryProjectPath) ?? 0
+      const secondaryCount = hibernatedCounts?.get(secondaryProjectPath) ?? 0
+      memoryDiagnostics.hibernation.observed = true
+      memoryDiagnostics.hibernation.runtimeCountAfter = primaryCount + secondaryCount
+      await captureMemorySample('post-auto-hibernation')
+
+      if (secondaryCount === 0 && primaryCount === 2) {
+        memoryDiagnostics.hibernation.target = 'secondary-project'
+        await clickTitledButton(activeCdp, '.project-select', secondaryProjectPath)
+        await waitForTitledSelection(
+          activeCdp,
+          '.project-select',
+          secondaryProjectPath,
+          TIMEOUT.ready,
+          'E_S26_REACTIVATE_PROJECT_SELECTION'
+        )
+        await waitForExpression(
+          activeCdp,
+          `window.piGui.getState().then(({ state }) => {
+            const primaryButton = Array.from(document.querySelectorAll('.project-select'))
+              .find((candidate) => candidate.getAttribute('data-project-key') === ${JSON.stringify(primaryProjectPath)})
+            return state.activeProjectKey === ${JSON.stringify(secondaryProjectPath)} &&
+              primaryButton instanceof HTMLButtonElement &&
+              !primaryButton.disabled &&
+              document.querySelector('.runtime-context-status[role="status"]') === null
+          })`,
+          TIMEOUT.ready,
+          'E_S26_REACTIVATE_PROJECT_SETTLE'
+        )
+      } else if (primaryCount === 1 && secondaryCount === 1 && primarySecondSessionKey !== null) {
+        memoryDiagnostics.hibernation.target = 'primary-session'
+        await clickTitledButton(activeCdp, '.session-item', primarySecondSessionKey)
+        await waitForTitledSelection(
+          activeCdp,
+          '.session-item',
+          primarySecondSessionKey,
+          TIMEOUT.ready,
+          'E_S26_REACTIVATE_SESSION_SELECTION'
+        )
+      } else {
+        fail('E_S26_HIBERNATION_TARGET')
+      }
+
+      const reactivatedReady = await evaluateValue(
+        activeCdp,
+        `window.piGui.getState().then(({ state }) => state.runtime.status === 'ready')`
+      )
+      if (!reactivatedReady) {
+        await clickButtonText(activeCdp, '.composer-start-action', '恢复对话')
+        await waitForRuntime(activeCdp, 'ready', TIMEOUT.ready)
+      }
+      const restoredConversation = await conversationCounts(activeCdp)
+      if (restoredConversation.user < 1 || restoredConversation.assistant < 1) {
+        fail('E_S26_REACTIVATE_CONVERSATION')
+      }
+      await assertConfiguredProjectRuntimeCounts(new Map([
+        [primaryProjectPath, 2],
+        [secondaryProjectPath, 1]
+      ]))
+      memoryDiagnostics.hibernation.reactivated = true
+      memoryDiagnostics.hibernation.conversationPreserved = true
+      await captureMemorySample('reactivated-hibernated-runtime')
+      evaluateMemoryBudgets()
+    })
+  }
 
   await runStep('final_close', async () => {
     await captureMemorySample('before-final-close')
@@ -1462,7 +1785,8 @@ async function openSubagentParticipant(cdp, locator) {
   if (!clicked) fail('E_S19_CAPSULE_CLICK')
   await waitForExpression(
     cdp,
-    `document.querySelector('.subagent-task-detail') !== null &&
+    `document.querySelector('.workbench-right-sidebar') !== null &&
+     document.querySelector('.subagent-task-detail') !== null &&
      (${lookup})?.getAttribute('aria-pressed') === 'true'`,
     TIMEOUT.page,
     'E_S19_DETAIL_OPEN'
@@ -1702,6 +2026,27 @@ async function conversationCounts(cdp) {
   )
 }
 
+async function resolveProjectTrustIfRequested(cdp, timeoutMs) {
+  await waitForExpression(
+    cdp,
+    `document.querySelector('.project-trust-dialog') !== null ||
+      window.piGui.getState().then((snapshot) => snapshot.state.runtime.status !== 'stopped')`,
+    timeoutMs,
+    'E_PROJECT_TRUST_SURFACE'
+  )
+  const trustRequired = await evaluateValue(
+    cdp,
+    `document.querySelector('.project-trust-dialog') !== null`
+  )
+  if (trustRequired) {
+    await clickButtonText(
+      cdp,
+      '.project-trust-dialog-decisions button',
+      '信任并记住此 Project'
+    )
+  }
+}
+
 async function waitForRuntime(cdp, status, timeoutMs) {
   const editableCondition = status === 'ready'
     ? ` && (() => {
@@ -1914,6 +2259,9 @@ async function installMemoryEventProbe(cdp) {
       const metrics = {
         fullStateEvents: 0,
         patchEvents: 0,
+        stateBatchEvents: 0,
+        stateBatchMembers: 0,
+        maxStateBatchSize: 0,
         compactionEvents: 0,
         otherEvents: 0,
         latestStateEntries: 0,
@@ -1942,7 +2290,15 @@ async function installMemoryEventProbe(cdp) {
         }
         return chars
       }
-      const unsubscribe = window.piGui.subscribe((event) => {
+      const observeEvent = (event) => {
+        if (event.type === 'kernel.state-batch') {
+          const size = event.events.length
+          metrics.stateBatchEvents += 1
+          metrics.stateBatchMembers += size
+          metrics.maxStateBatchSize = Math.max(metrics.maxStateBatchSize, size)
+          for (const member of event.events) observeEvent(member)
+          return
+        }
         if (event.type === 'kernel.state-changed') {
           metrics.fullStateEvents += 1
           metrics.latestStateEntries = event.state.conversation.entries.length
@@ -1979,7 +2335,8 @@ async function installMemoryEventProbe(cdp) {
         } else {
           metrics.otherEvents += 1
         }
-      })
+      }
+      const unsubscribe = window.piGui.subscribe(observeEvent)
       Object.defineProperty(globalThis, '__PI_GUI_MEMORY_EVENT_PROBE__', {
         value: { metrics, unsubscribe },
         configurable: true
@@ -2085,6 +2442,78 @@ async function captureMemorySample(label) {
   })
 }
 
+function evaluateMemoryBudgets() {
+  const sampleByLabel = new Map(memoryDiagnostics.samples.map((sample) => [sample.label, sample]))
+  const running = sampleByLabel.get('three-subagents-running')
+  const settled = sampleByLabel.get('three-subagents-completed')
+  const hibernated = sampleByLabel.get('post-auto-hibernation')
+  const reactivated = sampleByLabel.get('reactivated-hibernated-runtime')
+  if (running === undefined || settled === undefined || hibernated === undefined || reactivated === undefined) {
+    fail('E_MEMORY_BUDGET_SAMPLES')
+  }
+
+  const report = memoryDiagnosticsReport()
+  const maxSwapBytes = memoryDiagnostics.samples.reduce(
+    (maximum, sample) => Math.max(maximum, sample.totals.swapBytes),
+    0
+  )
+  const observed = {
+    peakTotalPssBytes: report.maxima.totalPssBytes,
+    peakRendererPssBytes: report.maxima.rendererPssBytes,
+    peakRendererHeapUsedBytes: report.maxima.rendererHeapUsedBytes,
+    peakRendererStateJsonBytes: report.maxima.rendererStateJsonBytes,
+    peakRendererFullStateEvents: report.maxima.rendererFullStateEvents,
+    peakPiRuntimeProcesses: report.maxima.piRuntimeProcesses,
+    peakPiChildProcesses: report.maxima.piChildProcesses,
+    maxSwapBytes,
+    runningTotalPssBytes: running.totals.pssBytes,
+    settledTotalPssBytes: settled.totals.pssBytes,
+    hibernatedTotalPssBytes: hibernated.totals.pssBytes,
+    reactivatedTotalPssBytes: reactivated.totals.pssBytes
+  }
+  memoryDiagnostics.budgets.observed = observed
+
+  if (observed.peakTotalPssBytes > MEMORY_BUDGET_LIMITS.peakTotalPssBytes) {
+    fail('E_MEMORY_TOTAL_PSS_BUDGET')
+  }
+  if (observed.peakRendererPssBytes > MEMORY_BUDGET_LIMITS.peakRendererPssBytes) {
+    fail('E_MEMORY_RENDERER_PSS_BUDGET')
+  }
+  if (observed.peakRendererHeapUsedBytes > MEMORY_BUDGET_LIMITS.peakRendererHeapUsedBytes) {
+    fail('E_MEMORY_RENDERER_HEAP_BUDGET')
+  }
+  if (observed.peakRendererStateJsonBytes > MEMORY_BUDGET_LIMITS.peakRendererStateJsonBytes) {
+    fail('E_MEMORY_STATE_BUDGET')
+  }
+  if (observed.peakRendererFullStateEvents > MEMORY_BUDGET_LIMITS.peakRendererFullStateEvents) {
+    fail('E_MEMORY_FULL_STATE_EVENT_BUDGET')
+  }
+  if (observed.maxSwapBytes > MEMORY_BUDGET_LIMITS.maxSwapBytes) {
+    fail('E_MEMORY_SWAP_BUDGET')
+  }
+  if (observed.peakPiRuntimeProcesses !== 3 || observed.peakPiChildProcesses !== 3) {
+    fail('E_MEMORY_PROCESS_BUDGET_SHAPE')
+  }
+  if (
+    observed.settledTotalPssBytes * 100 >
+    observed.runningTotalPssBytes * MEMORY_BUDGET_LIMITS.settledToRunningPssPercent
+  ) {
+    fail('E_MEMORY_SETTLED_RECOVERY')
+  }
+  if (
+    observed.hibernatedTotalPssBytes >
+    observed.settledTotalPssBytes + MEMORY_BUDGET_LIMITS.postHibernatePssToleranceBytes
+  ) {
+    fail('E_MEMORY_HIBERNATION_RECOVERY')
+  }
+  if (observed.reactivatedTotalPssBytes > MEMORY_BUDGET_LIMITS.reactivatedTotalPssBytes) {
+    fail('E_MEMORY_REACTIVATED_BUDGET')
+  }
+
+  memoryDiagnostics.budgets.evaluated = true
+  memoryDiagnostics.budgets.passed = true
+}
+
 function hasPiAncestor(record, recordsByPid) {
   const visited = new Set([record.pid])
   let parent = recordsByPid.get(record.ppid)
@@ -2168,9 +2597,22 @@ function memoryDiagnosticsReport() {
     rendererHeapUsedBytes: 0,
     rendererStateJsonBytes: 0,
     rendererFullStateEvents: 0,
-    rendererPatchEvents: 0
+    rendererPatchEvents: 0,
+    rendererStateBatchEvents: 0,
+    rendererStateBatchMembers: 0,
+    rendererMaxStateBatchSize: 0
   }
   for (const sample of memoryDiagnostics.samples) {
+    const batchEvents = sample.renderer.events?.stateBatchEvents ?? 0
+    const batchMembers = sample.renderer.events?.stateBatchMembers ?? 0
+    const maxBatchSize = sample.renderer.events?.maxStateBatchSize ?? 0
+    if (
+      maxBatchSize > 64 ||
+      batchMembers < batchEvents * 2 ||
+      batchMembers > batchEvents * 64
+    ) {
+      fail('E_MEMORY_STATE_BATCH_BOUNDS')
+    }
     maxima.processCount = Math.max(maxima.processCount, sample.processCount)
     maxima.totalPssBytes = Math.max(maxima.totalPssBytes, sample.totals.pssBytes)
     maxima.rendererPssBytes = Math.max(
@@ -2205,6 +2647,18 @@ function memoryDiagnosticsReport() {
       maxima.rendererPatchEvents,
       sample.renderer.events?.patchEvents ?? 0
     )
+    maxima.rendererStateBatchEvents = Math.max(
+      maxima.rendererStateBatchEvents,
+      sample.renderer.events?.stateBatchEvents ?? 0
+    )
+    maxima.rendererStateBatchMembers = Math.max(
+      maxima.rendererStateBatchMembers,
+      sample.renderer.events?.stateBatchMembers ?? 0
+    )
+    maxima.rendererMaxStateBatchSize = Math.max(
+      maxima.rendererMaxStateBatchSize,
+      sample.renderer.events?.maxStateBatchSize ?? 0
+    )
   }
   return {
     enabled: true,
@@ -2212,6 +2666,8 @@ function memoryDiagnosticsReport() {
     units: 'bytes',
     sampleLimit: MEMORY_DIAGNOSTICS_SAMPLE_LIMIT,
     maxima,
+    budgets: memoryDiagnostics.budgets,
+    hibernation: memoryDiagnostics.hibernation,
     samples: memoryDiagnostics.samples
   }
 }
@@ -2272,6 +2728,16 @@ async function piProcessesForConfiguredProjects() {
   )).filter((process) => process !== null)
 }
 
+async function configuredProjectRuntimeCounts() {
+  const processes = await piProcessesForConfiguredProjects()
+  const actualCounts = new Map(projectPaths.map((projectPath) => [projectPath, 0]))
+  for (const process of processes) {
+    activeApp.knownPids.add(process.pid)
+    actualCounts.set(process.cwd, actualCounts.get(process.cwd) + 1)
+  }
+  return actualCounts
+}
+
 async function assertConfiguredProjectRuntimeCounts(expectedCounts) {
   if (
     expectedCounts.size !== projectPaths.length ||
@@ -2279,16 +2745,34 @@ async function assertConfiguredProjectRuntimeCounts(expectedCounts) {
   ) {
     fail('E_P2_RUNTIME_OWNERSHIP_EXPECTATION')
   }
-  const processes = await piProcessesForConfiguredProjects()
-  const actualCounts = new Map(projectPaths.map((projectPath) => [projectPath, 0]))
-  for (const process of processes) {
-    activeApp.knownPids.add(process.pid)
-    actualCounts.set(process.cwd, actualCounts.get(process.cwd) + 1)
-  }
-  if (projectPaths.some(
-    (projectPath) => actualCounts.get(projectPath) !== expectedCounts.get(projectPath)
-  )) {
-    fail('E_P2_RUNTIME_OWNERSHIP')
+  const deadline = Date.now() + 5_000
+  while (true) {
+    const actualCounts = await configuredProjectRuntimeCounts()
+    if (projectPaths.every(
+      (projectPath) => actualCounts.get(projectPath) === expectedCounts.get(projectPath)
+    )) return
+    if (Date.now() >= deadline) {
+      const primaryActual = actualCounts.get(projectPaths[0])
+      const primaryExpected = expectedCounts.get(projectPaths[0])
+      if (primaryActual < primaryExpected) fail('E_P2_RUNTIME_PRIMARY_MISSING')
+      if (primaryActual > primaryExpected) fail('E_P2_RUNTIME_PRIMARY_EXTRA')
+      const secondaryActual = actualCounts.get(projectPaths[1])
+      const secondaryExpected = expectedCounts.get(projectPaths[1])
+      if (secondaryActual < secondaryExpected) {
+        const runtimeStatus = await evaluateValue(
+          activeCdp,
+          `window.piGui.getState().then(({ state }) => state.runtime.status)`
+        ).catch(() => null)
+        if (runtimeStatus === 'ready') fail('E_P2_RUNTIME_SECONDARY_MISSING_READY')
+        if (runtimeStatus === 'starting') fail('E_P2_RUNTIME_SECONDARY_MISSING_STARTING')
+        if (runtimeStatus === 'stopped') fail('E_P2_RUNTIME_SECONDARY_MISSING_STOPPED')
+        if (runtimeStatus === 'crashed') fail('E_P2_RUNTIME_SECONDARY_MISSING_CRASHED')
+        fail('E_P2_RUNTIME_SECONDARY_MISSING')
+      }
+      if (secondaryActual > secondaryExpected) fail('E_P2_RUNTIME_SECONDARY_EXTRA')
+      fail('E_P2_RUNTIME_OWNERSHIP')
+    }
+    await delay(100)
   }
 }
 

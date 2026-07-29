@@ -8,7 +8,7 @@ export function isTodoWriteToolEntry(
   entry: KernelConversationEntry
 ): entry is KernelToolEntry & { todos?: KernelTodoItem[] } {
   return entry.kind === 'tool' &&
-    entry.name.trim().toLowerCase().split('.').at(-1) === 'todowrite'
+    entry.name.trim().toLowerCase().split(/[.:/]/u).at(-1) === 'todowrite'
 }
 
 export function currentTurnTodos(

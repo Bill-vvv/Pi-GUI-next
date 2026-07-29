@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { isAbsolute } from 'node:path'
 
@@ -5,6 +6,8 @@ import {
   PiRpcClient,
   type PiRpcDiagnostic,
   type PiRpcEvent,
+  type PiRpcExtensionEvent,
+  type PiRpcExtensionInventory,
   type PiRpcSessionState
 } from '../pi-rpc/pi-rpc-client.ts'
 import type {
@@ -21,6 +24,25 @@ import {
 } from './pi-executable.ts'
 import { errorMessage } from '../utils/errors.ts'
 import type { SubagentSettings } from '../../shared/kernel-contract.ts'
+import {
+  buildHibernateLeasePrompt,
+  buildQuiescencePrompt,
+  interpretHibernateLeaseStatusText,
+  interpretQuiescenceStatusText,
+  isHibernateLeaseStatusEvent,
+  isInternalRuntimeStatusEvent,
+  isMutatingRuntimeCommandType,
+  isQuiescenceStatusEvent,
+  isValidAttemptId,
+  isValidLeaseToken,
+  isValidRuntimeGeneration,
+  isValidSessionId,
+  normalizeHibernateLeaseTimeoutMs,
+  normalizeQuiescenceTimeoutMs,
+  type RuntimeHibernateLeaseAction,
+  type RuntimeHibernateLeaseResult,
+  type RuntimeQuiescenceQueryResult
+} from './runtime-quiescence.ts'
 
 const DEFAULT_RPC_TIMEOUT_MS = 10_000
 const STOP_GRACE_MS = 1_000
@@ -75,12 +97,21 @@ export type LinuxLocalRuntimeOptions = {
   projectTrust?: boolean
   subagent?: SubagentSettings
   fastExtensionLoading?: boolean
+  /** Absolute path to the app-owned runtime quiescence extension entry. */
+  quiescenceExtensionPath?: string
+  /** Ordered app-owned extension entries loaded explicitly for every managed Pi process. */
+  extensionPaths?: readonly string[]
+  desktopNotification?: {
+    socketPath: string
+    token: string
+  }
 }
 
 export function buildPiRpcArguments(
   sessionFile?: string,
   noSession = false,
-  projectTrust?: boolean
+  projectTrust?: boolean,
+  extensionPaths: readonly string[] = []
 ): string[] {
   if (sessionFile !== undefined && noSession) {
     throw new Error('Session file and no-session mode cannot be used together.')
@@ -102,6 +133,12 @@ export function buildPiRpcArguments(
   }
   if (projectTrust === true) arguments_.push('--approve')
   else if (projectTrust === false) arguments_.push('--no-approve')
+  for (const extensionPath of extensionPaths) {
+    if (!isAbsolute(extensionPath)) {
+      throw new Error(`Extension path must be absolute: ${extensionPath}`)
+    }
+    arguments_.push('-e', extensionPath)
+  }
   return arguments_
 }
 
@@ -114,9 +151,33 @@ export type PiRpcProbeResult = {
   stderrChars: number
 }
 
+type QuiescenceWaiter = {
+  nonce: string
+  resolve: (result: RuntimeQuiescenceQueryResult) => void
+  timer: ReturnType<typeof setTimeout>
+}
+
+type LeaseWaiter = {
+  nonce: string
+  action: RuntimeHibernateLeaseAction
+  resolve: (result: RuntimeHibernateLeaseResult) => void
+  timer: ReturnType<typeof setTimeout>
+}
+
+type HibernateLeaseState =
+  | { phase: 'preparing'; sessionId: string; generation: number; attemptId: string }
+  | {
+      phase: 'prepared' | 'committed'
+      sessionId: string
+      generation: number
+      attemptId: string
+      token: string
+    }
+
 export class LinuxLocalRuntime implements RuntimeHost {
   private readonly options: LinuxLocalRuntimeOptions
   private readonly listeners = new Set<(event: RuntimeHostEvent) => void>()
+  private readonly extensionEventListeners = new Set<(event: PiRpcExtensionEvent) => void>()
   private child: ChildProcessWithoutNullStreams | null = null
   private client: PiRpcClient | null = null
   private streaming = false
@@ -124,6 +185,9 @@ export class LinuxLocalRuntime implements RuntimeHost {
   private startPromise: Promise<void> | null = null
   private stopPromise: Promise<void> | null = null
   private stopRequested = false
+  private readonly quiescenceWaiters = new Map<string, QuiescenceWaiter>()
+  private readonly leaseWaiters = new Map<string, LeaseWaiter>()
+  private hibernateLease: HibernateLeaseState | null = null
   private state: RuntimeHostState = {
     executable: null,
     version: null,
@@ -141,7 +205,35 @@ export class LinuxLocalRuntime implements RuntimeHost {
     if (options.sessionFile !== undefined && !isAbsolute(options.sessionFile)) {
       throw new Error(`Session file must be an absolute path: ${options.sessionFile}`)
     }
+    if (
+      options.quiescenceExtensionPath !== undefined &&
+      !isAbsolute(options.quiescenceExtensionPath)
+    ) {
+      throw new Error(
+        `Quiescence extension path must be an absolute path: ${options.quiescenceExtensionPath}`
+      )
+    }
+    if (options.extensionPaths !== undefined) {
+      for (const extensionPath of options.extensionPaths) {
+        if (!isAbsolute(extensionPath)) {
+          throw new Error(`Runtime extension path must be absolute: ${extensionPath}`)
+        }
+      }
+    }
     if (options.subagent !== undefined) assertSubagentSettings(options.subagent)
+    if (options.desktopNotification !== undefined) {
+      if (!isAbsolute(options.desktopNotification.socketPath)) {
+        throw new Error(
+          `Desktop notification socket path must be absolute: ${options.desktopNotification.socketPath}`
+        )
+      }
+      if (
+        options.desktopNotification.token.length < 32 ||
+        options.desktopNotification.token.length > 256
+      ) {
+        throw new Error('Desktop notification broker token is invalid.')
+      }
+    }
     this.options = options
   }
 
@@ -190,6 +282,8 @@ export class LinuxLocalRuntime implements RuntimeHost {
     delete env.PI_PARALLEL_EXTENSION_IMPORTS
     delete env.PI_NATIVE_COMPILED_EXTENSION_IMPORTS
     delete env.JITI_TRY_NATIVE
+    delete env.PI_GUI_NOTIFICATION_SOCKET
+    delete env.PI_GUI_NOTIFICATION_TOKEN
     if (this.options.fastExtensionLoading === true) {
       env.PI_PARALLEL_EXTENSION_IMPORTS = '1'
       env.PI_NATIVE_COMPILED_EXTENSION_IMPORTS = '1'
@@ -203,12 +297,23 @@ export class LinuxLocalRuntime implements RuntimeHost {
     if (this.options.subagent !== undefined) {
       env.PI_SUBAGENT_MAX_DEPTH = String(this.options.subagent.maxDepth)
     }
+    if (this.options.desktopNotification !== undefined) {
+      env.PI_GUI_NOTIFICATION_SOCKET = this.options.desktopNotification.socketPath
+      env.PI_GUI_NOTIFICATION_TOKEN = this.options.desktopNotification.token
+    }
+    const extensionPaths = [...new Set([
+      ...(this.options.extensionPaths ?? []),
+      ...(this.options.quiescenceExtensionPath === undefined
+        ? []
+        : [this.options.quiescenceExtensionPath])
+    ])]
     const child = spawn(
       executable,
       buildPiRpcArguments(
         this.options.sessionFile,
         this.options.noSession,
-        this.options.projectTrust
+        this.options.projectTrust,
+        extensionPaths
       ),
       {
         cwd: this.options.cwd,
@@ -228,10 +333,12 @@ export class LinuxLocalRuntime implements RuntimeHost {
       exitCode: null,
       exitSignal: null
     }
-    const client = new PiRpcClient(child, {
+    let client: PiRpcClient
+    client = new PiRpcClient(child, {
       requestTimeoutMs: this.options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS,
-      onDiagnostic: (diagnostic) => this.handleDiagnostic(diagnostic),
-      onEvent: (event) => this.handlePiEvent(event)
+      onDiagnostic: (diagnostic) => this.handleDiagnostic(diagnostic, child, client),
+      onEvent: (event) => this.handlePiEvent(event),
+      onExtensionEvent: (event) => this.emitExtensionEvent(event, child, client)
     })
     this.client = client
 
@@ -251,6 +358,7 @@ export class LinuxLocalRuntime implements RuntimeHost {
         cleanupError = stopError
       }
       if (cleanupError === null && this.child === child) {
+        this.extensionEventListeners.clear()
         this.child = null
         this.client = null
         this.streaming = false
@@ -270,6 +378,12 @@ export class LinuxLocalRuntime implements RuntimeHost {
   async send(command: RuntimeCommand): Promise<RuntimeCommandResult> {
     if (this.client === null || this.child === null || hasExited(this.child)) {
       throw new Error('Pi RPC process is not running.')
+    }
+    // After prepare begins, only read-only state reads and commit/release/stop remain.
+    if (this.hibernateLease !== null && isMutatingRuntimeCommandType(command.type)) {
+      throw new Error(
+        `Runtime command ${command.type} is rejected while a hibernate lease is active.`
+      )
     }
 
     if (command.type === 'get_state') {
@@ -300,6 +414,15 @@ export class LinuxLocalRuntime implements RuntimeHost {
     }
     if (command.type === 'get_entries') {
       return { type: 'entries', ...await this.client.getEntries() }
+    }
+    if (command.type === 'get_tree') {
+      return { type: 'tree', ...await this.client.getTree() }
+    }
+    if (command.type === 'navigate_tree') {
+      return {
+        type: 'tree-navigation',
+        ...await this.client.navigateTree(command.targetEntryId)
+      }
     }
     if (command.type === 'fork') {
       return { type: 'forked', ...await this.client.fork(command.entryId) }
@@ -342,6 +465,24 @@ export class LinuxLocalRuntime implements RuntimeHost {
       await this.client.setSessionName(command.name)
       return { type: 'accepted' }
     }
+    if (command.type === 'invoke_extension_command') {
+      await this.client.invokeExtensionCommand(command.name, command.args)
+      return { type: 'accepted' }
+    }
+    if (command.type === 'subscribe_extension_events') {
+      return {
+        type: 'extension-event-subscription',
+        channels: await this.client.subscribeExtensionEvents(command.channels)
+      }
+    }
+    if (command.type === 'extension_ui_response') {
+      await this.client.respondExtensionUi(
+        'value' in command
+          ? { id: command.id, value: command.value }
+          : { id: command.id, cancelled: true }
+      )
+      return { type: 'accepted' }
+    }
 
     command satisfies never
     throw new Error('Unsupported runtime command.')
@@ -349,6 +490,9 @@ export class LinuxLocalRuntime implements RuntimeHost {
 
   stop(): Promise<void> {
     this.stopRequested = true
+    // Settle outstanding QUERY/lease waiters at stop start so callers do not wait on a dying process.
+    this.rejectQuiescenceWaiters('stopping', 'Pi RPC process is stopping.')
+    this.rejectLeaseWaiters('stopping', 'Pi RPC process is stopping.')
     if (this.stopPromise !== null) {
       return this.stopPromise
     }
@@ -370,9 +514,419 @@ export class LinuxLocalRuntime implements RuntimeHost {
     return { ...this.state }
   }
 
+  getRpcPid(): number | null {
+    const child = this.child
+    if (child === null || hasExited(child)) return null
+    const pid = child.pid
+    return typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? pid : null
+  }
+
+  /**
+   * This Pi inventory has no Main-owned runtimeId. The future Workbench caller must
+   * capture and fence the owning RuntimeContext/runtimeId and this RuntimeHost identity
+   * both before dispatch and after await before using the result.
+   */
+  async getLoadedExtensions(): Promise<PiRpcExtensionInventory> {
+    if (this.client === null || this.child === null || hasExited(this.child)) {
+      throw new Error('Pi RPC process is not running.')
+    }
+    return this.client.getExtensions()
+  }
+
   subscribe(listener: (event: RuntimeHostEvent) => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  subscribeExtensionEvents(listener: (event: PiRpcExtensionEvent) => void): () => void {
+    this.extensionEventListeners.add(listener)
+    return () => this.extensionEventListeners.delete(listener)
+  }
+
+  async queryQuiescence(options?: { timeoutMs?: number }): Promise<RuntimeQuiescenceQueryResult> {
+    if (this.stopRequested) {
+      return {
+        ok: false,
+        reason: 'stopping',
+        message: 'Pi RPC process is stopping; quiescence queries are rejected.'
+      }
+    }
+    if (this.client === null || this.child === null || hasExited(this.child)) {
+      return {
+        ok: false,
+        reason: 'runtime-not-running',
+        message: 'Pi RPC process is not running.'
+      }
+    }
+    if (this.options.quiescenceExtensionPath === undefined) {
+      return {
+        ok: false,
+        reason: 'extension-missing',
+        message: 'Runtime quiescence extension path is not configured.'
+      }
+    }
+
+    const timeout = normalizeQuiescenceTimeoutMs(options?.timeoutMs)
+    if (!timeout.ok) {
+      return {
+        ok: false,
+        reason: 'malformed',
+        message: `Quiescence query timeout rejected: ${timeout.reason}.`
+      }
+    }
+
+    const nonce = randomUUID()
+    const timeoutMs = timeout.timeoutMs
+    const prompt = buildQuiescencePrompt(nonce)
+
+    return await new Promise<RuntimeQuiescenceQueryResult>((resolve) => {
+      const timer = setTimeout(() => {
+        this.quiescenceWaiters.delete(nonce)
+        resolve({
+          ok: false,
+          reason: 'timeout',
+          message: `Quiescence query timed out after ${timeoutMs}ms.`,
+          nonce
+        })
+      }, timeoutMs)
+      this.quiescenceWaiters.set(nonce, { nonce, resolve, timer })
+
+      void this.client!.prompt(prompt).then(
+        () => {
+          // Extension commands complete without agent turns; the correlated setStatus
+          // event settles the waiter. Timeout remains the fail-closed backstop.
+        },
+        (error) => {
+          const waiter = this.quiescenceWaiters.get(nonce)
+          if (waiter === undefined) return
+          clearTimeout(waiter.timer)
+          this.quiescenceWaiters.delete(nonce)
+          resolve({
+            ok: false,
+            reason: 'prompt-failed',
+            message: errorMessage(error),
+            nonce
+          })
+        }
+      )
+    })
+  }
+
+  async prepareHibernation(input: {
+    sessionId: string
+    generation: number
+    attemptId: string
+    timeoutMs?: number
+  }): Promise<RuntimeHibernateLeaseResult> {
+    const validated = this.validateLeaseIdentity(input, false)
+    if (!validated.ok) return validated
+
+    if (this.hibernateLease !== null) {
+      return {
+        ok: false,
+        reason: 'fenced',
+        message: 'A hibernate lease is already active on this runtime.',
+        action: 'prepare'
+      }
+    }
+
+    // Local fence begins before the extension prepare round-trip.
+    this.hibernateLease = {
+      phase: 'preparing',
+      sessionId: input.sessionId,
+      generation: input.generation,
+      attemptId: input.attemptId
+    }
+
+    const result = await this.runLeaseCommand({
+      action: 'prepare',
+      sessionId: input.sessionId,
+      generation: input.generation,
+      attemptId: input.attemptId,
+      timeoutMs: input.timeoutMs
+    })
+
+    if (!result.ok) {
+      this.hibernateLease = null
+      return result
+    }
+    if (typeof result.token !== 'string' || !isValidLeaseToken(result.token)) {
+      this.hibernateLease = null
+      return {
+        ok: false,
+        reason: 'malformed',
+        message: 'Prepare succeeded without a valid lease token.',
+        action: 'prepare'
+      }
+    }
+    this.hibernateLease = {
+      phase: 'prepared',
+      sessionId: input.sessionId,
+      generation: input.generation,
+      attemptId: input.attemptId,
+      token: result.token
+    }
+    return result
+  }
+
+  async commitHibernation(input: {
+    sessionId: string
+    generation: number
+    attemptId: string
+    token: string
+    timeoutMs?: number
+  }): Promise<RuntimeHibernateLeaseResult> {
+    const validated = this.validateLeaseIdentity(input, true)
+    if (!validated.ok) return validated
+
+    if (
+      this.hibernateLease === null ||
+      this.hibernateLease.phase === 'preparing' ||
+      this.hibernateLease.sessionId !== input.sessionId ||
+      this.hibernateLease.generation !== input.generation ||
+      this.hibernateLease.attemptId !== input.attemptId ||
+      this.hibernateLease.token !== input.token
+    ) {
+      return {
+        ok: false,
+        reason: 'identity-mismatch',
+        message: 'Commit identity does not match the active prepared lease.',
+        action: 'commit'
+      }
+    }
+
+    if (this.hibernateLease.phase === 'committed') {
+      return {
+        ok: true,
+        action: 'commit',
+        sessionId: input.sessionId,
+        generation: input.generation,
+        attemptId: input.attemptId,
+        token: input.token
+      }
+    }
+
+    const result = await this.runLeaseCommand({
+      action: 'commit',
+      sessionId: input.sessionId,
+      generation: input.generation,
+      attemptId: input.attemptId,
+      token: input.token,
+      timeoutMs: input.timeoutMs
+    })
+    if (result.ok) {
+      this.hibernateLease = {
+        phase: 'committed',
+        sessionId: input.sessionId,
+        generation: input.generation,
+        attemptId: input.attemptId,
+        token: input.token
+      }
+    }
+    return result
+  }
+
+  async releaseHibernation(input: {
+    sessionId: string
+    generation: number
+    attemptId: string
+    token: string
+    timeoutMs?: number
+  }): Promise<RuntimeHibernateLeaseResult> {
+    const validated = this.validateLeaseIdentity(input, true)
+    if (!validated.ok) return validated
+
+    if (
+      this.hibernateLease === null ||
+      this.hibernateLease.phase === 'preparing' ||
+      this.hibernateLease.sessionId !== input.sessionId ||
+      this.hibernateLease.generation !== input.generation ||
+      this.hibernateLease.attemptId !== input.attemptId ||
+      this.hibernateLease.token !== input.token
+    ) {
+      return {
+        ok: false,
+        reason: 'identity-mismatch',
+        message: 'Release identity does not match the active lease generation/token.',
+        action: 'release'
+      }
+    }
+
+    // Only a verifiably absent process can bypass the provider round-trip. A
+    // failed stop leaves stopRequested set while the child may still own live
+    // provider fences, so exact release must remain available in that state.
+    if (this.client === null || this.child === null || hasExited(this.child)) {
+      this.hibernateLease = null
+      return {
+        ok: true,
+        action: 'release',
+        sessionId: input.sessionId,
+        generation: input.generation,
+        attemptId: input.attemptId,
+        token: input.token
+      }
+    }
+
+    const result = await this.runLeaseCommand({
+      action: 'release',
+      sessionId: input.sessionId,
+      generation: input.generation,
+      attemptId: input.attemptId,
+      token: input.token,
+      timeoutMs: input.timeoutMs
+    })
+    // Clear the host fence only after an exact provider release succeeds. Rejected or
+    // stale releases remain fail-closed and cannot reopen mutation admission.
+    if (
+      result.ok &&
+      this.hibernateLease !== null &&
+      this.hibernateLease.token === input.token &&
+      this.hibernateLease.attemptId === input.attemptId
+    ) {
+      this.hibernateLease = null
+      // A live child whose stop failed is usable again only after every owner
+      // accepted the exact rollback token.
+      this.stopRequested = false
+    }
+    return result
+  }
+
+  private validateLeaseIdentity(
+    input: {
+      sessionId: string
+      generation: number
+      attemptId: string
+      token?: string
+    },
+    requireToken: boolean
+  ): { ok: true } | RuntimeHibernateLeaseResult {
+    if (!isValidSessionId(input.sessionId)) {
+      return {
+        ok: false,
+        reason: 'invalid-input',
+        message: 'Hibernate lease sessionId is invalid.'
+      }
+    }
+    if (!isValidRuntimeGeneration(input.generation)) {
+      return {
+        ok: false,
+        reason: 'invalid-input',
+        message: 'Hibernate lease generation is invalid.'
+      }
+    }
+    if (!isValidAttemptId(input.attemptId)) {
+      return {
+        ok: false,
+        reason: 'invalid-input',
+        message: 'Hibernate lease attemptId is invalid.'
+      }
+    }
+    if (requireToken && !isValidLeaseToken(input.token)) {
+      return {
+        ok: false,
+        reason: 'invalid-input',
+        message: 'Hibernate lease token is invalid.'
+      }
+    }
+    return { ok: true }
+  }
+
+  private async runLeaseCommand(input: {
+    action: RuntimeHibernateLeaseAction
+    sessionId: string
+    generation: number
+    attemptId: string
+    token?: string
+    timeoutMs?: number
+  }): Promise<RuntimeHibernateLeaseResult> {
+    if (this.stopRequested && input.action !== 'release') {
+      return {
+        ok: false,
+        reason: 'stopping',
+        message: 'Pi RPC process is stopping; new hibernate lease commands are rejected.',
+        action: input.action
+      }
+    }
+    if (this.client === null || this.child === null || hasExited(this.child)) {
+      return {
+        ok: false,
+        reason: 'runtime-not-running',
+        message: 'Pi RPC process is not running.',
+        action: input.action
+      }
+    }
+    if (this.options.quiescenceExtensionPath === undefined) {
+      return {
+        ok: false,
+        reason: 'extension-missing',
+        message: 'Runtime quiescence extension path is not configured.',
+        action: input.action
+      }
+    }
+
+    const timeout = normalizeHibernateLeaseTimeoutMs(input.timeoutMs)
+    if (!timeout.ok) {
+      return {
+        ok: false,
+        reason: 'malformed',
+        message: `Hibernate lease timeout rejected: ${timeout.reason}.`,
+        action: input.action
+      }
+    }
+
+    const nonce = randomUUID()
+    let prompt: string
+    try {
+      prompt = buildHibernateLeasePrompt({
+        action: input.action,
+        nonce,
+        sessionId: input.sessionId,
+        generation: input.generation,
+        attemptId: input.attemptId,
+        ...(input.token !== undefined ? { token: input.token } : {})
+      })
+    } catch (error) {
+      return {
+        ok: false,
+        reason: 'invalid-input',
+        message: errorMessage(error),
+        action: input.action
+      }
+    }
+
+    const timeoutMs = timeout.timeoutMs
+    return await new Promise<RuntimeHibernateLeaseResult>((resolve) => {
+      const timer = setTimeout(() => {
+        this.leaseWaiters.delete(nonce)
+        resolve({
+          ok: false,
+          reason: 'timeout',
+          message: `Hibernate lease ${input.action} timed out after ${timeoutMs}ms.`,
+          action: input.action,
+          nonce
+        })
+      }, timeoutMs)
+      this.leaseWaiters.set(nonce, { nonce, action: input.action, resolve, timer })
+
+      void this.client!.prompt(prompt).then(
+        () => {
+          // Correlated setStatus settles the waiter. Timeout remains fail-closed.
+        },
+        (error) => {
+          const waiter = this.leaseWaiters.get(nonce)
+          if (waiter === undefined) return
+          clearTimeout(waiter.timer)
+          this.leaseWaiters.delete(nonce)
+          resolve({
+            ok: false,
+            reason: 'prompt-failed',
+            message: errorMessage(error),
+            action: input.action,
+            nonce
+          })
+        }
+      )
+    })
   }
 
   private async stopRuntime(): Promise<void> {
@@ -404,9 +958,41 @@ export class LinuxLocalRuntime implements RuntimeHost {
       }
     }
     if (stopError !== null) throw stopError
+    this.rejectQuiescenceWaiters('runtime-not-running', 'Pi RPC process stopped before quiescence settled.')
+    this.rejectLeaseWaiters('runtime-not-running', 'Pi RPC process stopped before hibernate lease settled.')
+    this.hibernateLease = null
+    this.extensionEventListeners.clear()
     this.child = null
     this.client = null
     this.streaming = false
+  }
+
+  private rejectQuiescenceWaiters(
+    reason: Extract<RuntimeQuiescenceQueryResult, { ok: false }>['reason'],
+    message: string
+  ): void {
+    for (const [nonce, waiter] of this.quiescenceWaiters) {
+      clearTimeout(waiter.timer)
+      waiter.resolve({ ok: false, reason, message, nonce })
+    }
+    this.quiescenceWaiters.clear()
+  }
+
+  private rejectLeaseWaiters(
+    reason: Extract<RuntimeHibernateLeaseResult, { ok: false }>['reason'],
+    message: string
+  ): void {
+    for (const [nonce, waiter] of this.leaseWaiters) {
+      clearTimeout(waiter.timer)
+      waiter.resolve({
+        ok: false,
+        reason,
+        message,
+        action: waiter.action,
+        nonce
+      })
+    }
+    this.leaseWaiters.clear()
   }
 
   private assertStartNotCancelled(): void {
@@ -414,12 +1000,62 @@ export class LinuxLocalRuntime implements RuntimeHost {
   }
 
   private handlePiEvent(event: PiRpcEvent): void {
+    // Internal quiescence/lease replies stay on the RuntimeHost path only.
+    // Do not forward them as pi-events into Kernel/GUI conversation state.
+    if (isInternalRuntimeStatusEvent(event)) {
+      if (isQuiescenceStatusEvent(event)) {
+        this.handleQuiescenceStatusEvent(event)
+      } else if (isHibernateLeaseStatusEvent(event)) {
+        this.handleLeaseStatusEvent(event)
+      }
+      return
+    }
     if (event.type === 'agent_start') {
       this.setStreamingFromLifecycleEvent(true)
     } else if (event.type === 'agent_settled') {
       this.setStreamingFromLifecycleEvent(false)
     }
     this.emit({ type: 'pi-event', event })
+  }
+
+  private handleQuiescenceStatusEvent(event: PiRpcEvent): void {
+    const statusText = typeof event.statusText === 'string' ? event.statusText : undefined
+    // Clearing the status bar after delivery is expected and must not fail open waiters.
+    if (statusText === undefined) return
+
+    let nonce: string | null = null
+    try {
+      const raw = JSON.parse(statusText) as { nonce?: unknown }
+      if (typeof raw.nonce === 'string') nonce = raw.nonce
+    } catch {
+      // Malformed payloads cannot be correlated; leave waiters for timeout fail-closed.
+      return
+    }
+    if (nonce === null) return
+    const waiter = this.quiescenceWaiters.get(nonce)
+    if (waiter === undefined) return
+    clearTimeout(waiter.timer)
+    this.quiescenceWaiters.delete(nonce)
+    waiter.resolve(interpretQuiescenceStatusText(statusText, nonce))
+  }
+
+  private handleLeaseStatusEvent(event: PiRpcEvent): void {
+    const statusText = typeof event.statusText === 'string' ? event.statusText : undefined
+    if (statusText === undefined) return
+
+    let nonce: string | null = null
+    try {
+      const raw = JSON.parse(statusText) as { nonce?: unknown }
+      if (typeof raw.nonce === 'string') nonce = raw.nonce
+    } catch {
+      return
+    }
+    if (nonce === null) return
+    const waiter = this.leaseWaiters.get(nonce)
+    if (waiter === undefined) return
+    clearTimeout(waiter.timer)
+    this.leaseWaiters.delete(nonce)
+    waiter.resolve(interpretHibernateLeaseStatusText(statusText, nonce, waiter.action))
   }
 
   private setStreamingFromLifecycleEvent(nextStreaming: boolean): void {
@@ -439,7 +1075,11 @@ export class LinuxLocalRuntime implements RuntimeHost {
     this.emit({ type: nextStreaming ? 'activity-started' : 'activity-settled' })
   }
 
-  private handleDiagnostic(diagnostic: PiRpcDiagnostic): void {
+  private handleDiagnostic(
+    diagnostic: PiRpcDiagnostic,
+    sourceChild: ChildProcessWithoutNullStreams,
+    sourceClient: PiRpcClient
+  ): void {
     if (diagnostic.type === 'stderr') {
       const stderrChars = this.state.stderrChars + diagnostic.chunk.length
       this.state = {
@@ -455,8 +1095,13 @@ export class LinuxLocalRuntime implements RuntimeHost {
       })
       return
     }
-    if (diagnostic.type === 'stdout-parse-error') {
-      const message = 'Pi RPC stdout contained invalid JSONL.'
+    if (
+      diagnostic.type === 'stdout-parse-error' ||
+      diagnostic.type === 'extension-event-protocol-error'
+    ) {
+      const message = diagnostic.type === 'stdout-parse-error'
+        ? 'Pi RPC stdout contained invalid JSONL.'
+        : 'Pi RPC stdout contained a malformed extension-event envelope.'
       this.state = { ...this.state, lastError: message }
       this.emit({
         type: 'diagnostic',
@@ -469,6 +1114,9 @@ export class LinuxLocalRuntime implements RuntimeHost {
     if (diagnostic.type === 'process-error') {
       const message = `Pi RPC process error: ${diagnostic.error.message}`
       this.state = { ...this.state, lastError: message }
+      if (sourceChild === this.child && sourceClient === this.client) {
+        this.extensionEventListeners.clear()
+      }
       this.emit({
         type: 'diagnostic',
         kind: 'process',
@@ -483,6 +1131,22 @@ export class LinuxLocalRuntime implements RuntimeHost {
       exitCode: diagnostic.code,
       exitSignal: diagnostic.signal
     }
+    if (sourceChild === this.child && sourceClient === this.client) {
+      this.extensionEventListeners.clear()
+    }
+    // Natural process death must not leave QUERY/lease waiters hanging on timeout.
+    // Explicit stop() already settled them as `stopping`; this path is a no-op then.
+    if (!this.stopRequested) {
+      this.rejectQuiescenceWaiters(
+        'runtime-not-running',
+        'Pi RPC process exited before quiescence settled.'
+      )
+      this.rejectLeaseWaiters(
+        'runtime-not-running',
+        'Pi RPC process exited before hibernate lease settled.'
+      )
+      this.hibernateLease = null
+    }
     this.emit({
       type: 'process-exit',
       code: diagnostic.code,
@@ -492,6 +1156,24 @@ export class LinuxLocalRuntime implements RuntimeHost {
 
   private emit(event: RuntimeHostEvent): void {
     for (const listener of this.listeners) {
+      listener(event)
+    }
+  }
+
+  private emitExtensionEvent(
+    event: PiRpcExtensionEvent,
+    sourceChild: ChildProcessWithoutNullStreams,
+    sourceClient: PiRpcClient
+  ): void {
+    if (
+      this.stopRequested ||
+      sourceChild !== this.child ||
+      sourceClient !== this.client ||
+      hasExited(sourceChild)
+    ) {
+      return
+    }
+    for (const listener of this.extensionEventListeners) {
       listener(event)
     }
   }

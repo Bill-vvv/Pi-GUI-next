@@ -1,14 +1,10 @@
 import type {
   KernelAdvisorEntry,
+  KernelAskToolState,
   KernelConversationEntry,
   KernelExtensionStatusEntry,
   KernelMessageEntry,
   KernelMessagePhase,
-  KernelSubagentCoordination,
-  KernelSubagentNoticeEntry,
-  KernelSubagentParticipant,
-  KernelSubagentRun,
-  KernelSubagentStatus,
   KernelThinkingEntry,
   KernelTodoItem,
   KernelToolEntry,
@@ -18,12 +14,17 @@ import type { PiRpcEvent, PiRpcSessionEntry } from '../pi-rpc/pi-rpc-client.ts'
 import { projectPromptDisplay } from '../prompt/prompt-attachments.ts'
 import { isRecord } from '../utils/guards.ts'
 import {
+  isSubagentToolName,
+  projectSubagentCustomMessage,
+  projectSubagentRun,
+  resolveSubagentSupervisorRequest
+} from './subagent-projection.ts'
+import {
   mergeToolImageAttachments,
   projectToolResultContent
 } from './tool-result-images.ts'
 
 const MAX_DISPLAY_CHARS = 30_000
-const MAX_SUBAGENT_TEXT_CHARS = 6_000
 const MAX_ADVISOR_SLUG_CHARS = 128
 const MAX_ADVISOR_NAME_CHARS = 256
 const MAX_ADVISOR_TEXT_CHARS = 30_000
@@ -44,17 +45,6 @@ const ADVISORY_DETAIL_KEYS = [
   'delivery',
   'timestamp'
 ] as const
-
-const SUBAGENT_NOTICE_TYPES = {
-  'subagent-notify': 'completion',
-  subagent_control_notice: 'control',
-  subagent_steering_notice: 'steering',
-  subagent_supervisor_request: 'request',
-  'subagents-admin': 'admin',
-  'subagent-slash-text-result': 'command'
-} as const
-const SUBAGENT_SLASH_RESULT_TYPE = 'subagent-slash-result'
-const SUBAGENT_WATCHDOG_TYPE = 'subagent_watchdog_warning'
 
 export function projectMessages(messages: unknown[]): KernelConversationEntry[] {
   let entries: KernelConversationEntry[] = []
@@ -151,6 +141,7 @@ export function projectPiEvent(
       timestamp: now,
       durationMs: null,
       subagent: isSubagentToolName(name) ? projectSubagentRun(event.args, undefined) : null,
+      ...askToolStateField(existing?.ask),
       ...todoItemsField(name, event.args, existing),
       ...toolAttachmentsField(undefined, isSubagentToolName(name) ? undefined : existing?.attachments)
     })
@@ -187,6 +178,7 @@ export function projectPiEvent(
       subagent: isSubagentToolName(name)
         ? projectSubagentRun(event.args, partialResult.details) ?? existing?.subagent ?? null
         : null,
+      ...askToolStateField(existing?.ask),
       ...todoItemsField(name, event.args, existing),
       ...toolAttachmentsField(undefined, attachments)
     })
@@ -373,6 +365,7 @@ function projectMessage(
         subagent: isSubagentToolName(name)
           ? projectSubagentRun(item.arguments, undefined) ?? existing?.subagent ?? null
           : null,
+        ...askToolStateField(existing?.ask),
         ...todoItemsField(name, item.arguments, existing),
         ...toolAttachmentsField(undefined, isSubagentToolName(name) ? undefined : existing?.attachments)
       })
@@ -431,19 +424,15 @@ function projectMessage(
 
   if (value.role === 'custom') {
     const customType = stringValue(value.customType)
-    if (customType === SUBAGENT_SLASH_RESULT_TYPE) {
-      const requestId = slashRequestId(value.details)
-      const text = limitText(textFromContent(value.content)).text
-      if (requestId === null || text.trim().length === 0) return entries
-      const entry: KernelSubagentNoticeEntry = {
-        id: `subagent-notice:slash:${requestId}`,
-        kind: 'subagent-notice',
-        noticeType: 'command',
-        text,
-        timestamp
-      }
-      return upsert(entries, entry)
-    }
+    const subagentProjected = projectSubagentCustomMessage(entries, {
+      customType,
+      content: value.content,
+      details: value.details,
+      display: value.display,
+      timestamp,
+      historicalIdentity
+    })
+    if (subagentProjected !== null) return subagentProjected
     if (value.display !== true) return entries
     if (customType === ADVISORY_TYPE) {
       const details = projectAdvisoryDetails(value.details)
@@ -463,51 +452,7 @@ function projectMessage(
       }
       return upsert(entries, entry)
     }
-    if (customType === SUBAGENT_WATCHDOG_TYPE) {
-      const warning = projectWatchdogWarning(value.details)
-      if (warning === null) return entries
-      const entry: KernelSubagentNoticeEntry = {
-        id: historicalIdentity === undefined
-          ? `subagent-notice:watchdog:${timestamp}`
-          : `subagent-notice:${historicalIdentity}`,
-        kind: 'subagent-notice',
-        noticeType: warning.severity === 'blocker'
-          ? 'watchdog-blocker'
-          : 'watchdog-concern',
-        text: [
-          warning.summary,
-          `**证据：** ${warning.evidence}`,
-          `**建议：** ${warning.recommendedAction}`
-        ].join('\n\n'),
-        timestamp
-      }
-      return upsert(entries, entry)
-    }
-    if (customType === null || !(customType in SUBAGENT_NOTICE_TYPES)) return entries
-    const text = limitText(textFromContent(value.content)).text
-    if (text.trim().length === 0) return entries
-    const noticeType = SUBAGENT_NOTICE_TYPES[customType as keyof typeof SUBAGENT_NOTICE_TYPES]
-    const projectedCoordination = projectSubagentCoordination(
-      noticeType,
-      value.details,
-      text
-    )
-    const entry: KernelSubagentNoticeEntry = {
-      id: projectedCoordination?.id ?? (historicalIdentity === undefined
-        ? `subagent-notice:${customType}:${timestamp}`
-        : `subagent-notice:${historicalIdentity}`),
-      kind: 'subagent-notice',
-      noticeType,
-      text: projectedCoordination?.text ?? text,
-      timestamp,
-      ...(noticeType === 'completion'
-        ? { completion: projectSubagentCompletion(text) }
-        : {}),
-      ...(projectedCoordination === null
-        ? {}
-        : { coordination: projectedCoordination.coordination })
-    }
-    return upsertSubagentNotice(entries, entry)
+    return entries
   }
 
   return entries
@@ -540,32 +485,6 @@ function magicContextLevel(value: unknown): KernelExtensionStatusEntry['level'] 
   return value === 'info' || value === 'success' || value === 'warning' || value === 'error'
     ? value
     : null
-}
-
-function slashRequestId(value: unknown): string | null {
-  if (!isRecord(value) || !isBoundedString(value.requestId, MAX_CUSTOM_ID_CHARS, true)) return null
-  return value.requestId
-}
-
-function projectWatchdogWarning(value: unknown): {
-  severity: 'concern' | 'blocker'
-  summary: string
-  evidence: string
-  recommendedAction: string
-} | null {
-  if (
-    !isRecord(value) ||
-    (value.severity !== 'concern' && value.severity !== 'blocker') ||
-    !isBoundedString(value.summary, MAX_SUBAGENT_TEXT_CHARS, true) ||
-    !isBoundedString(value.evidence, MAX_SUBAGENT_TEXT_CHARS, true) ||
-    !isBoundedString(value.recommendedAction, MAX_SUBAGENT_TEXT_CHARS, true)
-  ) return null
-  return {
-    severity: value.severity,
-    summary: value.summary,
-    evidence: value.evidence,
-    recommendedAction: value.recommendedAction
-  }
 }
 
 function projectAdvisoryDetails(value: unknown): {
@@ -621,171 +540,6 @@ function isBoundedString(
     !value.includes('\0')
 }
 
-type ProjectedSubagentCoordination = {
-  id: string
-  text: string
-  coordination: KernelSubagentCoordination
-}
-
-function projectSubagentCoordination(
-  noticeType: KernelSubagentNoticeEntry['noticeType'],
-  detailsValue: unknown,
-  fallbackText: string
-): ProjectedSubagentCoordination | null {
-  const details = isRecord(detailsValue) ? detailsValue : null
-  if (details === null) return null
-
-  if (noticeType === 'request') {
-    const requestId = boundedStringValue(details.id, MAX_CUSTOM_ID_CHARS)
-    const runId = boundedStringValue(details.runId, MAX_CUSTOM_ID_CHARS)
-    const agent = boundedStringValue(details.agent, MAX_ADVISOR_NAME_CHARS)
-    const participantIndex = integerValue(details.childIndex)
-    if (requestId === null || runId === null || agent === null || participantIndex === null) {
-      return null
-    }
-    const reason = boundedStringValue(details.reason, MAX_ADVISOR_SLUG_CHARS)
-    const requiresReply = details.expectsReply === true
-    const text = cleanSupervisorRequestText(fallbackText) || `${agent} 请求主代理协助。`
-    return {
-      id: `subagent-notice:request:${requestId}`,
-      text,
-      coordination: {
-        runId,
-        agent,
-        participantIndex,
-        requestId,
-        reason,
-        requiresReply,
-        status: 'pending',
-        resolvedAt: null
-      }
-    }
-  }
-
-  if (noticeType !== 'control') return null
-  const event = isRecord(details.event) ? details.event : null
-  if (event === null) return null
-  const runId = boundedStringValue(event.runId, MAX_CUSTOM_ID_CHARS)
-  const agent = boundedStringValue(event.agent, MAX_ADVISOR_NAME_CHARS)
-  if (runId === null || agent === null) return null
-  const participantIndex = event.index === undefined ? null : integerValue(event.index)
-  if (event.index !== undefined && participantIndex === null) return null
-  const reason = boundedStringValue(event.reason, MAX_ADVISOR_SLUG_CHARS)
-  const message = boundedStringValue(event.message, MAX_SUBAGENT_TEXT_CHARS)
-  const recentFailure = boundedStringValue(event.recentFailureSummary, MAX_SUBAGENT_TEXT_CHARS)
-  const text = [message, recentFailure].filter((value): value is string => value !== null).join('\n') ||
-    `${agent} 需要主代理关注。`
-  const eventType = boundedStringValue(event.type, MAX_ADVISOR_SLUG_CHARS) ?? 'needs_attention'
-  return {
-    id: `subagent-notice:control:${runId}:${participantIndex ?? 'run'}:${eventType}:${reason ?? 'unknown'}`,
-    text,
-    coordination: {
-      runId,
-      agent,
-      participantIndex,
-      requestId: null,
-      reason,
-      requiresReply: reason === 'supervisor_request',
-      status: 'pending',
-      resolvedAt: null
-    }
-  }
-}
-
-function cleanSupervisorRequestText(value: string): string {
-  const replyHintIndex = value.indexOf('\n\nReply with:')
-  return (replyHintIndex === -1 ? value : value.slice(0, replyHintIndex)).trim()
-}
-
-function boundedStringValue(value: unknown, maxChars: number): string | null {
-  return isBoundedString(value, maxChars, true) ? value : null
-}
-
-function upsertSubagentNotice(
-  entries: KernelConversationEntry[],
-  entry: KernelSubagentNoticeEntry
-): KernelConversationEntry[] {
-  const coordination = entry.coordination
-  if (coordination === undefined) return upsert(entries, entry)
-
-  let nextEntries = entries
-  if (entry.noticeType === 'request') {
-    nextEntries = entries.filter((candidate) =>
-      candidate.kind !== 'subagent-notice' ||
-      candidate.noticeType !== 'control' ||
-      candidate.coordination?.reason !== 'supervisor_request' ||
-      !sameSubagentCoordinationTarget(candidate.coordination, coordination)
-    )
-  } else if (
-    entry.noticeType === 'control' &&
-    coordination.reason === 'supervisor_request' &&
-    entries.some((candidate) =>
-      candidate.kind === 'subagent-notice' &&
-      candidate.noticeType === 'request' &&
-      candidate.coordination !== undefined &&
-      sameSubagentCoordinationTarget(candidate.coordination, coordination)
-    )
-  ) {
-    return entries
-  }
-
-  const existing = nextEntries.find((candidate): candidate is KernelSubagentNoticeEntry =>
-    candidate.kind === 'subagent-notice' && candidate.id === entry.id
-  )
-  if (existing?.coordination?.status === 'handled' && coordination.status === 'pending') {
-    return upsert(nextEntries, {
-      ...entry,
-      coordination: {
-        ...coordination,
-        status: 'handled',
-        resolvedAt: existing.coordination.resolvedAt
-      }
-    })
-  }
-  return upsert(nextEntries, entry)
-}
-
-function sameSubagentCoordinationTarget(
-  left: KernelSubagentCoordination,
-  right: KernelSubagentCoordination
-): boolean {
-  return left.runId === right.runId && left.participantIndex === right.participantIndex
-}
-
-function resolveSubagentSupervisorRequest(
-  entries: KernelConversationEntry[],
-  toolName: string,
-  argsValue: unknown,
-  resolvedAt: number
-): KernelConversationEntry[] {
-  const name = toolName.trim().toLowerCase().split(/[.:/]/u).at(-1)
-  if (name !== 'subagent_supervisor' && name !== 'intercom') return entries
-  const args = parseRecordValue(argsValue)
-  if (args?.action !== 'reply') return entries
-  const requestId = boundedStringValue(args.replyTo, MAX_CUSTOM_ID_CHARS)
-  if (requestId === null) return entries
-
-  let changed = false
-  const nextEntries = entries.map((entry) => {
-    if (
-      entry.kind !== 'subagent-notice' ||
-      entry.noticeType !== 'request' ||
-      entry.coordination?.requestId !== requestId ||
-      entry.coordination.status === 'handled'
-    ) return entry
-    changed = true
-    return {
-      ...entry,
-      coordination: {
-        ...entry.coordination,
-        status: 'handled' as const,
-        resolvedAt
-      }
-    }
-  })
-  return changed ? nextEntries : entries
-}
-
 function upsert(
   entries: KernelConversationEntry[],
   entry: KernelConversationEntry
@@ -810,25 +564,12 @@ function findTool(entries: KernelConversationEntry[], toolCallId: string): Kerne
   return entry
 }
 
-function textFromContent(value: unknown): string {
-  if (typeof value === 'string') return value
-  if (!Array.isArray(value)) return ''
-  return value
-    .filter((item) => isRecord(item) && item.type === 'text')
-    .map((item) => stringValue(item.text) ?? '')
-    .join('\n')
-}
-
 function hasTruncation(value: unknown): boolean {
   return isRecord(value) && value.truncation !== null && value.truncation !== undefined
 }
 
-function isSubagentToolName(name: string): boolean {
-  return name.trim().toLowerCase().split(/[.:/]/u).at(-1) === 'subagent'
-}
-
 function isTodoWriteToolName(name: string): boolean {
-  return name.trim().toLowerCase().split('.').at(-1) === 'todowrite'
+  return name.trim().toLowerCase().split(/[.:/]/u).at(-1) === 'todowrite'
 }
 
 function todoItemsField(
@@ -840,6 +581,22 @@ function todoItemsField(
   const todos = projectTodoItems(argsValue)
   if (todos !== null) return { todos }
   return existing?.todos === undefined ? {} : { todos: existing.todos }
+}
+
+function askToolStateField(
+  ask: KernelAskToolState | undefined
+): Pick<KernelToolEntry, 'ask'> | Record<never, never> {
+  if (ask === undefined) return {}
+  return {
+    ask: {
+      status: ask.status,
+      error: ask.error,
+      questions: ask.questions.map((question) => ({
+        ...question,
+        options: question.options.map((option) => ({ ...option }))
+      }))
+    }
+  }
 }
 
 function toolAttachmentsField(
@@ -891,230 +648,6 @@ function projectTodoItems(value: unknown): KernelTodoItem[] | null {
   return todos
 }
 
-function projectSubagentCompletion(text: string): KernelSubagentParticipant {
-  const firstLine = text.split('\n', 1)[0] ?? ''
-  const single = firstLine.match(
-    /^(Background task|Detached foreground task) (completed|failed|paused): \*\*(.+?)\*\*(?:\s+(\([^)]*\)))?$/
-  )
-  const grouped = firstLine.match(/^Background tasks completed \((\d+)\):\s*(.*)$/)
-  const groupedAgents = grouped === null
-    ? []
-    : [...grouped[2].matchAll(/\*\*(.+?)\*\*/g)].map((match) => match[1]!)
-  const status: KernelSubagentStatus = single?.[2] === 'failed'
-    ? 'failed'
-    : single?.[2] === 'paused'
-      ? 'paused'
-      : 'completed'
-  const agent = single?.[3] ?? (
-    grouped === null
-      ? 'Subagent'
-      : groupedAgents.length > 0 ? groupedAgents.join('、') : `${grouped[1]} 个 Subagent`
-  )
-  const taskKind = single?.[1] === 'Detached foreground task'
-    ? '已分离的前台任务'
-    : grouped === null
-      ? '后台任务结果'
-      : '后台任务完成'
-  const taskInfo = single?.[4] ?? ''
-
-  return {
-    index: 0,
-    agent: limitedSubagentText(agent),
-    status,
-    task: limitedSubagentText(`${taskKind}${taskInfo}`),
-    currentTool: null,
-    currentPath: null,
-    toolCount: 0,
-    turnCount: 0,
-    tokens: 0,
-    durationMs: 0,
-    error: null,
-    finalOutput: nullableLimitedSubagentText(text)
-  }
-}
-
-function projectSubagentRun(argsValue: unknown, detailsValue: unknown): KernelSubagentRun | null {
-  const args = parseRecordValue(argsValue)
-  if (args !== null && typeof args.action === 'string') return null
-  const details = parseRecordValue(detailsValue)
-  const isSubagent = details !== null && (
-    details.mode === 'single' ||
-    details.mode === 'parallel' ||
-    details.mode === 'chain' ||
-    details.mode === 'management'
-  )
-  const hasSubagentArgs = args !== null && (
-    typeof args.agent === 'string' ||
-    Array.isArray(args.tasks) ||
-    Array.isArray(args.chain)
-  )
-  if (!isSubagent && !hasSubagentArgs) return null
-  if (details?.mode === 'management') return null
-
-  const mode = details?.mode === 'parallel' || details?.mode === 'chain' || details?.mode === 'single'
-    ? details.mode
-    : Array.isArray(args?.tasks) ? 'parallel' : Array.isArray(args?.chain) ? 'chain' : 'single'
-  const asyncId = stringValue(details?.asyncId)
-  const fallbackStatus: KernelSubagentStatus = asyncId === null ? 'pending' : 'detached'
-  const participants = mergeSubagentParticipants(
-    participantsFromArgs(args, fallbackStatus),
-    participantsFromDetails(details)
-  )
-
-  return {
-    mode,
-    runId: stringValue(details?.runId),
-    asyncId,
-    participants
-  }
-}
-
-function participantsFromArgs(
-  args: Record<string, unknown> | null,
-  status: KernelSubagentStatus
-): KernelSubagentParticipant[] {
-  if (args === null) return []
-  if (Array.isArray(args.tasks)) {
-    const participants: KernelSubagentParticipant[] = []
-    for (const value of args.tasks) {
-      const task = parseRecordValue(value)
-      if (task === null) continue
-      const count = integerValue(task.count) ?? 1
-      for (let repeatIndex = 0; repeatIndex < Math.min(count, 32); repeatIndex += 1) {
-        participants.push(emptySubagentParticipant(
-          participants.length,
-          stringValue(task.agent) ?? 'subagent',
-          stringValue(task.task) ?? '',
-          status
-        ))
-      }
-    }
-    return participants
-  }
-  if (Array.isArray(args.chain)) {
-    return args.chain.flatMap((value, index) => {
-      const step = parseRecordValue(value)
-      return step === null ? [] : [
-        emptySubagentParticipant(
-          index,
-          stringValue(step.agent) ?? 'subagent',
-          stringValue(step.task) ?? stringValue(step.prompt) ?? '',
-          status
-        )
-      ]
-    })
-  }
-  if (typeof args.agent === 'string') {
-    return [emptySubagentParticipant(0, args.agent, stringValue(args.task) ?? '', status)]
-  }
-  return []
-}
-
-function participantsFromDetails(
-  details: Record<string, unknown> | null
-): KernelSubagentParticipant[] {
-  if (details === null) return []
-  const progressValues = Array.isArray(details.progress) ? details.progress : []
-  const resultValues = Array.isArray(details.results) ? details.results : []
-  const indexes = new Set<number>()
-  for (const [arrayIndex, value] of progressValues.entries()) {
-    const item = parseRecordValue(value)
-    if (item !== null) indexes.add(integerValue(item.index) ?? arrayIndex)
-  }
-  for (const [arrayIndex, value] of resultValues.entries()) {
-    const item = parseRecordValue(value)
-    if (item !== null) indexes.add(integerValue(item.index) ?? arrayIndex)
-  }
-
-  return [...indexes].sort((left, right) => left - right).map((index) => {
-    const progress = progressValues
-      .map(parseRecordValue)
-      .find((item, arrayIndex) => item !== null && (integerValue(item.index) ?? arrayIndex) === index) ?? null
-    const result = resultValues
-      .map(parseRecordValue)
-      .find((item, arrayIndex) => item !== null && (integerValue(item.index) ?? arrayIndex) === index) ?? null
-    const status = subagentStatus(progress, result)
-    return {
-      index,
-      agent: stringValue(progress?.agent) ?? stringValue(result?.agent) ?? 'subagent',
-      status,
-      task: limitedSubagentText(stringValue(progress?.task) ?? stringValue(result?.task) ?? ''),
-      currentTool: stringValue(progress?.currentTool),
-      currentPath: stringValue(progress?.currentPath),
-      toolCount: nonNegativeNumber(progress?.toolCount) ?? nonNegativeNumber(result?.progressSummary, 'toolCount') ?? 0,
-      turnCount: nonNegativeNumber(progress?.turnCount) ?? nonNegativeNumber(result?.usage, 'turns') ?? 0,
-      tokens: nonNegativeNumber(progress?.tokens) ??
-        ((nonNegativeNumber(result?.usage, 'input') ?? 0) + (nonNegativeNumber(result?.usage, 'output') ?? 0)),
-      durationMs: nonNegativeNumber(progress?.durationMs) ??
-        nonNegativeNumber(result?.progressSummary, 'durationMs') ?? 0,
-      error: nullableLimitedSubagentText(stringValue(progress?.error) ?? stringValue(result?.error)),
-      finalOutput: nullableLimitedSubagentText(stringValue(result?.finalOutput))
-    }
-  })
-}
-
-function mergeSubagentParticipants(
-  fallback: KernelSubagentParticipant[],
-  projected: KernelSubagentParticipant[]
-): KernelSubagentParticipant[] {
-  if (projected.length === 0) return fallback
-  const projectedByIndex = new Map(projected.map((participant) => [participant.index, participant]))
-  const merged = fallback.map((participant) => {
-    const current = projectedByIndex.get(participant.index)
-    if (current === undefined) return participant
-    projectedByIndex.delete(participant.index)
-    return {
-      ...participant,
-      ...current,
-      task: current.task || participant.task,
-      agent: current.agent === 'subagent' ? participant.agent : current.agent
-    }
-  })
-  return [...merged, ...projectedByIndex.values()].sort((left, right) => left.index - right.index)
-}
-
-function emptySubagentParticipant(
-  index: number,
-  agent: string,
-  task: string,
-  status: KernelSubagentStatus
-): KernelSubagentParticipant {
-  return {
-    index,
-    agent: limitedSubagentText(agent),
-    status,
-    task: limitedSubagentText(task),
-    currentTool: null,
-    currentPath: null,
-    toolCount: 0,
-    turnCount: 0,
-    tokens: 0,
-    durationMs: 0,
-    error: null,
-    finalOutput: null
-  }
-}
-
-function subagentStatus(
-  progress: Record<string, unknown> | null,
-  result: Record<string, unknown> | null
-): KernelSubagentStatus {
-  const progressStatus = stringValue(progress?.status)
-  if (
-    progressStatus === 'pending' ||
-    progressStatus === 'running' ||
-    progressStatus === 'completed' ||
-    progressStatus === 'failed' ||
-    progressStatus === 'paused' ||
-    progressStatus === 'detached'
-  ) return progressStatus
-  if (result?.detached === true) return 'detached'
-  if (stringValue(result?.error) !== null) return 'failed'
-  const exitCode = numberValue(result?.exitCode)
-  if (exitCode !== null) return exitCode === 0 ? 'completed' : 'failed'
-  return 'pending'
-}
-
 function parseRecordValue(value: unknown): Record<string, unknown> | null {
   if (isRecord(value)) return value
   if (typeof value !== 'string' || !value.trim().startsWith('{')) return null
@@ -1124,25 +657,6 @@ function parseRecordValue(value: unknown): Record<string, unknown> | null {
   } catch {
     return null
   }
-}
-
-function nonNegativeNumber(value: unknown, key?: string): number | null {
-  const target = key === undefined ? value : isRecord(value) ? value[key] : undefined
-  return typeof target === 'number' && Number.isFinite(target) && target >= 0 ? target : null
-}
-
-function integerValue(value: unknown): number | null {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null
-}
-
-function limitedSubagentText(value: string): string {
-  return value.length <= MAX_SUBAGENT_TEXT_CHARS
-    ? value
-    : `${value.slice(0, MAX_SUBAGENT_TEXT_CHARS)}…`
-}
-
-function nullableLimitedSubagentText(value: string | null): string | null {
-  return value === null ? null : limitedSubagentText(value)
 }
 
 function formatValue(value: unknown): string {

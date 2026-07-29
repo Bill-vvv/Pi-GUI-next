@@ -9,6 +9,7 @@ import {
   type KernelSubagentDefinitionInput,
   type SubagentSettings as SubagentSettingsValue
 } from '../../../../shared/kernel-contract'
+import { IconButton } from '../../components/IconButton'
 import { Select } from '../../components/Select'
 import { hasUnsavedSettingsDraft } from './settings-workspace'
 import {
@@ -552,7 +553,7 @@ export function SubagentSettings({
   }
   const batchFieldOptions = [
     { value: 'scope', label: '作用域' },
-    { value: 'enabled', label: '启动状态' },
+    { value: 'enabled', label: '启用状态' },
     { value: 'model', label: '模型' },
     { value: 'thinking', label: '思考强度' },
     { value: 'inheritProjectContext', label: '继承项目指令' },
@@ -567,8 +568,8 @@ export function SubagentSettings({
       ]
     : batchField === 'enabled'
       ? [
-          { value: 'enabled', label: '已启动' },
-          { value: 'disabled', label: '未启动' }
+          { value: 'enabled', label: '已启用' },
+          { value: 'disabled', label: '已停用' }
         ]
       : batchField === 'model'
         ? modelOptions
@@ -692,8 +693,8 @@ export function SubagentSettings({
                   groups={[{
                     options: [
                       { value: 'all', label: '全部' },
-                      { value: 'enabled', label: '已启动' },
-                      { value: 'disabled', label: '未启动' }
+                      { value: 'enabled', label: '已启用' },
+                      { value: 'disabled', label: '已停用' }
                     ]
                   }]}
                   onValueChange={(value) => {
@@ -766,25 +767,25 @@ export function SubagentSettings({
                 ))}
               </div>
             )}
-            {pageCount > 1 ? (
+            {!definitionsLoading && definitionsError === null && filteredDefinitions.length > 0 ? (
               <nav className="settings-subagent-pagination" aria-label="Subagent 分页">
-                <button
-                  type="button"
-                  aria-label="上一页"
+                <IconButton
+                  className="settings-subagent-page-button"
+                  icon="chevron-left"
+                  iconSize="sm"
+                  label="上一页"
                   disabled={page === 0}
                   onClick={() => setPage((current) => Math.max(0, current - 1))}
-                >
-                  上一页
-                </button>
-                <span>{page + 1} / {pageCount}</span>
-                <button
-                  type="button"
-                  aria-label="下一页"
+                />
+                <span>共 {filteredDefinitions.length} 个 · {page + 1} / {pageCount}</span>
+                <IconButton
+                  className="settings-subagent-page-button"
+                  icon="chevron-right"
+                  iconSize="sm"
+                  label="下一页"
                   disabled={page >= pageCount - 1}
                   onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}
-                >
-                  下一页
-                </button>
+                />
               </nav>
             ) : null}
           </aside>
@@ -798,15 +799,13 @@ export function SubagentSettings({
               ) : (
                 <>
                   <div className="settings-subagent-editor-header">
-                    <button
+                    <IconButton
                       ref={editorBackRef}
-                      type="button"
                       className="settings-subagent-editor-back"
+                      icon="arrow-left"
+                      label="返回 Agent 列表"
                       onClick={closeEditor}
-                    >
-                      <span aria-hidden="true">←</span>
-                      Agent 列表
-                    </button>
+                    />
                     <h4>批量修改 · {batchSelectedDefinitions.length} 个 Agent</h4>
                   </div>
                   <div className="settings-subagent-editor-body">
@@ -872,15 +871,13 @@ export function SubagentSettings({
             ) : (
               <>
                 <div className="settings-subagent-editor-header">
-                  <button
+                  <IconButton
                     ref={editorBackRef}
-                    type="button"
                     className="settings-subagent-editor-back"
+                    icon="arrow-left"
+                    label="返回 Agent 列表"
                     onClick={closeEditor}
-                  >
-                    <span aria-hidden="true">←</span>
-                    Agent 列表
-                  </button>
+                  />
                   <h4>{editorState === 'create' ? '新增 Agent' : draft.name}</h4>
                 </div>
 
@@ -946,7 +943,7 @@ export function SubagentSettings({
                         </SettingsField>
                         {editorState === 'create' || selectedDefinition === null ? null : (
                           <SettingsField
-                            label="启动状态"
+                            label="启用状态"
                             htmlFor="settings-subagent-definition-enabled"
                           >
                             <Select
@@ -955,8 +952,8 @@ export function SubagentSettings({
                               disabled={formDisabled}
                               groups={[{
                                 options: [
-                                  { value: 'enabled', label: '已启动' },
-                                  { value: 'disabled', label: '未启动' }
+                                  { value: 'enabled', label: '已启用' },
+                                  { value: 'disabled', label: '已停用' }
                                 ]
                               }]}
                               onValueChange={(value) => {
@@ -1435,7 +1432,9 @@ function effectiveSubagentDefinitions(
 ): KernelSubagentDefinition[] {
   const definitionsByName = new Map<string, KernelSubagentDefinition>()
   for (const definition of definitions) definitionsByName.set(definition.name, definition)
-  return [...definitionsByName.values()]
+  return [...definitionsByName.values()].sort((left, right) =>
+    left.name.localeCompare(right.name)
+  )
 }
 
 function listValue(value: string[] | null): string {

@@ -8,7 +8,7 @@ type TodoPanelProps = {
 }
 
 export function TodoPanel({ todos }: TodoPanelProps): React.JSX.Element {
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(false)
   const bodyId = useId()
   const completedCount = todos.filter(({ status }) => status === 'completed').length
   const current = todos.find(({ status }) => status === 'in_progress') ??

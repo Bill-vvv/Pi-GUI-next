@@ -1,0 +1,24 @@
+{
+  "name": "pi-gui-task-notify",
+  "version": "0.1.0",
+  "description": "Task-completion desktop notifications with exact Pi GUI conversation activation",
+  "license": "MIT",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.0"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "src",
+    "assets",
+    "README.md",
+    "LICENSE"
+  ]
+}

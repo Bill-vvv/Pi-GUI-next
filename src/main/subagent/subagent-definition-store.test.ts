@@ -185,6 +185,158 @@ test('reads and writes reversible user and project enabled overrides', async (t)
   assert.equal(userSettings.theme, 'dark')
 })
 
+test('excludes legacy Skill markdown from Agent discovery', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-gui-subagent-skills-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const agentDir = join(root, 'agent')
+  const userHome = join(root, 'home')
+  const projectPath = join(root, 'project')
+  await Promise.all([
+    mkdir(join(userHome, '.agents', 'skills', 'brandkit'), { recursive: true }),
+    mkdir(join(userHome, '.agents', 'team'), { recursive: true }),
+    mkdir(join(projectPath, '.agents', 'skills', 'frontend'), { recursive: true }),
+    mkdir(join(projectPath, '.agents', 'team'), { recursive: true })
+  ])
+  await Promise.all([
+    writeFile(
+      join(userHome, '.agents', 'skills', 'brandkit', 'SKILL.md'),
+      agentFile('brandkit', 'Brand skill', 'Skill instructions.'),
+      'utf8'
+    ),
+    writeFile(
+      join(userHome, '.agents', 'team', 'explorer.md'),
+      agentFile('explorer', 'Explore code', 'Explore.'),
+      'utf8'
+    ),
+    writeFile(
+      join(projectPath, '.agents', 'skills', 'frontend', 'SKILL.md'),
+      agentFile('frontend', 'Frontend skill', 'Skill instructions.'),
+      'utf8'
+    ),
+    writeFile(
+      join(projectPath, '.agents', 'team', 'worker.md'),
+      agentFile('worker', 'Implement code', 'Implement.'),
+      'utf8'
+    )
+  ])
+
+  const store = new SubagentDefinitionStore({ agentDir, userHome })
+  const definitions = await store.list(projectPath)
+
+  assert.deepEqual(
+    definitions.map(({ scope, name }) => ({ scope, name })),
+    [
+      { scope: 'user', name: 'explorer' },
+      { scope: 'project', name: 'worker' }
+    ]
+  )
+})
+
+test('projects effective defaults and Agent overrides with runtime precedence', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-gui-subagent-overrides-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const agentDir = join(root, 'agent')
+  const userHome = join(root, 'home')
+  const projectPath = join(root, 'project')
+  const builtinDir = join(agentDir, 'npm', 'node_modules', 'pi-subagents', 'agents')
+  const userAgentDir = join(agentDir, 'agents')
+  await Promise.all([
+    mkdir(builtinDir, { recursive: true }),
+    mkdir(userAgentDir, { recursive: true }),
+    mkdir(join(projectPath, '.pi'), { recursive: true })
+  ])
+  await Promise.all([
+    writeFile(
+      join(builtinDir, 'reviewer.md'),
+      agentFile('reviewer', 'Review code', 'Review.'),
+      'utf8'
+    ),
+    writeFile(
+      join(builtinDir, 'worker.md'),
+      agentFile('worker', 'Implement code', 'Implement.'),
+      'utf8'
+    ),
+    writeFile(
+      join(userAgentDir, 'explorer.md'),
+      agentFile('explorer', 'Explore code', 'Explore.'),
+      'utf8'
+    ),
+    writeFile(
+      join(userAgentDir, 'fixed.md'),
+      `---\nname: fixed\ndescription: Fixed model\nmodel: provider/fixed\n---\n\nFixed.\n`,
+      'utf8'
+    ),
+    writeFile(
+      join(agentDir, 'settings.json'),
+      JSON.stringify({
+        subagents: {
+          defaultModel: 'provider/default',
+          defaultThinking: 'minimal',
+          agentOverrides: {
+            reviewer: {
+              model: 'provider/user-reviewer',
+              thinking: 'medium',
+              disabled: true
+            },
+            worker: {
+              model: 'provider/user-worker',
+              thinking: 'high',
+              defaultContext: 'fresh'
+            },
+            explorer: {
+              model: 'provider/user-explorer',
+              thinking: 'low',
+              defaultContext: 'fresh'
+            },
+            fixed: {
+              model: 'provider/ignored',
+              thinking: 'high'
+            }
+          }
+        }
+      }),
+      'utf8'
+    ),
+    writeFile(
+      join(projectPath, '.pi', 'settings.json'),
+      JSON.stringify({
+        subagents: {
+          agentOverrides: {
+            reviewer: {
+              model: 'provider/project-reviewer',
+              disabled: false
+            }
+          }
+        }
+      }),
+      'utf8'
+    )
+  ])
+
+  const store = new SubagentDefinitionStore({ agentDir, userHome })
+  const definitions = await store.list(projectPath)
+  const reviewer = definitions.find(({ scope, name }) => scope === 'builtin' && name === 'reviewer')
+  const worker = definitions.find(({ scope, name }) => scope === 'builtin' && name === 'worker')
+  const explorer = definitions.find(({ scope, name }) => scope === 'user' && name === 'explorer')
+  const fixed = definitions.find(({ scope, name }) => scope === 'user' && name === 'fixed')
+
+  assert.ok(reviewer)
+  assert.equal(reviewer.enabled, true)
+  assert.equal(reviewer.model, 'provider/project-reviewer')
+  assert.equal(reviewer.thinking, 'minimal')
+  assert.ok(worker)
+  assert.equal(worker.model, 'provider/user-worker')
+  assert.equal(worker.thinking, 'high')
+  assert.equal(worker.defaultContext, 'fresh')
+  assert.ok(explorer)
+  assert.equal(explorer.model, 'provider/user-explorer')
+  assert.equal(explorer.thinking, 'low')
+  assert.equal(explorer.defaultContext, 'fresh')
+  assert.ok(fixed)
+  assert.equal(fixed.model, 'provider/fixed')
+  assert.equal(fixed.thinking, 'high')
+})
+
 function agentFile(name: string, description: string, prompt: string): string {
   return `---\nname: ${name}\ndescription: ${description}\ninheritProjectContext: true\n---\n\n${prompt}\n`
 }

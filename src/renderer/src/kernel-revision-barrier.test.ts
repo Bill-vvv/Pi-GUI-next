@@ -98,6 +98,42 @@ test('ack before event does not settle until the matching revision is applied', 
   assert.equal(harness.latest()?.activeSessionKey, '/tmp/two.jsonl')
 })
 
+test('mixed full-state and later patch batch preserves revision and ack semantics', async () => {
+  const harness = createBarrierHarness()
+  const sessionKey = '/tmp/batched.jsonl'
+  const waiting = harness.barrier.waitForAck({ revision: 2 })
+  let settled = false
+  void waiting.then(() => {
+    settled = true
+  })
+
+  harness.barrier.handleEvent({
+    type: 'kernel.state-batch',
+    events: [
+      {
+        type: 'kernel.state-changed',
+        revision: 1,
+        state: baseState({ activeSessionKey: sessionKey })
+      },
+      {
+        type: 'kernel.state-patched',
+        revision: 2,
+        patch: runtimePatch('running', sessionKey)
+      }
+    ]
+  })
+
+  await Promise.resolve()
+  assert.equal(harness.barrier.getAppliedRevision(), 1)
+  assert.equal(settled, false)
+  assert.equal(harness.frames.length, 1)
+  harness.flushFrames()
+  await waiting
+  assert.equal(harness.barrier.getAppliedRevision(), 2)
+  assert.equal(harness.latest()?.activeSessionKey, sessionKey)
+  assert.equal(harness.latest()?.runtime.status, 'running')
+})
+
 test('event before ack settles immediately at the already-applied revision', async () => {
   const harness = createBarrierHarness()
   harness.barrier.handleEvent({

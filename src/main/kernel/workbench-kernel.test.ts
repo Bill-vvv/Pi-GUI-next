@@ -15,6 +15,7 @@ import { DEFAULT_SHORTCUT_SETTINGS } from '../../shared/shortcut-settings.ts'
 import type { ProjectSessionRegistry, SessionPointer } from '../project/session-pointer.ts'
 import type {
   PiRpcAvailableModel,
+  PiRpcExtensionInventory,
   PiRpcSessionEntry,
   PiRpcSessionState,
   PiRpcSessionStats,
@@ -44,6 +45,10 @@ import type {
   RuntimeHostState
 } from '../runtime/runtime-host.ts'
 import type {
+  RuntimeHibernateLeaseResult,
+  RuntimeQuiescenceQueryResult
+} from '../runtime/runtime-quiescence.ts'
+import type {
   SessionNameGenerationRequest,
   SessionNameGenerator
 } from '../runtime/session-name-generator.ts'
@@ -53,12 +58,21 @@ class FakeRuntimeHost implements RuntimeHost {
   readonly commands: RuntimeCommand[] = []
   startCalls = 0
   stopCalls = 0
+  readonly hibernateLeaseCalls: Array<{
+    action: 'prepare' | 'commit' | 'release'
+    sessionId: string
+    generation: number
+    attemptId: string
+    token?: string
+  }> = []
   protected readonly sessionState: PiRpcSessionState
   protected readonly messages: unknown[]
   protected readonly slashCommands: PiRpcSlashCommand[]
   protected readonly availableModels: PiRpcAvailableModel[]
   protected readonly sessionEntries: unknown[]
+  protected sessionLeafId: string | null
   private sessionStats: PiRpcSessionStats | undefined
+  private rpcPid: number | null = null
   private state: RuntimeHostState = {
     executable: '/usr/bin/pi',
     version: '0.80.10',
@@ -88,7 +102,8 @@ class FakeRuntimeHost implements RuntimeHost {
       contextWindow: 128000
     }],
     sessionStats?: PiRpcSessionStats,
-    sessionEntries: unknown[] = []
+    sessionEntries: unknown[] = [],
+    sessionLeafId: string | null = null
   ) {
     this.sessionState = sessionState
     this.messages = messages
@@ -96,6 +111,7 @@ class FakeRuntimeHost implements RuntimeHost {
     this.availableModels = availableModels
     this.sessionStats = sessionStats
     this.sessionEntries = sessionEntries
+    this.sessionLeafId = sessionLeafId
   }
 
   async start(): Promise<void> {
@@ -138,7 +154,16 @@ class FakeRuntimeHost implements RuntimeHost {
       return {
         type: 'entries',
         entries: this.sessionEntries as PiRpcSessionEntry[],
-        leafId: null
+        leafId: this.sessionLeafId
+      }
+    }
+    if (command.type === 'navigate_tree') {
+      this.sessionLeafId = command.targetEntryId
+      return {
+        type: 'tree-navigation',
+        targetEntryId: command.targetEntryId,
+        cancelled: false,
+        leafId: command.targetEntryId
       }
     }
     if (command.type === 'get_available_models') {
@@ -185,9 +210,81 @@ class FakeRuntimeHost implements RuntimeHost {
     return { ...this.state }
   }
 
+  getRpcPid(): number | null {
+    return this.rpcPid
+  }
+
+  async getLoadedExtensions(): Promise<PiRpcExtensionInventory> {
+    return {
+      protocolVersion: 1,
+      complete: true,
+      loading: 'eager_complete',
+      extensions: [],
+      loadErrorCount: 0
+    }
+  }
+
+  setRpcPid(pid: number | null): void {
+    this.rpcPid = pid
+  }
+
+  setHostState(state: Partial<RuntimeHostState>): void {
+    this.state = { ...this.state, ...state }
+  }
+
   subscribe(listener: (event: RuntimeHostEvent) => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  async queryQuiescence(): Promise<RuntimeQuiescenceQueryResult> {
+    return {
+      ok: true,
+      result: {
+        version: 1,
+        kind: 'pi-gui.runtime-quiescence/query-result',
+        nonce: 'fake-runtime',
+        core: { idle: true, pendingMessages: false },
+        providers: [],
+        quiescent: true
+      }
+    }
+  }
+
+  async prepareHibernation(input: {
+    sessionId: string
+    generation: number
+    attemptId: string
+  }): Promise<RuntimeHibernateLeaseResult> {
+    this.hibernateLeaseCalls.push({ action: 'prepare', ...input })
+    return {
+      ok: true,
+      action: 'prepare',
+      ...input,
+      token: `fake-token-${input.attemptId}`,
+      inventoryFingerprint: 'fake',
+      preparedProviders: []
+    }
+  }
+
+  async commitHibernation(input: {
+    sessionId: string
+    generation: number
+    attemptId: string
+    token: string
+  }): Promise<RuntimeHibernateLeaseResult> {
+    this.hibernateLeaseCalls.push({ action: 'commit', ...input })
+    return { ok: true, action: 'commit', ...input }
+  }
+
+  async releaseHibernation(input: {
+    sessionId: string
+    generation: number
+    attemptId: string
+    token: string
+  }): Promise<RuntimeHibernateLeaseResult> {
+    this.hibernateLeaseCalls.push({ action: 'release', ...input })
+    return { ok: true, action: 'release', ...input }
   }
 
   emit(event: RuntimeHostEvent): void {
@@ -710,6 +807,49 @@ test('advisor commands require strict boolean payloads', () => {
   }
 })
 
+test('Task Navigator commands require exact typed identities', () => {
+  assert.equal(isKernelCommand({ type: 'kernel.select-navigator', kind: 'project' }), true)
+  assert.equal(isKernelCommand({ type: 'kernel.select-navigator', kind: 'task' }), true)
+  assert.equal(isKernelCommand({ type: 'kernel.select-navigator', kind: 'other' }), false)
+  assert.equal(isKernelCommand({ type: 'kernel.select-navigator', kind: 'task', extra: true }), false)
+  assert.equal(isKernelCommand({ type: 'kernel.create-task' }), true)
+  assert.equal(isKernelCommand({ type: 'kernel.create-task', extra: true }), false)
+  const taskKey = '00000000-0000-4000-8000-000000000001'
+  assert.equal(isKernelCommand({ type: 'kernel.activate-task', taskKey }), true)
+  assert.equal(isKernelCommand({ type: 'kernel.activate-task', taskKey: '' }), false)
+  assert.equal(isKernelCommand({ type: 'kernel.activate-task', taskKey: 'task-1' }), false)
+  assert.equal(isKernelCommand({ type: 'kernel.activate-task', taskKey, extra: true }), false)
+})
+
+test('history prompt commands require an exact bounded message identity', () => {
+  assert.equal(isKernelCommand({
+    type: 'kernel.navigate-history-prompt',
+    sessionKey: '/tmp/session.jsonl',
+    messageId: 'message:history:0:user'
+  }), true)
+  assert.equal(isKernelCommand({
+    type: 'kernel.navigate-history-prompt',
+    sessionKey: '/tmp/session.jsonl',
+    messageId: ''
+  }), false)
+  assert.equal(isKernelCommand({
+    type: 'kernel.navigate-history-prompt',
+    sessionKey: '/tmp/session.jsonl',
+    messageId: 'message:history:0:user',
+    extra: true
+  }), false)
+  assert.equal(isKernelCommand({
+    type: 'kernel.prompt',
+    message: 'Revised prompt',
+    expectedSessionKey: '/tmp/session.jsonl'
+  }), true)
+  assert.equal(isKernelCommand({
+    type: 'kernel.prompt',
+    message: 'Revised prompt',
+    expectedSessionKey: ''
+  }), false)
+})
+
 test('mutation acknowledgements track published revisions without cloning KernelState', async () => {
   const runtime = new FakeRuntimeHost()
   const kernel = new WorkbenchKernel(
@@ -764,6 +904,390 @@ test('mutation acknowledgements track published revisions without cloning Kernel
   assert.deepEqual(kernel.getSnapshot(), {
     revision: 1,
     state: kernel.getState()
+  })
+})
+
+test('active stderr diagnostics publish a narrow runtime patch instead of a full state copy', async () => {
+  const runtime = new FakeRuntimeHost()
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  await kernel.start()
+  const events: KernelEvent[] = []
+  kernel.subscribe((event) => {
+    events.push(event)
+  })
+
+  runtime.setHostState({
+    stderrChars: 27,
+    stderrSummary: 'latest diagnostic tail'
+  })
+  runtime.emit({
+    type: 'diagnostic',
+    kind: 'stderr',
+    message: 'latest diagnostic tail',
+    stderrChars: 27
+  })
+
+  assert.equal(events.filter((event) => event.type === 'kernel.state-changed').length, 0)
+  const patches = events.filter((event) => event.type === 'kernel.state-patched')
+  assert.equal(patches.length, 1)
+  const patch = patches[0]?.type === 'kernel.state-patched' ? patches[0].patch : null
+  assert.equal(patch?.projectKey, '/tmp/project')
+  assert.equal(patch?.sessionKey, '/tmp/session-1.jsonl')
+  assert.equal(patch?.runtime?.stderrChars, 27)
+  assert.equal(patch?.runtime?.stderrSummary, 'latest diagnostic tail')
+  assert.equal(kernel.getState().runtime.stderrChars, 27)
+
+  await kernel.stop()
+})
+
+test('ask commands require bounded structured answer payloads', () => {
+  assert.equal(isKernelCommand({
+    type: 'kernel.submit-ask',
+    sessionKey: '/tmp/session-1.jsonl',
+    toolCallId: 'ask-1',
+    answers: [{ questionId: 'scope', value: 'large' }]
+  }), true)
+  assert.equal(isKernelCommand({
+    type: 'kernel.submit-ask',
+    sessionKey: '/tmp/session-1.jsonl',
+    toolCallId: 'ask-1',
+    answers: [{ questionId: 'scope', value: '', customValue: 'A staged rollout' }]
+  }), true)
+  assert.equal(isKernelCommand({
+    type: 'kernel.submit-ask',
+    sessionKey: '/tmp/session-1.jsonl',
+    toolCallId: 'ask-1',
+    answers: []
+  }), false)
+  assert.equal(isKernelCommand({
+    type: 'kernel.submit-ask',
+    sessionKey: '/tmp/session-1.jsonl',
+    toolCallId: 'ask-1',
+    answers: [{ questionId: 'scope', value: ['a', 'a'] }]
+  }), false)
+  assert.equal(isKernelCommand({
+    type: 'kernel.cancel-ask',
+    sessionKey: '/tmp/session-1.jsonl',
+    toolCallId: 'ask-1'
+  }), true)
+  assert.equal(isKernelCommand({
+    type: 'kernel.cancel-ask',
+    sessionKey: '/tmp/session-1.jsonl',
+    toolCallId: 'ask-1',
+    extra: true
+  }), false)
+})
+
+test('batches an inline ask form into sequential Pi extension UI responses', async () => {
+  const runtime = new FakeRuntimeHost()
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  await kernel.start()
+  const sessionKey = kernel.getState().activeSessionKey
+  assert.equal(sessionKey, '/tmp/session-1.jsonl')
+
+  const args = {
+    questions: [
+      {
+        id: 'scope',
+        prompt: 'Choose a scope',
+        type: 'single',
+        options: [
+          { value: 'small', label: 'Small' },
+          { value: 'large', label: 'Large' }
+        ]
+      },
+      {
+        id: 'targets',
+        prompt: 'Choose targets',
+        type: 'multiple',
+        options: [
+          { value: 'linux', label: 'Linux' },
+          { value: 'macos', label: 'macOS' },
+          { value: 'windows', label: 'Windows' }
+        ]
+      },
+      {
+        id: 'notes',
+        prompt: 'Add constraints',
+        type: 'text',
+        placeholder: 'Required details'
+      }
+    ]
+  }
+  runtime.emit({
+    type: 'pi-event',
+    event: { type: 'tool_execution_start', toolCallId: 'ask-1', toolName: 'ask', args }
+  })
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'extension_ui_request',
+      id: 'ui-1',
+      method: 'select',
+      title: 'Ask · Choose a scope',
+      options: ['Small', 'Large', '其他（自行输入）']
+    }
+  })
+
+  const pendingTool = kernel.getState().conversation.entries.find(
+    (entry) => entry.kind === 'tool' && entry.toolCallId === 'ask-1'
+  )
+  assert.equal(pendingTool?.kind === 'tool' ? pendingTool.ask?.status : null, 'waiting')
+  assert.equal(
+    kernel.getState().sessions.find((session) => session.key === sessionKey)?.awaitingUserInput,
+    true
+  )
+
+  await kernel.submitAsk(sessionKey!, 'ask-1', [
+    { questionId: 'scope', value: 'large' },
+    { questionId: 'targets', value: ['windows', 'linux'] },
+    { questionId: 'notes', value: 'Keep the current layout' }
+  ])
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'extension_ui_request',
+      id: 'ui-2',
+      method: 'select',
+      title: 'Ask · Choose targets',
+      options: ['Linux', 'macOS', 'Windows', '其他（自行输入）', '✓ Done']
+    }
+  })
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'extension_ui_request',
+      id: 'ui-3',
+      method: 'select',
+      title: 'Ask · Choose targets',
+      options: ['macOS', 'Windows', '其他（自行输入）', '✓ Done']
+    }
+  })
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'extension_ui_request',
+      id: 'ui-4',
+      method: 'select',
+      title: 'Ask · Choose targets',
+      options: ['macOS', '其他（自行输入）', '✓ Done']
+    }
+  })
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'extension_ui_request',
+      id: 'ui-5',
+      method: 'input',
+      title: 'Ask · Add constraints',
+      placeholder: 'Required details'
+    }
+  })
+
+  assert.deepEqual(
+    runtime.commands.filter((command) => command.type === 'extension_ui_response'),
+    [
+      { type: 'extension_ui_response', id: 'ui-1', value: 'Large' },
+      { type: 'extension_ui_response', id: 'ui-2', value: 'Linux' },
+      { type: 'extension_ui_response', id: 'ui-3', value: 'Windows' },
+      { type: 'extension_ui_response', id: 'ui-4', value: '✓ Done' },
+      { type: 'extension_ui_response', id: 'ui-5', value: 'Keep the current layout' }
+    ]
+  )
+  const submittingTool = kernel.getState().conversation.entries.find(
+    (entry) => entry.kind === 'tool' && entry.toolCallId === 'ask-1'
+  )
+  assert.equal(submittingTool?.kind === 'tool' ? submittingTool.ask?.status : null, 'submitting')
+
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_end',
+      toolCallId: 'ask-1',
+      toolName: 'ask',
+      result: { content: [{ type: 'text', text: 'User answers received.' }] },
+      isError: false
+    }
+  })
+  const completedTool = kernel.getState().conversation.entries.find(
+    (entry) => entry.kind === 'tool' && entry.toolCallId === 'ask-1'
+  )
+  assert.equal(completedTool?.kind === 'tool' ? completedTool.status : null, 'success')
+  assert.equal(completedTool?.kind === 'tool' ? completedTool.ask : null, undefined)
+  assert.equal(
+    kernel.getState().sessions.find((session) => session.key === sessionKey)?.awaitingUserInput,
+    false
+  )
+})
+
+test('a background ask publishes and clears its Session reply marker without swapping context', async () => {
+  const foregroundPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/foreground-session.jsonl',
+    sessionId: 'foreground-session',
+    sessionName: 'Foreground session'
+  }
+  const backgroundPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/background-session.jsonl',
+    sessionId: 'background-session',
+    sessionName: 'Background session'
+  }
+  const backgroundRuntime = new FakeRuntimeHost({
+    sessionId: backgroundPointer.sessionId,
+    sessionFile: backgroundPointer.sessionFile,
+    sessionName: backgroundPointer.sessionName ?? undefined
+  })
+  const foregroundRuntime = new FakeRuntimeHost({
+    sessionId: foregroundPointer.sessionId,
+    sessionFile: foregroundPointer.sessionFile,
+    sessionName: foregroundPointer.sessionName ?? undefined
+  })
+  const runtimes: RuntimeHost[] = [backgroundRuntime, foregroundRuntime]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [foregroundPointer, backgroundPointer],
+        activeSessionKey: backgroundPointer.sessionFile
+      }
+    }
+  )
+
+  await kernel.activateSession(backgroundPointer.sessionFile)
+  await kernel.activateSession(foregroundPointer.sessionFile)
+  backgroundRuntime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_start',
+      toolCallId: 'background-ask',
+      toolName: 'ask',
+      args: {
+        questions: [{
+          id: 'scope',
+          prompt: 'Choose a scope',
+          type: 'single',
+          options: [
+            { value: 'small', label: 'Small' },
+            { value: 'large', label: 'Large' }
+          ]
+        }]
+      }
+    }
+  })
+  backgroundRuntime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'extension_ui_request',
+      id: 'background-ui',
+      method: 'select',
+      title: 'Ask · Choose a scope',
+      options: ['Small', 'Large', '其他（自行输入）']
+    }
+  })
+
+  assert.equal(kernel.getState().activeSessionKey, foregroundPointer.sessionFile)
+  assert.equal(
+    kernel.getState().sessions.find((session) => session.key === backgroundPointer.sessionFile)
+      ?.awaitingUserInput,
+    true
+  )
+  assert.equal(
+    kernel.getState().conversation.entries.some(
+      (entry) => entry.kind === 'tool' && entry.toolCallId === 'background-ask'
+    ),
+    false
+  )
+  await assert.rejects(
+    kernel.reclaimInactiveRuntime(backgroundPointer.sessionFile),
+    /waiting for a user reply/
+  )
+
+  backgroundRuntime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_end',
+      toolCallId: 'background-ask',
+      toolName: 'ask',
+      result: { content: [{ type: 'text', text: 'Cancelled.' }] },
+      isError: true
+    }
+  })
+
+  assert.equal(kernel.getState().activeSessionKey, foregroundPointer.sessionFile)
+  assert.equal(
+    kernel.getState().sessions.find((session) => session.key === backgroundPointer.sessionFile)
+      ?.awaitingUserInput,
+    false
+  )
+})
+
+test('ask cancellation is identity-bound and replies only to the matching pending request', async () => {
+  const runtime = new FakeRuntimeHost()
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  await kernel.start()
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_start',
+      toolCallId: 'ask-cancel',
+      toolName: 'ask',
+      args: {
+        questions: [{
+          id: 'scope',
+          prompt: 'Choose a scope',
+          type: 'single',
+          options: [
+            { value: 'small', label: 'Small' },
+            { value: 'large', label: 'Large' }
+          ]
+        }]
+      }
+    }
+  })
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'extension_ui_request',
+      id: 'ui-cancel',
+      method: 'select',
+      title: 'Ask · Choose a scope',
+      options: ['Small', 'Large', '其他（自行输入）']
+    }
+  })
+
+  await assert.rejects(
+    kernel.cancelAsk('/tmp/other-session.jsonl', 'ask-cancel'),
+    /another Session/
+  )
+  await assert.rejects(
+    kernel.cancelAsk('/tmp/session-1.jsonl', 'other-tool'),
+    /stale or mismatched/
+  )
+  await kernel.cancelAsk('/tmp/session-1.jsonl', 'ask-cancel')
+
+  assert.deepEqual(runtime.commands.at(-1), {
+    type: 'extension_ui_response',
+    id: 'ui-cancel',
+    cancelled: true
   })
 })
 
@@ -3638,6 +4162,7 @@ test('a new session whose JSONL is not written yet starts as an unregistered pro
         id: 'provisional-session',
         name: 'Provisional session',
         runtimeStatus: 'ready',
+        awaitingUserInput: false,
         provisional: true,
         statistics: null
       },
@@ -3646,6 +4171,7 @@ test('a new session whose JSONL is not written yet starts as an unregistered pro
         id: existingPointer.sessionId,
         name: existingPointer.sessionName,
         runtimeStatus: 'stopped',
+        awaitingUserInput: false,
         statistics: null
       }
     ]
@@ -3655,10 +4181,16 @@ test('a new session whose JSONL is not written yet starts as an unregistered pro
   assert.ok(provisionalActivityAt !== null && provisionalActivityAt !== undefined)
   assert.ok(provisionalActivityAt >= activityWindowStart)
   assert.ok(provisionalActivityAt <= activityWindowEnd)
+  assert.deepEqual(state.projects[0]?.sessions?.map(({ id }) => id), ['existing-session'])
+  assert.equal(state.projects[0]?.sessionCount, 1)
   assert.deepEqual(persisted, [])
 
   await kernel.prompt('Write the first turn')
   assert.deepEqual(runtime.commands.at(-1), { type: 'prompt', message: 'Write the first turn' })
+  assert.deepEqual(
+    kernel.getState().projects[0]?.sessions?.map(({ id }) => id),
+    ['provisional-session', 'existing-session']
+  )
 })
 
 test('repeated starts reuse the active empty provisional session until it receives a prompt', async () => {
@@ -3692,6 +4224,8 @@ test('repeated starts reuse the active empty provisional session until it receiv
   assert.equal(createCalls, 1)
   assert.equal(runtimes[0].startCalls, 1)
   assert.deepEqual(kernel.getState().sessions.map(({ id }) => id), ['empty-provisional'])
+  assert.deepEqual(kernel.getState().projects[0]?.sessions, [])
+  assert.equal(kernel.getState().projects[0]?.sessionCount, 0)
 
   await kernel.prompt('Begin the first conversation')
   await kernel.start()
@@ -3702,6 +4236,84 @@ test('repeated starts reuse the active empty provisional session until it receiv
     new Set(kernel.getState().sessions.map(({ id }) => id)),
     new Set(['empty-provisional', 'next-provisional'])
   )
+  assert.deepEqual(
+    kernel.getState().projects[0]?.sessions?.map(({ id }) => id),
+    ['empty-provisional']
+  )
+})
+
+test('switching away discards an empty provisional Runtime without leaving a Navigator entry', async () => {
+  const existingPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/existing-session.jsonl',
+    sessionId: 'existing-session',
+    sessionName: 'Existing session'
+  }
+  const provisionalRuntime = new FakeRuntimeHost({
+    sessionId: 'empty-provisional',
+    sessionFile: '/tmp/empty-provisional.jsonl'
+  })
+  const existingRuntime = new FakeRuntimeHost({
+    sessionId: existingPointer.sessionId,
+    sessionFile: existingPointer.sessionFile,
+    sessionName: existingPointer.sessionName ?? undefined
+  })
+  const runtimes = [provisionalRuntime, existingRuntime]
+  let createCalls = 0
+  const kernel = new WorkbenchKernel(
+    () => runtimes[createCalls++]!,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(existingPointer),
+      validateSession: async (pointer) => {
+        if (pointer.sessionId === 'empty-provisional') {
+          throw fileError('ENOENT', 'session file not written yet')
+        }
+        return pointer
+      }
+    }
+  )
+
+  await kernel.start()
+  assert.deepEqual(kernel.getState().projects[0]?.sessions?.map(({ id }) => id), [
+    'existing-session'
+  ])
+
+  await kernel.activateSession(existingPointer.sessionFile)
+
+  assert.equal(provisionalRuntime.stopCalls, 1)
+  assert.equal(existingRuntime.startCalls, 1)
+  assert.equal(kernel.getState().activeSessionKey, existingPointer.sessionFile)
+  assert.deepEqual(kernel.getState().sessions.map(({ id }) => id), ['existing-session'])
+})
+
+test('switching projects discards an empty provisional Runtime', async () => {
+  const runtime = new FakeRuntimeHost({
+    sessionId: 'empty-provisional',
+    sessionFile: '/tmp/empty-provisional.jsonl'
+  })
+  const activeProjects: string[] = []
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    {
+      projects: [{ path: '/tmp/project' }, { path: '/tmp/next-project' }],
+      activeProjectKey: '/tmp/project'
+    },
+    {
+      ...kernelOptions(null, [], activeProjects),
+      validateSession: async () => {
+        throw fileError('ENOENT', 'session file not written yet')
+      }
+    }
+  )
+
+  await kernel.start()
+  await kernel.activateProject('/tmp/next-project', sessionRegistry(null))
+
+  assert.equal(runtime.stopCalls, 1)
+  assert.deepEqual(activeProjects, ['/tmp/next-project'])
+  assert.equal(kernel.getState().activeProjectKey, '/tmp/next-project')
+  assert.deepEqual(kernel.getState().projects[0]?.sessions, [])
 })
 
 test('the settled first turn uses a low-cost model to generate and persist a purpose-based session name', async () => {
@@ -3844,6 +4456,7 @@ test('renaming a provisional session persists the real name and replaces the pro
     name: expectedPointer.sessionName,
     lastActivityAt: null,
     runtimeStatus: 'ready',
+    awaitingUserInput: false,
     statistics: null
   }])
 
@@ -3943,6 +4556,7 @@ test('the first assistant message materializes a provisional session before sett
     id: canonicalPointer.sessionId,
     name: canonicalPointer.sessionName,
     runtimeStatus: 'ready',
+    awaitingUserInput: false,
     statistics: null
   }])
   assert.equal(typeof state.sessions[0]?.lastActivityAt, 'number')
@@ -4205,6 +4819,64 @@ test('activating a registered session preserves and reuses managed runtimes', as
     /Session is not registered for the active project/
   )
   assert.equal(secondRuntime.stopCalls, 0)
+})
+
+test('activateSession reconciles a persisted target missing from the in-memory registry', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/recovered-session.jsonl',
+    sessionId: 'recovered-session',
+    sessionName: 'Recovered session'
+  }
+  const runtime = new FakeRuntimeHost({
+    sessionId: pointer.sessionId,
+    sessionFile: pointer.sessionFile,
+    sessionName: pointer.sessionName ?? undefined
+  })
+  const persisted: SessionPointer[] = []
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: pointer.projectPath }], activeProjectKey: pointer.projectPath },
+    kernelOptions(null, persisted)
+  )
+
+  await kernel.activateSession(pointer.sessionFile, sessionRegistry(pointer))
+
+  assert.equal(runtime.startCalls, 1)
+  assert.equal(kernel.getState().activeSessionKey, pointer.sessionFile)
+  assert.equal(kernel.getState().session.id, pointer.sessionId)
+  assert.deepEqual(kernel.getState().sessions.map(({ key }) => key), [pointer.sessionFile])
+  assert.deepEqual(persisted.map(({ sessionId }) => sessionId), [pointer.sessionId])
+})
+
+test('previewSession reads a persisted target missing from the in-memory registry', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/preview-recovered-session.jsonl',
+    sessionId: 'preview-recovered-session',
+    sessionName: 'Preview recovered session'
+  }
+  const kernel = new WorkbenchKernel(
+    () => new FakeRuntimeHost(),
+    { projects: [{ path: pointer.projectPath }], activeProjectKey: pointer.projectPath },
+    {
+      ...kernelOptions(),
+      readSessionMessages: async () => [{
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Recovered preview' }],
+        timestamp: 1
+      }]
+    }
+  )
+  const before = kernel.getState()
+
+  const preview = await kernel.previewSession(pointer.sessionFile, sessionRegistry(pointer))
+
+  assert.equal(preview.sessionKey, pointer.sessionFile)
+  assert.equal(preview.sessionId, pointer.sessionId)
+  const entry = preview.conversation.entries[0]
+  assert.equal(entry?.kind === 'message' ? entry.text : null, 'Recovered preview')
+  assert.deepEqual(kernel.getState(), before)
 })
 
 test('starting a registered session attributes lifecycle status to its target before activation commits', async () => {
@@ -4484,6 +5156,32 @@ test('archiving a non-active session preserves the active runtime and conversati
   assert.deepEqual(after.session, before.session)
   assert.deepEqual(after.conversation, before.conversation)
   assert.deepEqual(after.sessions.map(({ key }) => key), [activePointer.sessionFile])
+})
+
+test('archiveSession archives a persisted target missing from the in-memory registry', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/archive-recovered-session.jsonl',
+    sessionId: 'archive-recovered-session',
+    sessionName: 'Archive recovered session'
+  }
+  const archived: Array<{ projectPath: string, sessionKey: string }> = []
+  const kernel = new WorkbenchKernel(
+    () => new FakeRuntimeHost(),
+    { projects: [{ path: pointer.projectPath }], activeProjectKey: pointer.projectPath },
+    kernelOptions(null, [], [], [], undefined, archived)
+  )
+
+  const receipt = await kernel.archiveSession(pointer.sessionFile, sessionRegistry(pointer))
+
+  assert.deepEqual(archived, [{
+    projectPath: pointer.projectPath,
+    sessionKey: pointer.sessionFile
+  }])
+  assert.equal(receipt.projectKey, pointer.projectPath)
+  assert.equal(receipt.sessionKey, pointer.sessionFile)
+  assert.equal(receipt.sessionName, pointer.sessionName)
+  assert.deepEqual(kernel.getState().sessions, [])
 })
 
 test('archiving the active ready session stops it before clearing the active projection', async () => {
@@ -5576,6 +6274,135 @@ test('project switching preserves managed runtime ownership', async () => {
   assert.equal(kernel.getState().runtime.status, 'running')
 })
 
+test('new Task starts one hidden provisional Session and repeated starts stay idempotent', async () => {
+  const runtime = new FakeRuntimeHost({
+    sessionId: 'new-task-provisional',
+    sessionFile: '/tmp/new-task-provisional.jsonl',
+    isStreaming: false
+  })
+  const activeTasks: string[] = []
+  const kernel = new WorkbenchKernel(
+    (_workspace, launchOptions) => {
+      assert.equal(launchOptions.projectTrust, true)
+      return runtime
+    },
+    { projects: [], activeProjectKey: null },
+    {
+      ...kernelOptions(),
+      persistActiveTask: async (taskKey) => {
+        activeTasks.push(taskKey)
+      },
+      validateSession: async () => {
+        throw fileError('ENOENT', 'session file not written yet')
+      }
+    }
+  )
+
+  await kernel.addTask(
+    { path: '/tmp/pi-gui-tasks/new-task', taskKey: 'new-task' },
+    sessionRegistry(null)
+  )
+  await kernel.start()
+  const provisionalKey = kernel.getState().activeSessionKey
+  await kernel.start()
+
+  assert.deepEqual(activeTasks, ['new-task'])
+  assert.equal(kernel.getState().navigatorKind, 'task')
+  assert.equal(kernel.getState().activeProjectKey, '/tmp/pi-gui-tasks/new-task')
+  assert.equal(runtime.startCalls, 1)
+  assert.notEqual(provisionalKey, null)
+  assert.equal(kernel.getState().activeSessionKey, provisionalKey)
+  assert.equal(kernel.getState().sessions[0]?.provisional, true)
+  assert.deepEqual(kernel.getState().projects[0]?.sessions, [])
+})
+
+test('Task activation uses isolated workspace identity and preserves background Runtime ownership', async () => {
+  const projectPointer: SessionPointer = {
+    projectPath: '/tmp/project-a',
+    sessionFile: '/tmp/project-a-session.jsonl',
+    sessionId: 'project-a-session',
+    sessionName: 'Project A session'
+  }
+  const taskPointer: SessionPointer = {
+    projectPath: '/tmp/pi-gui-tasks/task-a',
+    sessionFile: '/tmp/task-a-session.jsonl',
+    sessionId: 'task-a-session',
+    sessionName: 'Standalone task'
+  }
+  const projectRuntime = new FakeRuntimeHost({
+    sessionId: projectPointer.sessionId,
+    sessionFile: projectPointer.sessionFile,
+    sessionName: projectPointer.sessionName ?? undefined
+  })
+  const taskRuntime = new FakeRuntimeHost({
+    sessionId: taskPointer.sessionId,
+    sessionFile: taskPointer.sessionFile,
+    sessionName: taskPointer.sessionName ?? undefined
+  })
+  const runtimes = [projectRuntime, taskRuntime]
+  const activeTasks: string[] = []
+  let trustInspectionCount = 0
+  const options = kernelOptions(projectPointer)
+  const kernel = new WorkbenchKernel(
+    (_workspace, launchOptions) => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      if (runtime === taskRuntime) assert.equal(launchOptions.projectTrust, true)
+      return runtime
+    },
+    {
+      projects: [
+        { path: projectPointer.projectPath },
+        {
+          path: taskPointer.projectPath,
+          workspaceKind: 'task',
+          taskKey: 'task-a'
+        }
+      ],
+      activeProjectKey: projectPointer.projectPath
+    },
+    {
+      ...options,
+      sessionRegistriesByProject: new Map([
+        [projectPointer.projectPath, sessionRegistry(projectPointer)],
+        [taskPointer.projectPath, sessionRegistry(taskPointer)]
+      ]),
+      persistActiveTask: async (taskKey) => {
+        activeTasks.push(taskKey)
+      },
+      projectTrust: {
+        inspect: async () => {
+          trustInspectionCount += 1
+          return { requiresDecision: false, decision: null }
+        },
+        persist: async () => {}
+      }
+    }
+  )
+
+  await kernel.activateSession(projectPointer.sessionFile)
+  projectRuntime.emit({ type: 'activity-started' })
+  await kernel.activateTask('task-a', sessionRegistry(taskPointer))
+  await kernel.activateSession(taskPointer.sessionFile)
+  taskRuntime.emit({ type: 'activity-started' })
+
+  assert.deepEqual(activeTasks, ['task-a'])
+  assert.equal(kernel.getState().navigatorKind, 'task')
+  assert.equal(kernel.getState().activeProjectKey, taskPointer.projectPath)
+  assert.equal(kernel.getState().activeSessionKey, taskPointer.sessionFile)
+  assert.equal(projectRuntime.stopCalls, 0)
+  assert.equal(trustInspectionCount, 1, 'Task launch bypasses Project trust inspection')
+  await assert.rejects(
+    kernel.start(),
+    /Task already owns its Session/
+  )
+
+  await kernel.activateProject(projectPointer.projectPath, sessionRegistry(projectPointer))
+  assert.equal(kernel.getState().navigatorKind, 'project')
+  assert.equal(kernel.getState().runtime.status, 'running')
+  assert.equal(taskRuntime.stopCalls, 0)
+})
+
 test('inactive project runtime activity updates project busy session counts', async () => {
   const pointer: SessionPointer = {
     projectPath: '/tmp/project-a',
@@ -6346,6 +7173,145 @@ test('reload rejects unsettled and provisional ready sessions before replacing a
     assert.equal(createCalls, 1)
     assert.equal(runtime.stopCalls, 0)
   })
+})
+
+test('history prompt navigation reuses Pi native tree navigation', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/history-edit-session.jsonl',
+    sessionId: 'history-edit-session',
+    sessionName: 'History edit'
+  }
+  const messages = [
+    { role: 'user', content: [{ type: 'text', text: 'First prompt' }], timestamp: 1 },
+    { role: 'assistant', content: [{ type: 'text', text: 'First answer' }], timestamp: 2 },
+    { role: 'user', content: [{ type: 'text', text: 'Second prompt' }], timestamp: 3 },
+    { role: 'assistant', content: [{ type: 'text', text: 'Second answer' }], timestamp: 4 }
+  ]
+  const entries: PiRpcSessionEntry[] = [
+    {
+      id: 'first-user',
+      parentId: null,
+      type: 'message',
+      timestamp: '2026-07-29T01:00:00.000Z',
+      message: { role: 'user', content: { text: 'First prompt', hasImage: false } }
+    },
+    {
+      id: 'first-answer',
+      parentId: 'first-user',
+      type: 'message',
+      timestamp: '2026-07-29T01:00:01.000Z',
+      message: { role: 'assistant' }
+    },
+    {
+      id: 'second-user',
+      parentId: 'first-answer',
+      type: 'message',
+      timestamp: '2026-07-29T01:00:02.000Z',
+      message: { role: 'user', content: { text: 'Second prompt', hasImage: false } }
+    },
+    {
+      id: 'second-answer',
+      parentId: 'second-user',
+      type: 'message',
+      timestamp: '2026-07-29T01:00:03.000Z',
+      message: { role: 'assistant' }
+    }
+  ]
+  const runtime = new FakeRuntimeHost(
+    {
+      sessionId: pointer.sessionId,
+      sessionFile: pointer.sessionFile,
+      sessionName: pointer.sessionName ?? undefined,
+      isStreaming: false,
+      pendingMessageCount: 0
+    },
+    messages,
+    [],
+    undefined,
+    undefined,
+    entries,
+    'second-answer'
+  )
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions(pointer)
+  )
+  await kernel.activateSession(pointer.sessionFile)
+
+  await assert.rejects(
+    kernel.navigateHistoryPrompt('/tmp/other-session.jsonl', 'message:history:2:user'),
+    /active Session changed/
+  )
+  assert.equal(runtime.commands.some(({ type }) => type === 'navigate_tree'), false)
+
+  await kernel.navigateHistoryPrompt(pointer.sessionFile, 'message:history:2:user')
+  await assert.rejects(
+    kernel.prompt('Second prompt, revised', [], '/tmp/other-session.jsonl'),
+    /active Session changed/
+  )
+  assert.equal(runtime.commands.some(({ type }) => type === 'prompt'), false)
+
+  assert.deepEqual(
+    runtime.commands.filter(({ type }) =>
+      type === 'get_entries' || type === 'navigate_tree'
+    ),
+    [
+      { type: 'get_entries' },
+      { type: 'get_entries' },
+      { type: 'navigate_tree', targetEntryId: 'second-user' }
+    ]
+  )
+  const state = kernel.getState()
+  assert.equal(state.runtime.status, 'ready')
+  assert.deepEqual(
+    state.conversation.entries.map(({ id }) => id),
+    ['message:history:0:user', 'message:history:1:assistant']
+  )
+  assert.equal(state.conversation.activeRunStartIndex, null)
+})
+
+test('history prompt navigation fails before native navigation when the visible prompt is not eligible', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/history-edit-ineligible.jsonl',
+    sessionId: 'history-edit-ineligible',
+    sessionName: 'History edit ineligible'
+  }
+  const runtime = new FakeRuntimeHost(
+    {
+      sessionId: pointer.sessionId,
+      sessionFile: pointer.sessionFile,
+      isStreaming: false,
+      pendingMessageCount: 0
+    },
+    [{ role: 'user', content: [{ type: 'text', text: 'Visible prompt' }], timestamp: 1 }],
+    [],
+    undefined,
+    undefined,
+    [{
+      id: 'different-user',
+      parentId: null,
+      type: 'message',
+      timestamp: '2026-07-29T01:00:00.000Z',
+      message: { role: 'user', content: { text: 'Different prompt', hasImage: false } }
+    }],
+    'different-user'
+  )
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions(pointer)
+  )
+  await kernel.activateSession(pointer.sessionFile)
+
+  await assert.rejects(
+    kernel.navigateHistoryPrompt(pointer.sessionFile, 'message:history:0:user'),
+    /not an eligible user message/
+  )
+  assert.equal(runtime.commands.some(({ type }) => type === 'navigate_tree'), false)
+  assert.equal(kernel.getState().runtime.status, 'ready')
 })
 
 test('fork candidates follow the active entry path and fork migrates the same runtime', async () => {
@@ -7823,6 +8789,7 @@ test('stopContext waits for an owning background provisional durable commit befo
   )
 
   await kernel.start()
+  await kernel.prompt('Materialize before stop')
   await kernel.activateSession(pointerB.sessionFile)
   runtimeA.emit({
     type: 'pi-event',
@@ -9573,7 +10540,7 @@ test('getToolImage reads historical toolResult and rejects invalid identity or c
   )
 })
 
-test('hibernating an inactive ready session stops only that runtime and preserves the pointer', async () => {
+test('reclaiming an inactive ready runtime stops only that context and preserves the pointer', async () => {
   const activePointer: SessionPointer = {
     projectPath: '/tmp/project',
     sessionFile: '/tmp/active-session.jsonl',
@@ -9628,7 +10595,7 @@ test('hibernating an inactive ready session stops only that runtime and preserve
     'ready'
   )
 
-  await kernel.hibernateSession(hibernatePointer.sessionFile)
+  assert.equal(await kernel.reclaimInactiveRuntime(hibernatePointer.sessionFile), true)
 
   const after = kernel.getState()
   assert.equal(hibernateRuntime.stopCalls, 1)
@@ -9657,12 +10624,12 @@ test('hibernating an inactive ready session stops only that runtime and preserve
   )
 
   // Idempotent when the registered Session is already not managed.
-  await kernel.hibernateSession(hibernatePointer.sessionFile)
+  assert.equal(await kernel.reclaimInactiveRuntime(hibernatePointer.sessionFile), false)
   assert.equal(hibernateRuntime.stopCalls, 1)
   assert.deepEqual(archived, [])
 })
 
-test('reactivating a hibernated session relaunches the same identity from the transcript', async () => {
+test('reactivating a reclaimed runtime relaunches the same identity from the transcript', async () => {
   const activePointer: SessionPointer = {
     projectPath: '/tmp/project',
     sessionFile: '/tmp/active-session.jsonl',
@@ -9717,7 +10684,7 @@ test('reactivating a hibernated session relaunches the same identity from the tr
 
   await kernel.activateSession(hibernatePointer.sessionFile)
   await kernel.activateSession(activePointer.sessionFile)
-  await kernel.hibernateSession(hibernatePointer.sessionFile)
+  await kernel.reclaimInactiveRuntime(hibernatePointer.sessionFile)
   assert.equal(firstHibernateRuntime.stopCalls, 1)
 
   await kernel.activateSession(hibernatePointer.sessionFile)
@@ -9745,7 +10712,7 @@ test('reactivating a hibernated session relaunches the same identity from the tr
   )
 })
 
-test('hibernateSession rejects active, busy, compacting, provisional, and unregistered targets', async () => {
+test('inactive runtime reclaim rejects active, busy, compacting, provisional, and unregistered targets', async () => {
   const activePointer: SessionPointer = {
     projectPath: '/tmp/project',
     sessionFile: '/tmp/active-session.jsonl',
@@ -9817,14 +10784,14 @@ test('hibernateSession rejects active, busy, compacting, provisional, and unregi
   await kernel.activateSession(activePointer.sessionFile)
 
   await assert.rejects(
-    kernel.hibernateSession(activePointer.sessionFile),
+    kernel.reclaimInactiveRuntime(activePointer.sessionFile),
     /active foreground session/
   )
   assert.equal(activeRuntime.stopCalls, 0)
 
   backgroundRuntime.emit({ type: 'activity-started' })
   await assert.rejects(
-    kernel.hibernateSession(backgroundPointer.sessionFile),
+    kernel.reclaimInactiveRuntime(backgroundPointer.sessionFile),
     /runtime is running/
   )
   assert.equal(backgroundRuntime.stopCalls, 0)
@@ -9832,7 +10799,7 @@ test('hibernateSession rejects active, busy, compacting, provisional, and unregi
 
   compactRuntime.emit({ type: 'pi-event', event: { type: 'compaction_start', reason: 'manual' } })
   await assert.rejects(
-    kernel.hibernateSession(compactPointer.sessionFile),
+    kernel.reclaimInactiveRuntime(compactPointer.sessionFile),
     /compaction is in progress/
   )
   assert.equal(compactRuntime.stopCalls, 0)
@@ -9849,26 +10816,26 @@ test('hibernateSession rejects active, busy, compacting, provisional, and unregi
 
   const starting = kernel.activateSession(startingPointer.sessionFile)
   await startingRuntime.startEntered
-  // Launch single-flight fail-closes hibernation of a Session that is still starting.
+  // Launch single-flight fail-closes reclamation of a Session that is still starting.
   await assert.rejects(
-    kernel.hibernateSession(startingPointer.sessionFile),
+    kernel.reclaimInactiveRuntime(startingPointer.sessionFile),
     /runtime launch is already in progress/
   )
   startingRuntime.releaseStart()
   await starting
   // Starting target became the active foreground once committed.
   await assert.rejects(
-    kernel.hibernateSession(startingPointer.sessionFile),
+    kernel.reclaimInactiveRuntime(startingPointer.sessionFile),
     /active foreground session/
   )
   assert.equal(startingRuntime.stopCalls, 0)
 
   await assert.rejects(
-    kernel.hibernateSession('/tmp/unregistered-session.jsonl'),
-    /Session is not registered for the active project/
+    kernel.reclaimInactiveRuntime('/tmp/unregistered-session.jsonl'),
+    /Session is not registered for the target project/
   )
   await assert.rejects(
-    kernel.hibernateSession('relative-session.jsonl'),
+    kernel.reclaimInactiveRuntime('relative-session.jsonl'),
     /Session key must be absolute/
   )
 
@@ -9896,14 +10863,14 @@ test('hibernateSession rejects active, busy, compacting, provisional, and unregi
     true
   )
   await assert.rejects(
-    provisionalKernel.hibernateSession(provisionalKey),
-    /Session is not registered for the active project/
+    provisionalKernel.reclaimInactiveRuntime(provisionalKey),
+    /Session is not registered for the target project/
   )
   assert.equal(provisionalRuntime.stopCalls, 0)
 })
 
 
-test('stopContext retains ownership on stop failure and allows hibernate retry', async () => {
+test('stopContext retains ownership on stop failure and allows runtime reclaim retry', async () => {
   const activePointer: SessionPointer = {
     projectPath: '/tmp/project',
     sessionFile: '/tmp/active-session.jsonl',
@@ -9952,14 +10919,14 @@ test('stopContext retains ownership on stop failure and allows hibernate retry',
   await kernel.activateSession(hibernatePointer.sessionFile)
   await kernel.activateSession(activePointer.sessionFile)
 
-  await assert.rejects(kernel.hibernateSession(hibernatePointer.sessionFile), /stop failed/)
+  await assert.rejects(kernel.reclaimInactiveRuntime(hibernatePointer.sessionFile), /stop failed/)
   assert.equal(hibernateRuntime.stopCalls, 1)
   assert.equal(
     kernel.getState().sessions.find(({ key }) => key === hibernatePointer.sessionFile)?.runtimeStatus,
     'crashed'
   )
 
-  await kernel.hibernateSession(hibernatePointer.sessionFile)
+  await kernel.reclaimInactiveRuntime(hibernatePointer.sessionFile)
   assert.equal(hibernateRuntime.stopCalls, 2)
   assert.equal(
     kernel.getState().sessions.find(({ key }) => key === hibernatePointer.sessionFile)?.runtimeStatus,
@@ -10023,7 +10990,7 @@ test('activating a managed crashed inactive session cleans up and relaunches', a
 
   await kernel.activateSession(crashedPointer.sessionFile)
   await kernel.activateSession(activePointer.sessionFile)
-  await assert.rejects(kernel.hibernateSession(crashedPointer.sessionFile), /stop failed/)
+  await assert.rejects(kernel.reclaimInactiveRuntime(crashedPointer.sessionFile), /stop failed/)
 
   await kernel.activateSession(crashedPointer.sessionFile)
   assert.equal(crashedRuntime.stopCalls, 2)
@@ -10034,7 +11001,7 @@ test('activating a managed crashed inactive session cleans up and relaunches', a
   assert.equal(recovered?.kind === 'message' ? recovered.text : null, 'Relaunched')
 })
 
-test('hibernateSession rejects queued messages, usage refresh, and stop-in-progress targets', async () => {
+test('inactive runtime reclaim rejects queued messages, usage refresh, and stop-in-progress targets', async () => {
   const activePointer: SessionPointer = {
     projectPath: '/tmp/project',
     sessionFile: '/tmp/active-session.jsonl',
@@ -10086,7 +11053,7 @@ test('hibernateSession rejects queued messages, usage refresh, and stop-in-progr
     }
   })
   await assert.rejects(
-    kernel.hibernateSession(backgroundPointer.sessionFile),
+    kernel.reclaimInactiveRuntime(backgroundPointer.sessionFile),
     /messages are queued/
   )
   assert.equal(backgroundRuntime.stopCalls, 0)
@@ -10110,26 +11077,26 @@ test('hibernateSession rejects queued messages, usage refresh, and stop-in-progr
 
   inactive.sessionUsageRefreshRequested = true
   await assert.rejects(
-    kernel.hibernateSession(backgroundPointer.sessionFile),
+    kernel.reclaimInactiveRuntime(backgroundPointer.sessionFile),
     /session usage refresh is in progress/
   )
   inactive.sessionUsageRefreshRequested = false
   inactive.sessionUsageRefreshInFlight = true
   await assert.rejects(
-    kernel.hibernateSession(backgroundPointer.sessionFile),
+    kernel.reclaimInactiveRuntime(backgroundPointer.sessionFile),
     /session usage refresh is in progress/
   )
   inactive.sessionUsageRefreshInFlight = false
   inactive.stopRequested = true
   await assert.rejects(
-    kernel.hibernateSession(backgroundPointer.sessionFile),
+    kernel.reclaimInactiveRuntime(backgroundPointer.sessionFile),
     /stop is in progress/
   )
   inactive.stopRequested = false
   assert.equal(backgroundRuntime.stopCalls, 0)
 })
 
-test('delayed inactive hibernate stop publishes stopping and serializes competing launches', async () => {
+test('delayed inactive runtime reclaim publishes stopping and serializes competing launches', async () => {
   const activePointer: SessionPointer = {
     projectPath: '/tmp/project',
     sessionFile: '/tmp/active-session.jsonl',
@@ -10203,7 +11170,7 @@ test('delayed inactive hibernate stop publishes stopping and serializes competin
   await kernel.activateSession(activePointer.sessionFile)
   const before = kernel.getState()
 
-  const hibernatePromise = kernel.hibernateSession(hibernatePointer.sessionFile)
+  const reclaimPromise = kernel.reclaimInactiveRuntime(hibernatePointer.sessionFile)
   await hibernateRuntime.stopEntered
   const stopping = kernel.getState()
   assert.equal(
@@ -10219,12 +11186,12 @@ test('delayed inactive hibernate stop publishes stopping and serializes competin
     /runtime launch is already in progress/
   )
   await assert.rejects(
-    kernel.hibernateSession(hibernatePointer.sessionFile),
+    kernel.reclaimInactiveRuntime(hibernatePointer.sessionFile),
     /runtime launch is already in progress/
   )
 
   hibernateRuntime.releaseStop()
-  await hibernatePromise
+  await reclaimPromise
   const after = kernel.getState()
   assert.equal(
     after.sessions.find(({ key }) => key === hibernatePointer.sessionFile)?.runtimeStatus,
@@ -10237,6 +11204,387 @@ test('delayed inactive hibernate stop publishes stopping and serializes competin
     after.sessions.some(({ key }) => key === hibernatePointer.sessionFile),
     true
   )
+})
+
+test('runtime memory diagnostics command requires an exact empty payload', () => {
+  assert.equal(isKernelCommand({ type: 'kernel.get-runtime-memory-diagnostics' }), true)
+  assert.equal(
+    isKernelCommand({ type: 'kernel.get-runtime-memory-diagnostics', extra: true }),
+    false
+  )
+})
+
+test('getRuntimeMemoryDiagnostics samples managed runtimes without mutating state', async () => {
+  const activePointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/active-session.jsonl',
+    sessionId: 'active-session',
+    sessionName: 'Active session'
+  }
+  const backgroundPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/background-session.jsonl',
+    sessionId: 'background-session',
+    sessionName: 'Background session'
+  }
+  const activeRuntime = new FakeRuntimeHost({
+    sessionId: activePointer.sessionId,
+    sessionFile: activePointer.sessionFile,
+    sessionName: activePointer.sessionName ?? undefined
+  })
+  const backgroundRuntime = new FakeRuntimeHost({
+    sessionId: backgroundPointer.sessionId,
+    sessionFile: backgroundPointer.sessionFile,
+    sessionName: backgroundPointer.sessionName ?? undefined
+  })
+  activeRuntime.setRpcPid(4242)
+  backgroundRuntime.setRpcPid(null)
+
+  const runtimes = [backgroundRuntime, activeRuntime]
+  let clock = 1_700_000_000_000
+  const memoryReads: number[] = []
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [activePointer, backgroundPointer],
+        activeSessionKey: backgroundPointer.sessionFile
+      },
+      now: () => clock,
+      readProcessMemory: async (pid) => {
+        memoryReads.push(pid)
+        return {
+          ok: true,
+          memory: {
+            rssBytes: pid * 1024,
+            pssBytes: pid * 512
+          }
+        }
+      }
+    }
+  )
+
+  const events: KernelEvent[] = []
+  kernel.subscribe((event) => events.push(event))
+
+  await kernel.activateSession(backgroundPointer.sessionFile)
+  await kernel.activateSession(activePointer.sessionFile)
+  const before = kernel.getSnapshot()
+  const eventCountBefore = events.length
+  clock = 1_700_000_000_123
+
+  const diagnostics = await kernel.getRuntimeMemoryDiagnostics()
+  const after = kernel.getSnapshot()
+
+  assert.equal(diagnostics.sampledAt, 1_700_000_000_123)
+  assert.equal(diagnostics.runtimes.length, 2)
+  const activeSample = diagnostics.runtimes.find((sample) => sample.active)
+  const backgroundSample = diagnostics.runtimes.find((sample) => !sample.active)
+  assert.ok(activeSample)
+  assert.ok(backgroundSample)
+  assert.match(activeSample.runtimeId, /^rt-\d+$/)
+  assert.match(backgroundSample.runtimeId, /^rt-\d+$/)
+  assert.notEqual(activeSample.runtimeId, backgroundSample.runtimeId)
+  assert.deepEqual(activeSample, {
+    runtimeId: activeSample.runtimeId,
+    active: true,
+    runtimeStatus: 'ready',
+    rootPid: 4242,
+    rssBytes: 4242 * 1024,
+    pssBytes: 4242 * 512,
+    sampledAt: 1_700_000_000_123,
+    unavailableReason: null
+  })
+  assert.deepEqual(backgroundSample, {
+    runtimeId: backgroundSample.runtimeId,
+    active: false,
+    runtimeStatus: 'ready',
+    rootPid: null,
+    rssBytes: null,
+    pssBytes: null,
+    sampledAt: 1_700_000_000_123,
+    unavailableReason: 'pid-unavailable'
+  })
+  assert.deepEqual(memoryReads, [4242])
+  assert.equal(after.revision, before.revision)
+  assert.equal(events.length, eventCountBefore)
+  assert.deepEqual(after.state.runtime, before.state.runtime)
+  assert.deepEqual(after.state.session, before.state.session)
+  assert.deepEqual(after.state.conversation, before.state.conversation)
+  const payload = JSON.stringify(diagnostics)
+  assert.equal(payload.includes('sessionKey'), false)
+  assert.equal(payload.includes(activePointer.sessionFile), false)
+  assert.equal(payload.includes(backgroundPointer.sessionFile), false)
+  assert.equal(payload.includes('/tmp/project'), false)
+  assert.equal(payload.includes('Active session'), false)
+})
+
+test('getRuntimeMemoryDiagnostics emits pre-identity provisional runtimes', async () => {
+  const runtime = new FakeRuntimeHost({
+    sessionId: 'pre-identity-session',
+    sessionFile: '/tmp/pre-identity-secret.jsonl',
+    sessionName: 'Pre-identity secret name'
+  })
+  runtime.setRpcPid(7777)
+  let clock = 1_700_000_000_500
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/secret-project-path' }], activeProjectKey: '/tmp/secret-project-path' },
+    {
+      ...kernelOptions(),
+      now: () => clock,
+      validateSession: async () => {
+        throw fileError('ENOENT', 'session file not written yet')
+      },
+      readProcessMemory: async (pid) => ({
+        ok: true,
+        memory: { rssBytes: pid * 10, pssBytes: pid * 5 }
+      })
+    }
+  )
+
+  await kernel.start()
+  const provisionalKey = kernel.getState().activeSessionKey
+  assert.ok(typeof provisionalKey === 'string')
+  assert.equal(
+    kernel.getState().sessions.find(({ key }) => key === provisionalKey)?.provisional,
+    true
+  )
+
+  const diagnostics = await kernel.getRuntimeMemoryDiagnostics()
+  assert.equal(diagnostics.runtimes.length, 1)
+  const sample = diagnostics.runtimes[0]
+  assert.ok(sample)
+  assert.match(sample.runtimeId, /^rt-\d+$/)
+  assert.equal(sample.active, true)
+  assert.equal(sample.runtimeStatus, 'ready')
+  assert.equal(sample.rootPid, 7777)
+  assert.equal(sample.rssBytes, 77770)
+  assert.equal(sample.pssBytes, 38885)
+  assert.equal(sample.unavailableReason, null)
+
+  const payload = JSON.stringify(diagnostics)
+  assert.equal(payload.includes('sessionKey'), false)
+  assert.equal(payload.includes('/tmp/secret-project-path'), false)
+  assert.equal(payload.includes('/tmp/pre-identity-secret.jsonl'), false)
+  assert.equal(payload.includes('Pre-identity secret name'), false)
+  assert.equal(payload.includes(provisionalKey), false)
+})
+
+test('getRuntimeMemoryDiagnostics redacts multi-project identity', async () => {
+  const pointerA: SessionPointer = {
+    projectPath: '/tmp/project-alpha-leak',
+    sessionFile: '/tmp/alpha-session-leak.jsonl',
+    sessionId: 'alpha-session-id',
+    sessionName: 'Alpha secret name'
+  }
+  const pointerB: SessionPointer = {
+    projectPath: '/tmp/project-beta-leak',
+    sessionFile: '/tmp/beta-session-leak.jsonl',
+    sessionId: 'beta-session-id',
+    sessionName: 'Beta secret name'
+  }
+  const runtimeA = new FakeRuntimeHost({
+    sessionId: pointerA.sessionId,
+    sessionFile: pointerA.sessionFile,
+    sessionName: pointerA.sessionName ?? undefined
+  })
+  const runtimeB = new FakeRuntimeHost({
+    sessionId: pointerB.sessionId,
+    sessionFile: pointerB.sessionFile,
+    sessionName: pointerB.sessionName ?? undefined
+  })
+  runtimeA.setRpcPid(1111)
+  runtimeB.setRpcPid(2222)
+  const runtimes = [runtimeA, runtimeB]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    {
+      projects: [{ path: pointerA.projectPath }, { path: pointerB.projectPath }],
+      activeProjectKey: pointerA.projectPath
+    },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [pointerA],
+        activeSessionKey: pointerA.sessionFile
+      },
+      readProcessMemory: async (pid) => ({
+        ok: true,
+        memory: { rssBytes: pid, pssBytes: pid }
+      })
+    }
+  )
+
+  await kernel.activateSession(pointerA.sessionFile)
+  await kernel.activateProject(pointerB.projectPath, {
+    sessions: [pointerB],
+    activeSessionKey: null
+  })
+  await kernel.activateSession(pointerB.sessionFile)
+
+  const diagnostics = await kernel.getRuntimeMemoryDiagnostics()
+  assert.equal(diagnostics.runtimes.length, 2)
+  assert.equal(diagnostics.runtimes.filter((sample) => sample.active).length, 1)
+  assert.equal(new Set(diagnostics.runtimes.map((sample) => sample.runtimeId)).size, 2)
+
+  const payload = JSON.stringify(diagnostics)
+  const secrets = [
+    pointerA.projectPath,
+    pointerB.projectPath,
+    pointerA.sessionFile,
+    pointerB.sessionFile,
+    pointerA.sessionId,
+    pointerB.sessionId,
+    pointerA.sessionName ?? 'Alpha secret name',
+    pointerB.sessionName ?? 'Beta secret name',
+    'sessionKey',
+    'prompt',
+    'output'
+  ]
+  for (const secret of secrets) {
+    assert.equal(payload.includes(secret), false, `diagnostics leaked ${secret}`)
+  }
+})
+
+test('getRuntimeMemoryDiagnostics marks ownership-changed after pid swap during read', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/ownership-session.jsonl',
+    sessionId: 'ownership-session',
+    sessionName: 'Ownership session'
+  }
+  const runtime = new FakeRuntimeHost({
+    sessionId: pointer.sessionId,
+    sessionFile: pointer.sessionFile,
+    sessionName: pointer.sessionName ?? undefined
+  })
+  runtime.setRpcPid(5001)
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [pointer],
+        activeSessionKey: pointer.sessionFile
+      },
+      readProcessMemory: async (pid) => {
+        assert.equal(pid, 5001)
+        runtime.setRpcPid(5002)
+        return {
+          ok: true,
+          memory: { rssBytes: 4096, pssBytes: 2048 }
+        }
+      }
+    }
+  )
+
+  await kernel.activateSession(pointer.sessionFile)
+  const diagnostics = await kernel.getRuntimeMemoryDiagnostics()
+  assert.equal(diagnostics.runtimes.length, 1)
+  assert.deepEqual(diagnostics.runtimes[0], {
+    runtimeId: diagnostics.runtimes[0]?.runtimeId,
+    active: true,
+    runtimeStatus: 'ready',
+    rootPid: 5002,
+    rssBytes: null,
+    pssBytes: null,
+    sampledAt: diagnostics.sampledAt,
+    unavailableReason: 'ownership-changed'
+  })
+})
+
+test('getRuntimeMemoryDiagnostics marks stale when context leaves during read', async () => {
+  const activePointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stale-active.jsonl',
+    sessionId: 'stale-active',
+    sessionName: 'Stale active'
+  }
+  const backgroundPointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stale-background.jsonl',
+    sessionId: 'stale-background',
+    sessionName: 'Stale background'
+  }
+  const activeRuntime = new FakeRuntimeHost({
+    sessionId: activePointer.sessionId,
+    sessionFile: activePointer.sessionFile,
+    sessionName: activePointer.sessionName ?? undefined
+  })
+  const backgroundRuntime = new FakeRuntimeHost({
+    sessionId: backgroundPointer.sessionId,
+    sessionFile: backgroundPointer.sessionFile,
+    sessionName: backgroundPointer.sessionName ?? undefined
+  })
+  activeRuntime.setRpcPid(null)
+  backgroundRuntime.setRpcPid(6001)
+
+  const runtimes = [backgroundRuntime, activeRuntime]
+  let releaseRead!: () => void
+  let markReadStarted!: () => void
+  const readStarted = new Promise<void>((resolve) => {
+    markReadStarted = resolve
+  })
+  const readGate = new Promise<void>((resolve) => {
+    releaseRead = resolve
+  })
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      sessionRegistry: {
+        sessions: [activePointer, backgroundPointer],
+        activeSessionKey: backgroundPointer.sessionFile
+      },
+      readProcessMemory: async (pid) => {
+        assert.equal(pid, 6001)
+        markReadStarted()
+        await readGate
+        return {
+          ok: true,
+          memory: { rssBytes: 8192, pssBytes: 4096 }
+        }
+      }
+    }
+  )
+
+  await kernel.activateSession(backgroundPointer.sessionFile)
+  await kernel.activateSession(activePointer.sessionFile)
+
+  const diagnosticsPromise = kernel.getRuntimeMemoryDiagnostics()
+  await readStarted
+  await kernel.reclaimInactiveRuntime(backgroundPointer.sessionFile)
+  releaseRead()
+  const diagnostics = await diagnosticsPromise
+
+  assert.equal(diagnostics.runtimes.length, 2)
+  const staleSample = diagnostics.runtimes.find((sample) => sample.unavailableReason === 'stale')
+  const activeSample = diagnostics.runtimes.find((sample) => sample.active)
+  assert.ok(staleSample)
+  assert.ok(activeSample)
+  assert.equal(staleSample.active, false)
+  assert.equal(staleSample.rootPid, null)
+  assert.equal(staleSample.rssBytes, null)
+  assert.equal(staleSample.pssBytes, null)
+  assert.equal(activeSample.unavailableReason, 'pid-unavailable')
+  assert.equal(JSON.stringify(diagnostics).includes(backgroundPointer.sessionFile), false)
 })
 
 test('todo metadata add/status/clear patches without full state and isolates mutations', async () => {
@@ -10416,4 +11764,331 @@ test('tool attachment metadata add/clear patches isolate copies; mixed growth fa
   // output same length prefix - text unchanged; attachments cleared via content present empty images.
   const endEvent = events.at(-1)
   assert.ok(endEvent?.type === 'kernel.state-patched' || endEvent?.type === 'kernel.state-changed')
+})
+
+test('automatic hibernation honors the 5-minute boundary and keeps one background Runtime warm', async () => {
+  const projectPath = '/tmp/auto-project'
+  const pointers: SessionPointer[] = [
+    { projectPath, sessionFile: '/tmp/auto-old.jsonl', sessionId: 'auto-old', sessionName: 'Old' },
+    { projectPath, sessionFile: '/tmp/auto-warm.jsonl', sessionId: 'auto-warm', sessionName: 'Warm' },
+    { projectPath, sessionFile: '/tmp/auto-active.jsonl', sessionId: 'auto-active', sessionName: 'Active' }
+  ]
+  const runtimes = pointers.map((pointer) => new FakeRuntimeHost({
+    sessionId: pointer.sessionId,
+    sessionFile: pointer.sessionFile,
+    sessionName: pointer.sessionName ?? undefined
+  }))
+  const queue = [...runtimes]
+  const registry: ProjectSessionRegistry = {
+    sessions: pointers,
+    activeSessionKey: pointers[0]!.sessionFile
+  }
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = queue.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: projectPath }], activeProjectKey: projectPath },
+    { ...kernelOptions(), sessionRegistry: registry, now: () => 300_000 }
+  )
+
+  for (const pointer of pointers) await kernel.activateSession(pointer.sessionFile)
+  const internals = kernel as unknown as {
+    contextBySessionKey: Map<string, { state: { activeSessionKey: string | null }, lastWarmUseAt: number }>
+  }
+  for (const context of internals.contextBySessionKey.values()) {
+    if (context.state.activeSessionKey === pointers[0]!.sessionFile) context.lastWarmUseAt = 0
+    if (context.state.activeSessionKey === pointers[1]!.sessionFile) context.lastWarmUseAt = 1
+  }
+
+  assert.deepEqual(await kernel.sweepAutomaticHibernation({ nowMs: 300_000 }), {
+    attempted: 1,
+    hibernatedCount: 1,
+    skippedCount: 1,
+    failedCount: 0
+  })
+  assert.equal(runtimes[0]!.stopCalls, 1, 'exactly 5 minutes old is eligible')
+  assert.equal(runtimes[1]!.stopCalls, 0, 'most-recent background Runtime stays warm')
+  assert.equal(runtimes[2]!.stopCalls, 0, 'foreground Runtime is protected')
+  assert.deepEqual(
+    runtimes[0]!.hibernateLeaseCalls.map(({ action, generation }) => ({ action, generation })),
+    [
+      { action: 'prepare', generation: 1 },
+      { action: 'commit', generation: 1 }
+    ],
+    'host command generation is process-local even when Kernel RuntimeContext generations differ'
+  )
+})
+
+test('automatic hibernation releases on activation race and overlapping sweeps do not duplicate work', async () => {
+  class DeferredPrepareRuntimeHost extends FakeRuntimeHost {
+    readonly prepareEntered: Promise<void>
+    private readonly markPrepareEntered: () => void
+    private readonly prepareGate: Promise<void>
+    private readonly releasePrepareGate: () => void
+
+    constructor(sessionState: ConstructorParameters<typeof FakeRuntimeHost>[0]) {
+      super(sessionState)
+      let markPrepareEntered!: () => void
+      let releasePrepareGate!: () => void
+      this.prepareEntered = new Promise((resolve) => { markPrepareEntered = resolve })
+      this.prepareGate = new Promise((resolve) => { releasePrepareGate = resolve })
+      this.markPrepareEntered = markPrepareEntered
+      this.releasePrepareGate = releasePrepareGate
+    }
+
+    override async prepareHibernation(input: {
+      sessionId: string
+      generation: number
+      attemptId: string
+    }): Promise<RuntimeHibernateLeaseResult> {
+      this.hibernateLeaseCalls.push({ action: 'prepare', ...input })
+      this.markPrepareEntered()
+      await this.prepareGate
+      return {
+        ok: true,
+        action: 'prepare',
+        ...input,
+        token: 'deferred-token',
+        inventoryFingerprint: 'fake',
+        preparedProviders: []
+      }
+    }
+
+    releasePrepare(): void {
+      this.releasePrepareGate()
+    }
+  }
+
+  const projectPath = '/tmp/auto-race-project'
+  const pointers: SessionPointer[] = [
+    { projectPath, sessionFile: '/tmp/auto-race-old.jsonl', sessionId: 'race-old', sessionName: 'Old' },
+    { projectPath, sessionFile: '/tmp/auto-race-warm.jsonl', sessionId: 'race-warm', sessionName: 'Warm' },
+    { projectPath, sessionFile: '/tmp/auto-race-active.jsonl', sessionId: 'race-active', sessionName: 'Active' }
+  ]
+  const candidate = new DeferredPrepareRuntimeHost({
+    sessionId: pointers[0]!.sessionId,
+    sessionFile: pointers[0]!.sessionFile,
+    sessionName: pointers[0]!.sessionName ?? undefined
+  })
+  const warm = new FakeRuntimeHost({
+    sessionId: pointers[1]!.sessionId,
+    sessionFile: pointers[1]!.sessionFile,
+    sessionName: pointers[1]!.sessionName ?? undefined
+  })
+  const active = new FakeRuntimeHost({
+    sessionId: pointers[2]!.sessionId,
+    sessionFile: pointers[2]!.sessionFile,
+    sessionName: pointers[2]!.sessionName ?? undefined
+  })
+  const queue: RuntimeHost[] = [candidate, warm, active]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = queue.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: projectPath }], activeProjectKey: projectPath },
+    {
+      ...kernelOptions(),
+      sessionRegistry: { sessions: pointers, activeSessionKey: pointers[0]!.sessionFile },
+      now: () => 600_000
+    }
+  )
+  for (const pointer of pointers) await kernel.activateSession(pointer.sessionFile)
+  const internals = kernel as unknown as {
+    contextBySessionKey: Map<string, { state: { activeSessionKey: string | null }, lastWarmUseAt: number }>
+  }
+  for (const context of internals.contextBySessionKey.values()) {
+    if (context.state.activeSessionKey === pointers[0]!.sessionFile) context.lastWarmUseAt = 0
+    if (context.state.activeSessionKey === pointers[1]!.sessionFile) context.lastWarmUseAt = 1
+  }
+
+  const firstSweep = kernel.sweepAutomaticHibernation({ nowMs: 600_000 })
+  await candidate.prepareEntered
+  const overlappingSweep = kernel.sweepAutomaticHibernation({ nowMs: 600_000 })
+  await kernel.activateSession(pointers[0]!.sessionFile)
+  candidate.releasePrepare()
+
+  assert.deepEqual(await firstSweep, {
+    attempted: 1,
+    hibernatedCount: 0,
+    skippedCount: 2,
+    failedCount: 0
+  })
+  assert.deepEqual(await overlappingSweep, {
+    attempted: 0,
+    hibernatedCount: 0,
+    skippedCount: 0,
+    failedCount: 0
+  })
+  assert.equal(candidate.stopCalls, 0)
+  assert.deepEqual(candidate.hibernateLeaseCalls.map(({ action }) => action), ['prepare', 'release'])
+})
+
+test('activation is rejected while automatic hibernation owns the launch gate and can relaunch after stop', async () => {
+  class AutoDelayedStopRuntimeHost extends FakeRuntimeHost {
+    readonly stopEntered: Promise<void>
+    private readonly markStopEntered: () => void
+    private readonly stopGate: Promise<void>
+    private readonly releaseStopGate: () => void
+
+    constructor(sessionState: ConstructorParameters<typeof FakeRuntimeHost>[0]) {
+      super(sessionState)
+      let markStopEntered!: () => void
+      let releaseStopGate!: () => void
+      this.stopEntered = new Promise((resolve) => { markStopEntered = resolve })
+      this.stopGate = new Promise((resolve) => { releaseStopGate = resolve })
+      this.markStopEntered = markStopEntered
+      this.releaseStopGate = releaseStopGate
+    }
+
+    override async stop(): Promise<void> {
+      this.stopCalls += 1
+      this.markStopEntered()
+      await this.stopGate
+    }
+
+    releaseStop(): void {
+      this.releaseStopGate()
+    }
+  }
+
+  const projectPath = '/tmp/auto-stop-activation-project'
+  const pointers: SessionPointer[] = [
+    { projectPath, sessionFile: '/tmp/auto-stop-old.jsonl', sessionId: 'auto-stop-old', sessionName: null },
+    { projectPath, sessionFile: '/tmp/auto-stop-warm.jsonl', sessionId: 'auto-stop-warm', sessionName: null },
+    { projectPath, sessionFile: '/tmp/auto-stop-active.jsonl', sessionId: 'auto-stop-active', sessionName: null }
+  ]
+  const candidate = new AutoDelayedStopRuntimeHost({
+    sessionId: pointers[0]!.sessionId,
+    sessionFile: pointers[0]!.sessionFile
+  })
+  const replacement = new FakeRuntimeHost({
+    sessionId: pointers[0]!.sessionId,
+    sessionFile: pointers[0]!.sessionFile
+  })
+  const queue: RuntimeHost[] = [
+    candidate,
+    new FakeRuntimeHost({ sessionId: pointers[1]!.sessionId, sessionFile: pointers[1]!.sessionFile }),
+    new FakeRuntimeHost({ sessionId: pointers[2]!.sessionId, sessionFile: pointers[2]!.sessionFile }),
+    replacement
+  ]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = queue.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: projectPath }], activeProjectKey: projectPath },
+    {
+      ...kernelOptions(),
+      sessionRegistry: { sessions: pointers, activeSessionKey: pointers[0]!.sessionFile },
+      now: () => 600_000
+    }
+  )
+  for (const pointer of pointers) await kernel.activateSession(pointer.sessionFile)
+  const internals = kernel as unknown as {
+    contextBySessionKey: Map<string, { state: { activeSessionKey: string | null }, lastWarmUseAt: number }>
+  }
+  for (const context of internals.contextBySessionKey.values()) {
+    if (context.state.activeSessionKey === pointers[0]!.sessionFile) context.lastWarmUseAt = 0
+    if (context.state.activeSessionKey === pointers[1]!.sessionFile) context.lastWarmUseAt = 1
+  }
+
+  const sweep = kernel.sweepAutomaticHibernation({ nowMs: 600_000 })
+  await candidate.stopEntered
+  await assert.rejects(
+    kernel.activateSession(pointers[0]!.sessionFile),
+    /runtime launch is already in progress/u
+  )
+  assert.equal(kernel.getState().activeSessionKey, pointers[2]!.sessionFile)
+  candidate.releaseStop()
+  assert.equal((await sweep).hibernatedCount, 1)
+
+  await kernel.activateSession(pointers[0]!.sessionFile)
+  assert.equal(kernel.getState().activeSessionKey, pointers[0]!.sessionFile)
+  assert.equal(replacement.startCalls, 1)
+})
+
+test('automatic hibernation retries the exact release token when commit rollback initially fails', async () => {
+  class CommitRejectingRuntimeHost extends FakeRuntimeHost {
+    private releaseCalls = 0
+
+    override async commitHibernation(input: {
+      sessionId: string
+      generation: number
+      attemptId: string
+      token: string
+    }): Promise<RuntimeHibernateLeaseResult> {
+      this.hibernateLeaseCalls.push({ action: 'commit', ...input })
+      return { ok: false, reason: 'lease-rejected', message: 'commit rejected', action: 'commit' }
+    }
+
+    override async releaseHibernation(input: {
+      sessionId: string
+      generation: number
+      attemptId: string
+      token: string
+    }): Promise<RuntimeHibernateLeaseResult> {
+      this.hibernateLeaseCalls.push({ action: 'release', ...input })
+      this.releaseCalls += 1
+      if (this.releaseCalls === 1) {
+        return { ok: false, reason: 'lease-rejected', message: 'restore failed', action: 'release' }
+      }
+      return { ok: true, action: 'release', ...input }
+    }
+  }
+  const projectPath = '/tmp/auto-rollback-project'
+  const pointers: SessionPointer[] = [
+    { projectPath, sessionFile: '/tmp/auto-rollback-old.jsonl', sessionId: 'rollback-old', sessionName: null },
+    { projectPath, sessionFile: '/tmp/auto-rollback-warm.jsonl', sessionId: 'rollback-warm', sessionName: null },
+    { projectPath, sessionFile: '/tmp/auto-rollback-active.jsonl', sessionId: 'rollback-active', sessionName: null }
+  ]
+  const candidate = new CommitRejectingRuntimeHost({
+    sessionId: pointers[0]!.sessionId,
+    sessionFile: pointers[0]!.sessionFile
+  })
+  const queue: RuntimeHost[] = [
+    candidate,
+    new FakeRuntimeHost({ sessionId: pointers[1]!.sessionId, sessionFile: pointers[1]!.sessionFile }),
+    new FakeRuntimeHost({ sessionId: pointers[2]!.sessionId, sessionFile: pointers[2]!.sessionFile })
+  ]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = queue.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [{ path: projectPath }], activeProjectKey: projectPath },
+    {
+      ...kernelOptions(),
+      sessionRegistry: { sessions: pointers, activeSessionKey: pointers[0]!.sessionFile },
+      now: () => 300_000
+    }
+  )
+  for (const pointer of pointers) await kernel.activateSession(pointer.sessionFile)
+  const internals = kernel as unknown as {
+    contextBySessionKey: Map<string, { state: { activeSessionKey: string | null }, lastWarmUseAt: number }>
+  }
+  for (const context of internals.contextBySessionKey.values()) {
+    if (context.state.activeSessionKey === pointers[0]!.sessionFile) context.lastWarmUseAt = 0
+    if (context.state.activeSessionKey === pointers[1]!.sessionFile) context.lastWarmUseAt = 1
+  }
+
+  const result = await kernel.sweepAutomaticHibernation({ nowMs: 300_000 })
+  assert.equal(result.hibernatedCount, 0)
+  assert.equal(candidate.stopCalls, 0)
+  assert.deepEqual(candidate.hibernateLeaseCalls.map(({ action }) => action), [
+    'prepare',
+    'commit',
+    'release',
+    'release'
+  ])
+  const [prepared, , firstRelease, secondRelease] = candidate.hibernateLeaseCalls
+  assert.equal(firstRelease?.attemptId, prepared?.attemptId)
+  assert.equal(secondRelease?.attemptId, prepared?.attemptId)
+  assert.equal(firstRelease?.token, prepared === undefined ? undefined : `fake-token-${prepared.attemptId}`)
+  assert.equal(secondRelease?.token, firstRelease?.token)
 })

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import type { KernelForkCandidate } from '../../../../shared/kernel-contract'
+import { useModalDialog } from '../../components/useModalDialog'
 import './session-operations.css'
 
 type SessionForkDialogProps = {
@@ -28,12 +29,7 @@ export function SessionForkDialog({
   const dialogRef = useRef<HTMLElement>(null)
   const firstCandidateRef = useRef<HTMLInputElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
-  const previousFocusRef = useRef<HTMLElement | null>(null)
-  const submittingRef = useRef(submitting)
-  const onCancelRef = useRef(onCancel)
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
-  submittingRef.current = submitting
-  onCancelRef.current = onCancel
 
   useEffect(() => {
     if (candidates.length === 0) {
@@ -53,55 +49,13 @@ export function SessionForkDialog({
     })
   }, [candidates, preferredUserText])
 
-  useEffect(() => {
-    previousFocusRef.current = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null
-    const focusFrame = requestAnimationFrame(() => {
-      ;(firstCandidateRef.current ?? closeRef.current)?.focus()
-    })
-
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        if (submittingRef.current) return
-        event.preventDefault()
-        event.stopPropagation()
-        onCancelRef.current()
-        return
-      }
-      if (event.key !== 'Tab') return
-
-      const dialog = dialogRef.current
-      const focusable = dialog === null
-        ? []
-        : Array.from(dialog.querySelectorAll<HTMLElement>(
-            'button:not(:disabled), input:not(:disabled)'
-          ))
-      if (focusable.length === 0) {
-        event.preventDefault()
-        return
-      }
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      const active = document.activeElement
-      if (
-        !dialog?.contains(active) ||
-        (event.shiftKey && active === first) ||
-        (!event.shiftKey && active === last)
-      ) {
-        event.preventDefault()
-        ;(event.shiftKey ? last : first).focus()
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown, true)
-    return () => {
-      cancelAnimationFrame(focusFrame)
-      document.removeEventListener('keydown', handleKeyDown, true)
-      const previousFocus = previousFocusRef.current
-      if (previousFocus !== null && previousFocus.isConnected) previousFocus.focus()
-    }
-  }, [])
+  useModalDialog({
+    open: true,
+    dialogRef,
+    initialFocus: () => firstCandidateRef.current ?? closeRef.current,
+    dismissDisabled: submitting,
+    onDismiss: onCancel
+  })
 
   return createPortal(
     <div className="session-fork-dialog-backdrop" onPointerDown={(event) => event.stopPropagation()}>
@@ -113,6 +67,7 @@ export function SessionForkDialog({
         aria-labelledby="session-fork-dialog-title"
         aria-describedby="session-fork-dialog-description"
         aria-busy={loading || submitting}
+        tabIndex={-1}
       >
         <header className="session-fork-dialog-header">
           <h2 id="session-fork-dialog-title">分叉会话</h2>

@@ -42,12 +42,60 @@ export type KernelRuntimeState = {
   exitSignal: string | null
 }
 
+/**
+ * Exact unavailable reasons for on-demand Runtime memory diagnostics.
+ * Consumers must not invent alternate spellings or free-form strings.
+ */
+export type KernelRuntimeMemoryUnavailableReason =
+  | 'platform-unsupported'
+  | 'invalid-pid'
+  | 'process-gone'
+  | 'smaps-unreadable'
+  | 'pid-unavailable'
+  | 'stale'
+  | 'ownership-changed'
+
+/**
+ * On-demand memory sample for one managed RuntimeContext.
+ * Root Pi RPC process only; descendants are not aggregated.
+ * Never enters Conversation/Timeline or periodic KernelState.
+ * Must not carry Session identity, project path, names, prompt/output, or filesystem paths.
+ */
+export type KernelRuntimeMemorySample = {
+  /** Opaque process-lifetime id owned by RuntimeContext; encodes no Session/Project identity. */
+  runtimeId: string
+  active: boolean
+  runtimeStatus: RuntimeStatus
+  /** Root Pi RPC PID, or null when the process is not running / unavailable. */
+  rootPid: number | null
+  /** Canonical RSS bytes from `/proc/<pid>/smaps_rollup`, or null when unavailable. */
+  rssBytes: number | null
+  /** Canonical PSS bytes from `/proc/<pid>/smaps_rollup`, or null when unavailable. */
+  pssBytes: number | null
+  /** Unix epoch milliseconds when this sample was taken. */
+  sampledAt: number
+  /** Null when RSS/PSS are available; otherwise an exact unavailable-reason literal. */
+  unavailableReason: KernelRuntimeMemoryUnavailableReason | null
+}
+
+/** Bounded on-demand snapshot across every managed RuntimeContext. */
+export type KernelRuntimeMemoryDiagnostics = {
+  /** Unix epoch milliseconds for the overall request. */
+  sampledAt: number
+  runtimes: KernelRuntimeMemorySample[]
+}
+
+export type KernelNavigatorKind = 'project' | 'task'
+
 export type KernelProjectState = {
   path: string
+  /** Internal Runtime workspace kind. Task paths are never rendered as Projects. */
+  workspaceKind?: KernelNavigatorKind
+  /** Stable user-facing Task identity; present only for task workspaces. */
+  taskKey?: string
   sessionCount?: number
-  unreadCount?: number
   busySessionCount?: number
-  /** Navigator 摘要；每个 Project 自己的 Session 列表，供多 Project 同时展开。 */
+  /** Navigator 摘要；每个 Runtime workspace 自己的 Session 列表。 */
   sessions?: KernelSessionSummary[]
 }
 
@@ -69,6 +117,7 @@ export type KernelSessionSummary = {
   name: string | null
   lastActivityAt: number | null
   runtimeStatus: RuntimeStatus
+  awaitingUserInput: boolean
   requiresReload?: boolean
   /** In-memory new Session before Pi JSONL materializes; not present in XDG index. */
   provisional?: true
@@ -507,11 +556,28 @@ export type KernelSubagentStatus =
   | 'paused'
   | 'detached'
 
+export type KernelSubagentUsage = {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  costUsd: number
+}
+
+export type KernelSubagentOutputReference = {
+  agent: string | null
+  path: string
+  sizeLabel: string | null
+  lines: number | null
+}
+
 export type KernelSubagentParticipant = {
   index: number
   agent: string
   status: KernelSubagentStatus
   task: string
+  model: string | null
+  usage: KernelSubagentUsage | null
   currentTool: string | null
   currentPath: string | null
   toolCount: number
@@ -520,6 +586,7 @@ export type KernelSubagentParticipant = {
   durationMs: number
   error: string | null
   finalOutput: string | null
+  outputReferences: KernelSubagentOutputReference[]
 }
 
 export type KernelSubagentRun = {
@@ -549,6 +616,32 @@ export type KernelToolImageAttachment = {
   contentIndex: number
 }
 
+export type KernelAskOption = {
+  value: string
+  label: string
+  description: string | null
+}
+
+export type KernelAskQuestion = {
+  id: string
+  prompt: string
+  type: 'single' | 'multiple' | 'text'
+  options: KernelAskOption[]
+  placeholder: string | null
+}
+
+export type KernelAskAnswer = {
+  questionId: string
+  value: string | string[]
+  customValue?: string
+}
+
+export type KernelAskToolState = {
+  questions: KernelAskQuestion[]
+  status: 'waiting' | 'submitting'
+  error: string | null
+}
+
 export type KernelToolEntry = {
   id: string
   kind: 'tool'
@@ -562,6 +655,7 @@ export type KernelToolEntry = {
   timestamp: number
   durationMs: number | null
   subagent: KernelSubagentRun | null
+  ask?: KernelAskToolState
   todos?: KernelTodoItem[]
   /** Metadata-only image attachments from toolResult content; never includes base64. */
   attachments?: KernelToolImageAttachment[]
@@ -817,6 +911,9 @@ export type KernelAdvisorDefinitionInput = {
 
 export type KernelState = {
   projects: KernelProjectState[]
+  /** Selected top-level Navigator tab. Missing legacy fixtures default to project. */
+  navigatorKind?: KernelNavigatorKind
+  /** Active internal Runtime workspace path; task paths must not be rendered as Projects. */
   activeProjectKey: string | null
   sessions: KernelSessionSummary[]
   activeSessionKey: string | null
@@ -889,9 +986,13 @@ export type KernelStatePatch = {
 
 export type KernelCommand =
   | { type: 'kernel.get-state' }
+  | { type: 'kernel.get-runtime-memory-diagnostics' }
   | { type: 'kernel.list-system-fonts' }
   | { type: 'kernel.add-project' }
   | { type: 'kernel.activate-project'; projectKey: string }
+  | { type: 'kernel.select-navigator'; kind: KernelNavigatorKind }
+  | { type: 'kernel.create-task' }
+  | { type: 'kernel.activate-task'; taskKey: string }
   | { type: 'kernel.start-session' }
   | { type: 'kernel.reload-session' }
   | {
@@ -906,6 +1007,7 @@ export type KernelCommand =
   | { type: 'kernel.preview-archived-session'; token: string }
   | { type: 'kernel.list-fork-candidates' }
   | { type: 'kernel.fork-session'; entryId: string }
+  | { type: 'kernel.navigate-history-prompt'; sessionKey: string; messageId: string }
   | { type: 'kernel.export-session' }
   | {
       type: 'kernel.get-message-image'
@@ -970,7 +1072,19 @@ export type KernelCommand =
   | { type: 'kernel.cancel-provider-login'; operationId: string }
   | { type: 'kernel.logout-provider'; providerId: string }
   | { type: 'kernel.select-prompt-attachments' }
-  | { type: 'kernel.prompt'; message: string; attachments?: KernelPromptAttachment[] }
+  | {
+      type: 'kernel.submit-ask'
+      sessionKey: string
+      toolCallId: string
+      answers: KernelAskAnswer[]
+    }
+  | { type: 'kernel.cancel-ask'; sessionKey: string; toolCallId: string }
+  | {
+      type: 'kernel.prompt'
+      message: string
+      attachments?: KernelPromptAttachment[]
+      expectedSessionKey?: string
+    }
   | { type: 'kernel.steer'; message: string; attachments?: KernelPromptAttachment[] }
   | { type: 'kernel.follow-up'; message: string; attachments?: KernelPromptAttachment[] }
   | { type: 'kernel.abort' }
@@ -983,7 +1097,7 @@ export type KernelCommand =
   | { type: 'kernel.set-shortcuts'; settings: ShortcutSettings }
   | { type: 'kernel.invoke-command'; commandId: string; argument: string }
 
-export type KernelEvent =
+export type KernelStateEvent =
   | {
       type: 'kernel.state-changed'
       revision: number
@@ -994,6 +1108,10 @@ export type KernelEvent =
       revision: number
       patch: KernelStatePatch
     }
+
+export type KernelEvent =
+  | KernelStateEvent
+  | { type: 'kernel.state-batch'; events: KernelStateEvent[] }
   | {
       type: 'kernel.compaction-started'
       projectKey: string
@@ -1012,9 +1130,17 @@ export type KernelEvent =
 export type KernelApi = {
   getPathForFile: (file: File) => string
   getState: () => Promise<KernelSnapshot>
+  /**
+   * On-demand read-only memory diagnostics for managed RuntimeContexts.
+   * Does not mutate state, publish events, or touch Conversation/Timeline.
+   */
+  getRuntimeMemoryDiagnostics: () => Promise<KernelRuntimeMemoryDiagnostics>
   listSystemFonts: () => Promise<string[]>
   addProject: () => Promise<KernelMutationAck>
   activateProject: (projectKey: string) => Promise<KernelMutationAck>
+  selectNavigator: (kind: KernelNavigatorKind) => Promise<KernelMutationAck>
+  createTask: () => Promise<KernelMutationAck>
+  activateTask: (taskKey: string) => Promise<KernelMutationAck>
   startSession: () => Promise<KernelMutationAck>
   reloadSession: () => Promise<KernelMutationAck>
   resolveProjectTrust: (
@@ -1028,6 +1154,7 @@ export type KernelApi = {
   previewArchivedSession: (token: string) => Promise<KernelSessionPreview>
   listForkCandidates: () => Promise<KernelForkCandidate[]>
   forkSession: (entryId: string) => Promise<KernelForkResult>
+  navigateHistoryPrompt: (sessionKey: string, messageId: string) => Promise<KernelMutationAck>
   exportSession: () => Promise<KernelSessionExportResult>
   getMessageImage: (
     sessionKey: string,
@@ -1093,7 +1220,17 @@ export type KernelApi = {
   cancelProviderLogin: (operationId: string) => Promise<void>
   logoutProvider: (providerId: string) => Promise<KernelProviderCredential[]>
   selectPromptAttachments: () => Promise<KernelPromptAttachment[]>
-  prompt: (message: string, attachments?: KernelPromptAttachment[]) => Promise<KernelMutationAck>
+  submitAsk: (
+    sessionKey: string,
+    toolCallId: string,
+    answers: KernelAskAnswer[]
+  ) => Promise<KernelMutationAck>
+  cancelAsk: (sessionKey: string, toolCallId: string) => Promise<KernelMutationAck>
+  prompt: (
+    message: string,
+    attachments?: KernelPromptAttachment[],
+    expectedSessionKey?: string
+  ) => Promise<KernelMutationAck>
   steer: (message: string, attachments?: KernelPromptAttachment[]) => Promise<KernelMutationAck>
   followUp: (message: string, attachments?: KernelPromptAttachment[]) => Promise<KernelMutationAck>
   abort: () => Promise<KernelMutationAck>

@@ -626,6 +626,101 @@ test('invalid and conflicting shortcuts fail before writing config', async (t) =
 })
 
 
+test('task workspaces persist outside the Project registry and own exactly one Session', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-gui-project-store-task-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const stateHome = join(root, 'state')
+  const store = new ProjectStore({ configHome: join(root, 'config'), stateHome })
+
+  assert.deepEqual(await store.loadTasks(), {
+    tasks: [],
+    activeTaskKey: null,
+    navigatorKind: 'project'
+  })
+
+  const task = await store.createTask()
+  assert.equal(task.path, join(stateHome, 'pi-gui-next', 'tasks', task.key))
+  assert.deepEqual(await store.loadProjects(), { projects: [], activeProjectKey: null })
+  assert.deepEqual(await store.loadTasks(), {
+    tasks: [task],
+    activeTaskKey: task.key,
+    navigatorKind: 'task'
+  })
+
+  const sessionDirectory = join(root, 'sessions')
+  const firstSessionFile = join(sessionDirectory, 'first.jsonl')
+  const secondSessionFile = join(sessionDirectory, 'second.jsonl')
+  await mkdir(sessionDirectory, { recursive: true })
+  await writeFile(firstSessionFile, '{}\n')
+  await writeFile(secondSessionFile, '{}\n')
+  const firstPointer = {
+    projectPath: task.path,
+    sessionFile: firstSessionFile,
+    sessionId: 'task-session-1',
+    sessionName: 'Standalone task'
+  }
+  await store.saveSession(firstPointer)
+  assert.equal(await store.taskOwnsSession(task.path), true)
+  assert.deepEqual(await store.loadSessionRegistry(task.path), {
+    sessions: [firstPointer],
+    activeSessionKey: firstSessionFile
+  })
+  assert.deepEqual(await store.validateSession(firstPointer), firstPointer)
+
+  await assert.rejects(store.saveSession({
+    projectPath: task.path,
+    sessionFile: secondSessionFile,
+    sessionId: 'task-session-2',
+    sessionName: null
+  }), /Task already owns another session/)
+
+  await store.selectNavigator('project')
+  assert.equal((await store.loadTasks()).navigatorKind, 'project')
+  await store.activateTask(task.key)
+  assert.deepEqual(await store.loadTasks(), {
+    tasks: [task],
+    activeTaskKey: task.key,
+    navigatorKind: 'task'
+  })
+})
+
+test('creating another Task preserves archived Task identity and its restorable Session', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-gui-project-store-archived-task-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = new ProjectStore({
+    configHome: join(root, 'config'),
+    stateHome: join(root, 'state')
+  })
+  const task = await store.createTask()
+  const sessionFile = join(root, 'sessions', 'archived.jsonl')
+  await mkdir(join(root, 'sessions'), { recursive: true })
+  await writeFile(sessionFile, '{}\n')
+  await store.saveSession({
+    projectPath: task.path,
+    sessionFile,
+    sessionId: 'archived-task-session',
+    sessionName: 'Archived Task'
+  })
+  await store.archiveSession(task.path, sessionFile)
+  assert.equal(await store.taskOwnsSession(task.path), true)
+
+  const nextTask = await store.createTask()
+  assert.deepEqual(await store.loadTasks(), {
+    tasks: [task, nextTask],
+    activeTaskKey: nextTask.key,
+    navigatorKind: 'task'
+  })
+  assert.deepEqual(await store.restoreArchivedSession(task.path, sessionFile), {
+    sessions: [{
+      projectPath: task.path,
+      sessionFile,
+      sessionId: 'archived-task-session',
+      sessionName: 'Archived Task'
+    }],
+    activeSessionKey: null
+  })
+})
+
 test('session pointers roundtrip as a per-project index with an active selection', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-gui-project-store-session-'))
   t.after(() => rm(root, { recursive: true, force: true }))

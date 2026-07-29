@@ -22,6 +22,17 @@ import {
   serializeTurnDelta,
 } from "./protocol.mjs";
 import {
+  PROVIDER_ID_MULTI_ADVISOR,
+  buildProviderLeaseReply,
+  buildProviderReply,
+  createAdvisorAdmissionFence,
+  installQuiescenceProvider,
+  parseProviderLeaseEvent,
+  parseProviderQueryEvent,
+  providerLeaseReplyEventName,
+  providerReplyEventName,
+} from "./quiescence-provider.mjs";
+import {
   ADVISOR_MAX_ADVICE_CHARS,
   AdvisorLifecycleAbortedError,
   admitAdvisorCandidate,
@@ -140,6 +151,106 @@ export default async function multiAdvisorExtension(pi: ExtensionAPI) {
   let interruptImmuneTurnStart: number | undefined;
 
   const enabledRuntimes = () => [...runtimes.values()].filter((runtime) => runtime.config.enabled);
+  const isAdvisorBusy = () =>
+    enabled &&
+    enabledRuntimes().some(
+      (runtime) =>
+        runtime.running ||
+        runtime.queued !== undefined ||
+        runtime.health === "running",
+    );
+  // Generation-fenced admission fence for safe automatic hibernate prepare/commit/release.
+  const admissionFence = createAdvisorAdmissionFence();
+  const replyLease = (requestId: string, ok: boolean, reason?: string) => {
+    try {
+      pi.events.emit(
+        providerLeaseReplyEventName(requestId),
+        buildProviderLeaseReply({
+          requestId,
+          ok,
+          ...(reason !== undefined ? { reason } : {}),
+        }),
+      );
+    } catch {
+      // Lease replies must never break Advisor review paths.
+    }
+  };
+  // Quiescence QUERY + lease provider: declare ID, then answer the versioned event-bus protocol.
+  // Package-local shim only — no monorepo sibling runtime import.
+  // Registration/listener install is best-effort and must never abort extension init.
+  installQuiescenceProvider(
+    pi.events,
+    (raw) => {
+      const query = parseProviderQueryEvent(raw);
+      if (query === null) return;
+      try {
+        const busy = isAdvisorBusy();
+        pi.events.emit(
+          providerReplyEventName(query.requestId),
+          buildProviderReply({
+            requestId: query.requestId,
+            providerId: PROVIDER_ID_MULTI_ADVISOR,
+            state: busy ? "busy" : "idle",
+            ...(busy ? { reason: "advisor-running" } : {}),
+          }),
+        );
+      } catch {
+        // Provider replies must never break Advisor review paths.
+      }
+    },
+    {
+      onPrepare: (raw) => {
+        const event = parseProviderLeaseEvent(raw);
+        if (event === null || event.token === undefined) return;
+        // Freeze before the check so no review can enter between idle sampling
+        // and prepare. Existing/queued work is never discarded for an automatic
+        // sweep: fail fast, reopen admission, and let a later sweep retry.
+        const prepared = admissionFence.prepare({
+          sessionId: event.sessionId,
+          generation: event.generation,
+          attemptId: event.attemptId,
+          token: event.token,
+        });
+        if (!prepared) {
+          replyLease(event.requestId, false, "lease-identity-mismatch");
+          return;
+        }
+        if (isAdvisorBusy()) {
+          admissionFence.release({
+            sessionId: event.sessionId,
+            generation: event.generation,
+            attemptId: event.attemptId,
+            token: event.token,
+          });
+          replyLease(event.requestId, false, "advisor-running");
+          return;
+        }
+        replyLease(event.requestId, true);
+      },
+      onCommit: (raw) => {
+        const event = parseProviderLeaseEvent(raw);
+        if (event === null || event.token === undefined) return;
+        const ok = admissionFence.commit({
+          sessionId: event.sessionId,
+          generation: event.generation,
+          attemptId: event.attemptId,
+          token: event.token,
+        });
+        replyLease(event.requestId, ok, ok ? undefined : "lease-identity-mismatch");
+      },
+      onRelease: (raw) => {
+        const event = parseProviderLeaseEvent(raw);
+        if (event === null) return;
+        const ok = admissionFence.release({
+          sessionId: event.sessionId,
+          generation: event.generation,
+          attemptId: event.attemptId,
+          ...(event.token !== undefined ? { token: event.token } : {}),
+        });
+        replyLease(event.requestId, ok, ok ? undefined : "lease-identity-mismatch");
+      },
+    },
+  );
   const rosterSummary = () => {
     const active = enabledRuntimes();
     const names = active
@@ -695,6 +806,11 @@ export default async function multiAdvisorExtension(pi: ExtensionAPI) {
   pi.on("turn_end", (event, ctx) => {
     lastContext = ctx;
     if (!enabled) return;
+    // Safe hibernate prepare freezes new review admission; drop new turn work fail-closed.
+    if (admissionFence.isFrozen()) {
+      pendingPrompt = "";
+      return;
+    }
     const prompt = pendingPrompt;
     pendingPrompt = "";
     const epoch = lifecycleEpoch;
@@ -732,6 +848,7 @@ export default async function multiAdvisorExtension(pi: ExtensionAPI) {
     }
   });
   pi.on("session_start", async (_event, ctx) => {
+    admissionFence.startSession();
     lastContext = ctx;
     completedPrimaryTurns = 0;
     interruptImmuneTurnStart = undefined;
@@ -745,6 +862,7 @@ export default async function multiAdvisorExtension(pi: ExtensionAPI) {
     updateStatus(ctx);
   });
   pi.on("session_shutdown", () => {
+    admissionFence.endSession();
     resetRuntimes();
     completedPrimaryTurns = 0;
     interruptImmuneTurnStart = undefined;

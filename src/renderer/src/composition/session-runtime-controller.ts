@@ -113,6 +113,10 @@ export class SessionRuntimeController {
     if (state?.activeProjectKey === null || state?.activeProjectKey === undefined) {
       throw new Error('No active project is available.')
     }
+    if (!sessionIsRegistered(state, sessionKey)) {
+      this.discardStaleSessionTarget(sessionKey)
+      return
+    }
     const requestRevision = this.previewRequestRevision + 1
     this.previewRequestRevision = requestRevision
     const target: SessionViewTarget = {
@@ -185,9 +189,14 @@ export class SessionRuntimeController {
     mode: 'immediate' | 'settled' = 'immediate'
   ): Promise<void> {
     this.assertActive()
-    const projectKey = this.dependencies.getKernelState()?.activeProjectKey
-    if (projectKey === null || projectKey === undefined) {
+    const state = this.dependencies.getKernelState()
+    if (state === null || state.activeProjectKey === null) {
       return Promise.reject(new Error('No active project is available.'))
+    }
+    const projectKey = state.activeProjectKey
+    if (!sessionIsRegistered(state, sessionKey)) {
+      this.discardStaleSessionTarget(sessionKey)
+      return Promise.resolve()
     }
     return this.enqueueRuntimeEnsure(
       { kind: 'session', projectKey, sessionKey },
@@ -326,6 +335,10 @@ export class SessionRuntimeController {
     if (state?.activeProjectKey !== target.projectKey) {
       throw new Error(SUPERSEDED_ERROR)
     }
+    if (target.kind === 'session' && !sessionIsRegistered(state, target.sessionKey)) {
+      this.discardStaleSessionTarget(target.sessionKey)
+      return
+    }
 
     if (target.kind === 'session' && sessionRuntimeAlreadyUsable(state, target)) {
       if (
@@ -441,6 +454,19 @@ export class SessionRuntimeController {
     this.runtimeEnsureTimer = null
   }
 
+  private discardStaleSessionTarget(sessionKey: string): void {
+    const target = this.snapshot.sessionViewTarget
+    if (target?.kind === 'session' && target.sessionKey === sessionKey) {
+      this.previewRequestRevision += 1
+      this.updateSnapshot({
+        sessionViewTarget: null,
+        sessionPreview: null,
+        previewPendingKey: null
+      })
+    }
+    this.dependencies.onError(null)
+  }
+
   private assertActive(): void {
     if (this.disposed) throw new Error('Session Runtime controller is disposed.')
   }
@@ -495,9 +521,22 @@ export function keepValidSessionViewTarget(
   if (state.activeSessionKey === null) {
     return target.sawProvisional ? target : { ...target, sawProvisional: true }
   }
-  if (target.sawProvisional || target.prepared) return null
-  if (state.sessions.some((session) => session.key === state.activeSessionKey)) return null
-  return target
+  if (activeSessionIsListedInProject(state)) return null
+  return target.sawProvisional ? target : { ...target, sawProvisional: true }
+}
+
+function activeSessionIsListedInProject(state: KernelState): boolean {
+  const activeProjectKey = state.activeProjectKey
+  const activeSessionKey = state.activeSessionKey
+  if (activeProjectKey === null || activeSessionKey === null) return false
+  return state.projects
+    .find(({ path }) => path === activeProjectKey)
+    ?.sessions
+    ?.some(({ key }) => key === activeSessionKey) === true
+}
+
+function sessionIsRegistered(state: KernelState, sessionKey: string): boolean {
+  return state.sessions.some(({ key }) => key === sessionKey)
 }
 
 function sessionRuntimeAlreadyUsable(

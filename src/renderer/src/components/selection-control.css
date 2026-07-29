@@ -99,7 +99,10 @@
 }
 
 :is(.select-control-check, .font-select-check) {
+  display: inline-flex;
   width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  align-items: center;
+  justify-content: center;
   color: var(--color-text-soft);
-  text-align: center;
 }

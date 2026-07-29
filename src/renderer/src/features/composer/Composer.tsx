@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import type {
   KernelCommandDescriptor,
@@ -11,6 +11,12 @@ import type {
   KernelTodoItem,
   ThinkingLevel
 } from '../../../../shared/kernel-contract'
+import {
+  isRuntimeContextAction,
+  isWorkbenchAction,
+  type WorkbenchCompletedAction,
+  type WorkbenchOperation
+} from '../../workbench-actions'
 import { Icon } from '../../components/Icon'
 import { IconButton } from '../../components/IconButton'
 import { useViewportPopoverPosition } from '../../components/useViewportPopoverPosition'
@@ -21,7 +27,6 @@ import {
   formatTokenCount,
   normalizeContextPercent
 } from '../../usage-formatters'
-import { TIMELINE_LAYOUT_CHANGE_EVENT } from '../chat/timeline-scroll-stability'
 import {
   filterSlashCommands,
   parseSlashCommandToken,
@@ -32,6 +37,12 @@ import {
   replaceProjectPathToken
 } from './project-path-input'
 import { shouldAbortComposerFromEscape } from './composer-escape'
+import {
+  resolveComposerDraftContext,
+  switchComposerDraft,
+  type ComposerDraft,
+  type ComposerPendingAttachment as PendingAttachment
+} from './composer-drafts'
 import { readDroppedPromptAttachments } from './prompt-attachments'
 import { ComposerModelPicker } from './ComposerModelPicker'
 import { TodoPanel } from './TodoPanel'
@@ -40,11 +51,6 @@ import {
   ProjectPathSurface,
   SlashCommandSurface
 } from './ComposerSuggestionSurfaces'
-
-type PendingAttachment = {
-  id: string
-  attachment: KernelPromptAttachment
-}
 
 type ProjectPathSearchState = {
   key: string
@@ -73,8 +79,8 @@ type ComposerProps = {
   viewingNewSession: boolean
   newSessionPrepared: boolean
   busy: boolean
-  pendingAction: string | null
-  completedAction: { action: string; succeeded: boolean } | null
+  pendingAction: WorkbenchOperation | null
+  completedAction: WorkbenchCompletedAction | null
   todos: KernelTodoItem[] | null
   onSelectPromptAttachments: () => Promise<KernelPromptAttachment[]>
   onSearchProjectPaths: (query: string) => Promise<KernelProjectPathSearchResult>
@@ -88,6 +94,7 @@ type ComposerProps = {
   globalEscapeAbortEnabled: boolean
   onSetModel: (provider: string, modelId: string) => Promise<void>
   onSetThinkingLevel: (level: ThinkingLevel) => Promise<void>
+  onMeasuredHeightChange: (height: number) => void
 }
 
 export function Composer({
@@ -114,7 +121,8 @@ export function Composer({
   onAbort,
   globalEscapeAbortEnabled,
   onSetModel,
-  onSetThinkingLevel
+  onSetThinkingLevel,
+  onMeasuredHeightChange
 }: ComposerProps): React.JSX.Element {
   const [prompt, setPrompt] = useState('')
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
@@ -141,15 +149,37 @@ export function Composer({
   const appliedDraftRequestIdRef = useRef<number | null>(null)
   const appliedControlRequestIdRef = useRef<number | null>(null)
   const projectPathSearchRevisionRef = useRef(0)
+  const composerDraftsRef = useRef(new Map<string, ComposerDraft>())
   const { activeProjectKey, activeSessionKey, runtime, session } = state
-  const displayedContextKey = [
-    activeProjectKey ?? 'no-project',
-    viewingNewSession ? 'new-session' : viewedSessionKey ?? activeSessionKey ?? 'no-session'
-  ].join(':')
+  const activeWorkspace = activeProjectKey === null
+    ? null
+    : state.projects.find(({ path }) => path === activeProjectKey) ?? null
+  const taskWorkspace = activeWorkspace?.workspaceKind === 'task'
+  const projectPathFeaturesAvailable = !taskWorkspace
+  const displayedSessionKey = viewingNewSession
+    ? null
+    : viewedSessionKey ?? activeSessionKey
+  const displayedSessionSummary = displayedSessionKey === null
+    ? null
+    : state.sessions.find(({ key }) => key === displayedSessionKey) ?? null
+  const displayedSessionId = displayedSessionSummary?.id ?? (
+    displayedSessionKey === activeSessionKey ? session.id : null
+  )
+  const draftContext = resolveComposerDraftContext({
+    projectKey: activeProjectKey,
+    viewingNewSession,
+    sessionKey: displayedSessionKey,
+    sessionId: displayedSessionId,
+    provisional: displayedSessionSummary?.provisional === true
+  })
+  const displayedContextKey = draftContext.key
+  const draftContextRef = useRef(draftContext)
   const displayedContextKeyRef = useRef(displayedContextKey)
   displayedContextKeyRef.current = displayedContextKey
   const promptRef = useRef(prompt)
   promptRef.current = prompt
+  const pendingAttachmentsRef = useRef(pendingAttachments)
+  pendingAttachmentsRef.current = pendingAttachments
   const cursorPositionRef = useRef(cursorPosition)
   cursorPositionRef.current = cursorPosition
   const activeProjectKeyRef = useRef(activeProjectKey)
@@ -167,6 +197,8 @@ export function Composer({
     : viewingNewSession && !newSessionPrepared
       ? preparingNewSession
       : runtime.status === 'ready'
+  const promptCanWaitForStartingRuntime =
+    viewedSessionKey !== null && viewedSessionRuntimeStatus === 'starting'
   const draftEditable = activeProjectKey !== null && !submitting
   const runtimeContextBusy =
     !preparingNewSession &&
@@ -177,7 +209,7 @@ export function Composer({
     !attachmentProcessing &&
     !runtimeContextBusy
   const canSubmit =
-    (ready || running) &&
+    (ready || running || promptCanWaitForStartingRuntime) &&
     !submissionBusy &&
     !submitting &&
     !attachmentProcessing
@@ -200,6 +232,7 @@ export function Composer({
         activeProjectPathToken.query
       ])
   const projectPathSearchEnabled =
+    projectPathFeaturesAvailable &&
     draftEditable &&
     activeProjectKey !== null &&
     slashQuery === null &&
@@ -232,6 +265,7 @@ export function Composer({
   const canStart =
     canStartRuntime(runtime.status) &&
     activeProjectKey !== null &&
+    !taskWorkspace &&
     !busy
   const canResume =
     canStartRuntime(runtime.status) &&
@@ -240,34 +274,78 @@ export function Composer({
     session.resumeAvailable &&
     !busy
   useLayoutEffect(() => {
+    const previousContext = draftContextRef.current
+    if (previousContext.key === draftContext.key) {
+      draftContextRef.current = draftContext
+      return
+    }
+
+    const nextDraft = switchComposerDraft(
+      composerDraftsRef.current,
+      previousContext,
+      draftContext,
+      {
+        prompt: promptRef.current,
+        pendingAttachments: pendingAttachmentsRef.current,
+        cursorPosition: cursorPositionRef.current
+      }
+    )
+    draftContextRef.current = draftContext
+    promptRef.current = nextDraft.prompt
+    pendingAttachmentsRef.current = nextDraft.pendingAttachments
+    cursorPositionRef.current = nextDraft.cursorPosition
+    setPrompt(nextDraft.prompt)
+    setPendingAttachments(nextDraft.pendingAttachments)
+    setCursorPosition(nextDraft.cursorPosition)
+
+    const restoreFrame = requestAnimationFrame(() => {
+      const textarea = textareaRef.current
+      if (textarea === null) return
+      textarea.style.height = 'auto'
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`
+      textarea.setSelectionRange(nextDraft.cursorPosition, nextDraft.cursorPosition)
+    })
+    return () => cancelAnimationFrame(restoreFrame)
+  }, [
+    draftContext.key,
+    draftContext.kind,
+    draftContext.projectKey,
+    draftContext.provisional,
+    draftContext.sessionKey
+  ])
+  useLayoutEffect(() => {
     const composer = composerRef.current
-    const mainChat = composer?.closest<HTMLElement>('.main-chat')
-    if (!composer || !mainChat) return
+    if (composer === null) return
     let measuredHeight = -1
 
-    const notifyTimelineLayoutChange = (): void => {
-      mainChat.querySelector<HTMLElement>('.conversation-surface')?.dispatchEvent(
-        new Event(TIMELINE_LAYOUT_CHANGE_EVENT)
-      )
-    }
-    const updateClearance = (): void => {
+    const updateMeasuredHeight = (): void => {
       const height = Math.ceil(composer.getBoundingClientRect().height)
       if (height === measuredHeight) return
       measuredHeight = height
-      mainChat.style.setProperty('--composer-measured-clearance', `${height}px`)
-      notifyTimelineLayoutChange()
+      onMeasuredHeightChange(height)
     }
 
-    updateClearance()
-    const resizeObserver = new ResizeObserver(updateClearance)
+    updateMeasuredHeight()
+    const resizeObserver = new ResizeObserver(updateMeasuredHeight)
     resizeObserver.observe(composer)
 
     return () => {
       resizeObserver.disconnect()
-      mainChat.style.removeProperty('--composer-measured-clearance')
-      notifyTimelineLayoutChange()
+      onMeasuredHeightChange(0)
     }
-  }, [])
+  }, [onMeasuredHeightChange])
+
+  const abortRuntime = useCallback(async (): Promise<void> => {
+    const contextKey = displayedContextKeyRef.current
+    setCommandError(null)
+    try {
+      await onAbort()
+    } catch (error) {
+      if (displayedContextKeyRef.current === contextKey) {
+        setCommandError(errorMessage(error))
+      }
+    }
+  }, [onAbort])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
@@ -280,11 +358,11 @@ export function Composer({
         keyCode: event.keyCode
       })) return
       event.preventDefault()
-      void onAbort().catch(() => undefined)
+      void abortRuntime()
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [globalEscapeAbortEnabled, onAbort, running])
+  }, [abortRuntime, globalEscapeAbortEnabled, running])
 
   useEffect(() => {
     if (!viewingNewSession) return
@@ -627,7 +705,7 @@ export function Composer({
     const submittedPendingAttachments = pendingAttachments
     const attachments = pendingAttachments.map(({ attachment }) => attachment)
     if (
-      (!ready && !running) ||
+      (!ready && !running && !promptCanWaitForStartingRuntime) ||
       submitting ||
       submissionBusy ||
       attachmentProcessingRef.current ||
@@ -654,6 +732,11 @@ export function Composer({
         }
         setSubmitting(false)
       }
+      return
+    }
+
+    if (promptCanWaitForStartingRuntime && message.startsWith('/')) {
+      setCommandError('Slash 命令将在对话启动完成后可用。')
       return
     }
 
@@ -996,7 +1079,7 @@ export function Composer({
                 icon="stop"
                 label="中止本轮输出"
                 type="button"
-                onClick={() => void onAbort().catch(() => undefined)}
+                onClick={() => void abortRuntime()}
               />
             ) : (
               <IconButton
@@ -1018,36 +1101,40 @@ export function Composer({
         <div className="composer-runtime-controls">
           {preparingNewSession || viewingInactiveSession ? null : canResume ? (
             <>
-              <button
-                className="composer-start-action"
-                type="button"
-                disabled={!canStart}
-                aria-busy={pendingAction === 'start-session' ? true : undefined}
-                onClick={() => void onStartSession().catch(() => undefined)}
-              >
-                <span>新建对话</span>
-              </button>
+              {taskWorkspace ? null : (
+                <button
+                  className="composer-start-action"
+                  type="button"
+                  disabled={!canStart}
+                  aria-busy={isWorkbenchAction(pendingAction, 'start-session') ? true : undefined}
+                  onClick={() => void onStartSession().catch(() => undefined)}
+                >
+                  <span>新建对话</span>
+                </button>
+              )}
               <button
                 className="composer-start-action"
                 type="button"
                 disabled={busy}
-                aria-busy={pendingAction === 'activate-session' ? true : undefined}
+                aria-busy={isWorkbenchAction(pendingAction, 'activate-session') ? true : undefined}
                 onClick={() => {
                   if (activeSessionKey !== null) {
                     void onActivateSession(activeSessionKey).catch(() => undefined)
                   }
                 }}
               >
-                <span>{runtime.status === 'crashed' ? '重启并恢复' : '恢复对话'}</span>
+                <span>{runtime.status === 'crashed'
+                  ? '重启并恢复'
+                  : taskWorkspace ? '恢复任务' : '恢复对话'}</span>
                 <Icon name="arrow-right" size="sm" />
               </button>
             </>
-          ) : canStartRuntime(runtime.status) ? (
+          ) : canStartRuntime(runtime.status) && !taskWorkspace ? (
             <button
               className="composer-start-action"
               type="button"
               disabled={!canStart}
-              aria-busy={pendingAction === 'start-session' ? true : undefined}
+              aria-busy={isWorkbenchAction(pendingAction, 'start-session') ? true : undefined}
               onClick={() => void onStartSession().catch(() => undefined)}
             >
               <span>{runtime.status === 'crashed' ? '重新启动 Pi' : '启动 Pi'}</span>
@@ -1165,7 +1252,9 @@ function composerPlaceholder(
   viewingNewSession: boolean,
   viewedSessionRuntimeStatus: KernelState['runtime']['status']
 ): string {
-  if (state.activeProjectKey === null) return '先选择项目文件夹'
+  if (state.activeProjectKey === null) {
+    return state.navigatorKind === 'task' ? '新建任务开始' : '先选择项目文件夹'
+  }
   if (viewingNewSession && state.runtime.status === 'crashed') return '新对话启动失败'
   if (viewingNewSession) return ''
   if (viewingInactiveSession && canChangeRuntimeContext(viewedSessionRuntimeStatus)) return ''
@@ -1178,13 +1267,6 @@ function composerPlaceholder(
 
 function hasDraggedFiles(dataTransfer: DataTransfer): boolean {
   return Array.from(dataTransfer.types).includes('Files')
-}
-
-function isRuntimeContextAction(action: string): boolean {
-  return action === 'add-project' ||
-    action === 'activate-project' ||
-    action === 'activate-session' ||
-    action === 'start-session'
 }
 
 function canChangeRuntimeContext(status: KernelState['runtime']['status']): boolean {
