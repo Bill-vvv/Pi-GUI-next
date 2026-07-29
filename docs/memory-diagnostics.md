@@ -1,7 +1,7 @@
 # Memory Diagnostics and Runtime Lifecycle
 
 > Slice: S26 — Memory Budget & Automatic Runtime Hibernation
-> Status: In Progress
+> Status: Complete
 > Last updated: 2026-07-30
 
 ## 1. Purpose and evidence levels
@@ -74,7 +74,19 @@ release/evidence/2026-07-27T17-24-06-418Z-e2aeb73cea10/report.json
 release/evidence/2026-07-27T17-31-22-250Z-981282e2c564/report.json
 ```
 
-Both diagnostic runs came from an isolated clean worktree while unrelated canonical work was still in progress. Both passed all 18 verifier steps, but neither replaces a canonical release acceptance run.
+Both diagnostic runs came from an isolated clean worktree while unrelated canonical work was still in progress. Both passed all 18 verifier steps, but neither replaced a canonical release acceptance run.
+
+The final canonical P2/S26 acceptance is commit `152a9a3a0725736c918cc92c8666b84037f5b3c6`. It passed the expanded 19-step AppImage verifier, including real five-minute automatic Runtime hibernation, explicit reactivation, conversation preservation and enforced memory budgets.
+
+```text
+release/evidence/2026-07-29T18-48-57-827Z-152a9a3a0725/report.json
+```
+
+Final AppImage SHA-256:
+
+```text
+114a7040a20cd21dd89dfe3de181334ef36d2d9698324ed3da76f0b8efd4e417
+```
 
 ### 3.1 Process and state samples
 
@@ -137,7 +149,7 @@ Mutating commands now return narrow revision acknowledgements rather than a seco
 
 Main now coalesces only consecutive state events into an 8ms, maximum-64-member envelope. A newer full state supersedes older pending state work, later patches retain revision order, and domain events flush the queue as ordering barriers. Active stderr diagnostics publish a narrow runtime patch instead of copying the full Conversation. Renderer expands each envelope through the existing revision barrier and snapshot-resync path.
 
-This is bounded Main send-side containment, not byte-level backpressure after Electron accepts a message. A future gate must still measure Renderer settled slope and native allocations under a real workload.
+This is bounded Main send-side containment, not byte-level backpressure after Electron accepts a message. The final P2 gate now enforces bounded Renderer/native measurements over the release workflow and verifies that total process-tree PSS falls after parallel work and again after one background Runtime is reclaimed. A separate 30-minute settled-slope stress test remains deferred unless a real regression requires it.
 
 ### 4.4 DOM mounting is not the main failure
 
@@ -164,28 +176,41 @@ For Pi GUI this becomes: Jupyter-style Session/Runtime separation, Chrome-style 
 2. Replace duplicate mutating invoke state returns with typed acknowledgements. **Complete.**
 3. Add identity/revision-safe metadata patches so Subagent/tool status updates do not fall back to complete state. **Complete for the high-frequency paths.**
 4. Bound and coalesce Main→Renderer event delivery. **Complete for the Main pre-send queue: 8ms / 64 state events with full-state supersession and revision resync.**
-5. Split Navigation, active Session metadata and active Conversation projections.
-6. Keep the single-Runtime stop/recovery primitive inside Main/Kernel only; do not expose Session, Project or all-idle hibernation as a user action.
-7. Define Kernel and Extension operation leases; unknown quiescence fails closed.
-8. Enable conservative automatic hibernation only for persisted, inactive, non-busy, non-provisional, lease-free Runtimes.
-9. Page and evict old Timeline data in Renderer.
-10. Measure bare Pi, Subagent, Magic Context, Advisor and combined Extension baseline costs, then move excessive fixed cost to lazy initialization in the owning component.
+5. Keep the single-Runtime stop/recovery primitive inside Main/Kernel only; do not expose Session, Project or all-idle hibernation as a user action. **Complete.**
+6. Define Kernel and Extension operation leases; unknown quiescence fails closed. **Complete for current bundled/managed providers.**
+7. Enable conservative automatic hibernation only for persisted, inactive, non-busy, non-provisional, lease-free Runtimes. **Complete and verified in the final AppImage gate.**
+8. Split or page additional inactive Renderer state only if later evidence shows the bounded current projection is again a dominant retained-memory source. **Deferred; not required by the completed P2 budget.**
+9. Measure additional standalone Extension combinations only when those products enter a release scope or trigger a real budget regression. **Deferred.**
 
-## 7. Provisional budgets
+## 7. P2 release budgets
 
-These are investigation targets, not yet release gates:
+The final `--memory-diagnostics` gate enforces these redlines:
 
-| Scenario | Initial target |
-| --- | ---: |
-| AppImage + one ready Runtime | ≤ 1.0 GiB PSS |
-| Electron shell without Pi Runtime | ≤ 500 MiB PSS |
-| Renderer settled | ≤ 300 MiB PSS |
-| Renderer 30-minute settled slope | ≤ 2 MiB/min after warm-up |
-| Default warm Runtime set | foreground + most recent quiescent Runtime |
-| Automatic hibernation grace period | initially 5 minutes, subject to evidence |
-| Busy/provisional/unknown-quiescence Runtime | never automatically hibernated |
+| Metric | Release limit | Final observed maximum/result |
+| --- | ---: | ---: |
+| Whole AppImage process-tree PSS | ≤ 4 GiB | 2,687,216,640 bytes |
+| Renderer PSS | ≤ 512 MiB | 164,363,264 bytes |
+| Renderer V8 heap used | ≤ 128 MiB | 27,195,464 bytes |
+| Complete Renderer KernelState JSON | ≤ 2 MiB | 100,568 bytes |
+| Renderer full-state events in the scenario | ≤ 256 | 109 |
+| Swap across sampled process tree | 0 | 0 |
+| Settled PSS after parallel work | ≤ 80% of busy peak | 1,662,782,464 / 2,687,216,640 bytes, about 61.9% |
+| Reactivated three-Runtime PSS | ≤ 3 GiB | 1,575,842,816 bytes |
+| Main state envelope size | ≤ 64 members | 5 |
 
-Parallel busy work is allowed to exceed the steady-state budget. The required behavior is that memory returns toward the warm-set budget after work completes and the grace period expires.
+The Runtime lifecycle result was:
+
+```text
+3 materialized Runtime processes
+→ real five-minute grace + automatic sweep
+→ 2 Runtime processes / 1,304,407,040 bytes total PSS
+→ explicit “恢复对话”
+→ 3 Runtime processes / 1,575,842,816 bytes total PSS
+```
+
+The reactivated conversation retained its user and assistant entries. Busy, foreground, provisional, pending ask/queue, compaction, active lease and unknown-quiescence exclusions are covered by deterministic core tests; the verifier does not shorten the production grace or fake Kernel time.
+
+Continuous 20-Session browsing, three simultaneously busy parent Runtimes, pressure-triggered reclaim and a 30-minute settled-slope run are intentionally not claimed. Under KISS/YAGNI they are follow-up stress scenarios, not P2 completion requirements, unless later evidence reopens them.
 
 ## 8. Diagnostic safety
 

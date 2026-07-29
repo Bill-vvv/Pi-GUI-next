@@ -489,3 +489,11 @@
 - 决策：历史 Prompt 编辑直接复用 Pi Tree：GUI 只解析当前可见活动路径上的 user turn，调用受控 `navigate_tree`，再复用现有 `prompt` 并刷新真实 Tree；失败时保留草稿，导航已经成功则只重试 prompt。不得为该交互恢复 atomic navigate+prompt、projection watermark、第二份 Conversation projection stream 或另一套 Session 数据库。Package、Extension、Skill、MCP 和 Git 也优先复用固定 Pi 版本、成熟依赖或已安装 Package 的真实能力；GUI 只增加实际界面所需的 typed bridge 和状态投影。
 - 原因：Pi TUI 已经证明 Tree 分支语义可用。此前为假设性的并发边界设计新的原子协议、watermark 和 artifact admission，扩大了实现、验证与打包面，却没有真实产品失败证明这些机制必要，违反 KISS、YAGNI 和 Fail Fast。
 - 影响：没有可复现失败证据时，不增加第二套协议、capability 自证明或平行事实源。当前 Git Main/IPC、Capability Inventory 和通用 Right Sidebar 只是 P3 前置基础，不表示 Git 工作台、Capability Center、MCP 管理或 P3 已完成；各产品面只有在真实调用链和对应 UI 落地后才能单独验收。
+
+## D-062 — S26 以真实 AppImage预算和自动恢复闭环完成
+
+- 日期：2026-07-30
+- 状态：Accepted；完成 D-052/D-058 的自动休眠目标，并将 P2 推进到 Complete
+- 决策：S26 的 P2完成门槛固定为唯一 Linux verifier中的真实 AppImage链路：3 个已物化 Runtime经生产五分钟 grace和自动 sweep降到2个，用户通过现有“恢复对话”恢复被回收 Session后回到3个且对话保留；同一 Gate必须通过总 PSS、Renderer PSS/V8、KernelState大小、swap、busy后回落、恢复后总量和 Main state batch上限。自动候选继续对 busy、前台、provisional、pending ask/queue、compaction、active lease和未知 quiescence fail-closed。
+- 原因：此前的采样只证明诊断存在，没有证明自动回收和恢复在正式包中闭环；另一方面，把20 Session浏览、三个父Runtime同时busy、内存压力触发和30分钟slope全部设为P2前置，会把真实问题扩大为长期压力平台，违反KISS/YAGNI。真实五分钟生命周期与固定红线足以证明当前P2预算边界。
+- 影响：P2/S26可在对应正式证据通过后标记Complete。20 Session、三个busy父Runtime、pressure reclaim、Timeline分页和30分钟slope只作为真实回归触发的专项，不冒充已验证，也不阻塞P3。诊断继续默认关闭、脱敏、无正文/身份，并禁止GC/purge作为通过手段。
