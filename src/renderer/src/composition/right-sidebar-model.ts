@@ -59,6 +59,16 @@ export function writeRightSidebarWidthPreference(
   }
 }
 
+export function reconcileRightSidebarActiveTab(
+  tabIds: readonly string[],
+  requestedTabId: string
+): string {
+  if (tabIds.length === 0) {
+    throw new Error('RightSidebar requires at least one concrete tab.')
+  }
+  return tabIds.includes(requestedTabId) ? requestedTabId : tabIds[0]!
+}
+
 export function validateRightSidebarTabs(
   tabIds: readonly string[],
   activeTabId: string

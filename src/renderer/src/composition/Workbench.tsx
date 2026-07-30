@@ -76,8 +76,10 @@ import {
   type SubagentTaskSelection,
   type SubagentTaskTarget
 } from '../features/chat/subagent-task-detail-model'
+import { GitChangesPanel } from '../features/git/GitChangesPanel'
 import { ProjectTrustDialog } from '../features/trust/ProjectTrustDialog'
 import { RIGHT_SIDEBAR_ID, RightSidebar } from './RightSidebar'
+import { reconcileRightSidebarActiveTab } from './right-sidebar-model'
 import {
   DEFAULT_TOOL_DISPLAY_DENSITY,
   isToolDisplayDensity,
@@ -206,6 +208,7 @@ type WorkbenchProps = {
     origin: WorkbenchActionOrigin
   ) => Promise<void>
   onSetThinkingLevel: (level: ThinkingLevel) => Promise<void>
+  onSetOpenAiFastMode: (enabled: boolean) => Promise<void>
   onSetSessionNaming: (settings: SessionNamingSettings) => Promise<void>
   onSetGeneral: (settings: GeneralSettings) => Promise<void>
   onSetSubagentEnabled: (enabled: boolean) => Promise<void>
@@ -302,6 +305,7 @@ export function Workbench({
   onAbort,
   onSetModel,
   onSetThinkingLevel,
+  onSetOpenAiFastMode,
   onSetSessionNaming,
   onSetGeneral,
   onSetSubagentEnabled,
@@ -341,8 +345,10 @@ export function Workbench({
   const [historyPromptEditing, setHistoryPromptEditing] = useState(false)
   const [subagentTaskSelection, setSubagentTaskSelection] =
     useState<SubagentTaskSelection | null>(null)
+  const [rightSidebarActivated, setRightSidebarActivated] = useState(false)
+  const [rightSidebarTabFocusRequest, setRightSidebarTabFocusRequest] = useState(0)
   const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false)
-  const [rightSidebarTabId, setRightSidebarTabId] = useState('subagent')
+  const [rightSidebarTabId, setRightSidebarTabId] = useState<'git' | 'subagent'>('subagent')
   const [toolDisplayDensity, setToolDisplayDensity] = useState<ToolDisplayDensity>(() => {
     const stored = window.localStorage.getItem(TOOL_DISPLAY_DENSITY_STORAGE_KEY)
     return isToolDisplayDensity(stored) ? stored : DEFAULT_TOOL_DISPLAY_DENSITY
@@ -368,6 +374,7 @@ export function Workbench({
     conversation
   } = state
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
+  const rightSidebarShellTriggerRef = useRef<HTMLButtonElement>(null)
   const projectNavigatorTabRef = useRef<HTMLButtonElement>(null)
   const taskNavigatorTabRef = useRef<HTMLButtonElement>(null)
   const mainChatRef = useRef<HTMLElement>(null)
@@ -393,7 +400,10 @@ export function Workbench({
   const invalidateRightSidebarFocusRestoration = useCallback(() => {
     focusRestorationRevisionRef.current += 1
   }, [])
-  const restoreSubagentTaskTriggerFocus = useCallback((selection: SubagentTaskSelection | null) => {
+  const restoreRightSidebarTriggerFocus = useCallback((
+    tabId: 'git' | 'subagent',
+    selection: SubagentTaskSelection | null
+  ) => {
     const requestRevision = ++focusRestorationRevisionRef.current
     requestAnimationFrame(() => {
       const mainChat = mainChatRef.current
@@ -401,26 +411,34 @@ export function Workbench({
         requestRevision !== focusRestorationRevisionRef.current ||
         hasConnectedMeaningfulFocus(mainChat)
       ) return
-      const trigger = mainChat === null || selection === null
-        ? null
-        : findSubagentTaskTrigger(mainChat, selection)
-      if (trigger !== null) trigger.focus()
+      const trigger = tabId === 'git'
+        ? rightSidebarShellTriggerRef.current
+        : mainChat === null || selection === null
+          ? null
+          : findSubagentTaskTrigger(mainChat, selection)
+      if (trigger?.isConnected) trigger.focus()
       else mainChat?.focus()
     })
   }, [])
+  const restoreSubagentTaskTriggerFocus = useCallback((selection: SubagentTaskSelection | null) => {
+    restoreRightSidebarTriggerFocus('subagent', selection)
+  }, [restoreRightSidebarTriggerFocus])
   const handleRightSidebarResizeCancelChange = useCallback((cancel: (() => void) | null) => {
     rightSidebarResizeCancelRef.current = cancel
   }, [])
   const collapseRightSidebar = useCallback(() => {
     setRightSidebarCollapsed(true)
-    restoreSubagentTaskTriggerFocus(subagentTaskSelection)
-  }, [restoreSubagentTaskTriggerFocus, subagentTaskSelection])
+    restoreRightSidebarTriggerFocus(rightSidebarTabId, subagentTaskSelection)
+  }, [restoreRightSidebarTriggerFocus, rightSidebarTabId, subagentTaskSelection])
   const closeRightSidebar = useCallback((restoreFocus: boolean) => {
+    const activeTabId = rightSidebarTabId
     const selection = subagentTaskSelection
+    setRightSidebarActivated(false)
+    setRightSidebarTabFocusRequest(0)
     setSubagentTaskSelection(null)
     setRightSidebarCollapsed(false)
-    if (restoreFocus) restoreSubagentTaskTriggerFocus(selection)
-  }, [restoreSubagentTaskTriggerFocus, subagentTaskSelection])
+    if (restoreFocus) restoreRightSidebarTriggerFocus(activeTabId, selection)
+  }, [restoreRightSidebarTriggerFocus, rightSidebarTabId, subagentTaskSelection])
   useEffect(() => {
     if (settingsOpen || !restoreSettingsFocusRef.current) return
     restoreSettingsFocusRef.current = false
@@ -448,6 +466,12 @@ export function Workbench({
         return
       }
       if (subagentTaskSelection !== null && !rightSidebarCollapsed && event.key === 'Escape') {
+        closeRightSidebar(true)
+        event.preventDefault()
+        event.stopPropagation()
+        return
+      }
+      if (gitSidebarAvailable && !rightSidebarCollapsed && event.key === 'Escape') {
         closeRightSidebar(true)
         event.preventDefault()
         event.stopPropagation()
@@ -490,6 +514,7 @@ export function Workbench({
     })
     .map(({ project }) => project)
   const activeProject = activeWorkspace?.workspaceKind === 'task' ? null : activeWorkspace
+  const normalProjectActive = navigatorKind === 'project' && activeProject !== null
   const taskItems = taskWorkspaces.flatMap((workspace) => {
     if (workspace.taskKey === undefined) return []
     return (workspace.sessions ?? []).map((session) => ({
@@ -555,7 +580,27 @@ export function Workbench({
   const selectedSubagentTaskKey = reconciledSubagentTaskSelection === null
     ? null
     : subagentTaskSelectionKey(reconciledSubagentTaskSelection)
-  const rightSidebarOpen = selectedSubagentTask !== null && !rightSidebarCollapsed
+  const gitSidebarAvailable = rightSidebarActivated && normalProjectActive && !settingsOpen
+  const rightSidebarTabIds: Array<'git' | 'subagent'> = [
+    ...(gitSidebarAvailable ? ['git' as const] : []),
+    ...(selectedSubagentTask !== null ? ['subagent' as const] : [])
+  ]
+  const activeRightSidebarTabId = rightSidebarTabIds.length === 0
+    ? null
+    : reconcileRightSidebarActiveTab(rightSidebarTabIds, rightSidebarTabId) as 'git' | 'subagent'
+  const rightSidebarHasModules = activeRightSidebarTabId !== null
+  const rightSidebarOpen = rightSidebarHasModules && !rightSidebarCollapsed
+  const rightSidebarToggleAvailable = normalProjectActive || rightSidebarHasModules
+  useLayoutEffect(() => {
+    if (activeRightSidebarTabId !== null && activeRightSidebarTabId !== rightSidebarTabId) {
+      setRightSidebarTabId(activeRightSidebarTabId)
+    }
+  }, [activeRightSidebarTabId, rightSidebarTabId])
+  useEffect(() => {
+    if (!settingsOpen && normalProjectActive) return
+    setRightSidebarActivated(false)
+    setRightSidebarTabFocusRequest(0)
+  }, [normalProjectActive, settingsOpen])
   useLayoutEffect(() => {
     timelineStabilizeRef.current?.()
   }, [rightSidebarOpen, selectedSubagentTaskKey, sidebarCollapsed])
@@ -574,6 +619,24 @@ export function Workbench({
       ...target
     })
   }, [displayedConversationIdentity, invalidateRightSidebarFocusRestoration])
+  const toggleRightSidebar = useCallback((): void => {
+    invalidateRightSidebarFocusRestoration()
+    if (rightSidebarOpen) {
+      setRightSidebarCollapsed(true)
+      return
+    }
+    if (!rightSidebarHasModules) {
+      if (!normalProjectActive) return
+      setRightSidebarActivated(true)
+    }
+    setRightSidebarCollapsed(false)
+    setRightSidebarTabFocusRequest((current) => current + 1)
+  }, [
+    invalidateRightSidebarFocusRestoration,
+    normalProjectActive,
+    rightSidebarHasModules,
+    rightSidebarOpen
+  ])
   useEffect(() => {
     if (subagentTaskSelection === null) return
     if (
@@ -585,18 +648,28 @@ export function Workbench({
     }
     if (reconciledSubagentTaskSelection !== null) return
     setSubagentTaskSelection(null)
+    if (gitSidebarAvailable) {
+      setRightSidebarTabId('git')
+      setRightSidebarTabFocusRequest((current) => current + 1)
+      return
+    }
     restoreSubagentTaskTriggerFocus(subagentTaskSelection)
   }, [
     displayedConversationIdentity,
+    gitSidebarAvailable,
     reconciledSubagentTaskSelection,
     restoreSubagentTaskTriggerFocus,
     settingsOpen,
     subagentTaskSelection
   ])
   useEffect(() => {
-    if (!rightSidebarOpen || selectedSubagentTaskKey === null) return
+    if (
+      !rightSidebarOpen ||
+      activeRightSidebarTabId !== 'subagent' ||
+      selectedSubagentTaskKey === null
+    ) return
     subagentTaskDetailRef.current?.focus()
-  }, [rightSidebarOpen, selectedSubagentTaskKey])
+  }, [activeRightSidebarTabId, rightSidebarOpen, selectedSubagentTaskKey])
   const canUseSettledSessionActions =
     !viewingArchivedSession &&
     sessionPreview === null &&
@@ -1042,20 +1115,6 @@ export function Workbench({
             />
           </div>
         ) : null}
-        {selectedSubagentTask !== null && rightSidebarCollapsed && !settingsOpen ? (
-          <IconButton
-            className="right-sidebar-reopen-trigger"
-            icon="chevron-left"
-            label="展开右侧栏"
-            aria-controls={RIGHT_SIDEBAR_ID}
-            aria-expanded={false}
-            onClick={() => {
-              invalidateRightSidebarFocusRestoration()
-              setRightSidebarCollapsed(false)
-            }}
-          />
-        ) : null}
-
         {settingsOpen ? (
           <SettingsPanel
             state={settingsState}
@@ -1115,20 +1174,34 @@ export function Workbench({
         ) : (
           <>
         <header className="workbench-session-header">
-          <div className="workbench-session-heading">
-            <span className="workbench-session-scope">
-              {navigatorKind === 'task' ? '任务' : projectName}
-            </span>
-            <span className="workbench-session-separator" aria-hidden="true">/</span>
-            <strong className="workbench-session-title">
-              {archivedSessionPreview !== null
-                ? archivedSessionPreview.sessionName ?? `对话 ${archivedSessionPreview.sessionId.slice(0, 8)}`
-                : viewingNewSession
-                ? navigatorKind === 'task' ? '新任务' : '新对话'
-                : activeSession === null
-                  ? navigatorKind === 'task' ? '尚未选择任务' : '尚未选择对话'
-                  : sessionTitle(activeSession)}
-            </strong>
+          <div className="workbench-session-primary">
+            <div className="workbench-session-heading">
+              <span className="workbench-session-scope">
+                {navigatorKind === 'task' ? '任务' : projectName}
+              </span>
+              <span className="workbench-session-separator" aria-hidden="true">/</span>
+              <strong className="workbench-session-title">
+                {archivedSessionPreview !== null
+                  ? archivedSessionPreview.sessionName ?? `对话 ${archivedSessionPreview.sessionId.slice(0, 8)}`
+                  : viewingNewSession
+                  ? navigatorKind === 'task' ? '新任务' : '新对话'
+                  : activeSession === null
+                    ? navigatorKind === 'task' ? '尚未选择任务' : '尚未选择对话'
+                    : sessionTitle(activeSession)}
+              </strong>
+            </div>
+            {!rightSidebarToggleAvailable ? null : (
+              <IconButton
+                ref={rightSidebarShellTriggerRef}
+                className="workbench-header-right-sidebar-toggle"
+                icon={rightSidebarOpen ? 'right-sidebar-close' : 'right-sidebar-open'}
+                iconSize="lg"
+                label={rightSidebarOpen ? '收起右侧栏' : '展开右侧栏'}
+                aria-controls={RIGHT_SIDEBAR_ID}
+                aria-expanded={rightSidebarOpen}
+                onClick={toggleRightSidebar}
+              />
+            )}
           </div>
           {archivedSessionPreview !== null ? (
             <span className="archived-preview-status" role="status">
@@ -1206,7 +1279,11 @@ export function Workbench({
             return onPrompt(message, undefined, activeSessionKey)
           }}
           onHistoryPromptEditingChange={setHistoryPromptEditing}
-          subagentTaskSelection={rightSidebarOpen ? reconciledSubagentTaskSelection : null}
+          subagentTaskSelection={
+            rightSidebarOpen && activeRightSidebarTabId === 'subagent'
+              ? reconciledSubagentTaskSelection
+              : null
+          }
           onOpenSubagentTask={openSubagentTaskDetail}
           onSubmitAsk={onSubmitAsk}
           onCancelAsk={onCancelAsk}
@@ -1250,28 +1327,40 @@ export function Workbench({
           globalEscapeAbortEnabled={!rightSidebarOpen}
           onSetModel={(provider, modelId) => onSetModel(provider, modelId, 'conversation')}
           onSetThinkingLevel={onSetThinkingLevel}
+          onSetOpenAiFastMode={onSetOpenAiFastMode}
           onMeasuredHeightChange={handleComposerMeasuredHeightChange}
         />}
           </>
         )}
       </section>
 
-      {!rightSidebarOpen || selectedSubagentTask === null ? null : (
+      {!rightSidebarOpen || activeRightSidebarTabId === null ? null : (
         <RightSidebar
-          activeTabId={rightSidebarTabId}
-          tabs={[{
-            id: 'subagent',
-            label: '子任务',
-            content: (
-              <SubagentTaskDetail
-                entry={selectedSubagentTask.entry}
-                participant={selectedSubagentTask.participant}
-                tokenCountFormat={state.appearance.tokenCountFormat}
-                panelRef={subagentTaskDetailRef}
-              />
-            )
-          }]}
+          activeTabId={activeRightSidebarTabId}
+          tabs={[
+            ...(gitSidebarAvailable ? [{
+              id: 'git',
+              label: 'Git',
+              content: <GitChangesPanel projectKey={activeProject.path} />
+            }] : []),
+            ...(selectedSubagentTask === null ? [] : [{
+              id: 'subagent',
+              label: '子任务',
+              content: (
+                <SubagentTaskDetail
+                  entry={selectedSubagentTask.entry}
+                  participant={selectedSubagentTask.participant}
+                  tokenCountFormat={state.appearance.tokenCountFormat}
+                  panelRef={subagentTaskDetailRef}
+                />
+              )
+            }])
+          ]}
+          focusActiveTabRequest={rightSidebarTabFocusRequest}
           onTabChange={(tabId) => {
+            if (tabId !== 'git' && tabId !== 'subagent') {
+              throw new Error(`Unknown right sidebar tab: ${JSON.stringify(tabId)}.`)
+            }
             invalidateRightSidebarFocusRestoration()
             setRightSidebarTabId(tabId)
           }}

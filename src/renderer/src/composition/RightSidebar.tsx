@@ -46,7 +46,8 @@ export function RightSidebar({
   onTabChange,
   onCollapse,
   onClose,
-  onResizeCancelChange
+  onResizeCancelChange,
+  focusActiveTabRequest = 0
 }: {
   tabs: readonly RightSidebarTab[]
   activeTabId: string
@@ -54,6 +55,7 @@ export function RightSidebar({
   onCollapse: () => void
   onClose: () => void
   onResizeCancelChange: (cancel: (() => void) | null) => void
+  focusActiveTabRequest?: number
 }): React.JSX.Element {
   const generatedId = useId()
   const componentId = generatedId.replace(/[^a-zA-Z0-9_-]/g, '') || 'root'
@@ -111,6 +113,10 @@ export function RightSidebar({
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
+
+  useEffect(() => {
+    if (focusActiveTabRequest > 0) tabRefs.current[activeTabIndex]?.focus()
+  }, [activeTabIndex, focusActiveTabRequest])
 
   useEffect(() => () => {
     const separator = separatorRef.current
@@ -272,7 +278,8 @@ export function RightSidebar({
         <div className="right-sidebar-actions">
           <IconButton
             className="right-sidebar-collapse"
-            icon="chevron-right"
+            icon="right-sidebar-close"
+            iconSize="lg"
             label="收起右侧栏"
             onClick={onCollapse}
           />

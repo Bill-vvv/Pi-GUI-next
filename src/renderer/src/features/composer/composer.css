@@ -672,6 +672,13 @@
   line-height: var(--composer-meta-line-height);
 }
 
+.model-summary-fast {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  color: var(--color-accent-primary);
+}
+
 .model-picker-popover {
   --composer-menu-font-size: var(--text-control);
   --composer-menu-line-height: var(--line-control);
@@ -741,6 +748,15 @@
 .model-picker-thinking-section {
   border-bottom: 1px solid var(--color-border-divider);
   padding-bottom: 0.36rem;
+}
+
+.model-picker-fast-section {
+  border-bottom: 1px solid var(--color-border-divider);
+  padding: 0.36rem;
+}
+
+.model-picker-fast-section .picker-option {
+  padding-block: 0.4rem;
 }
 
 .model-picker-section-heading {

@@ -40,6 +40,7 @@ const expectedSimpleOwners = {
   'cancel-ask': 'local',
   'invoke-command': 'local',
   'set-thinking-level': 'timeline',
+  'set-openai-fast-mode': 'timeline',
   'set-general': 'general',
   'set-appearance': 'appearance',
   'set-session-naming': 'preferences',

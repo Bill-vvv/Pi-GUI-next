@@ -4,11 +4,13 @@ export type IconName =
   | 'arrow-left'
   | 'arrow-right'
   | 'attach'
+  | 'bolt'
   | 'check'
   | 'chevron-down'
   | 'chevron-left'
   | 'chevron-right'
   | 'close'
+  | 'collapse-all'
   | 'copy'
   | 'edit'
   | 'enter'
@@ -19,6 +21,8 @@ export type IconName =
   | 'fork'
   | 'left-sidebar-close'
   | 'left-sidebar-open'
+  | 'right-sidebar-close'
+  | 'right-sidebar-open'
   | 'loader'
   | 'messages'
   | 'model'
@@ -26,6 +30,8 @@ export type IconName =
   | 'pin'
   | 'pin-filled'
   | 'plus'
+  | 'question'
+  | 'undo'
   | 'unread'
   | 'preferences'
   | 'settings'
@@ -88,6 +94,12 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
           <path d="m9.55 15.15 6.1-6.1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
         </svg>
       )
+    case 'bolt':
+      return (
+        <svg {...common}>
+          <path d="m13.5 3-8 10h6l-1 8 8-11h-6l1-7Z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
     case 'check':
       return (
         <svg {...common}>
@@ -116,6 +128,13 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
       return (
         <svg {...common}>
           <path d="m6.5 6.5 11 11M17.5 6.5l-11 11" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+        </svg>
+      )
+    case 'collapse-all':
+      return (
+        <svg {...common}>
+          <path d="m7 6.5 5 4.5 5-4.5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="m7 17.5 5-4.5 5 4.5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       )
     case 'copy':
@@ -192,6 +211,22 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
           <path d="m12 9 3 3-3 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" opacity="0.72" />
         </svg>
       )
+    case 'right-sidebar-close':
+      return (
+        <svg {...common}>
+          <rect x="4" y="5" width="16" height="14" rx="3" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M15 5v14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          <path d="m9.5 9 3 3-3 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" opacity="0.72" />
+        </svg>
+      )
+    case 'right-sidebar-open':
+      return (
+        <svg {...common}>
+          <rect x="4" y="5" width="16" height="14" rx="3" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M15 5v14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          <path d="m12 9-3 3 3 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" opacity="0.72" />
+        </svg>
+      )
     case 'loader':
       return (
         <svg {...common}>
@@ -238,6 +273,20 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
       return (
         <svg {...common}>
           <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      )
+    case 'question':
+      return (
+        <svg {...common}>
+          <path d="M8.75 8.4a3.45 3.45 0 1 1 5.66 2.65C13.1 12.1 12 12.78 12 14.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          <path d="M12 18h.01" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+        </svg>
+      )
+    case 'undo':
+      return (
+        <svg {...common}>
+          <path d="M9 8H5V4" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M5.5 8.25A7.5 7.5 0 1 1 5 15" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
         </svg>
       )
     case 'unread':

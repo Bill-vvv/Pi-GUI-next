@@ -94,6 +94,7 @@ type ComposerProps = {
   globalEscapeAbortEnabled: boolean
   onSetModel: (provider: string, modelId: string) => Promise<void>
   onSetThinkingLevel: (level: ThinkingLevel) => Promise<void>
+  onSetOpenAiFastMode: (enabled: boolean) => Promise<void>
   onMeasuredHeightChange: (height: number) => void
 }
 
@@ -122,6 +123,7 @@ export function Composer({
   globalEscapeAbortEnabled,
   onSetModel,
   onSetThinkingLevel,
+  onSetOpenAiFastMode,
   onMeasuredHeightChange
 }: ComposerProps): React.JSX.Element {
   const [prompt, setPrompt] = useState('')
@@ -188,6 +190,11 @@ export function Composer({
   const submissionBusy = busy && !preparingNewSession
   const commands = preparingNewSession ? [] : state.commands ?? []
   const availableModels = state.availableModels ?? []
+  const openAiFastModeAvailable = session.model !== null && (
+    session.model.provider === 'openai' ||
+    session.model.provider === 'openai-codex' ||
+    (session.model.provider === 'vvqq-cpa' && session.model.id.startsWith('gpt-'))
+  )
   const viewedSessionRuntimeStatus = viewingInactiveSession
     ? state.sessions.find(({ key }) => key === viewedSessionKey)?.runtimeStatus ?? 'stopped'
     : runtime.status
@@ -1149,6 +1156,11 @@ export function Composer({
               key={controlRequest?.action === 'focus' ? `focus:${controlRequest.id}` : 'model-picker'}
               model={session.model}
               thinkingLevel={session.thinkingLevel}
+              openAiFastModeAvailable={openAiFastModeAvailable}
+              openAiFastMode={session.openAiFastMode}
+              openAiFastModePending={
+                isWorkbenchAction(pendingAction, 'set-openai-fast-mode')
+              }
               availableModels={availableModels}
               runtimeStatus={runtime.status}
               busy={busy}
@@ -1158,6 +1170,7 @@ export function Composer({
               }
               onSetModel={onSetModel}
               onSetThinkingLevel={onSetThinkingLevel}
+              onSetOpenAiFastMode={onSetOpenAiFastMode}
             />
           )}
 

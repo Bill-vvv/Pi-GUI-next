@@ -13,6 +13,9 @@ import {
 type ComposerModelPickerProps = {
   model: KernelState['session']['model']
   thinkingLevel: ThinkingLevel | null
+  openAiFastModeAvailable: boolean
+  openAiFastMode: boolean
+  openAiFastModePending: boolean
   availableModels: NonNullable<KernelState['availableModels']>
   runtimeStatus: KernelState['runtime']['status']
   busy: boolean
@@ -20,18 +23,23 @@ type ComposerModelPickerProps = {
   openRequestId?: number | null
   onSetModel: (provider: string, modelId: string) => Promise<void>
   onSetThinkingLevel: (level: ThinkingLevel) => Promise<void>
+  onSetOpenAiFastMode: (enabled: boolean) => Promise<void>
 }
 
 export function ComposerModelPicker({
   model,
   thinkingLevel,
+  openAiFastModeAvailable,
+  openAiFastMode,
+  openAiFastModePending,
   availableModels,
   runtimeStatus,
   busy,
   contextKey,
   openRequestId = null,
   onSetModel,
-  onSetThinkingLevel
+  onSetThinkingLevel,
+  onSetOpenAiFastMode
 }: ComposerModelPickerProps): React.JSX.Element {
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
@@ -60,6 +68,15 @@ export function ComposerModelPicker({
     ? []
     : availableModels.map((availableModel) => modelKey(availableModel.provider, availableModel.id))
   const selectedModelKey = model === null ? null : modelKey(model.provider, model.id)
+  const modelPickerLabel = openAiFastModeAvailable
+    ? '选择模型、思考强度和 Fast mode'
+    : '选择模型和思考强度'
+  const modelPickerDialogLabel = openAiFastModeAvailable
+    ? '模型、思考强度和 Fast mode 设置'
+    : '模型和思考强度设置'
+  const openAiFastModeTooltip = openAiFastMode
+    ? 'Fast mode 已开启：当前请求使用 Priority processing，可能消耗更多订阅额度或按 Priority 费率计费。点击关闭。'
+    : '开启 Fast mode：请求将使用 Priority processing，可能消耗更多订阅额度或按 Priority 费率计费。'
 
   useEffect(() => {
     if (openRequestId === null) {
@@ -197,7 +214,7 @@ export function ComposerModelPicker({
     >
       <summary
         className="model-picker-button"
-        aria-label="选择模型和思考强度"
+        aria-label={modelPickerLabel}
         aria-haspopup="dialog"
         aria-expanded={modelPickerOpen}
         aria-controls={modelPickerOpen ? 'model-picker-popover' : undefined}
@@ -219,6 +236,11 @@ export function ComposerModelPicker({
             {technicalThinkingLevelLabel(thinkingLevel)}
           </span>
         ) : null}
+        {openAiFastModeAvailable && openAiFastMode ? (
+          <span className="model-summary-fast">
+            <Icon name="bolt" size="sm" />
+          </span>
+        ) : null}
       </summary>
       {modelPickerOpen && modelPickerPosition !== null
         ? createPortal(
@@ -227,7 +249,7 @@ export function ComposerModelPicker({
               id="model-picker-popover"
               className="model-picker-popover"
               role="dialog"
-              aria-label="模型和思考强度设置"
+              aria-label={modelPickerDialogLabel}
               data-placement={modelPickerPosition.placement}
               style={modelPickerPosition.style}
             >
@@ -277,6 +299,30 @@ export function ComposerModelPicker({
                     </div>
                   )}
                 </section>
+
+                {openAiFastModeAvailable ? (
+                  <section className="model-picker-fast-section" aria-label="Fast mode">
+                    <button
+                      className={`picker-option model-picker-item${openAiFastMode ? ' selected' : ''}`}
+                      type="button"
+                      aria-pressed={openAiFastMode}
+                      aria-busy={openAiFastModePending ? true : undefined}
+                      data-tooltip={openAiFastModeTooltip}
+                      data-tooltip-placement="right"
+                      disabled={busy || runtimeStatus !== 'ready'}
+                      onClick={() => {
+                        void onSetOpenAiFastMode(!openAiFastMode).catch(() => undefined)
+                      }}
+                    >
+                      <span className="model-picker-option-copy">
+                        <span className="model-picker-option-label">Fast mode</span>
+                      </span>
+                      {openAiFastMode
+                        ? <span className="model-picker-selected">当前</span>
+                        : null}
+                    </button>
+                  </section>
+                ) : null}
 
                 <div className="model-picker-model-menu">
                   <button

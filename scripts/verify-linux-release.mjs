@@ -54,6 +54,7 @@ const NON_RUN_GUARD_CODES = new Set(['E_VERIFY_ALREADY_RUNNING', 'E_DEV_GUI_RUNN
 const PI_VERSION = '0.80.10'
 const APP_OWNED_PI_PACKAGE_NAMES = new Set([
   'pi-gui-ask',
+  'pi-gui-openai-fast-mode',
   'pi-gui-runtime-quiescence',
   'pi-gui-task-notify'
 ])
@@ -1174,7 +1175,7 @@ async function exerciseUi() {
       activeCdp,
       `document.querySelector('.workbench-right-sidebar') === null &&
        document.querySelector('.subagent-task-detail') === null &&
-       document.querySelector('.right-sidebar-reopen-trigger') === null`,
+       document.querySelector('.workbench-header-right-sidebar-toggle')?.getAttribute('aria-expanded') === 'false'`,
       TIMEOUT.page,
       'E_S19_ESCAPE_CLOSE'
     )
@@ -1245,12 +1246,12 @@ async function exerciseUi() {
       activeCdp,
       `document.querySelector('.workbench-right-sidebar') === null &&
        document.querySelector('.subagent-task-detail') === null &&
-       document.querySelector('.right-sidebar-reopen-trigger') !== null`,
+       document.querySelector('.workbench-header-right-sidebar-toggle')?.getAttribute('aria-expanded') === 'false'`,
       TIMEOUT.page,
       'E_S19_COLLAPSE'
     )
     await waitForSubagentFocus(activeCdp, first, 'E_S19_COLLAPSE_FOCUS')
-    await clickSelector(activeCdp, '.right-sidebar-reopen-trigger')
+    await clickSelector(activeCdp, '.workbench-header-right-sidebar-toggle')
     await waitForExpression(
       activeCdp,
       `document.querySelector('.workbench-right-sidebar') !== null &&
@@ -1264,7 +1265,7 @@ async function exerciseUi() {
       activeCdp,
       `document.querySelector('.workbench-right-sidebar') === null &&
        document.querySelector('.subagent-task-detail') === null &&
-       document.querySelector('.right-sidebar-reopen-trigger') === null`,
+       document.querySelector('.workbench-header-right-sidebar-toggle')?.getAttribute('aria-expanded') === 'false'`,
       TIMEOUT.page,
       'E_S19_CLOSE'
     )
@@ -1312,14 +1313,14 @@ async function exerciseUi() {
       activeCdp,
       `document.querySelector('.workbench-right-sidebar') === null &&
        document.querySelector('.subagent-task-detail') === null &&
-       document.querySelector('.right-sidebar-reopen-trigger') !== null`,
+       document.querySelector('.workbench-header-right-sidebar-toggle')?.getAttribute('aria-expanded') === 'false'`,
       TIMEOUT.page,
       'E_S19_BACK'
     )
     await waitForSubagentFocus(activeCdp, second, 'E_S19_BACK_FOCUS')
     s19Summary.focusRestoration.back = true
 
-    await clickSelector(activeCdp, '.right-sidebar-reopen-trigger')
+    await clickSelector(activeCdp, '.workbench-header-right-sidebar-toggle')
     await waitForExpression(
       activeCdp,
       `document.querySelector('.workbench-right-sidebar') !== null &&
@@ -1332,7 +1333,7 @@ async function exerciseUi() {
     await waitForExpression(
       activeCdp,
       `document.querySelector('.workbench-right-sidebar') === null &&
-       document.querySelector('.right-sidebar-reopen-trigger') === null`,
+       document.querySelector('.workbench-header-right-sidebar-toggle')?.getAttribute('aria-expanded') === 'false'`,
       TIMEOUT.page,
       'E_S19_NARROW_CLOSE'
     )
@@ -1344,7 +1345,7 @@ async function exerciseUi() {
       activeCdp,
       `document.querySelector('.workbench-right-sidebar') === null &&
        document.querySelector('.subagent-task-detail') === null &&
-       document.querySelector('.right-sidebar-reopen-trigger') === null`,
+       document.querySelector('.workbench-header-right-sidebar-toggle')?.getAttribute('aria-expanded') === 'false'`,
       TIMEOUT.page,
       'E_S19_NARROW_ESCAPE'
     )

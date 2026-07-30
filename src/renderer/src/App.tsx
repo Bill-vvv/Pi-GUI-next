@@ -959,6 +959,12 @@ export function App(): React.JSX.Element {
           () => window.piGui.setThinkingLevel(level)
         )
       }
+      onSetOpenAiFastMode={(enabled) =>
+        runAction(
+          workbenchOp('set-openai-fast-mode'),
+          () => window.piGui.setOpenAiFastMode(enabled)
+        )
+      }
       onSetSessionNaming={(settings: SessionNamingSettings) =>
         runAction(
           workbenchOp('set-session-naming'),

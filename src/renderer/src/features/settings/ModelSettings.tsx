@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 
-import type { KernelModelState, RuntimeStatus } from '../../../../shared/kernel-contract'
+import type {
+  KernelModelState,
+  RuntimeStatus
+} from '../../../../shared/kernel-contract'
 import { Select } from '../../components/Select'
 
 type ModelSettingsProps = {

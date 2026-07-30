@@ -12,6 +12,7 @@ import {
   RIGHT_SIDEBAR_WIDTH_STORAGE_KEY,
   clampRightSidebarWidth,
   readRightSidebarWidthPreference,
+  reconcileRightSidebarActiveTab,
   rightSidebarDomIds,
   rightSidebarTabIdFromKey,
   rightSidebarWidthBounds,
@@ -35,6 +36,7 @@ const { RightSidebar } = rightSidebarModule
 const rightSidebarSource = await readFile(new URL('./RightSidebar.tsx', import.meta.url), 'utf8')
 const workbenchSource = await readFile(new URL('./Workbench.tsx', import.meta.url), 'utf8')
 const workbenchStyles = await readFile(new URL('./workbench.css', import.meta.url), 'utf8')
+const iconSource = await readFile(new URL('../components/Icon.tsx', import.meta.url), 'utf8')
 const verifierSource = await readFile(
   new URL('../../../../scripts/verify-linux-release.mjs', import.meta.url),
   'utf8'
@@ -93,6 +95,13 @@ test('right sidebar fails fast for empty, duplicate and missing active logical t
   const secondIds = rightSidebarDomIds('R1', 1)
   assert.notEqual(firstIds.tabId, secondIds.tabId)
   assert.notEqual(firstIds.panelId, secondIds.panelId)
+})
+
+test('active tab reconciliation keeps a concrete module selected as modules open and close', () => {
+  assert.equal(reconcileRightSidebarActiveTab(['git'], 'subagent'), 'git')
+  assert.equal(reconcileRightSidebarActiveTab(['git', 'subagent'], 'subagent'), 'subagent')
+  assert.equal(reconcileRightSidebarActiveTab(['subagent'], 'git'), 'subagent')
+  assert.throws(() => reconcileRightSidebarActiveTab([], 'git'), /at least one concrete tab/)
 })
 
 test('tab keyboard navigation wraps and supports Home and End', () => {
@@ -164,6 +173,26 @@ test('separator owns complete pointer cleanup and Workbench capture owns resize 
   assert.match(workbenchSource, /globalEscapeAbortEnabled=\{!rightSidebarOpen\}/)
 })
 
+test('Workbench gives the shell a generic mirrored toggle and keeps domain modules inside it', () => {
+  assert.match(workbenchSource, /import \{ GitChangesPanel \} from '\.\.\/features\/git\/GitChangesPanel'/)
+  assert.match(workbenchSource, /const rightSidebarToggleAvailable = normalProjectActive \|\| rightSidebarHasModules/)
+  assert.match(workbenchSource, /className="workbench-header-right-sidebar-toggle"/)
+  assert.match(workbenchSource, /icon=\{rightSidebarOpen \? 'right-sidebar-close' : 'right-sidebar-open'\}/)
+  assert.match(workbenchSource, /label=\{rightSidebarOpen \? '收起右侧栏' : '展开右侧栏'\}/)
+  assert.match(workbenchSource, /if \(rightSidebarOpen\) \{[\s\S]*?setRightSidebarCollapsed\(true\)/)
+  assert.match(workbenchSource, /if \(!rightSidebarHasModules\) \{[\s\S]*?setRightSidebarActivated\(true\)/)
+  assert.match(workbenchSource, /gitSidebarAvailable \? \[\{[\s\S]*?label: 'Git'[\s\S]*?content: <GitChangesPanel projectKey=\{activeProject\.path\} \/>/)
+  assert.match(workbenchSource, /selectedSubagentTask === null \? \[\] : \[\{[\s\S]*?label: '子任务'/)
+  assert.match(workbenchSource, /reconcileRightSidebarActiveTab\(rightSidebarTabIds, rightSidebarTabId\)/)
+  assert.match(workbenchSource, /if \(!settingsOpen && normalProjectActive\) return[\s\S]*?setRightSidebarActivated\(false\)/)
+  assert.match(workbenchSource, /setRightSidebarActivated\(false\)[\s\S]*?setSubagentTaskSelection\(null\)/)
+  assert.match(rightSidebarSource, /className="right-sidebar-collapse"[\s\S]*?icon="right-sidebar-close"/)
+  assert.match(iconSource, /\| 'right-sidebar-close'[\s\S]*?\| 'right-sidebar-open'/)
+  assert.match(iconSource, /case 'right-sidebar-close':[\s\S]*?case 'right-sidebar-open':/)
+  assert.doesNotMatch(workbenchSource, /workbench-header-git-trigger|right-sidebar-reopen-trigger|icon="fork"/)
+  assert.doesNotMatch(workbenchSource, /label: '(?:History|Branches|Sync|MCP|Browser|Terminal)'/)
+})
+
 test('Workbench fences deferred focus restoration while preserving close, collapse and invalid-target fallback', () => {
   assert.match(workbenchSource, /const focusRestorationRevisionRef = useRef\(0\)/)
   assert.match(workbenchSource, /const requestRevision = \+\+focusRestorationRevisionRef\.current/)
@@ -174,7 +203,9 @@ test('Workbench fences deferred focus restoration while preserving close, collap
   assert.match(workbenchSource, /\[displayedConversationIdentity, invalidateRightSidebarFocusRestoration, settingsOpen\]/)
   assert.match(workbenchSource, /setSubagentTaskSelection\(null\)[\s\S]*?restoreSubagentTaskTriggerFocus\(subagentTaskSelection\)/)
   assert.match(workbenchSource, /findSubagentTaskTrigger\(mainChat, selection\)/)
-  assert.match(workbenchSource, /className="right-sidebar-reopen-trigger"/)
+  assert.match(workbenchSource, /rightSidebarShellTriggerRef\.current/)
+  assert.match(workbenchSource, /restoreRightSidebarTriggerFocus\(rightSidebarTabId, subagentTaskSelection\)/)
+  assert.doesNotMatch(workbenchSource, /right-sidebar-reopen-trigger/)
 })
 
 test('generic right sidebar layout and official verifier share the current contract', () => {
@@ -190,7 +221,8 @@ test('generic right sidebar layout and official verifier share the current contr
   assert.match(verifierSource, /clickSelector\(activeCdp, '\.right-sidebar-collapse'\)/)
   assert.match(verifierSource, /\.right-sidebar-close/)
   assert.match(verifierSource, /\.right-sidebar-back/)
-  assert.match(verifierSource, /\.right-sidebar-reopen-trigger/)
+  assert.match(verifierSource, /\.workbench-header-right-sidebar-toggle/)
+  assert.doesNotMatch(verifierSource, /\.right-sidebar-reopen-trigger/)
   assert.match(verifierSource, /separatorTransitionDuration/)
   assert.doesNotMatch(verifierSource, /subagent-detail-open/)
   assert.doesNotMatch(verifierSource, /subagent-task-detail-(?:close|back)/)
