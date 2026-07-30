@@ -4242,6 +4242,39 @@ test('repeated starts reuse the active empty provisional session until it receiv
   )
 })
 
+test('activating the current empty provisional Session is idempotent', async () => {
+  const runtime = new FakeRuntimeHost({
+    sessionId: 'empty-provisional',
+    sessionFile: '/tmp/empty-provisional.jsonl',
+    isStreaming: false
+  })
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      validateSession: async () => {
+        throw fileError('ENOENT', 'session file not written yet')
+      }
+    }
+  )
+
+  await kernel.start()
+  const sessionKey = kernel.getState().activeSessionKey
+  assert.equal(sessionKey, '/tmp/empty-provisional.jsonl')
+
+  await kernel.activateSession(sessionKey)
+  await kernel.activateSession(sessionKey)
+
+  const state = kernel.getState()
+  assert.equal(runtime.startCalls, 1)
+  assert.equal(runtime.stopCalls, 0)
+  assert.equal(state.activeSessionKey, sessionKey)
+  assert.equal(state.runtime.status, 'ready')
+  assert.equal(state.sessions[0]?.provisional, true)
+  assert.deepEqual(state.projects[0]?.sessions, [])
+})
+
 test('switching away discards an empty provisional Runtime without leaving a Navigator entry', async () => {
   const existingPointer: SessionPointer = {
     projectPath: '/tmp/project',

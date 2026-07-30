@@ -998,8 +998,10 @@ export class WorkbenchKernel {
           await this.persistSession(storedPointer)
           this.assertLaunchActive()
         }
-        await this.discardActiveEmptyProvisionalContext()
-        this.assertLaunchActive()
+        if (this.activeContext !== managed) {
+          await this.discardActiveEmptyProvisionalContext()
+          this.assertLaunchActive()
+        }
         this.captureActiveContext()
         this.touchWarmUse(managed)
         this.loadContext(managed)
