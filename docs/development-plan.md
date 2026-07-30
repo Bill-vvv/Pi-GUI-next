@@ -1,10 +1,10 @@
 # Pi GUI 开发计划
 
 > 当前阶段：P3 — Ecosystem Integration
-> 计划版本：8.9
+> 计划版本：9.7
 > 最后更新：2026-07-30
-> 总体状态：Ready
-> 当前 Slice：P3-1 — Git Changes Sidebar（Ready）
+> 总体状态：In Progress
+> 当前 Slice：P3-2 — Commit & Push（Ready）
 
 ## 1. 计划用途
 
@@ -441,7 +441,7 @@ P1 完成后进入 P2。P2/P3/P4 的当前路径见下一节；后续调整继�
 | --- | --- | --- | --- |
 | P1 — Linux Core Chain | 建立第一条可发布的 Linux 本地 Pi 核心链路 | `Complete` | 2026-07-21 完成 |
 | P2 — Workbench Foundation | 补齐日常工作台基础功能，并完成 UI、交互、Runtime 治理与内存预算收敛 | `Complete` | 2026-07-30；commit `152a9a3` 的 19 步正式 AppImage + memory gate 通过 |
-| P3 — Ecosystem Integration | 接入 Pi Extension、Package、Skill、prompt template、Git Workbench 与 MCP 等扩展能力 | `Ready` | P2 已完成；P3-1 从既有 typed Git foundation 接入 Changes Sidebar |
+| P3 — Ecosystem Integration | 接入 Pi Extension、Package、Skill、prompt template、Git Workbench 与 MCP 等扩展能力 | `In Progress` | P3-1 已完成；P3-2 从已验证的 staged-content 链路增加 Commit & Push |
 | P4 — Cross-platform Desktop | 将已经稳定的 Linux Workbench 依次移植到 macOS、Windows 原生，并按需评估 WSL | `Deferred` | Linux GUI 的功能、体验、稳定性、内存预算和正式发布门槛稳定，且用户显式重新开启跨平台范围 |
 
 ### 15.2 P2 — Workbench Foundation
@@ -821,22 +821,104 @@ S14-20 前移 Skill 的最小创建入口：Pi 0.80.10 没有独立的新建技�
 
 P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核验后追加到本计划。后续拆分必须继续遵循 KISS：先接入一条真实可验证的能力链路，再扩展第二类资源或管理界面。
 
-#### P3-0 — 已集成的前置基础（不代表 P3 已启动）
+#### P3-0 — 已集成的前置基础（P3 启动前）
 
-2026-07-30 的 canonical 候选提前收口了四项可独立验证、且不改变 P3 阶段状态的窄基础：
+2026-07-30 在 P3 启动前，canonical 候选提前收口了四项可独立验证、且当时不改变 P3 阶段状态的窄基础：
 
 - 历史 Prompt 原位编辑直接复用 Pi Tree：GUI 解析当前可见活动路径上的 user turn，先调用受控 `navigate_tree`，再复用现有 `prompt`；发送失败保留草稿并只重试 prompt。没有新增 atomic navigate+prompt、projection watermark 或第二份 Conversation 事实源。
-- Workbench composition 拥有通用右侧栏壳层，但当前唯一模块仍是“子任务”；Git、MCP、Browser、Terminal 不显示占位 Tab。
-- Git Main/IPC 使用 `simple-git@3.36.0` 提供受 Project identity 与 ancestor trust challenge 约束的 status/diff/stage 基础；Renderer Git 工作台、commit/push 和同步 UI 尚未实施。
+- P3-1 开始前，Workbench composition 已拥有通用右侧栏壳层，当时唯一模块是“子任务”；P3-1 已增加真实 Git Tab，MCP、Browser、Terminal 仍不显示占位 Tab。
+- Git Main/IPC 使用 `simple-git@3.36.0` 提供受 Project identity 与 ancestor trust challenge 约束的 status/diff/stage 基础；P3-1 已接入 Renderer Changes 工作台，commit/push 和同步 UI 仍未实施。
 - Capability Inventory 是只读、离线的 Main service，复用现有 Pi 0.80.10 executable/package-root 验证；它不安装 Package、不执行 Extension factory，也尚未接 Settings 页面。
 
-P2/S26 已在 commit `152a9a3` 的正式 AppImage + memory gate 中完成；P3 现为 `Ready`。上述基础只能按实际接线 Slice 继续扩展，不能据此声明 Git 工作台、Capability Center、MCP 管理或 P3 已完成。
+P2/S26 已在 commit `152a9a3` 的正式 AppImage + memory gate 中完成；P3 现为 `In Progress`，P3-1 已完成且 P3-2 为 `Ready`。上述基础只能按实际接线 Slice 继续扩展，不能据此声明 Commit & Push、Capability Center、MCP 管理或 P3 已完成。
 
-#### P3-1 — Git Changes Sidebar（Ready）
+P3 按以下顺序实施；只有当前 Slice 的真实调用链和 UI 验收通过后才进入下一项，不并行建立未使用的 Git、Capability 或 MCP 平台能力：
 
-首个 P3 Slice 只接通现有 typed Git foundation 与右侧栏 `Changes` 页面：展示当前受信任 Project 的 branch/upstream、staged/unstaged/untracked 状态，按文件展开 staged/working diff，并提供文件级 stage/unstage。ancestor repository 继续经过现有 trust challenge；Renderer 不接受任意 cwd 或 raw Git参数。
+1. P3-1 Git Changes Sidebar。
+2. P3-2 Commit & Push。
+3. P3-3 Git History。
+4. P3-4 Branches & Sync。
+5. P3-5 Settings Capability Center。
+6. P3-6 Package / Extension / Skill / Prompt 管理。
+7. P3-7 MCP 管理。
 
-本 Slice 不实现 commit/push、History、Branches、Sync、watcher/polling、hunk/line staging或 AI commit message；这些能力只有在 Changes链路真实使用并通过后再拆分。验收至少覆盖普通/未跟踪/rename/conflict文件、Project切换、trust拒绝、stale snapshot、窄窗口右侧栏替换、键盘/Escape/focus，以及 typecheck、core tests、build 和 diff check。
+**P3 并行实施规则**：
+
+- 顶层仍保持单一当前 Slice：当前 Slice 未验收前不启动下一项产品实现（现为 P3-2 未验收前不启动 P3-3），后续同理。允许并行的是当前 Slice 内已经冻结边界的独立层，不是提前铺设未来平台。
+- 每批最多两个隔离 writer + 一个只读 reviewer。Parent先冻结最小 typed contract和文件 ownership，两个 writer分别在独立 worktree/source snapshot写入；Parent负责唯一集成、冲突解决和最终验收。测试随对应 writer的实现一起维护，reviewer不向共享树写修复。
+- P3-1 可并行：① Header / shared Right Sidebar composition、焦点和响应式壳层；② 新建的 Git Changes feature状态、列表、diff和mutation UI；③ 只读 reviewer核对现有 `window.piGit` DTO、trust/stale/conflict边界。Shell writer不写Git feature文件，feature writer不改Workbench/RightSidebar既有composition文件，Parent最后完成单一接线。
+- P3-2 可并行：① commit/amend/push typed contract与Main adapter；② 紧凑确认层和结果UI。只有Parent先冻结 snapshot、结果和错误 DTO 后才开始；公共 `git-contract.ts` 只由backend writer拥有，Parent完成最终preload/Workbench接线。
+- P3-3 可并行：① 有界history/detail/diff Main读取；② History列表与详情组件。read-only接口冻结前不实现Renderer猜测或raw revision/path调用。
+- P3-4 可并行：① branch/fetch/pull/push Main动作和安全结果；② Branches & Sync UI。共享Git controller、preload和右侧栏导航的集成顺序由Parent串行完成，Commit & Push路径不由第二个writer复制。
+- P3-5 可并行：① Settings scope/navigation壳层；② 只读Capability Inventory视图组件。Inventory writer只新增页面组件和feature样式，不修改Settings总路由；Parent接入现有bounded DTO。
+- P3-6 可并行：① Package mutation桥与Package页面；② Extension / Skill / Prompt资源页面和现有服务适配。共享Settings导航、page draft和即时operation状态由Parent串行集成；Package与Extension不得各自实现一套install/reload事实源。
+- P3-7 可并行：① `pi-mcp-adapter`配置/状态/auth窄桥；② MCP Settings页面。凭证/provenance reviewer可与两条writer并行只读复核，但config writer是唯一安全边界owner。
+- 不可并行写同一共享边界：`Workbench.tsx`/RightSidebar composition、Settings总导航、`git-contract.ts`、Git controller/preload、MCP config writer和同一feature CSS由单一owner串行修改。正式build或UI gate只对Parent集成后的单一候选运行，不分别为兄弟worktree重复启动应用。
+
+#### P3-1 — Git Changes Sidebar（Complete）
+
+本地 source snapshot 已接通 Header 通用右侧栏展开/收起入口、Git/Subagent 真实 Tab 组合、Project/Settings/宽窄窗口/Escape/焦点合同，以及 Cursor 式紧凑 Changes 范围选择、默认折叠文件列表、Working/Staged diff、Stage/Unstage、ancestor trust、stale 与 bounded error 状态。性能加固后的 Parent 验证为相关 Renderer 67/67、Main Git 49/49、`pnpm typecheck`、`pnpm build` 与 `git diff --check` 全部通过；多轮独立只读审计已将 snapshot/trust、并发 mutation、虚拟 DOM、水平宽度、完整复制和可访问性 blocker/high 清零。按本 Slice 最小 gate 未启动 Electron 或增加截图证据。
+
+目标是只接通现有 typed Git foundation 与右侧栏 `Changes` 页面，先证明 Project identity、Git trust、diff 和文件级 mutation 的完整产品链路。
+
+**入口与容器**：
+
+- 普通 Project 的 Session Header 右侧增加通用右侧栏展开/收起按钮，使用与左侧栏镜像的壳层图标；Git 不作为一级图标，只在右侧栏内作为真实 Tab。Task workspace 没有可用右侧模块时不显示该入口，Navigator 不增加重复 Git 按钮，也不显示没有刷新保证的变化数量徽标。
+- 点击后打开 composition-owned 的共享右侧栏，顶层模块标签为“Git”。只有 Git 实际打开、或用户已经选择真实 Subagent 任务时才显示对应真实 Tab；不显示 History、Branches、Sync、MCP、Browser、Terminal 等占位 Tab。
+- Project 切换时保持 Git 模块打开并刷新为新 Project；打开 Settings 时关闭右侧栏。收起后由同一 Header 通用按钮重新展开；关闭或 Escape 尽力把焦点恢复到仍代表同一操作的 Header 右侧栏按钮或 Subagent 胶囊；窄窗口继续复用现有右侧栏替换主工作区与“返回对话”合同。
+
+**Changes 内容**：
+
+- 顶部展示当前 branch、detached 状态、upstream、ahead/behind 和手动刷新入口；没有 upstream 时显示明确 unavailable，不推断 remote。
+- 主体只有一个 Changes 列表，顶部以 Cursor 式紧凑选择器切换 `Uncommitted / Unstaged / Staged` 投影；默认 `Uncommitted`。mixed 文件可进入 unstaged 与 staged 投影，但同一时刻的单列表不重复文件。每行展示 staged、unstaged、mixed、untracked 或 conflicted 状态；rename 使用 `originalPath → path`。
+- 所有文件 diff 默认折叠，每个文件独立展开/折叠并可同时保留多个展开项；标题区提供“全部折叠”，并以 per-file request token 隔离并发返回。pointer/focus 意图只预取 typed diff 数据且不挂载隐藏 DOM，点击文件行时优先消费 exact snapshot 缓存，冷路径仍原位加载。普通未暂存与 untracked 文件显示 Working diff；已暂存文件显示 Staged diff；mixed 文件在 Uncommitted 投影提供 `Working / Staged` 切换并默认 Working，在过滤投影只显示对应一侧。binary、oversized、非 UTF-8 和不支持的 diff shape 显示后端 canonical 状态，不由 Renderer 猜测或解析 raw patch。
+- diff hunk 前和 hunk 间根据 `oldStart/oldLines/newStart/newLines` 精确显示 `N unmodified lines` 折叠条，取代 raw `@@` header。当前 DTO 不含被 Git 省略的源码文本和文件尾总行数，因此 P3-1 不提供假的上下文展开箭头；真实展开需后续新增有界 `contextLines` Main/IPC request，并继续服从 stale、output 与 identity fence。
+- diff DTO 缓存严格绑定 Project、repository root、status revision、HEAD、index tree、worktree fingerprint、file identity/fingerprint 与 Working/Staged kind；同 key single-flight，LRU 最多 8 条且估算不超过 8 MiB，错误、trust 与 stale 结果不缓存。最多同时展开 8 个文件；单个 diff 在 300 行以内保持直接 React 渲染，超过阈值时使用 feature-local `@tanstack/react-virtual` 的固定 32px 行窗口、稳定全量水平宽度和 overscan，并提供完整文本模式与“复制全部”。
+- Unstaged / untracked 文件提供 Stage，staged 文件提供 Unstage；mixed 文件在 Uncommitted 投影同时提供两项，在 Unstaged/Staged 投影只保留对应操作。操作只使用当前 `GitRepositoryState` 的 repository root、HEAD、index、worktree、file fingerprint 和 status revision；stale 时替换为后端返回的新状态并要求用户重新确认，不自动重放 mutation。
+- Conflicted 文件只显示紧凑冲突状态且不提供 mutation；P3-1 不提供假 diff、自动解决或“暂存为已解决”入口。Rename 继续由现有 Main service 原子处理 old/new path。现有 DTO 不提供 repository 总增删行、Last Turn 或 Branch Commits，因此 P3-1 不扫描全部 diff 猜统计，也不显示不可用占位项。
+
+**刷新、信任与状态**：
+
+- 不增加 watcher 或 polling。只在打开 Git 模块、切换 Project、手动刷新、Stage / Unstage 完成后刷新；Project identity 或 request revision 变化后丢弃迟到结果。
+- Project 不是 repository 时显示明确空态，不提供 `git init`。Project 位于 ancestor repository 时显示 repository root 并要求用户显式“允许本次使用”；授权继续绑定现有 root + status revision challenge，只在当前 Main 进程内有效，Project/repository identity 变化后重新确认。
+- `truncated`、not-repository、trust-required、stale、timeout、output-limit 和 bounded public error 都按 typed DTO 展示；Renderer 不接收任意 cwd、raw Git 参数、stderr 或任意路径读取。
+
+**明确非目标**：
+
+- 不实现 Commit、Amend、Push、Pull、Fetch、History、Branches 或 Sync。
+- 不实现 hunk/line staging、文件 watcher、定时 polling、conflict resolver、repository 初始化或 AI commit message。
+- 不把 Git 状态并入 KernelState，不建立第二份 repository 数据库或通用 Workbench module registry。
+
+**验收**：
+
+- 覆盖普通、untracked、mixed、staged、rename、conflict、binary/oversized 文件，clean/not-repository/detached/unborn repository，以及 ahead/behind 和无 upstream。
+- 覆盖 Project 切换、ancestor trust允许/拒绝/过期、stale diff/mutation、操作后刷新、迟到请求丢弃和错误脱敏。
+- 覆盖右侧栏 Git/Subagent真实 Tab组合、关闭/收起/Project切换/Settings、宽窄窗口替换、键盘 Tab、Escape、焦点恢复和 reduced-motion。
+- 最小 gate 为相关 Git/Renderer定向测试、`pnpm typecheck`、`pnpm build` 和 `git diff --check`；除非实际变更需要视觉运行证据，不启动 Electron或增加截图 gate。
+
+#### P3-2 — Commit & Push（Ready）
+
+在 P3-1 的 staged-content 链路通过后增加提交能力。`Commit & Push` 点击后必须先打开紧凑确认层，展示 staged 文件数量、目标 branch/remote 和自动生成但可编辑的 commit message，并提供明确的 Commit、Commit & Push、Amend 选择。提交请求绑定确认时的 HEAD 与 index snapshot，不执行 `git add -A`，不把未勾选内容顺带暂存；commit成功而push失败时分别报告两个结果。确认层复用 `useModalDialog` 的焦点/Escape合同。AI message只能作为可编辑建议，不能成为提交前置条件，也不能修改 index。
+
+#### P3-3 — Git History（Planned）
+
+增加只读提交历史、提交元信息、changed files 和按文件 diff；复用同一 Project/repository identity和有界 DTO，不读取任意 revision/path。首期不提供 reset、rebase、cherry-pick、revert 或历史改写入口；只有真实只读链路验收后再决定是否需要独立 mutation Slice。
+
+#### P3-4 — Branches & Sync（Planned）
+
+增加当前/本地/远端 branch展示、受控新建与切换，以及彼此独立的 Fetch、Pull、Push动作。每项操作显示明确目标和独立结果，不建立含义不透明的“一键同步”；dirty worktree、detached HEAD、上游缺失、非 fast-forward、冲突和认证失败均 Fail Fast。Commit & Push继续复用 P3-2确认合同，不复制另一套提交路径。
+
+#### P3-5 — Settings Capability Center（Planned）
+
+Settings继续是独立全页，不进入右侧栏。先把现有只读、离线 Capability Inventory 接入 Settings，以 user/project scope、继承/override、来源和静态 resolved 状态统一展示 Package、Extension、Skill和Prompt；不得把配置声明误标成 Runtime实际加载成功。页面只消费 bounded DTO，不显示 Prompt/Skill正文、Theme body、settings JSON、credential或 package cache绝对路径。
+
+#### P3-6 — Package / Extension / Skill / Prompt 管理（Planned）
+
+在 P3-5只读模型通过后，逐项接入已有真实服务：Package负责安装/更新/卸载和资源过滤；Extension负责已加载代码与Runtime状态；Skill/Prompt负责发现、作用域和现有管理入口。页面 draft与 install/remove/update/reload等即时动作分离，后者各自确认并独立报告；不把 Package存在等同于 Extension已加载，也不建立第二个 Package Manager。
+
+#### P3-7 — MCP 管理（Planned）
+
+复用已安装的 `pi-mcp-adapter`，在 Settings中管理 server配置、连接/认证状态及真实 tools/resources；Package仍管理 adapter安装，Extension仍管理 loaded code，MCP只管理外部server和capability。配置 mutation继续使用严格 provenance、scope ownership和 malformed-target Fail Fast边界；不重写 MCP client、不复制 secret、不暴露 raw config或任意 Extension command passthrough。
 
 ### 15.4 P4 — Cross-platform Desktop
 
@@ -990,6 +1072,13 @@ P4 开始前必须重新确认 Pi 的分发策略：默认继续使用用户已�
 | 2026-07-30 | P3-0 前置基础 / KISS 范围纠正 | 将已验收的 Pi typed RPC bridge、通用 Right Sidebar、历史 Prompt 原位编辑、Git Main/IPC 与离线 Capability Inventory 合入 canonical；历史编辑最终只使用原生 `navigate_tree → prompt → refresh`，停止 atomic navigate+prompt、projection watermark 与 heavyweight artifact admission 实验。Git 与 Inventory 仍无产品 UI，P3 不因此启动或完成 | canonical 合入后离线 frozen install、typecheck 和 856 项 core 测试为 855 pass / 0 fail / 1 built-worker skip；相同源码隔离 build 与 built-worker 测试已通过。下一步先建立 clean candidate 和正式 AppImage gate；S26 继续是唯一 In Progress，P3 继续 Pending |
 | 2026-07-30 | S26 Main state delivery containment | Main 将连续 full-state/patch 以 8ms、最多 64 项 envelope 有界发送；新 full state 淘汰旧 pending state，compaction 等领域事件保持顺序屏障。Renderer 逐项复用 revision/ack/resync；active stderr diagnostic 改为窄 runtime patch；verifier 记录并校验 batch envelope/member/max-size | 基于最新 P3-0 dirty source snapshot 隔离实现；`pnpm typecheck`、865 项 core tests（864 pass / 1 built-worker skip）、verifier syntax 与 production build 通过。不修改视觉组件、Task Navigator、自动休眠或 Runtime ownership。该切片只约束 Main 发送前队列，不声称提供 Electron 下游字节级背压；正式结论仍需 canonical AppImage memory gate |
 | 2026-07-30 | P2 / S26 Complete | canonical commit `152a9a3` 通过 19 步正式 AppImage + memory gate：P1/P2、两个 Project、三个物化 Session Runtime、slash command、三路 Subagent详情、五分钟自动休眠、显式恢复、对话保留和固定内存红线全部通过；峰值总 PSS 2.50 GiB、Renderer PSS 156.7 MiB、heap 25.9 MiB、state 98.2 KiB、swap 0，3→2→3 Runtime闭环成立 | P2与S26标记Complete；证据 `release/evidence/2026-07-29T18-48-57-827Z-152a9a3a0725/`，AppImage SHA-256 `114a7040a20cd21dd89dfe3de181334ef36d2d9698324ed3da76f0b8efd4e417`。P3改为Ready，下一 Slice为P3-1 Git Changes Sidebar |
+| 2026-07-30 | P3 Planning | 用户确认 P3 顺序为 Changes → Commit & Push → History → Branches & Sync → Capability Center → Capability管理 → MCP；P3-1使用 Session Header单一入口、右侧栏 Git模块、单一 Uncommitted Changes列表、文件内 Working/Staged diff和文件级 Stage/Unstage | 计划版本更新为9.0；P3-1保持Ready。首个Slice明确排除commit/sync、watcher/polling、hunk/line staging、conflict resolver和占位Tab，下一步按现有typed Git foundation实现Changes UI |
+| 2026-07-30 | P3 Parallelization | 固定“单一当前Slice、Slice内并行”的多Agent执行方式：Parent先冻结接口和文件ownership，每批最多两个隔离writer与一个只读reviewer，Parent作为唯一integrator和acceptance owner | 计划版本更新为9.1；P3-1拆为Right Sidebar shell与新Git Changes feature两条独立writer，现有Git contract安全复核只读并行。未来Slice只记录可拆边界，不在前序Slice验收前启动产品实现 |
+| 2026-07-30 | P3-1 Complete | Parent 集成两条隔离 writer 结果并按只读安全复核收口 response identity、stale trust/diff/mutation、conflict、binary/oversized 与错误脱敏；未修改既有 Git contract/Main/preload | Renderer 52/52、Main Git 49/49、typecheck、production build 与 diff check 通过；P3 标记 In Progress，P3-2 Commit & Push 改为 Ready |
+| 2026-07-30 | P3-1 Shell correction | 按用户复核将 Session Header 的 Git 一级图标改为通用右侧栏展开/收起控制；新增与左侧栏镜像的右栏图标，Git 与 Subagent 继续只作为栏内真实 Tab | 删除独立浮动 reopen 入口，统一 Header toggle、栏内 collapse、Escape/close 焦点和正式 verifier 的重开路径；不建立模块 registry 或未来占位 Tab |
+| 2026-07-30 | P3-1 Changes density correction | 按用户实际使用反馈参考 Cursor 收敛大量文件时的信息层级；默认不展开 diff，增加可信 status 范围选择并压缩文件操作 | 单列表支持 Uncommitted/Unstaged/Staged；mixed 在过滤投影只显示对应 diff 与 mutation；文件操作改为图标，冲突说明不重复占高。DTO 未提供的总增删行、Last Turn、Branch Commits 不伪造；Renderer 54/54、typecheck、production build、verifier syntax 与 diff check 通过 |
+| 2026-07-30 | P3-1 Diff folding correction | 按 Cursor 真实行为允许多个文件独立展开，增加标题区全部折叠，并显示 hunk 间被省略的未修改行 | per-file token 隔离并发 diff；canonical hunk range 生成 `N unmodified lines` 折叠条并移除 raw `@@`。省略文本与尾部行数不在 DTO 中，因此当前折叠条保持只读，真实上下文展开留给有界 Main/IPC 协议；Renderer 56/56、typecheck、production build、verifier syntax 与 diff check 通过 |
+| 2026-07-30 | P3-1 Diff performance hardening | 按用户性能反馈加入 typed DTO 意图预取、snapshot-bound LRU、同 key single-flight 与大 diff 行虚拟化；独立只读审计覆盖 stale/trust、旧 callback、并发 mutation、DOM、水平滚动与可访问性 | 审计发现的 null-revision identity、exact displayed snapshot、同步 mutation gate、pointer/focus ownership、完整复制/连续阅读、稳定水平宽度和 panel 工作集上限均已修复并经 closure review 确认 Blocker/High 为 0；不修改 Main/IPC 或预渲染隐藏 DOM |
 
 
 ## 17. 计划变更记录
@@ -1085,3 +1174,11 @@ P4 开始前必须重新确认 Pi 的分发策略：默认继续使用用户已�
 | 2026-07-28 | 8.7 | 删除主动 Runtime 休眠产品面并并入自动休眠基础设施 | 用户确认 Session、Project 与全局主动休眠没有独立作用，不应作为单独功能保留 | 删除完整 UI/IPC/API/批量链路；Main/Kernel 仅保留单 Runtime 回收原语和 stop/recovery 安全测试。自动 operation lease、quiescence、压力回收与 LRU 继续作为 S26 未完成项 |
 | 2026-07-30 | 8.8 | 记录 P3-0 前置基础并纠正历史 Prompt 的过度设计 | Pi TUI Tree 已提供真实分支语义；继续设计 atomic navigate+prompt、projection watermark 和第二套 artifact admission 违反 KISS/YAGNI，也不是当前 GUI 适配的必要条件 | 历史编辑固定为受控 `navigate_tree` 后复用现有 `prompt`；Git/Inventory 只作为未接 UI 的窄基础。P3 保持 Pending、S26 保持唯一 In Progress；后续没有真实失败证据不得恢复第二套协议 |
 | 2026-07-30 | 8.9 | 完成 P2/S26 并开放 P3-1 Git Changes Sidebar | commit `152a9a3` 的 19 步正式 AppImage memory gate通过预算、五分钟自动休眠、显式恢复、对话保留、三路Subagent和完整P2回归；用户要求完成P2并继续遵守KISS/Fail Fast | P2与S26标记Complete，P3改为Ready；20 Session/三个父Runtime同时busy/30分钟slope等泛化压力不再阻塞P2，只在真实回归时恢复。P3-1只接现有Git typed foundation到Changes UI，不扩commit/sync或第二套协议 |
+| 2026-07-30 | 9.0 | 固定 P3-1至P3-7任务线和 Git Changes交互合同 | 用户确认先完整推进Git工作台，再进入Capability Center与MCP；P3-1只做Changes，入口位于Session Header，使用单一Uncommitted Changes列表 | P3按 Changes → Commit & Push → History → Branches & Sync → Capability Center → Capability管理 → MCP实施；后续Slice保持Planned，不把未来能力或空Tab写成现有实现 |
+| 2026-07-30 | 9.1 | 固定P3的安全并行与文件ownership模型 | 用户要求梳理可并行任务，同时项目规则要求主动多Agent但保持共享worktree单一writer和Parent最终验收 | 顶层Slice继续串行；当前Slice内可按Main/Renderer或shell/feature拆成两个隔离writer，第三槽位只读review。共享contract、composition、Settings导航和config writer保持单一owner，正式gate只跑集成候选 |
+| 2026-07-30 | 9.2 | 完成 P3-1 Git Changes Sidebar 并开放 P3-2 | 现有 typed Git foundation 已通过真实 Renderer 接线证明 Project identity、ancestor trust、diff、Stage/Unstage 和 stale mutation 产品链路，且最小 gate 明确无需启动 Electron | P3-1 标记 Complete；P3 标记 In Progress；P3-2 Commit & Push 改为 Ready。后续继续复用同一 repository snapshot，不把 commit/push 提前混入 Changes feature |
+| 2026-07-30 | 9.3 | 将右侧栏一级入口从 Git 领域图标纠正为通用壳层 toggle | 用户确认右侧栏后续承载多个系统，一级入口必须表达容器展开/收起而非当前首个模块；左侧栏已有镜像图标语义可直接复用 | 新增 right-sidebar open/close 图标；Header、栏内 collapse 和 verifier 统一消费壳层语义，Git/Subagent 继续只在栏内按真实可用性出现 |
+| 2026-07-30 | 9.4 | 参考 Cursor 收敛 Git Changes 大量文件场景 | 用户实际打开后确认全量平铺缺少层次，要求默认不展开并参考 Cursor 的范围选择与紧凑行设计 | 默认 Uncommitted 且 diff 全折叠；新增 Uncommitted/Unstaged/Staged 可信过滤、文件 disclosure 和图标 mutation。协议未提供的总行统计、Last Turn 与 Branch Commits 保持不显示 |
+| 2026-07-30 | 9.5 | 补齐 Cursor 式全部折叠与未修改区域折叠层级 | 用户补充截图确认多个文件可同时展开，标题区提供全部折叠，diff 内的大段未修改内容以折叠条呈现 | diff 状态改为 per-file map 与独立 token；hunk range 精确生成未修改行折叠条。当前 DTO 未携带省略文本，故不伪造展开箭头；真实上下文按需展开需后续有界 Main/IPC contract |
+| 2026-07-30 | 9.6 | 增加正常重启后一次性继续全部精确运行中 Session 的调试开关 | 用户需要 GUI 重启后可选择自动继续所有当时仍在执行的前台/后台对话，同时要求不能把历史 `crashed` 或不完整 transcript 猜成运行事实 | config v14 默认关闭；Kernel shutdown 精确快照，XDG state 使用 boot-scoped claim-before-send；恢复不改前台选择、不绕过 Project trust，Ask/compaction/provisional/异常退出均不自动继续。P3 当前 Slice 状态不变 |
+| 2026-07-30 | 9.7 | 加固 P3-1 diff 首开等待与大型 DOM 性能，并完成独立审计闭环 | 用户要求避免自研 diff 在大量文件/大 patch 下卡顿，并要求完成后独立审计 | hover/focus 只预取有界 typed DTO；snapshot-bound 8 条/8 MiB LRU、single-flight、最多 8 个展开文件和 300 行虚拟化阈值进入当前合同。大型 diff 保留完整文本/复制路径；trust/repository identity、exact snapshot ownership、mutation gate、意图 ownership、稳定宽度与可访问性 findings 已全部修复，最终 closure review 为 Blocker/High 0 |

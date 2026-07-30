@@ -37,7 +37,7 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 └───────────────────────────────┴────────────────────────────────┴──────────────────────────┘
 ```
 
-- 右侧栏由 Workbench composition 统一拥有顶层 Tab、收起/关闭、持久化有界宽度、指针/键盘 separator 与宽窄窗口容器；模块 feature 继续拥有领域内容。当前唯一真实模块是“子任务”，不显示 Git、Browser、Terminal 或其他占位 Tab，也不建立模块 registry。Settings 仍是独立全页工作区。
+- 右侧栏由 Workbench composition 统一拥有一级展开/收起入口、顶层 Tab、关闭、持久化有界宽度、指针/键盘 separator 与宽窄窗口容器；模块 feature 继续拥有领域内容。Session Header 的一级入口使用与左侧栏镜像的通用右栏图标，不显示领域模块图标；当前真实模块为按可用性出现的“Git”和“子任务”，不显示 Browser、Terminal 或其他占位 Tab，也不建立模块 registry。Settings 仍是独立全页工作区。
 
 - 标题下不保留重复标题语义、无实际作用的介绍性文案；确有必要的补充说明放在对应控件的 tooltip 中，由鼠标悬浮显示，不占用常驻布局。
 
@@ -68,18 +68,18 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 
 - Project Session 显示当前 Project 与 Session 名称；Task 显示“任务”与任务名称，二者都显示 Runtime 状态。
 - 诊断入口移到 Header；展开内容进入正常布局流，不再以浮层遮挡 Timeline。
-- Header 不承载 Project/Session 事实，只消费 Kernel 的活动选择投影。
+- Header 不承载 Project/Session 事实，只消费 Kernel 的活动选择投影；右侧一级控制只负责共享右侧栏展开/收起，领域模块入口留在栏内真实 Tab。
 
 ### 3.3 Conversation Timeline
 
 - 保留现有 `message`、`thinking`、`tool`、`error` normalized entry，为固定 Subagent 适配增加 `subagent-notice`，并为既有 Session 保留历史 `advisor` compatibility entry；全部继续使用同一 Conversation 与增量 patch 路径，当前产品不再提供新的 Advisor 控制入口。
 - 固定适配的 `ask` 交互仍附着在原 `toolCallId` 对应的运行中 tool entry 上，以同一 Timeline 工具卡展示严格归一化的问题、提交和取消状态；它不成为脱离 Conversation 的弹窗式第二事实，也不让 Renderer 解析原始 extension UI payload。
 - 以一次 user turn 和随后一个 agent run 形成可辨识的 turn group。
-- 活动 run 线性展示 thinking 与 tool；Renderer 将同一 turn 内连续的 thinking entry 合为一个视觉阶段，任意非-thinking 过程项封口，同时保留 Kernel 中每条 entry 的原始 identity 与顺序。活动阶段以最新摘要作为标题且不在正文重复该行，完成阶段仅有一个非空源码行的短思考直接显示正文，多行或多段内容才保留一个“思考” disclosure；重叠的现场 thinking 计时取最长完整观测跨度，不相加。普通工具批次只有一个 entry 时，外层汇总展开后直接显示真实详情而不重复该工具标题。settled 后的工作过程摘要与最终回答保持在同一 turn group 内，不作为脱离回答的独立大卡片。
+- 活动 run 线性展示 thinking 与 tool；Renderer 将同一 turn 内连续的 thinking entry 合为一个视觉阶段，任意非-thinking 过程项封口，同时保留 Kernel 中每条 entry 的原始 identity 与顺序。若 error 或其他 content entry 将活动 run 切成多个过程 chunk，后续 chunk 出现新 thinking 时只挂载最新含 thinking chunk 的 thinking；更早 thinking 在 settled 后的完成过程展开中恢复，跨 chunk 的 tool、commentary 与 error 继续保留。活动阶段以最新摘要作为标题且不在正文重复该行，完成阶段仅有一个非空源码行的短思考直接显示正文，多行或多段内容才保留一个“思考” disclosure；重叠的现场 thinking 计时取最长完整观测跨度，不相加。普通工具批次只有一个 entry 时，外层汇总展开后直接显示真实详情而不重复该工具标题。settled 后的工作过程摘要与最终回答保持在同一 turn group 内，不作为脱离回答的独立大卡片。
 - 保留按 `toolCallId` 原地更新、最近 60 轮渐进挂载、用户离开底部后停止自动跟随等现有行为。当前 60-turn 规则只限制 Renderer 的 DOM 挂载，不代表活动 Conversation 已完成分页读取、状态拆分或工作集驱逐。
 - 固定适配的 `pi-subagents` 在拉起后进入同一 turn：唤起中与运行中的 Subagent 必须直接显示，不得藏入 thinking 或通用工具详情 disclosure；前台运行默认按参与者显示紧凑、可聚焦的任务胶囊和同行整体状态。胶囊用“当前展示 Conversation identity + Subagent toolCallId + participant.index”作为稳定目标；点击后选择共享右侧栏中的“子任务”Tab。宽窗口右侧栏作为真实第三列与 Timeline / Composer 并排，用户可通过可访问 separator 指针或键盘调宽，并可收起后从 Conversation 重新展开；较窄窗口复用同一右侧栏 contract，在主工作区显示带返回入口的完整详情面。关闭、返回、Escape、Project/Session/Conversation identity 变化和目标消失继续按稳定 locator 恢复或清理焦点/选择。`SubagentTaskDetail` 自己拥有领域标题与正文，composition 不解析或复制其内容。详情按状态重排：运行中显示当前活动，完成态显示结果或输出文件，失败态显示错误，暂停态显示已有输出与最后活动；实际模型、input/output/cache token、费用、轮次、工具数和耗时跟随归一化 patch 更新。普通完成通知在 Timeline 只形成轻量可点击的完成任务胶囊，并保留通知协议中的原始 Agent 名称作为胶囊标签；Main 移除重复 completion envelope 与 Session file 行，把固定 `Output saved to` 协议投影为 metadata-only 输出引用，用户可显式打开但 GUI 不读取正文。通知未携带模型或 usage 时明确 unavailable，不从配置或 Session 猜测。关闭/返回/Escape 恢复合理焦点；Project、Session、新对话、归档预览 identity 变化、目标消失或设置页打开时关闭旧详情。`subagent list/status`、`subagent_wait` 以及 supervisor/intercom 的 pending/status/list 是内部发现或轮询，不进入 Timeline；控制、转向、暂停、停止、回复与 Watchdog 警告仍以独立通知显示。Main 从白名单 details 投影 supervisor request 的稳定 identity 与 pending/handled 生命周期，同一 run participant 的具体 request 替代泛化 attention，成功 reply 原地更新。该协作默认不作为用户 alert，只有 completion guard 与 Watchdog blocker 使用 alert。GUI 不读取子 Session transcript 或普通 artifact，不建立任务数据库或运行控制，也不按通知文案猜测原 run identity。
 - 既有 Session 中合法的历史 Advisor advisory 继续留在触发它的 turn 内，按归一化 entry 时序只读显示名称、严重度、正文和 guidance；blocker 不覆盖 Assistant 最终回答，Renderer 不解析 raw custom message 或 XML，也不恢复已退役的 Advisor 安装、启停或 roster 控制面。
-- Navigator 完全展开时，Timeline 左缘显示与真实用户轮次对应的 Prompt 导航短标记；悬浮或键盘聚焦可预览内容，点击定位对应轮次，折叠与窄窗口下隐藏。不在 Session Header 下粘着当前阅读轮次的用户 prompt。
+- Navigator 完全展开时，Timeline 左缘显示与真实用户轮次对应的 Prompt 导航短标记；悬浮或键盘聚焦可预览内容，首次悬浮成立后扩展为连续命中带，邻近标记保持固定线高和矩形端点、只按整数像素成组延长，短暂离轨不会立即收起，点击定位对应轮次；折叠与窄窗口下隐藏。不在 Session Header 下粘着当前阅读轮次的用户 prompt。
 - 复制回答、导出 HTML 与分叉对话属于当前 Conversation 操作：每个具备真实操作能力的已完成 turn 都在下方常驻预留同高的内联图标槽，悬停该 turn 或用键盘聚焦槽内按钮时只切换图标可见性与命中，不改变后续内容位置，也不占用 Session Header。复制/导出反馈固定留在发起操作的同一 turn 槽内，并以单行省略保持槽高；没有 turn 来源的快捷键反馈才使用时间线末尾的稳定位置。图标保持无底板的轻量外观。导出与分叉仍是会话级能力；复制作用于当前聚焦轮次的最终回答。
 - Project 或 Session 选择变化时，Timeline identity 随活动二元组变化，不复用上一 Session 的滚动和 disclosure 状态。
 

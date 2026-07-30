@@ -169,6 +169,8 @@ stopped -> starting -> ready -> running -> ready -> stopping -> stopped
 
 状态变化只有 Workbench Kernel 一个 owner。每个 Session context 独立执行同一状态机，后台事件不得改写当前 Session 投影。Pi 非正常退出必须只让所属 context 进入 `crashed`；不自动无限重启。完整一轮以 `agent_settled` 为稳定点，不把中间的 retry、compaction 或 continuation 误判为结束；`compaction_start` / `compaction_end` 保留 manual、threshold、overflow 与 `willRetry` 语义并单独收口。
 
+“重启后自动继续”是默认关闭的调试开关，只在正常 GUI shutdown 边界工作。Kernel 在停止 admission 前精确快照当时全部 `running + unsettled` 的已持久化 Context，并排除 provisional、Ask 等待、compaction、identity commit、stopping 与无法校验的 Session。一次性状态保存 exact `projectPath + sessionFile + sessionId` 和 canonical epoch-millisecond `capturedAt`；下一 boot 先绑定 boot ID，逐 Session 在发送继续 prompt 前原子 claim，claim 后即使崩溃也不自动重放。未被当前 boot 消费的旧状态在再下一次启动直接失效，不能根据 transcript、crashed、mtime 或 `settled=false` 猜测任务仍在运行。恢复可后台启动多个 Project/Task Runtime，但不得持久化改写最后的前台 Workspace/Session；需要新 Project trust 决定的候选等用户正常打开并授权后再继续。
+
 ## Runtime 内存与休眠边界
 
 持久 Session、managed RuntimeContext 与 Renderer 工作集是三个不同生命周期。休眠停止一个非前台 Pi Runtime，同时保留 Session pointer、导航 identity 与 transcript；再次选择时按同一 Session identity 重新启动。Renderer 的 Chromium native allocation 不属于 Runtime 休眠直接回收的内存。
@@ -189,6 +191,6 @@ Runtime memory diagnostics 是独立的只读 typed API：只返回 opaque Runti
 - Linux PATH、XDG、进程和权限逻辑只能存在于 runtime/main 边界，不进入 renderer 或会话模型。
 - 任务完成通知由 Main 的私有 Unix socket Broker 接收 strict v1 单行请求：目录 `0700`、socket `0600`、随机 capability token、固定限长 schema、无 Shell 插值，并以 `notify-send --print-id` 的服务端 ID 回执确认动作通知已创建。点击动作必须重新校验 canonical Project、未归档注册 Session 与可读常规文件；只为首轮 provisional materialization 对同一 identity 做 bounded 重试，验证后才聚焦并调用既有 `activateProject` / `activateSession`。Broker 在 Kernel shutdown 前停止接收并 drain 已开始的激活。
 - Renderer 不能按任意路径读取文件；只有 Main 原生选择器返回的文件或用户显式拖放、粘贴产生的 DOM `File` 可以进入附件预处理。普通文件正文不经过 Renderer/IPC，路径只用于发给本地 Pi Agent 按需读取。
-- 对话正文使用无 raw HTML 的 CommonMark/GFM AST 渲染；Markdown 图片不自动发起远程请求。
-- 流式 Markdown 按动画帧合并并复用稳定顶层块；未稳定 tail 超过 16,384 字符时停止额外的分块预解析，改由同一 React Markdown 管线整篇渲染，任何长度都不降级为纯文本。
+- 对话正文使用无 raw HTML 的 CommonMark/GFM + math AST 渲染；`$...$`、`$$...$$`、`\\(...\\)`、`\\[...\\]` 与 `math` code fence 经 `remark-math-extended` / `rehype-katex` 在本地转为 KaTeX HTML/MathML，`trust: false` 禁止公式生成受信链接或外部资源，KaTeX CSS 与字体随应用打包。Markdown 图片仍不自动发起远程请求。
+- 流式 Markdown 按动画帧合并并复用稳定顶层块，分块预解析器与最终 Renderer 使用同一 math 语法；未稳定 tail 超过 16,384 字符时停止额外的分块预解析，改由同一 React Markdown 管线整篇渲染，任何长度都不降级为纯文本或仅在 settled 后补公式格式。
 - Markdown 链接只能由用户点击触发并经过受信 IPC sender 校验。`http:`、`https:`、`mailto:` 交给系统外部 URL handler；Linux 绝对路径与无远程 host 的 `file:` URL 由 Main 转换为本地路径后使用 `shell.openPath` 打开。Renderer 不直接导航或读取目标，相对路径与其他 scheme 继续拒绝。

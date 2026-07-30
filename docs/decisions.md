@@ -497,3 +497,19 @@
 - 决策：S26 的 P2完成门槛固定为唯一 Linux verifier中的真实 AppImage链路：3 个已物化 Runtime经生产五分钟 grace和自动 sweep降到2个，用户通过现有“恢复对话”恢复被回收 Session后回到3个且对话保留；同一 Gate必须通过总 PSS、Renderer PSS/V8、KernelState大小、swap、busy后回落、恢复后总量和 Main state batch上限。自动候选继续对 busy、前台、provisional、pending ask/queue、compaction、active lease和未知 quiescence fail-closed。
 - 原因：此前的采样只证明诊断存在，没有证明自动回收和恢复在正式包中闭环；另一方面，把20 Session浏览、三个父Runtime同时busy、内存压力触发和30分钟slope全部设为P2前置，会把真实问题扩大为长期压力平台，违反KISS/YAGNI。真实五分钟生命周期与固定红线足以证明当前P2预算边界。
 - 影响：P2/S26可在对应正式证据通过后标记Complete。20 Session、三个busy父Runtime、pressure reclaim、Timeline分页和30分钟slope只作为真实回归触发的专项，不冒充已验证，也不阻塞P3。诊断继续默认关闭、脱敏、无正文/身份，并禁止GC/purge作为通过手段。
+
+## D-063 — 对话 Markdown 使用同一安全管线渲染数学公式
+
+- 日期：2026-07-30
+- 状态：Accepted；替代 D-007 中“不引入数学公式”的限制，不改变 raw HTML、链接或远程资源边界
+- 决策：Conversation 正文、thinking、Subagent 输出以及流式/完成态继续共用一条 `react-markdown` 管线，并在既有 GFM 上增加精确固定的 `remark-math-extended@6.1.0`、`rehype-katex@7.0.1` 与 `katex@0.16.47`。支持 `$...$` / `\\(...\\)` 行内公式、`$$...$$` / `\\[...\\]` 块级公式与 `math` code fence；流式顶层分块解析器同步加载 `remark-math-extended`，不得只在 settled 后补渲染。KaTeX 使用 `trust: false`，CSS 和字体随应用本地打包，用户 raw HTML 仍由 `skipHtml` 禁用；非法公式保留可读错误内容而不让整个消息渲染失败。
+- 原因：纯 CommonMark/GFM 只能把 LaTeX 当普通文本，导致上下标、矩阵与公式结构丢失；手写正则、DOM 二次扫描或完成态专用 renderer 会破坏代码块、流式 identity、安全边界和格式一致性。标准 unified AST 扩展是在现有 owner 内完成该能力的最小实现。
+- 影响：块级公式在窄窗口内独立横向滚动，不扩大 Timeline 或 Workbench 宽度；KaTeX 公式不能绕过现有 Markdown 链接点击策略创建受信外链。Session HTML export 仍保持其现有安全 CommonMark/GFM 序列化范围，本决定不在 Main 增加第二套 KaTeX 导出链路。
+
+## D-064 — 正常 GUI 重启可一次性继续精确运行中的 Session
+
+- 日期：2026-07-30
+- 状态：Accepted；扩展 D-017 的多 Runtime shutdown/recovery，不改变异常退出与显式 crash resume
+- 决策：常规设置增加默认关闭的“重启后自动继续任务”。仅在正常 GUI shutdown 时，Workbench Kernel 从全部 managed Context 精确抓取当时 `running + unsettled` 的已持久化 Session，排除 provisional、Ask 等待、compaction、identity commit、stopping 和不完整 identity；Main 原子保存 exact Project/Session identity。下一次启动为该批状态绑定单次 boot ID，对每项先持久化 claim，再恢复 Runtime 并发送固定的安全继续 prompt；发送已开始或失败后均完成该 claim，不自动重放。恢复多个后台 Session 后还原启动前的前台 Project/Task/Session，且不写回 active selection。需要新 Project trust 决定的候选不绕过授权，只在用户正常打开并授权后尝试。
+- 原因：只看 transcript、`crashed`、文件 mtime 或 `settled=false` 无法证明 GUI 停止时 Agent 仍在执行，也可能重复工具副作用；只恢复前台又会丢失 D-017 允许的后台并行任务。正常 shutdown 的 Kernel-owned Runtime 状态是唯一足以判定“重启前正在运行”的事实边界，claim-before-send 与 boot-scoped expiry 则把重复执行风险压到 fail-closed。
+- 影响：强杀、崩溃、写入失败或 claim 后再次崩溃时宁可不继续，也不猜测或重复发送；Ask 等待继续由原交互恢复，不注入回答。该功能不是通用任务队列、checkpoint 或 exactly-once 工具事务，不保证模型可在任意工具中点无损恢复；用户启用时必须理解继续 prompt 仍可能让模型重做缺少明确结果的外部副作用。
