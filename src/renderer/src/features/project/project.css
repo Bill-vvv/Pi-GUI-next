@@ -246,15 +246,10 @@
   width: 18px;
   height: 18px;
   flex: 0 0 auto;
+  pointer-events: none;
+  user-select: none;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--color-status-warning) 52%, transparent);
-  border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--color-status-warning) 10%, transparent);
   color: var(--color-status-warning);
-  font-family: var(--font-code);
-  font-size: var(--text-caption);
-  font-weight: var(--weight-semibold);
-  line-height: 1;
 }
 
 .project-activity-summary {
@@ -742,14 +737,7 @@
   pointer-events: none;
   user-select: none;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--color-status-warning) 52%, transparent);
-  border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--color-status-warning) 10%, transparent);
   color: var(--color-status-warning);
-  font-family: var(--font-code);
-  font-size: var(--text-caption);
-  font-weight: var(--weight-semibold);
-  line-height: 1;
   transition: opacity var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
@@ -797,7 +785,7 @@
   grid-area: 1 / 1;
   display: flex;
   align-items: center;
-  justify-self: end;
+  justify-self: center;
   gap: 0.08rem;
 }
 
@@ -904,8 +892,7 @@
       padding: 0;
     }
 
-    .app-shell.left-sidebar-collapsed .left-sidebar .project-unread-summary,
-    .app-shell.left-sidebar-collapsed .left-sidebar .project-awaiting-summary {
+    .app-shell.left-sidebar-collapsed .left-sidebar .project-unread-summary {
       position: absolute;
       top: 2px;
       right: 2px;
@@ -914,7 +901,11 @@
     }
 
     .app-shell.left-sidebar-collapsed .left-sidebar .project-awaiting-summary {
-      font-size: 0.62rem;
+      position: absolute;
+      top: 1px;
+      right: 1px;
+      width: var(--icon-size-sm);
+      height: var(--icon-size-sm);
     }
 
     .app-shell.left-sidebar-collapsed .left-sidebar .project-select .project-name {

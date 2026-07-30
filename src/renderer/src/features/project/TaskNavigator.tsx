@@ -240,7 +240,7 @@ export function TaskNavigator({
                       role="status"
                       aria-label="等待你的回复"
                     >
-                      ?
+                      <Icon name="question" size="sm" />
                     </span>
                   ) : lifecycleLabel !== null ? (
                     <SessionSpinner status={session.runtimeStatus} label={lifecycleLabel} />
@@ -312,8 +312,33 @@ export function TaskNavigator({
 }
 
 export function orderTaskItems(tasks: TaskItem[]): TaskItem[] {
-  return tasks
-    .map((task, index) => ({ task, index }))
+  const tasksByIdentity = new Map<string, { task: TaskItem; index: number }>()
+  tasks.forEach((task, index) => {
+    const current = tasksByIdentity.get(task.taskKey)
+    if (current === undefined) {
+      tasksByIdentity.set(task.taskKey, { task, index })
+      return
+    }
+    tasksByIdentity.set(task.taskKey, {
+      task: preferredTaskItem(current.task, task),
+      index: current.index
+    })
+  })
+
+  const tasksBySessionIdentity = new Map<string, { task: TaskItem; index: number }>()
+  for (const candidate of tasksByIdentity.values()) {
+    const current = tasksBySessionIdentity.get(candidate.task.session.key)
+    if (current === undefined) {
+      tasksBySessionIdentity.set(candidate.task.session.key, candidate)
+      continue
+    }
+    tasksBySessionIdentity.set(candidate.task.session.key, {
+      task: preferredTaskItem(current.task, candidate.task),
+      index: current.index
+    })
+  }
+
+  return Array.from(tasksBySessionIdentity.values())
     .sort((left, right) => {
       const busyOrder = Number(isTaskBusy(right.task.session.runtimeStatus)) -
         Number(isTaskBusy(left.task.session.runtimeStatus))
@@ -323,6 +348,20 @@ export function orderTaskItems(tasks: TaskItem[]): TaskItem[] {
       return activityOrder === 0 ? left.index - right.index : activityOrder
     })
     .map(({ task }) => task)
+}
+
+function preferredTaskItem(current: TaskItem, candidate: TaskItem): TaskItem {
+  const currentPersisted = current.session.provisional !== true
+  const candidatePersisted = candidate.session.provisional !== true
+  if (currentPersisted !== candidatePersisted) return candidatePersisted ? candidate : current
+
+  const currentBusy = isTaskBusy(current.session.runtimeStatus)
+  const candidateBusy = isTaskBusy(candidate.session.runtimeStatus)
+  if (currentBusy !== candidateBusy) return candidateBusy ? candidate : current
+
+  return (candidate.session.lastActivityAt ?? 0) > (current.session.lastActivityAt ?? 0)
+    ? candidate
+    : current
 }
 
 function isTaskBusy(status: KernelState['runtime']['status']): boolean {

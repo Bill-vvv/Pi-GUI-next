@@ -782,7 +782,7 @@ export function ProjectNavigator({
                         aria-label={`有 ${awaitingUserInputCount} 个对话等待回复`}
                         data-tooltip={`有 ${awaitingUserInputCount} 个对话等待回复`}
                       >
-                        ?
+                        <Icon name="question" size="sm" />
                       </span>
                     ) : busySessionCount > 0 ? (
                       <span
@@ -948,7 +948,7 @@ export function ProjectNavigator({
                                 role="status"
                                 aria-label="等待你的回复"
                               >
-                                ?
+                                <Icon name="question" size="sm" />
                               </span>
                             ) : lifecycleLabel !== null ? (
                               <SessionSpinner status={sessionRuntimeStatus} label={lifecycleLabel} />

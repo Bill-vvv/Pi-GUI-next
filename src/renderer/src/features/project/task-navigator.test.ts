@@ -73,6 +73,40 @@ test('Task ordering keeps active work first and otherwise follows recent activit
   )
 })
 
+test('Task ordering keeps one persisted Session row per Task identity', () => {
+  const persisted = task('same-task', 'ready', 10)
+  const duplicateProvisional = task('same-task', 'running', 20)
+  duplicateProvisional.session = {
+    ...duplicateProvisional.session,
+    key: '/tmp/wrong-project-session.jsonl',
+    id: 'wrong-project-session',
+    provisional: true
+  }
+
+  const ordered = orderTaskItems([duplicateProvisional, persisted])
+
+  assert.equal(ordered.length, 1)
+  assert.equal(ordered[0]?.session.key, persisted.session.key)
+  assert.equal(ordered[0]?.session.provisional, undefined)
+})
+
+test('Task ordering does not project one Session identity through stale Task workspaces', () => {
+  const staleReady = task('stale-ready', 'ready', 10)
+  const staleRunning = task('stale-running', 'running', 20)
+  staleReady.session = {
+    ...staleReady.session,
+    key: '/tmp/shared-wrong-session.jsonl',
+    id: 'shared-wrong-session',
+    provisional: true
+  }
+  staleRunning.session = { ...staleReady.session, runtimeStatus: 'running', lastActivityAt: 20 }
+
+  const ordered = orderTaskItems([staleReady, staleRunning])
+
+  assert.equal(ordered.length, 1)
+  assert.equal(ordered[0]?.taskKey, 'stale-running')
+})
+
 test('Workbench exposes mutually selected Project and Task tabs', () => {
   assert.match(workbenchSource, /role="tablist" aria-label="工作类型"/)
   assert.match(workbenchSource, /id="project-navigator-tab"[\s\S]*aria-selected=\{navigatorKind === 'project'\}/)
