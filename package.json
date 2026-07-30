@@ -15,7 +15,7 @@
     "dev": "electron-vite dev",
     "preview:browser": "vite --config vite.browser-preview.config.ts",
     "typecheck": "tsc --noEmit",
-    "test:core": "node --test scripts/memory-event-metrics.test.mjs src/main/advisor/*.test.ts src/main/export/*.test.ts src/main/extension/*.test.ts src/main/git/*.test.ts src/main/pi-rpc/*.test.ts src/main/runtime/*.test.ts src/main/kernel/*.test.ts src/main/notification/*.test.ts src/main/project/*.test.ts src/main/provider/*.test.ts src/main/security/*.test.ts src/main/subagent/*.test.ts src/renderer/src/*.test.ts src/renderer/src/composition/*.test.ts src/renderer/src/features/chat/*.test.ts src/renderer/src/features/composer/*.test.ts src/renderer/src/features/project/*.test.ts src/shared/*.test.ts extensions/pi-gui-runtime-quiescence/tests/*.test.mjs extensions/pi-gui-multi-advisor/tests/quiescence-provider.test.mjs extensions/pi-gui-task-notify/tests/quiescence-provider.test.mjs extensions/pi-gui-ask/tests/quiescence-provider.test.mjs",
+    "test:core": "node --test scripts/memory-event-metrics.test.mjs src/main/advisor/*.test.ts src/main/export/*.test.ts src/main/extension/*.test.ts src/main/git/*.test.ts src/main/pi-rpc/*.test.ts src/main/runtime/*.test.ts src/main/kernel/*.test.ts src/main/notification/*.test.ts src/main/project/*.test.ts src/main/provider/*.test.ts src/main/security/*.test.ts src/main/subagent/*.test.ts src/renderer/src/*.test.ts src/renderer/src/composition/*.test.ts src/renderer/src/features/chat/*.test.ts src/renderer/src/features/composer/*.test.ts src/renderer/src/features/git/*.test.ts src/renderer/src/features/project/*.test.ts src/shared/*.test.ts extensions/pi-gui-runtime-quiescence/tests/*.test.mjs extensions/pi-gui-multi-advisor/tests/quiescence-provider.test.mjs extensions/pi-gui-task-notify/tests/quiescence-provider.test.mjs extensions/pi-gui-ask/tests/quiescence-provider.test.mjs extensions/pi-gui-openai-fast-mode/tests/*.test.ts",
     "bench:markdown": "node scripts/benchmark-streaming-markdown.ts",
     "smoke:pi": "pnpm build && PI_GUI_PROBE_ONLY=1 electron .",
     "build": "electron-vite build",
@@ -58,6 +58,13 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "extensions/pi-gui-openai-fast-mode",
+        "to": "extensions/pi-gui-openai-fast-mode",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "linux": {
@@ -76,12 +83,16 @@
     }
   },
   "dependencies": {
+    "@tanstack/react-virtual": "3.14.9",
     "ignore": "7.0.5",
+    "katex": "0.16.47",
     "proper-lockfile": "4.1.2",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "react-markdown": "10.1.0",
+    "rehype-katex": "7.0.1",
     "remark-gfm": "4.0.1",
+    "remark-math-extended": "6.1.0",
     "remark-parse": "11.0.0",
     "simple-git": "3.36.0",
     "unified": "11.0.5",
