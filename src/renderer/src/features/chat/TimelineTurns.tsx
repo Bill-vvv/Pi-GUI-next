@@ -1612,7 +1612,16 @@ function buildLiveChunks(entries: KernelConversationEntry[]): LiveChunk[] {
     }
   }
   flushProcess()
-  return chunks
+
+  const latestThinkingChunkIndex = chunks.findLastIndex(
+    (chunk) => chunk.kind === 'process' && chunk.entries.some((entry) => entry.kind === 'thinking')
+  )
+  if (latestThinkingChunkIndex <= 0) return chunks
+  return chunks.flatMap((chunk, chunkIndex) => {
+    if (chunk.kind !== 'process' || chunkIndex >= latestThinkingChunkIndex) return [chunk]
+    const visibleEntries = chunk.entries.filter((entry) => entry.kind !== 'thinking')
+    return visibleEntries.length === 0 ? [] : [{ ...chunk, entries: visibleEntries }]
+  })
 }
 
 export function isProcessEntry(entry: KernelConversationEntry): entry is ProcessEntry {

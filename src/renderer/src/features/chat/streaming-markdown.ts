@@ -1,4 +1,5 @@
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math-extended'
 import remarkParse from 'remark-parse'
 import { unified } from 'unified'
 
@@ -25,7 +26,7 @@ type PositionedNode = {
   children?: PositionedNode[]
 }
 
-const streamingParser = unified().use(remarkParse).use(remarkGfm)
+const streamingParser = unified().use(remarkParse).use(remarkGfm).use(remarkMath)
 const STREAMING_TAIL_PARSE_BUDGET = 16_384
 
 export function buildStreamingMarkdownModel(

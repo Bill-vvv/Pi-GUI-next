@@ -109,6 +109,36 @@ test('adjacent thinking entries form one stage without repeating the active titl
   assert.ok(text.indexOf('Inspecting extension registration') < text.indexOf('Comparing load order'))
 })
 
+test('a newer live thinking stage replaces earlier thinking without hiding intervening output', () => {
+  const entries: KernelConversationEntry[] = [
+    thinking(
+      'thinking-before-retry',
+      '**Inspecting the first transport**\n\nThe first attempt is no longer active.',
+      false,
+      false
+    ),
+    tool('read-before-retry', 'read', 'success', { path: '/tmp/transport.ts' }),
+    {
+      id: 'retry-error',
+      kind: 'error',
+      title: 'CPA Responses WebSocket error',
+      message: 'WebSocket closed before response.completed',
+      source: 'agent',
+      timestamp: 1
+    },
+    thinking('thinking-after-retry', '**Inspecting fallback priorities**', true)
+  ]
+
+  for (const density of ['standard', 'detailed'] as const) {
+    const html = renderLiveTurn(entries, density)
+    assert.doesNotMatch(html, /Inspecting the first transport/)
+    assert.doesNotMatch(html, /The first attempt is no longer active/)
+    assert.match(html, /Inspecting fallback priorities/)
+    assert.match(html, /CPA Responses WebSocket error/)
+    assert.match(html, /transport\.ts/)
+  }
+})
+
 test('non-thinking process entries split thinking stages', () => {
   const html = renderLiveTurn([
     thinking('thinking-before-commentary', '**First stage**'),

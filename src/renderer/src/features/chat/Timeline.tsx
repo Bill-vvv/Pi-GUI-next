@@ -110,8 +110,12 @@ type TimelineReadingAnchor = {
 const COMPLETED_TURN_WINDOW_SIZE = 60
 const ACTIVE_PROMPT_SWITCH_GAP = 8
 const PROMPT_NAVIGATION_PREVIEW_DELAY_MS = 360
-const PROMPT_NAVIGATION_FOCUS_SIGMA = 1.35
-const PROMPT_NAVIGATION_FOCUS_SCALE_SPAN = 2
+const PROMPT_NAVIGATION_CLOSE_DELAY_MS = 180
+const PROMPT_NAVIGATION_FOCUS_SIGMA = 2.1
+const PROMPT_NAVIGATION_FOCUS_BASE_OPACITY = 0.4
+const PROMPT_NAVIGATION_FOCUS_OPACITY_SPAN = 0.5
+const PROMPT_NAVIGATION_FOCUS_BASE_WIDTH_PX = 9
+const PROMPT_NAVIGATION_FOCUS_WIDTH_SPAN_PX = 23
 const MAGIC_CONTEXT_LIVE_STATUS_ID = 'extension-status:magic-context'
 const EMPTY_STATE_SLOGANS = [
   '从一个想法开始。',
@@ -1043,6 +1047,7 @@ function PromptNavigationRail({
   const markerRefs = useRef<Array<HTMLButtonElement | null>>([])
   const markerPositionsRef = useRef<PromptNavigationMarkerPosition[]>([])
   const previewDelayRef = useRef<number | null>(null)
+  const closeDelayRef = useRef<number | null>(null)
   const focusFrameRef = useRef<number | null>(null)
   const pendingFocusPositionRef = useRef<number | null>(null)
   const previewModeRef = useRef(false)
@@ -1055,6 +1060,11 @@ function PromptNavigationRail({
     if (previewDelayRef.current === null) return
     window.clearTimeout(previewDelayRef.current)
     previewDelayRef.current = null
+  }, [])
+  const clearCloseDelay = useCallback(() => {
+    if (closeDelayRef.current === null) return
+    window.clearTimeout(closeDelayRef.current)
+    closeDelayRef.current = null
   }, [])
   const clearNavigationFocus = useCallback(() => {
     if (focusFrameRef.current !== null) {
@@ -1079,10 +1089,18 @@ function PromptNavigationRail({
   }, [])
   const closePreview = useCallback(() => {
     clearPreviewDelay()
+    clearCloseDelay()
     clearNavigationFocus()
     previewModeRef.current = false
     setPreview(null)
-  }, [clearNavigationFocus, clearPreviewDelay])
+  }, [clearCloseDelay, clearNavigationFocus, clearPreviewDelay])
+  const scheduleClosePreview = useCallback(() => {
+    clearCloseDelay()
+    closeDelayRef.current = window.setTimeout(() => {
+      closeDelayRef.current = null
+      closePreview()
+    }, PROMPT_NAVIGATION_CLOSE_DELAY_MS)
+  }, [clearCloseDelay, closePreview])
   const showPreview = useCallback((
     item: PromptNavigationItem,
     index: number,
@@ -1090,6 +1108,7 @@ function PromptNavigationRail({
     immediate: boolean
   ) => {
     clearPreviewDelay()
+    clearCloseDelay()
     if (immediate) {
       previewModeRef.current = true
       if (markerPositionsRef.current.length === 0) {
@@ -1106,7 +1125,7 @@ function PromptNavigationRail({
       scheduleNavigationFocus(index)
       setPreview({ item, trigger })
     }, PROMPT_NAVIGATION_PREVIEW_DELAY_MS)
-  }, [clearPreviewDelay, scheduleNavigationFocus])
+  }, [clearCloseDelay, clearPreviewDelay, scheduleNavigationFocus])
 
   useEffect(() => {
     if (preview === null) return
@@ -1119,8 +1138,9 @@ function PromptNavigationRail({
 
   useEffect(() => () => {
     clearPreviewDelay()
+    clearCloseDelay()
     clearNavigationFocus()
-  }, [clearNavigationFocus, clearPreviewDelay])
+  }, [clearCloseDelay, clearNavigationFocus, clearPreviewDelay])
 
   const focusMarker = (index: number): void => {
     markerRefs.current[Math.max(0, Math.min(items.length - 1, index))]?.focus()
@@ -1130,7 +1150,13 @@ function PromptNavigationRail({
     <nav
       className="prompt-navigation-rail"
       aria-label="提示词导航"
-      onPointerLeave={closePreview}
+      data-expanded={preview === null ? undefined : 'true'}
+      onPointerEnter={clearCloseDelay}
+      onPointerLeave={(event) => {
+        if (event.currentTarget.contains(document.activeElement)) return
+        if (previewModeRef.current) scheduleClosePreview()
+        else closePreview()
+      }}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) closePreview()
       }}
@@ -1207,7 +1233,7 @@ function applyPromptNavigationFocus(
     if (marker === null) return
     if (focusedPosition === null) {
       marker.style.removeProperty('--prompt-navigation-marker-opacity')
-      marker.style.removeProperty('--prompt-navigation-marker-scale')
+      marker.style.removeProperty('--prompt-navigation-marker-width')
       return
     }
     const distance = Math.abs(index - focusedPosition)
@@ -1216,11 +1242,17 @@ function applyPromptNavigationFocus(
     )
     marker.style.setProperty(
       '--prompt-navigation-marker-opacity',
-      (0.3 + weight * 0.58).toFixed(3)
+      (
+        PROMPT_NAVIGATION_FOCUS_BASE_OPACITY +
+        weight * PROMPT_NAVIGATION_FOCUS_OPACITY_SPAN
+      ).toFixed(3)
     )
     marker.style.setProperty(
-      '--prompt-navigation-marker-scale',
-      (1 + weight * PROMPT_NAVIGATION_FOCUS_SCALE_SPAN).toFixed(3)
+      '--prompt-navigation-marker-width',
+      `${Math.round(
+        PROMPT_NAVIGATION_FOCUS_BASE_WIDTH_PX +
+        weight * PROMPT_NAVIGATION_FOCUS_WIDTH_SPAN_PX
+      )}px`
     )
   })
 }

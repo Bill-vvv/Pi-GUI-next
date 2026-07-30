@@ -6,8 +6,12 @@ import {
   type MouseEvent,
   type ReactNode
 } from 'react'
-import ReactMarkdown, { type Components } from 'react-markdown'
+import 'katex/dist/katex.min.css'
+
+import rehypeKatex, { type Options as KatexOptions } from 'rehype-katex'
+import ReactMarkdown, { type Components, type Options as MarkdownOptions } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math-extended'
 
 import { normalizeOpenTarget } from '../../../../shared/external-url'
 import {
@@ -20,7 +24,15 @@ type MarkdownMessageProps = {
   streaming: boolean
 }
 
-const remarkPlugins = [remarkGfm]
+const remarkPlugins: NonNullable<MarkdownOptions['remarkPlugins']> = [remarkGfm, remarkMath]
+const katexOptions: KatexOptions = {
+  errorColor: 'var(--color-error-text)',
+  strict: 'warn',
+  trust: false
+}
+const rehypePlugins: NonNullable<MarkdownOptions['rehypePlugins']> = [
+  [rehypeKatex, katexOptions]
+]
 
 const markdownComponents: Components = {
   a({ href, children, title }) {
@@ -81,6 +93,7 @@ const MarkdownFragment = memo(function MarkdownFragment({ text }: { text: string
   return (
     <ReactMarkdown
       components={markdownComponents}
+      rehypePlugins={rehypePlugins}
       remarkPlugins={remarkPlugins}
       skipHtml
       urlTransform={normalizeMarkdownUrl}

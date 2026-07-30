@@ -61,21 +61,26 @@
   position: absolute;
   top: var(--conversation-top-safe-space);
   bottom: var(--conversation-bottom-safe-space);
-  left: -0.55rem;
+  left: -9px;
   z-index: 5;
   display: flex;
-  width: 1.5rem;
+  width: 29px;
   min-height: 0;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   pointer-events: none;
+  transition: width var(--motion-duration-layout) var(--motion-easing-layout);
+}
+
+.prompt-navigation-rail[data-expanded='true'] {
+  width: 60px;
 }
 
 .prompt-navigation-list {
-  --prompt-navigation-marker-base-width: 5px;
-  --prompt-navigation-marker-hover-scale: 2;
-  --prompt-navigation-marker-active-scale: 1.8;
-  --prompt-navigation-marker-active-hover-scale: 2.4;
+  --prompt-navigation-marker-base-width: 6px;
+  --prompt-navigation-marker-hover-width: 19px;
+  --prompt-navigation-marker-active-width: 12px;
+  --prompt-navigation-marker-active-hover-width: 22px;
   display: flex;
   width: 100%;
   height: 100%;
@@ -93,8 +98,9 @@
 }
 
 .prompt-navigation-list:hover,
-.prompt-navigation-list:focus-within {
-  opacity: 0.88;
+.prompt-navigation-list:focus-within,
+.prompt-navigation-rail[data-expanded='true'] .prompt-navigation-list {
+  opacity: 0.96;
 }
 
 .prompt-navigation-list > li {
@@ -107,9 +113,9 @@
 
 .prompt-navigation-marker {
   --prompt-navigation-marker-opacity: 0.3;
-  --prompt-navigation-marker-scale: 1;
+  --prompt-navigation-marker-width: var(--prompt-navigation-marker-base-width);
   display: grid;
-  width: 20px;
+  width: 100%;
   height: 100%;
   min-height: 1px;
   align-items: center;
@@ -118,26 +124,24 @@
   border-radius: var(--radius-pill);
   background: transparent;
   color: var(--color-text-muted);
-  padding: 0;
+  padding: 0 0 0 12px;
   transition: color var(--motion-duration-control) var(--motion-easing-layout);
 }
 
 .prompt-navigation-marker::before {
-  width: var(--prompt-navigation-marker-base-width);
+  width: var(--prompt-navigation-marker-width);
   height: 2px;
-  border-radius: var(--radius-pill);
+  border-radius: 0;
   background: currentColor;
   content: '';
   opacity: var(--prompt-navigation-marker-opacity);
-  transform: scaleX(var(--prompt-navigation-marker-scale));
-  transform-origin: left center;
-  transition: transform var(--motion-duration-layout) var(--motion-easing-layout), opacity var(--motion-duration-control) var(--motion-easing-layout);
+  transition: opacity var(--motion-duration-control) var(--motion-easing-layout);
 }
 
 .prompt-navigation-marker:hover:not(:disabled),
 .prompt-navigation-marker:focus-visible {
   --prompt-navigation-marker-opacity: 0.72;
-  --prompt-navigation-marker-scale: var(--prompt-navigation-marker-hover-scale);
+  --prompt-navigation-marker-width: var(--prompt-navigation-marker-hover-width);
   border-color: transparent;
   background: transparent;
   color: var(--color-text-soft);
@@ -146,14 +150,14 @@
 
 .prompt-navigation-marker[aria-current='location'] {
   --prompt-navigation-marker-opacity: 0.68;
-  --prompt-navigation-marker-scale: var(--prompt-navigation-marker-active-scale);
+  --prompt-navigation-marker-width: var(--prompt-navigation-marker-active-width);
   color: color-mix(in srgb, var(--color-accent-primary) 55%, var(--color-text-muted));
 }
 
 .prompt-navigation-marker[aria-current='location']:hover,
 .prompt-navigation-marker[aria-current='location']:focus-visible {
   --prompt-navigation-marker-opacity: 0.88;
-  --prompt-navigation-marker-scale: var(--prompt-navigation-marker-active-hover-scale);
+  --prompt-navigation-marker-width: var(--prompt-navigation-marker-active-hover-width);
 }
 
 .prompt-navigation-marker[data-navigation-focus='true'] {
@@ -811,6 +815,19 @@
   line-height: var(--line-code);
   padding: 0;
   white-space: inherit;
+}
+
+.markdown-message .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.18em 0;
+  overscroll-behavior-inline: contain;
+}
+
+.markdown-message .katex-error {
+  color: var(--color-error-text);
+  font-family: var(--font-code);
 }
 
 .markdown-message table {
@@ -2615,10 +2632,10 @@ button.subagent-run-chip:focus-visible {
 
 @media (min-width: 1201px) {
   .prompt-navigation-list {
-    --prompt-navigation-marker-base-width: 7px;
-    --prompt-navigation-marker-hover-scale: 1.86;
-    --prompt-navigation-marker-active-scale: 2.29;
-    --prompt-navigation-marker-active-hover-scale: 2.29;
+    --prompt-navigation-marker-base-width: 8px;
+    --prompt-navigation-marker-hover-width: 24px;
+    --prompt-navigation-marker-active-width: 17px;
+    --prompt-navigation-marker-active-hover-width: 27px;
   }
 }
 

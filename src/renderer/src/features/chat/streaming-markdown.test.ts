@@ -55,6 +55,25 @@ test('lists and CommonMark fence variants stay intact as top-level blocks', () =
   assert.match(fenced.blocks[0]?.text ?? '', /~~~ts/)
 })
 
+test('display math remains one streaming block even when the formula contains blank lines', () => {
+  const model = buildStreamingMarkdownModel([
+    'Before',
+    '',
+    '\\[',
+    'a_t = W_c [z_t; h_t]',
+    '',
+    '+ b_c',
+    '\\]',
+    '',
+    'After'
+  ].join('\n'))
+
+  assert.equal(model.blocks.length, 3)
+  assert.equal(model.blocks[1]?.stable, true)
+  assert.equal(model.blocks[1]?.text.startsWith('\\[\n'), true)
+  assert.equal(model.blocks[1]?.text.endsWith('\\]\n\n'), true)
+})
+
 test('document-wide link definitions keep the message in one parser document', () => {
   const model = buildStreamingMarkdownModel('[Pi][site]\n\n[site]: https://example.com')
 
