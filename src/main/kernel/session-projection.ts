@@ -15,7 +15,8 @@ import type {
 export function toKernelSession(
   state: PiRpcSessionState,
   resumeAvailable: boolean,
-  usageFallback: KernelSessionUsage | null = null
+  usageFallback: KernelSessionUsage | null,
+  openAiFastMode: boolean
 ): KernelSessionState {
   return {
     id: stringValue(state.sessionId),
@@ -24,6 +25,7 @@ export function toKernelSession(
     model: toKernelModel(state.model),
     usage: usageFallback,
     thinkingLevel: thinkingLevel(state.thinkingLevel),
+    openAiFastMode,
     messageCount: integerValue(state.messageCount),
     pendingMessageCount: integerValue(state.pendingMessageCount),
     pendingSteeringMessages: [],

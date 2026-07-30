@@ -1,0 +1,22 @@
+{
+  "name": "pi-gui-openai-fast-mode",
+  "version": "0.1.0",
+  "description": "OpenAI Priority processing toggle managed by Pi GUI",
+  "license": "MIT",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.0"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ]
+}

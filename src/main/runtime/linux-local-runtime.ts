@@ -47,8 +47,30 @@ import {
 const DEFAULT_RPC_TIMEOUT_MS = 10_000
 const STOP_GRACE_MS = 1_000
 const PROBE_SESSION_NAME = 'Pi GUI S11 probe'
+const MAX_EXTENSION_COMMAND_NAME_LENGTH = 256
+const MAX_EXTENSION_COMMAND_ARGS_LENGTH = 64 * 1024
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u
 const PROGRESS_SYSTEM_PROMPT =
   'For non-trivial tasks, provide brief user-visible commentary before important tool operations and after important discoveries. Do not narrate every tool call. Use commentary for progress updates and final_answer for the final response.'
+
+function buildExtensionCommandPrompt(name: string, args?: string): string {
+  if (
+    name.length === 0 ||
+    name.length > MAX_EXTENSION_COMMAND_NAME_LENGTH ||
+    name.trim() !== name ||
+    name.startsWith('/') ||
+    CONTROL_CHARACTER_PATTERN.test(name)
+  ) {
+    throw new Error('Runtime extension command name is malformed')
+  }
+  if (args !== undefined && args.length > MAX_EXTENSION_COMMAND_ARGS_LENGTH) {
+    throw new Error(
+      `Runtime extension command args exceed maximum length of ${MAX_EXTENSION_COMMAND_ARGS_LENGTH}`
+    )
+  }
+  return args === undefined || args.length === 0 ? `/${name}` : `/${name} ${args}`
+}
+
 const FAST_EXTENSION_RESOLVER_HOOK_URL = `data:text/javascript,${encodeURIComponent(`
 import { existsSync, realpathSync } from 'node:fs'
 import { registerHooks } from 'node:module'
@@ -284,6 +306,7 @@ export class LinuxLocalRuntime implements RuntimeHost {
     delete env.JITI_TRY_NATIVE
     delete env.PI_GUI_NOTIFICATION_SOCKET
     delete env.PI_GUI_NOTIFICATION_TOKEN
+    delete env.PI_GUI_OPENAI_FAST_MODE
     if (this.options.fastExtensionLoading === true) {
       env.PI_PARALLEL_EXTENSION_IMPORTS = '1'
       env.PI_NATIVE_COMPILED_EXTENSION_IMPORTS = '1'
@@ -466,7 +489,7 @@ export class LinuxLocalRuntime implements RuntimeHost {
       return { type: 'accepted' }
     }
     if (command.type === 'invoke_extension_command') {
-      await this.client.invokeExtensionCommand(command.name, command.args)
+      await this.client.prompt(buildExtensionCommandPrompt(command.name, command.args))
       return { type: 'accepted' }
     }
     if (command.type === 'subscribe_extension_events') {

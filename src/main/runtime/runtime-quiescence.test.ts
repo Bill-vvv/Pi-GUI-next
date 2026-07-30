@@ -55,12 +55,13 @@ test('resolveRuntimeQuiescenceExtensionPath finds the source extension', () => {
   assert.match(path, /pi-gui-runtime-quiescence\/src\/index\.ts$/u)
 })
 
-test('resolveRuntimeExtensionPaths includes quiescence, task-notify, and ask in stable order', () => {
+test('resolveRuntimeExtensionPaths includes all app-owned extensions in stable order', () => {
   const paths = resolveRuntimeExtensionPaths()
-  assert.equal(paths.length, 3)
+  assert.equal(paths.length, 4)
   assert.match(paths[0]!, /pi-gui-runtime-quiescence\/src\/index\.ts$/u)
   assert.match(paths[1]!, /pi-gui-task-notify\/src\/index\.ts$/u)
   assert.match(paths[2]!, /pi-gui-ask\/src\/index\.ts$/u)
+  assert.match(paths[3]!, /pi-gui-openai-fast-mode\/src\/index\.ts$/u)
 })
 
 test('resolveRuntimeQuiescenceExtensionPath prefers packaged resources when present', async (t) => {

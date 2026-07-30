@@ -272,6 +272,31 @@ export function SettingsPanel({
                     />
                   </div>
                 </div>
+                <div className="settings-row">
+                  <div className="settings-row-copy">
+                    <label htmlFor="general-auto-continue-interrupted-tasks">
+                      自动继续重启中断的任务（调试）
+                    </label>
+                    <p>
+                      正常退出时精确记录所有仍在运行的已保存对话，下次启动在后台逐个恢复并发送一次继续指令，且不改变前台选择。
+                      默认关闭；可能重新触发模型和工具，不适用于崩溃或强制结束进程。
+                    </p>
+                  </div>
+                  <div className="settings-row-control settings-checkbox-control">
+                    <input
+                      id="general-auto-continue-interrupted-tasks"
+                      type="checkbox"
+                      checked={state.general.autoContinueInterruptedTasks}
+                      disabled={busy}
+                      onChange={(event) => {
+                        void onSetGeneral({
+                          ...state.general,
+                          autoContinueInterruptedTasks: event.currentTarget.checked
+                        }).catch(() => undefined)
+                      }}
+                    />
+                  </div>
+                </div>
               </div>
             </section>
 

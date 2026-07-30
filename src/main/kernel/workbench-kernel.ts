@@ -68,12 +68,18 @@ import {
 } from '../prompt/prompt-attachments.ts'
 import { isAbsolute } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import type { RestartContinuationCandidate } from '../project/restart-continuation.ts'
 import {
   upsertSessionPointer,
   type ProjectSessionRegistry,
   type SessionPointer
 } from '../project/session-pointer.ts'
 import type { RuntimeHost, RuntimeHostEvent, RuntimeHostState } from '../runtime/runtime-host.ts'
+import {
+  OPENAI_FAST_MODE_COMMAND_NAME,
+  buildOpenAiFastModeCommandArgs,
+  openAiFastModeFromSessionEntries
+} from '../runtime/openai-fast-mode.ts'
 import {
   readLinuxProcessMemoryBytes,
   type LinuxProcessMemoryReadResult
@@ -143,6 +149,7 @@ const INITIAL_SESSION_STATE: KernelSessionState = {
   model: null,
   usage: null,
   thinkingLevel: null,
+  openAiFastMode: false,
   messageCount: 0,
   pendingMessageCount: 0,
   pendingSteeringMessages: [],
@@ -162,6 +169,8 @@ const ARCHIVE_UNDO_DURATION_MS = 5_000
 const TOOL_IMAGE_CACHE_TTL_MS = 60_000
 const MAX_TOOL_IMAGE_CACHE_ENTRIES = 8
 const MAX_TOOL_IMAGE_CACHE_BASE64_CHARS = 24 * 1024 * 1024
+const RESTART_CONTINUATION_PROMPT =
+  '请继续完成因 GUI 重启而中断的上一项任务。先根据当前会话记录核对已完成步骤和工具结果，不要重复已经完成的有副作用操作；如果无法安全判断下一步，请先说明风险并等待确认。'
 
 export type RuntimeFactory = (
   project: { path: string },
@@ -208,6 +217,9 @@ export type WorkbenchKernelOptions = {
   persistAppearance?: (settings: AppearanceSettings) => Promise<void>
   general?: GeneralSettings
   persistGeneral?: (settings: GeneralSettings) => Promise<void>
+  restartContinuations?: readonly RestartContinuationCandidate[]
+  claimRestartContinuation?: (id: string) => Promise<void>
+  completeRestartContinuation?: (id: string) => Promise<void>
   subagent?: SubagentSettings
   persistSubagent?: (settings: SubagentSettings) => Promise<void>
   shortcuts?: ShortcutSettings
@@ -330,6 +342,12 @@ type ForkTarget = {
   context: RuntimeContext
 }
 
+type RestartRecoverySelection = {
+  activeProjectKey: string | null
+  activeSessionKey: string | null
+  navigatorKind: 'project' | 'task'
+}
+
 export class WorkbenchKernel {
   private readonly createRuntime: RuntimeFactory
   private readonly listeners = new Set<(event: KernelEvent) => void>()
@@ -350,6 +368,7 @@ export class WorkbenchKernel {
     new Map<string, Map<string, KernelSessionStatistics | null>>()
   private readonly archiveUndoByToken = new Map<string, ArchiveUndoRecord>()
   private readonly sessionReloadRequired = new Set<string>()
+  private readonly restartContinuations = new Map<string, RestartContinuationCandidate>()
   /**
    * Bounded Main-only cache for tool result images that completed but may not yet
    * be readable from the Pi transcript. Never enters KernelState / patches / logs.
@@ -363,6 +382,7 @@ export class WorkbenchKernel {
   /** Monotonic revision bumped on every published state-changed/state-patched event. */
   private stateRevision = 0
   private stopRequested = false
+  private shutdownRequested = false
   private launchOperation: Promise<void> | null = null
   private projectChangeOperation: Promise<void> | null = null
   private launchCommitting = false
@@ -426,6 +446,11 @@ export class WorkbenchKernel {
     this.persistSessionNaming = options.persistSessionNaming ?? (async () => {})
     this.persistAppearance = options.persistAppearance ?? (async () => {})
     this.persistGeneral = options.persistGeneral ?? (async () => {})
+    this.claimRestartContinuation = options.claimRestartContinuation ?? (async () => {})
+    this.completeRestartContinuation = options.completeRestartContinuation ?? (async () => {})
+    for (const candidate of options.restartContinuations ?? []) {
+      this.restartContinuations.set(candidate.id, { ...candidate })
+    }
     this.persistSubagent = options.persistSubagent ?? (async () => {})
     this.persistShortcuts = options.persistShortcuts ?? (async () => {})
     this.generateSessionName = options.generateSessionName
@@ -471,6 +496,8 @@ export class WorkbenchKernel {
   private readonly persistSessionNaming: (settings: SessionNamingSettings) => Promise<void>
   private readonly persistAppearance: (settings: AppearanceSettings) => Promise<void>
   private readonly persistGeneral: (settings: GeneralSettings) => Promise<void>
+  private readonly claimRestartContinuation: (id: string) => Promise<void>
+  private readonly completeRestartContinuation: (id: string) => Promise<void>
   private readonly persistSubagent: (settings: SubagentSettings) => Promise<void>
   private readonly persistShortcuts: (settings: ShortcutSettings) => Promise<void>
   private readonly generateSessionName: SessionNameGenerator | undefined
@@ -510,6 +537,141 @@ export class WorkbenchKernel {
    */
   acknowledge(): KernelMutationAck {
     return { revision: this.stateRevision }
+  }
+
+  /**
+   * Captures only exact, persisted RuntimeContexts observed running at the orderly
+   * shutdown boundary. Startup never infers candidates from transcript shape or a
+   * stale crashed projection.
+   */
+  prepareRestartContinuationShutdown(): RestartContinuationCandidate[] {
+    const candidates = this.captureRestartContinuations()
+    this.shutdownRequested = true
+    return candidates
+  }
+
+  captureRestartContinuations(): RestartContinuationCandidate[] {
+    if (!this.state.general.autoContinueInterruptedTasks) return []
+    this.captureActiveContext()
+    const capturedAt = this.now()
+    const contexts = [...this.contexts].sort((first, second) => {
+      if (first === this.activeContext) return -1
+      if (second === this.activeContext) return 1
+      return second.lastWarmUseAt - first.lastWarmUseAt
+    })
+    const candidates: RestartContinuationCandidate[] = []
+    for (const context of contexts) {
+      const state = context.state
+      if (
+        context.stopRequested ||
+        context.launchCommitting ||
+        context.deferredEvents !== null ||
+        context.provisionalSession !== null ||
+        context.provisionalCommit !== null ||
+        context.askInteraction !== null ||
+        state.runtime.status !== 'running' ||
+        state.session.settled ||
+        state.session.compaction !== null ||
+        (context.compactionLifecycle !== null && !context.compactionLifecycle.settled)
+      ) {
+        continue
+      }
+      const sessionFile = state.activeSessionKey
+      const sessionId = state.session.id
+      if (sessionFile === null || sessionId === null) continue
+      const pointer = (this.sessionPointersByProject.get(context.projectPath) ?? []).find(
+        (candidate) => candidate.projectPath === context.projectPath &&
+          candidate.sessionFile === sessionFile &&
+          candidate.sessionId === sessionId
+      )
+      if (pointer === undefined) continue
+      candidates.push({
+        id: randomUUID(),
+        projectPath: pointer.projectPath,
+        sessionFile: pointer.sessionFile,
+        sessionId: pointer.sessionId,
+        capturedAt
+      })
+    }
+    return candidates
+  }
+
+  /**
+   * Startup-only non-interactive recovery. It resumes every exact pending identity
+   * that does not need a fresh Project trust decision, while restoring the user's
+   * persisted foreground selection after background Runtime creation.
+   */
+  async resumeInterruptedSessions(): Promise<void> {
+    if (
+      !this.state.general.autoContinueInterruptedTasks ||
+      this.restartContinuations.size === 0
+    ) {
+      return
+    }
+    if (
+      this.contexts.size > 0 ||
+      this.launchOperation !== null ||
+      this.projectChangeOperation !== null ||
+      this.pendingProjectTrust !== null
+    ) {
+      throw new Error('Restart continuation recovery is only available during startup.')
+    }
+
+    const selection: RestartRecoverySelection = {
+      activeProjectKey: this.state.activeProjectKey,
+      activeSessionKey: this.state.activeSessionKey,
+      navigatorKind: this.state.navigatorKind ?? 'project'
+    }
+    const candidates = [...this.restartContinuations.values()].sort((first, second) => {
+      const firstForeground = first.projectPath === selection.activeProjectKey &&
+        first.sessionFile === selection.activeSessionKey
+      const secondForeground = second.projectPath === selection.activeProjectKey &&
+        second.sessionFile === selection.activeSessionKey
+      if (firstForeground !== secondForeground) return firstForeground ? -1 : 1
+      return first.capturedAt - second.capturedAt
+    })
+
+    try {
+      for (const candidate of candidates) {
+        const workspace = this.state.projects.find(({ path }) => path === candidate.projectPath)
+        const pointer = (this.sessionPointersByProject.get(candidate.projectPath) ?? []).find(
+          (stored) => stored.sessionFile === candidate.sessionFile &&
+            stored.sessionId === candidate.sessionId
+        )
+        if (workspace === undefined || pointer === undefined) {
+          await this.discardRestartContinuation(candidate)
+          continue
+        }
+
+        let projectTrust: boolean | undefined | null = null
+        try {
+          projectTrust = await this.restartProjectTrust(workspace)
+        } catch {
+          continue
+        }
+        if (projectTrust === null) continue
+
+        this.loadRestartRecoveryWorkspace(workspace, pointer)
+        try {
+          await this.beginLaunch(async () => {
+            await this.launch(
+              workspace,
+              projectTrust === undefined
+                ? { sessionFile: pointer.sessionFile }
+                : { sessionFile: pointer.sessionFile, projectTrust },
+              pointer.sessionId,
+              true,
+              false
+            )
+          })
+        } catch {
+          // Trust-blocked records remain pending. Once claim succeeds, every launch
+          // or prompt failure is fail-closed and never retries automatically.
+        }
+      }
+    } finally {
+      this.restoreRestartRecoverySelection(selection)
+    }
   }
 
   /**
@@ -695,10 +857,23 @@ export class WorkbenchKernel {
       throw new Error(`Runtime workspace is already registered: ${task.path}`)
     }
     await this.beginProjectChange(async () => {
+      const staleTaskPaths = new Set(
+        this.state.projects
+          .filter((workspace) =>
+            workspaceKind(workspace) === 'task' &&
+            this.projectNavigationState(workspace.path).sessions.length === 0
+          )
+          .map(({ path }) => path)
+      )
+      for (const path of staleTaskPaths) {
+        this.sessionPointersByProject.delete(path)
+        this.sessionActivityByProject.delete(path)
+        this.sessionStatisticsByProject.delete(path)
+      }
       this.state = {
         ...this.state,
         projects: [
-          ...this.state.projects,
+          ...this.state.projects.filter(({ path }) => !staleTaskPaths.has(path)),
           { path: task.path, workspaceKind: 'task', taskKey: task.taskKey }
         ]
       }
@@ -825,7 +1000,8 @@ export class WorkbenchKernel {
       workspaceKind(selectedWorkspace) === 'task' &&
       (
         this.state.activeSessionKey !== null ||
-        this.sessionPointers.some(({ projectPath }) => projectPath === selectedWorkspace.path)
+        this.sessionPointers.some(({ projectPath }) => projectPath === selectedWorkspace.path) ||
+        Array.from(this.contexts).some(({ projectPath }) => projectPath === selectedWorkspace.path)
       )
     ) {
       throw new Error('A Task already owns its Session; create another Task instead.')
@@ -1230,6 +1406,12 @@ export class WorkbenchKernel {
       }
       const navigatedState: KernelState = {
         ...target.context.state,
+        session: {
+          ...target.context.state.session,
+          openAiFastMode: openAiFastModeFromSessionEntries(
+            sessionEntriesOnActivePath(entriesResult.entries, navigation.leafId)
+          )
+        },
         conversation: {
           entries: target.context.state.conversation.entries.slice(0, targetIndex),
           activeRunStartIndex: null
@@ -1286,10 +1468,11 @@ export class WorkbenchKernel {
         if (statisticsResult.type !== 'session-statistics') {
           throw new Error('Runtime did not return forked session statistics.')
         }
-        const session = toKernelSession(
+        let session = toKernelSession(
           stateResult.state,
           true,
-          toKernelSessionUsage(statisticsResult.statistics, stateResult.state.model?.contextWindow)
+          toKernelSessionUsage(statisticsResult.statistics, stateResult.state.model?.contextWindow),
+          false
         )
         const sessionFile = stringValue(stateResult.state.sessionFile)
         if (
@@ -1302,7 +1485,8 @@ export class WorkbenchKernel {
         ) {
           throw new Error('Runtime did not return a distinct forked session identity.')
         }
-        assertSessionStatisticsIdentity(statisticsResult.statistics, sessionFile, session.id)
+        const sessionId = session.id
+        assertSessionStatisticsIdentity(statisticsResult.statistics, sessionFile, sessionId)
 
         const messagesResult = await target.runtime.send({ type: 'get_messages' })
         this.assertForkTarget(target)
@@ -1324,11 +1508,19 @@ export class WorkbenchKernel {
         if (modelsResult.type !== 'available-models') {
           throw new Error('Runtime did not return a forked model catalog.')
         }
+        const activeSessionEntries = sessionEntriesOnActivePath(
+          capabilitiesResult.entries,
+          capabilitiesResult.leafId
+        )
+        session = toKernelSession(
+          stateResult.state,
+          true,
+          toKernelSessionUsage(statisticsResult.statistics, stateResult.state.model?.contextWindow),
+          openAiFastModeFromSessionEntries(activeSessionEntries)
+        )
         const projectedMessages = mergeConversationEntries(
           projectMessages(messagesResult.messages),
-          projectSessionEntries(
-            sessionEntriesOnActivePath(capabilitiesResult.entries, capabilitiesResult.leafId)
-          )
+          projectSessionEntries(activeSessionEntries)
         )
         const commands = createCommandCatalog(commandsResult.commands, true)
         const advisor = projectAdvisorState(capabilitiesResult.entries)
@@ -1339,14 +1531,14 @@ export class WorkbenchKernel {
         const pointer = await this.validateSession({
           projectPath: target.projectPath,
           sessionFile,
-          sessionId: session.id,
+          sessionId,
           sessionName: session.name
         })
         this.assertForkTarget(target)
         if (
           pointer.projectPath !== target.projectPath ||
           pointer.sessionFile === target.pointer.sessionFile ||
-          pointer.sessionId !== session.id ||
+          pointer.sessionId !== sessionId ||
           pointer.sessionId === target.pointer.sessionId
         ) {
           throw new Error('Forked session validation returned a mismatched identity.')
@@ -2045,6 +2237,7 @@ export class WorkbenchKernel {
   }
 
   private beginLaunch(task: () => Promise<void>): Promise<void> {
+    if (this.shutdownRequested) throw new Error('Runtime shutdown is in progress.')
     if (this.projectChangeOperation !== null) {
       throw new Error('Cannot launch a runtime while a project change is in progress.')
     }
@@ -2099,7 +2292,8 @@ export class WorkbenchKernel {
     project: { path: string },
     launchOptions: { sessionFile?: string, projectTrust?: boolean },
     expectedSessionId?: string,
-    projectTrustPreflighted = false
+    projectTrustPreflighted = false,
+    persistSessionActivation = true
   ): Promise<void> {
     this.assertLaunchActive()
     const projectTrust = projectTrustPreflighted
@@ -2109,6 +2303,23 @@ export class WorkbenchKernel {
     const resolvedLaunchOptions = projectTrust === undefined
       ? launchOptions
       : { ...launchOptions, projectTrust }
+    const restartContinuation = launchOptions.sessionFile === undefined
+      ? undefined
+      : [...this.restartContinuations.values()].find(
+          (candidate) => candidate.projectPath === project.path &&
+            candidate.sessionFile === launchOptions.sessionFile
+        )
+    let claimedRestartContinuation: RestartContinuationCandidate | null = null
+    if (restartContinuation !== undefined) {
+      if (expectedSessionId !== restartContinuation.sessionId) {
+        throw new Error('Restart continuation identity does not match the requested Session.')
+      }
+      await this.claimRestartContinuation(restartContinuation.id)
+      this.restartContinuations.delete(restartContinuation.id)
+      claimedRestartContinuation = restartContinuation
+    }
+
+    try {
     const previousContext = this.activeContext
     const previousState = copyState(this.state)
     this.captureActiveContext()
@@ -2180,7 +2391,11 @@ export class WorkbenchKernel {
       if (stateResult.type !== 'state') {
         throw new Error('Runtime returned an invalid startup projection.')
       }
-      let session = toKernelSession(stateResult.state, true)
+      const sessionFile = stringValue(stateResult.state.sessionFile)
+      if (sessionFile === null || !isAbsolute(sessionFile)) {
+        throw new Error('Runtime did not return an absolute session file.')
+      }
+      let session = toKernelSession(stateResult.state, true, null, false)
       if (session.id === null || session.id.length === 0) {
         throw new Error('Runtime did not return a session ID.')
       }
@@ -2189,9 +2404,10 @@ export class WorkbenchKernel {
           `Resumed session ID mismatch: expected ${expectedSessionId}, received ${session.id}.`
         )
       }
-      const sessionFile = stringValue(stateResult.state.sessionFile)
-      if (sessionFile === null || !isAbsolute(sessionFile)) {
-        throw new Error('Runtime did not return an absolute session file.')
+      if (launchOptions.sessionFile !== undefined && sessionFile !== launchOptions.sessionFile) {
+        throw new Error(
+          `Resumed session file mismatch: expected ${launchOptions.sessionFile}, received ${sessionFile}.`
+        )
       }
       const pointer: SessionPointer = {
         projectPath: project.path,
@@ -2217,11 +2433,14 @@ export class WorkbenchKernel {
       if (entriesResult.type !== 'entries') {
         throw new Error('Runtime returned invalid session entries.')
       }
+      const activeSessionEntries = sessionEntriesOnActivePath(
+        entriesResult.entries,
+        entriesResult.leafId
+      )
+      const openAiFastMode = openAiFastModeFromSessionEntries(activeSessionEntries)
       projectedMessages = mergeConversationEntries(
         projectedMessages,
-        projectSessionEntries(
-          sessionEntriesOnActivePath(entriesResult.entries, entriesResult.leafId)
-        )
+        projectSessionEntries(activeSessionEntries)
       )
       projectedMessages = mergeConversationEntries(
         projectedMessages,
@@ -2249,7 +2468,8 @@ export class WorkbenchKernel {
       session = toKernelSession(
         stateResult.state,
         true,
-        toKernelSessionUsage(statisticsResult.statistics, stateResult.state.model?.contextWindow)
+        toKernelSessionUsage(statisticsResult.statistics, stateResult.state.model?.contextWindow),
+        openAiFastMode
       )
       const stateAfterProjection = this.getState()
       if (stateAfterProjection.runtime.status === 'crashed') {
@@ -2294,7 +2514,7 @@ export class WorkbenchKernel {
       this.assertStartActive(runtime)
       this.launchCommitting = true
       try {
-        await this.persistSession(canonicalPointer)
+        if (persistSessionActivation) await this.persistSession(canonicalPointer)
         this.assertStartActive(runtime)
         this.sessionPointers = upsertSessionPointer(this.sessionPointers, canonicalPointer)
         await this.captureSessionMetadata(canonicalPointer, statistics)
@@ -2329,6 +2549,9 @@ export class WorkbenchKernel {
         )
         this.emitState()
         this.beginSessionNameGeneration()
+        if (claimedRestartContinuation !== null) {
+          await this.prompt(RESTART_CONTINUATION_PROMPT, [], canonicalPointer.sessionFile)
+        }
       } finally {
         this.launchCommitting = false
       }
@@ -2372,6 +2595,18 @@ export class WorkbenchKernel {
       }
       this.emitState()
       throw launchError
+    }
+    } finally {
+      if (
+        claimedRestartContinuation !== null &&
+        typeof this.completeRestartContinuation === 'function'
+      ) {
+        try {
+          await this.completeRestartContinuation(claimedRestartContinuation.id)
+        } catch {
+          // The durable claim already prevents replay; cleanup is best effort.
+        }
+      }
     }
   }
 
@@ -2536,6 +2771,26 @@ export class WorkbenchKernel {
     const runtime = this.requireRuntime('ready')
     await runtime.send({ type: 'set_thinking_level', level })
     await this.refreshSessionState(runtime)
+  }
+
+  async setOpenAiFastMode(enabled: boolean): Promise<void> {
+    if (typeof enabled !== 'boolean') throw new Error('OpenAI Fast mode must be a boolean.')
+    const runtime = this.requireRuntime('ready')
+    const context = this.activeContext
+    if (context === null || context.runtime !== runtime) {
+      throw new Error('Active runtime context is unavailable.')
+    }
+    if (this.state.session.openAiFastMode === enabled) return
+
+    await this.applyOpenAiFastMode(runtime, enabled)
+    if (this.activeContext !== context || this.runtime !== runtime) {
+      throw new Error('OpenAI Fast mode update cancelled because the active session changed.')
+    }
+    this.state = {
+      ...this.state,
+      session: { ...this.state.session, openAiFastMode: enabled }
+    }
+    this.emitState()
   }
 
   async setAdvisorSystemEnabled(enabled: boolean): Promise<void> {
@@ -2828,7 +3083,8 @@ export class WorkbenchKernel {
         session: toKernelSession(
           stateResult.state,
           this.state.session.resumeAvailable,
-          this.state.session.usage
+          this.state.session.usage,
+          this.state.session.openAiFastMode
         ),
         conversation: settleConversationRun(this.state.conversation)
       })
@@ -2972,11 +3228,23 @@ export class WorkbenchKernel {
   }
 
   private requireRuntime(status: RuntimeStatus): RuntimeHost {
+    if (this.shutdownRequested) throw new Error('Runtime shutdown is in progress.')
     if (this.state.runtime.status !== status) {
       throw new Error(`Runtime must be ${status}; current status is ${this.state.runtime.status}.`)
     }
     if (this.runtime === null) throw new Error('Runtime is unavailable.')
     return this.runtime
+  }
+
+  private async applyOpenAiFastMode(runtime: RuntimeHost, enabled: boolean): Promise<void> {
+    const result = await runtime.send({
+      type: 'invoke_extension_command',
+      name: OPENAI_FAST_MODE_COMMAND_NAME,
+      args: buildOpenAiFastModeCommandArgs(enabled)
+    })
+    if (result.type !== 'accepted') {
+      throw new Error('Runtime did not accept the OpenAI Fast mode update.')
+    }
   }
 
   private async refreshSessionState(runtime: RuntimeHost): Promise<void> {
@@ -2988,7 +3256,8 @@ export class WorkbenchKernel {
       session: toKernelSession(
         result.state,
         this.state.session.resumeAvailable,
-        this.state.session.usage
+        this.state.session.usage,
+        this.state.session.openAiFastMode
       )
     }
     this.emitState()
@@ -3087,7 +3356,8 @@ export class WorkbenchKernel {
     const session = toKernelSession(
       result.state,
       this.state.session.resumeAvailable,
-      this.state.session.usage
+      this.state.session.usage,
+      this.state.session.openAiFastMode
     )
     const sessionFile = stringValue(result.state.sessionFile)
     if (session.id === null || sessionFile === null || !isAbsolute(sessionFile)) {
@@ -3152,6 +3422,7 @@ export class WorkbenchKernel {
   }
 
   private beginProjectChange(task: () => Promise<void>): Promise<void> {
+    if (this.shutdownRequested) throw new Error('Runtime shutdown is in progress.')
     if (this.projectChangeOperation !== null) {
       throw new Error('A project change is already in progress.')
     }
@@ -3713,7 +3984,12 @@ export class WorkbenchKernel {
       const stateResult = await context.runtime.send({ type: 'get_state' })
       this.assertCompactionIdentity(context, lifecycle, identity)
       if (stateResult.type !== 'state') throw new Error('Runtime did not return session state.')
-      const projectedSession = toKernelSession(stateResult.state, context.state.session.resumeAvailable)
+      const projectedSession = toKernelSession(
+        stateResult.state,
+        context.state.session.resumeAvailable,
+        null,
+        context.state.session.openAiFastMode
+      )
       const sessionFile = stringValue(stateResult.state.sessionFile)
       if (projectedSession.id !== identity.sessionId || sessionFile !== identity.sessionKey) {
         throw new Error('Runtime returned compacted state for a different session.')
@@ -3752,7 +4028,12 @@ export class WorkbenchKernel {
       const nextContextState: KernelState = {
         ...context.state,
         session: {
-          ...toKernelSession(stateResult.state, context.state.session.resumeAvailable, usage),
+          ...toKernelSession(
+            stateResult.state,
+            context.state.session.resumeAvailable,
+            usage,
+            context.state.session.openAiFastMode
+          ),
           compaction: null
         },
         conversation: {
@@ -4785,6 +5066,118 @@ export class WorkbenchKernel {
 
   private touchWarmUse(context: RuntimeContext): void {
     context.lastWarmUseAt = this.now()
+  }
+
+  private async restartProjectTrust(
+    workspace: KernelProjectState
+  ): Promise<boolean | undefined | null> {
+    if (workspaceKind(workspace) === 'task') return true
+    const inspection = await this.projectTrust.inspect(workspace.path)
+    return inspection.requiresDecision && inspection.decision === null ? null : undefined
+  }
+
+  private loadRestartRecoveryWorkspace(
+    workspace: KernelProjectState,
+    pointer: SessionPointer
+  ): void {
+    const shared = this.state
+    this.captureActiveContext()
+    this.clearActiveRuntimeProjection()
+    this.sessionPointers = this.sessionPointersByProject.get(workspace.path) ?? []
+    this.sessionActivityAtByKey =
+      this.sessionActivityByProject.get(workspace.path) ?? new Map<string, number | null>()
+    this.sessionStatisticsByKey =
+      this.sessionStatisticsByProject.get(workspace.path) ??
+      new Map<string, KernelSessionStatistics | null>()
+    this.sessionActivityByProject.set(workspace.path, this.sessionActivityAtByKey)
+    this.sessionStatisticsByProject.set(workspace.path, this.sessionStatisticsByKey)
+    this.state = {
+      ...initialKernelState(
+        { projects: shared.projects, activeProjectKey: workspace.path },
+        { sessions: this.sessionPointers, activeSessionKey: pointer.sessionFile },
+        this.sessionActivityAtByKey,
+        this.sessionStatisticsByKey,
+        shared.sessionNaming,
+        shared.appearance,
+        shared.general,
+        shared.subagent,
+        shared.shortcuts,
+        shared.extensions
+      ),
+      navigatorKind: workspaceKind(workspace)
+    }
+  }
+
+  private restoreRestartRecoverySelection(selection: RestartRecoverySelection): void {
+    const shared = this.state
+    this.captureActiveContext()
+    const managed = selection.activeProjectKey === null || selection.activeSessionKey === null
+      ? null
+      : this.contextBySessionKey.get(
+          contextKey(selection.activeProjectKey, selection.activeSessionKey)
+        ) ?? null
+    if (managed !== null) {
+      this.loadContext(managed)
+      this.state = { ...this.state, navigatorKind: selection.navigatorKind }
+      return
+    }
+
+    this.clearActiveRuntimeProjection()
+    const workspace = selection.activeProjectKey === null
+      ? null
+      : shared.projects.find(({ path }) => path === selection.activeProjectKey) ?? null
+    this.sessionPointers = workspace === null
+      ? []
+      : this.sessionPointersByProject.get(workspace.path) ?? []
+    this.sessionActivityAtByKey = workspace === null
+      ? new Map()
+      : this.sessionActivityByProject.get(workspace.path) ?? new Map()
+    this.sessionStatisticsByKey = workspace === null
+      ? new Map()
+      : this.sessionStatisticsByProject.get(workspace.path) ?? new Map()
+    const activeSessionKey = selection.activeSessionKey !== null &&
+      this.sessionPointers.some(({ sessionFile }) => sessionFile === selection.activeSessionKey)
+      ? selection.activeSessionKey
+      : null
+    this.state = {
+      ...initialKernelState(
+        { projects: shared.projects, activeProjectKey: workspace?.path ?? null },
+        { sessions: this.sessionPointers, activeSessionKey },
+        this.sessionActivityAtByKey,
+        this.sessionStatisticsByKey,
+        shared.sessionNaming,
+        shared.appearance,
+        shared.general,
+        shared.subagent,
+        shared.shortcuts,
+        shared.extensions
+      ),
+      navigatorKind: selection.navigatorKind
+    }
+  }
+
+  private clearActiveRuntimeProjection(): void {
+    this.activeContext = null
+    this.runtime = null
+    this.unsubscribeRuntime = null
+    this.stopRequested = false
+    this.launchCommitting = false
+    this.provisionalSession = null
+    this.provisionalCommit = null
+    this.provisionalSettled = false
+    this.pendingSessionName = null
+    this.sessionNameOperation = null
+  }
+
+  private async discardRestartContinuation(
+    candidate: RestartContinuationCandidate
+  ): Promise<void> {
+    try {
+      await this.completeRestartContinuation(candidate.id)
+      this.restartContinuations.delete(candidate.id)
+    } catch {
+      // A stale record is harmless; keep it pending if durable cleanup failed.
+    }
   }
 
   private captureActiveContext(): void {
@@ -6168,14 +6561,16 @@ function copyGeneralSettings(settings: GeneralSettings): GeneralSettings {
   return {
     startupWorkspaceRestore: settings.startupWorkspaceRestore,
     doubleClickBorderMaximize: settings.doubleClickBorderMaximize,
-    fastExtensionLoading: settings.fastExtensionLoading
+    fastExtensionLoading: settings.fastExtensionLoading,
+    autoContinueInterruptedTasks: settings.autoContinueInterruptedTasks
   }
 }
 
 function sameGeneralSettings(first: GeneralSettings, second: GeneralSettings): boolean {
   return first.startupWorkspaceRestore === second.startupWorkspaceRestore &&
     first.doubleClickBorderMaximize === second.doubleClickBorderMaximize &&
-    first.fastExtensionLoading === second.fastExtensionLoading
+    first.fastExtensionLoading === second.fastExtensionLoading &&
+    first.autoContinueInterruptedTasks === second.autoContinueInterruptedTasks
 }
 
 function copySubagentSettings(settings: SubagentSettings): SubagentSettings {
@@ -6246,7 +6641,8 @@ function assertGeneralSettings(value: GeneralSettings): void {
   if (
     (value.startupWorkspaceRestore !== 'restore' && value.startupWorkspaceRestore !== 'none') ||
     typeof value.doubleClickBorderMaximize !== 'boolean' ||
-    typeof value.fastExtensionLoading !== 'boolean'
+    typeof value.fastExtensionLoading !== 'boolean' ||
+    typeof value.autoContinueInterruptedTasks !== 'boolean'
   ) {
     throw new Error('Invalid general settings.')
   }

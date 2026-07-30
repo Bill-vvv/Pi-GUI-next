@@ -15,6 +15,7 @@ import {
   SET_SESSION_NAME_COMMAND_ID,
   SET_THINKING_COMMAND_ID
 } from './command-catalog.ts'
+import { OPENAI_FAST_MODE_COMMAND_NAME } from '../runtime/openai-fast-mode.ts'
 import { QUIESCENCE_COMMAND_NAME } from '../runtime/runtime-quiescence.ts'
 
 test('builds the typed GUI and Pi RPC command catalog', () => {
@@ -99,14 +100,21 @@ test('normalizes dynamic commands and keeps typed names authoritative', () => {
   assert.notStrictEqual(catalog[8]?.sourceInfo, reviewSourceInfo)
 })
 
-test('filters the internal runtime quiescence command from the user catalog', () => {
+test('filters app-owned internal runtime commands from the user catalog', () => {
   const catalog = createCommandCatalog([
     {
       name: QUIESCENCE_COMMAND_NAME,
       description: 'Internal only',
       source: 'extension',
       sourceInfo: { source: 'pi-gui-runtime-quiescence', scope: 'temporary', origin: 'top-level' }
+    },
+    {
+      name: OPENAI_FAST_MODE_COMMAND_NAME,
+      description: 'Internal only',
+      source: 'extension',
+      sourceInfo: { source: 'pi-gui-openai-fast-mode', scope: 'temporary', origin: 'top-level' }
     }
   ])
   assert.equal(catalog.some(({ name }) => name === QUIESCENCE_COMMAND_NAME), false)
+  assert.equal(catalog.some(({ name }) => name === OPENAI_FAST_MODE_COMMAND_NAME), false)
 })

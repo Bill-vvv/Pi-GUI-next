@@ -1,4 +1,4 @@
-import { access, chmod, mkdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, open, readFile, realpath, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
@@ -26,6 +26,10 @@ import {
   type ProjectSessionRegistry,
   type SessionPointer
 } from './session-pointer.ts'
+import type {
+  RestartContinuationCandidate,
+  RestartContinuationRecord
+} from './restart-continuation.ts'
 
 type ProjectConfigFileV1 = {
   version: 1
@@ -146,14 +150,33 @@ type ProjectConfigFileV11 = {
   subagent: SubagentSettings
 }
 
+type GeneralSettingsV13 = Omit<GeneralSettings, 'autoContinueInterruptedTasks'>
+type GeneralSettingsV14 = GeneralSettings
+type GeneralSettingsV15 = GeneralSettings & { openAiFastMode: boolean }
+
 type ProjectConfigFileV12 = Omit<ProjectConfigFileV11, 'version' | 'general'> & {
   version: 12
-  general: GeneralSettings
+  general: GeneralSettingsV13
 }
 
-type ProjectConfigFile = Omit<ProjectConfigFileV12, 'version' | 'appearance'> & {
+type ProjectConfigFileV13 = Omit<ProjectConfigFileV12, 'version' | 'appearance'> & {
   version: 13
   appearance: AppearanceSettings
+}
+
+type ProjectConfigFileV14 = Omit<ProjectConfigFileV13, 'version' | 'general'> & {
+  version: 14
+  general: GeneralSettingsV14
+}
+
+type ProjectConfigFileV15 = Omit<ProjectConfigFileV14, 'version' | 'general'> & {
+  version: 15
+  general: GeneralSettingsV15
+}
+
+type ProjectConfigFile = Omit<ProjectConfigFileV15, 'version' | 'general'> & {
+  version: 16
+  general: GeneralSettings
 }
 
 export type ProjectRegistry = {
@@ -177,6 +200,13 @@ type TaskStateFile = {
   tasks: TaskWorkspace[]
   activeTaskKey: string | null
   navigatorKind: 'project' | 'task'
+}
+
+type RestartContinuationFile = {
+  version: 1
+  /** Null only for a fresh orderly-shutdown snapshot not yet opened by a GUI boot. */
+  bootId: string | null
+  candidates: RestartContinuationRecord[]
 }
 
 type ProjectConfiguration = ProjectRegistry & {
@@ -239,6 +269,8 @@ export class ProjectStore {
   private readonly configFile: string
   private readonly stateFile: string
   private readonly taskStateFile: string
+  private readonly restartContinuationFile: string
+  private readonly restartContinuationBootId = randomUUID()
   private readonly taskRoot: string
   private saveQueue: Promise<void> = Promise.resolve()
 
@@ -251,6 +283,11 @@ export class ProjectStore {
     this.configFile = join(assertAbsolute(configHome, 'XDG config home'), 'pi-gui-next', 'config.json')
     this.stateFile = join(stateHome, 'pi-gui-next', 'state.json')
     this.taskStateFile = join(stateHome, 'pi-gui-next', 'tasks.json')
+    this.restartContinuationFile = join(
+      stateHome,
+      'pi-gui-next',
+      'restart-continuations.json'
+    )
     this.taskRoot = join(stateHome, 'pi-gui-next', 'tasks')
   }
 
@@ -329,6 +366,85 @@ export class ProjectStore {
 
   async loadGeneral(): Promise<GeneralSettings> {
     return copyGeneral((await this.readConfiguration()).general)
+  }
+
+  loadRestartContinuations(): Promise<RestartContinuationCandidate[]> {
+    return this.enqueueSave(async () => {
+      const state = await this.readRestartContinuationState()
+      if (state.bootId !== null && state.bootId !== this.restartContinuationBootId) {
+        // Pending work belongs only to the immediately following boot. If that boot
+        // exited or crashed before dispatch, never infer that it was still running.
+        await this.writeRestartContinuationState([], null)
+        return []
+      }
+      const pending = state.candidates.filter(({ status }) => status === 'pending')
+      if (pending.length === 0) {
+        await this.writeRestartContinuationState([], null)
+        return []
+      }
+      if (
+        state.bootId !== this.restartContinuationBootId ||
+        pending.length !== state.candidates.length
+      ) {
+        await this.writeRestartContinuationState(
+          pending,
+          this.restartContinuationBootId
+        )
+      }
+      return pending.map(copyRestartContinuationCandidate)
+    })
+  }
+
+  replaceRestartContinuations(
+    candidates: readonly RestartContinuationCandidate[]
+  ): Promise<void> {
+    const copied = candidates.map((candidate) => {
+      assertRestartContinuationCandidate(candidate)
+      return { ...copyRestartContinuationCandidate(candidate), status: 'pending' as const }
+    })
+    if (new Set(copied.map(({ id }) => id)).size !== copied.length) {
+      throw new Error('Restart continuation candidate IDs must be unique.')
+    }
+    if (new Set(copied.map(restartContinuationIdentity)).size !== copied.length) {
+      throw new Error('Restart continuation Session identities must be unique.')
+    }
+    return this.enqueueSave(() => this.writeRestartContinuationState(copied, null))
+  }
+
+  claimRestartContinuation(id: string): Promise<void> {
+    assertRestartContinuationId(id)
+    return this.enqueueSave(async () => {
+      const state = await this.readRestartContinuationState()
+      if (state.bootId !== this.restartContinuationBootId) {
+        throw new Error('Restart continuation candidate belongs to another GUI boot.')
+      }
+      const index = state.candidates.findIndex((candidate) => candidate.id === id)
+      if (index < 0 || state.candidates[index]?.status !== 'pending') {
+        throw new Error('Restart continuation candidate is unavailable or already claimed.')
+      }
+      const candidates = state.candidates.map((candidate, candidateIndex) =>
+        candidateIndex === index ? { ...candidate, status: 'claimed' as const } : candidate
+      )
+      await this.writeRestartContinuationState(candidates, this.restartContinuationBootId)
+    })
+  }
+
+  completeRestartContinuation(id: string): Promise<void> {
+    assertRestartContinuationId(id)
+    return this.enqueueSave(async () => {
+      const state = await this.readRestartContinuationState()
+      if (state.bootId !== this.restartContinuationBootId) {
+        throw new Error('Restart continuation candidate belongs to another GUI boot.')
+      }
+      await this.writeRestartContinuationState(
+        state.candidates.filter((candidate) => candidate.id !== id),
+        this.restartContinuationBootId
+      )
+    })
+  }
+
+  clearRestartContinuations(): Promise<void> {
+    return this.enqueueSave(() => this.writeRestartContinuationState([], null))
   }
 
   async loadShortcuts(): Promise<ShortcutSettings> {
@@ -482,6 +598,36 @@ export class ProjectStore {
     if (isProjectConfigFile(value)) {
       return copyConfiguration(value)
     }
+    if (isProjectConfigFileV15(value)) {
+      return {
+        ...copyRegistry(value),
+        sessionNaming: copySessionNaming(value.sessionNaming),
+        appearance: copyAppearance(value.appearance),
+        general: requireGeneral(value.general),
+        shortcuts: copyShortcutSettings(value.shortcuts),
+        subagent: copySubagent(value.subagent)
+      }
+    }
+    if (isProjectConfigFileV14(value)) {
+      return {
+        ...copyRegistry(value),
+        sessionNaming: copySessionNaming(value.sessionNaming),
+        appearance: copyAppearance(value.appearance),
+        general: requireGeneral(value.general),
+        shortcuts: copyShortcutSettings(value.shortcuts),
+        subagent: copySubagent(value.subagent)
+      }
+    }
+    if (isProjectConfigFileV13(value)) {
+      return {
+        ...copyRegistry(value),
+        sessionNaming: copySessionNaming(value.sessionNaming),
+        appearance: copyAppearance(value.appearance),
+        general: requireGeneral(value.general),
+        shortcuts: copyShortcutSettings(value.shortcuts),
+        subagent: copySubagent(value.subagent)
+      }
+    }
     if (isProjectConfigFileV12(value)) {
       return {
         ...copyRegistry(value),
@@ -499,7 +645,8 @@ export class ProjectStore {
         appearance: { ...DEFAULT_APPEARANCE_SETTINGS, ...value.appearance },
         general: {
           ...copyGeneralV11(value.general),
-          fastExtensionLoading: DEFAULT_GENERAL_SETTINGS.fastExtensionLoading
+          fastExtensionLoading: DEFAULT_GENERAL_SETTINGS.fastExtensionLoading,
+          autoContinueInterruptedTasks: DEFAULT_GENERAL_SETTINGS.autoContinueInterruptedTasks
         },
         shortcuts: copyShortcutSettings(value.shortcuts),
         subagent: copySubagent(value.subagent)
@@ -657,9 +804,10 @@ export class ProjectStore {
       this.loadProjects(),
       this.loadTasks()
     ])
+    const task = taskRegistry.tasks.find(({ path }) => path === pointer.projectPath)
     if (
       !registry.projects.some(({ path }) => path === pointer.projectPath) &&
-      !taskRegistry.tasks.some(({ path }) => path === pointer.projectPath)
+      task === undefined
     ) {
       throw new Error(`Project is not registered as a Project or Task Runtime workspace: ${pointer.projectPath}`)
     }
@@ -669,6 +817,13 @@ export class ProjectStore {
       throw new Error(`Session file is not a regular file: ${canonicalSessionFile}`)
     }
     await access(canonicalSessionFile, constants.R_OK)
+    if (task !== undefined) {
+      await validateTaskSessionIdentity(
+        canonicalSessionFile,
+        pointer.sessionId,
+        task.path
+      )
+    }
     return { ...pointer, sessionFile: canonicalSessionFile }
   }
 
@@ -798,6 +953,41 @@ export class ProjectStore {
     return copyTaskState(value)
   }
 
+  private async readRestartContinuationState(): Promise<RestartContinuationFile> {
+    let text: string
+    try {
+      text = await readFile(this.restartContinuationFile, 'utf8')
+    } catch (error) {
+      if (isNodeError(error) && error.code === 'ENOENT') {
+        return { version: 1, bootId: null, candidates: [] }
+      }
+      throw error
+    }
+
+    const value: unknown = JSON.parse(text)
+    if (!isRestartContinuationFile(value)) {
+      throw new Error(`Invalid Pi GUI restart continuation state: ${this.restartContinuationFile}`)
+    }
+    return copyRestartContinuationFile(value)
+  }
+
+  private async writeRestartContinuationState(
+    candidates: readonly RestartContinuationRecord[],
+    bootId: string | null
+  ): Promise<void> {
+    if (candidates.length === 0) {
+      await unlink(this.restartContinuationFile).catch((error: unknown) => {
+        if (!isNodeError(error) || error.code !== 'ENOENT') throw error
+      })
+      return
+    }
+    await writeJson(this.restartContinuationFile, {
+      version: 1,
+      bootId,
+      candidates: candidates.map(copyRestartContinuationRecord)
+    } satisfies RestartContinuationFile)
+  }
+
   private async readSessionState(): Promise<ProjectStateFile> {
     let text: string
     try {
@@ -840,6 +1030,40 @@ function xdgHome(name: 'XDG_CONFIG_HOME' | 'XDG_STATE_HOME', fallback: string): 
 function assertAbsolute(path: string, label: string): string {
   if (!isAbsolute(path)) throw new Error(`${label} must be an absolute path: ${path}`)
   return path
+}
+
+const MAX_SESSION_HEADER_BYTES = 16 * 1024
+
+async function validateTaskSessionIdentity(
+  sessionFile: string,
+  expectedSessionId: string,
+  taskPath: string
+): Promise<void> {
+  const handle = await open(sessionFile, 'r')
+  try {
+    const buffer = Buffer.allocUnsafe(MAX_SESSION_HEADER_BYTES)
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+    const text = buffer.toString('utf8', 0, bytesRead)
+    const headerEnd = text.indexOf('\n')
+    if (headerEnd <= 0) throw new Error('Invalid Pi Task session header.')
+
+    let header: unknown
+    try {
+      header = JSON.parse(text.slice(0, headerEnd)) as unknown
+    } catch {
+      throw new Error('Invalid Pi Task session header.')
+    }
+    if (
+      !isRecord(header) ||
+      header.type !== 'session' ||
+      header.id !== expectedSessionId ||
+      header.cwd !== taskPath
+    ) {
+      throw new Error('Pi Session does not belong to the selected Task workspace.')
+    }
+  } finally {
+    await handle.close()
+  }
 }
 
 function assertStrictPermutation(actual: string[], expected: string[], label: string): void {
@@ -978,6 +1202,66 @@ function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
   if (
     !isRecord(value) ||
     Object.keys(value).length !== 8 ||
+    value.version !== 16 ||
+    !Array.isArray(value.projects) ||
+    !value.projects.every(isProject) ||
+    new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
+    (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
+    !isSessionNaming(value.sessionNaming) ||
+    !isAppearance(value.appearance) ||
+    !isGeneral(value.general) ||
+    !isShortcutSettings(value.shortcuts) ||
+    !isSubagent(value.subagent)
+  ) {
+    return false
+  }
+  return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
+}
+
+function isProjectConfigFileV15(value: unknown): value is ProjectConfigFileV15 {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 8 ||
+    value.version !== 15 ||
+    !Array.isArray(value.projects) ||
+    !value.projects.every(isProject) ||
+    new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
+    (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
+    !isSessionNaming(value.sessionNaming) ||
+    !isAppearance(value.appearance) ||
+    !isGeneralV15(value.general) ||
+    !isShortcutSettings(value.shortcuts) ||
+    !isSubagent(value.subagent)
+  ) {
+    return false
+  }
+  return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
+}
+
+function isProjectConfigFileV14(value: unknown): value is ProjectConfigFileV14 {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 8 ||
+    value.version !== 14 ||
+    !Array.isArray(value.projects) ||
+    !value.projects.every(isProject) ||
+    new Set(value.projects.map(({ path }) => path)).size !== value.projects.length ||
+    (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
+    !isSessionNaming(value.sessionNaming) ||
+    !isAppearance(value.appearance) ||
+    !isGeneralV14(value.general) ||
+    !isShortcutSettings(value.shortcuts) ||
+    !isSubagent(value.subagent)
+  ) {
+    return false
+  }
+  return value.activeProjectKey === null || value.projects.some(({ path }) => path === value.activeProjectKey)
+}
+
+function isProjectConfigFileV13(value: unknown): value is ProjectConfigFileV13 {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 8 ||
     value.version !== 13 ||
     !Array.isArray(value.projects) ||
     !value.projects.every(isProject) ||
@@ -985,7 +1269,7 @@ function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
     (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
     !isSessionNaming(value.sessionNaming) ||
     !isAppearance(value.appearance) ||
-    !acceptsGeneral(value.general) ||
+    !isGeneralV13(value.general) ||
     !isShortcutSettings(value.shortcuts) ||
     !isSubagent(value.subagent)
   ) {
@@ -1005,7 +1289,7 @@ function isProjectConfigFileV12(value: unknown): value is ProjectConfigFileV12 {
     (typeof value.activeProjectKey !== 'string' && value.activeProjectKey !== null) ||
     !isSessionNaming(value.sessionNaming) ||
     !isAppearanceV8(value.appearance) ||
-    !acceptsGeneral(value.general) ||
+    !isGeneralV13(value.general) ||
     !isShortcutSettings(value.shortcuts) ||
     !isSubagent(value.subagent)
   ) {
@@ -1109,7 +1393,7 @@ function isProjectConfigFileV4(value: unknown): value is ProjectConfigFileV4 {
 
 function toProjectConfigFile(configuration: ProjectConfiguration): ProjectConfigFile {
   return {
-    version: 13,
+    version: 16,
     projects: configuration.projects.map((project) => ({ ...project })),
     activeProjectKey: configuration.activeProjectKey,
     sessionNaming: copySessionNaming(configuration.sessionNaming),
@@ -1160,7 +1444,8 @@ function copyGeneral(settings: GeneralSettings): GeneralSettings {
   return {
     startupWorkspaceRestore: settings.startupWorkspaceRestore,
     doubleClickBorderMaximize: settings.doubleClickBorderMaximize,
-    fastExtensionLoading: settings.fastExtensionLoading
+    fastExtensionLoading: settings.fastExtensionLoading,
+    autoContinueInterruptedTasks: settings.autoContinueInterruptedTasks
   }
 }
 
@@ -1206,6 +1491,29 @@ function assertGeneral(value: GeneralSettings): void {
 
 function isGeneral(value: unknown): value is GeneralSettings {
   return isRecord(value) &&
+    Object.keys(value).length === 4 &&
+    (value.startupWorkspaceRestore === 'restore' || value.startupWorkspaceRestore === 'none') &&
+    typeof value.doubleClickBorderMaximize === 'boolean' &&
+    typeof value.fastExtensionLoading === 'boolean' &&
+    typeof value.autoContinueInterruptedTasks === 'boolean'
+}
+
+function isGeneralV15(value: unknown): value is GeneralSettingsV15 {
+  return isRecord(value) &&
+    Object.keys(value).length === 5 &&
+    (value.startupWorkspaceRestore === 'restore' || value.startupWorkspaceRestore === 'none') &&
+    typeof value.doubleClickBorderMaximize === 'boolean' &&
+    typeof value.fastExtensionLoading === 'boolean' &&
+    typeof value.openAiFastMode === 'boolean' &&
+    typeof value.autoContinueInterruptedTasks === 'boolean'
+}
+
+function isGeneralV14(value: unknown): value is GeneralSettingsV14 {
+  return isGeneral(value)
+}
+
+function isGeneralV13(value: unknown): value is GeneralSettingsV13 {
+  return isRecord(value) &&
     Object.keys(value).length === 3 &&
     (value.startupWorkspaceRestore === 'restore' || value.startupWorkspaceRestore === 'none') &&
     typeof value.doubleClickBorderMaximize === 'boolean' &&
@@ -1244,10 +1552,21 @@ function isLegacyGeneralWithBorderFlag(value: unknown): value is LegacyGeneralWi
 
 function normalizeGeneral(value: unknown): GeneralSettings | null {
   if (isGeneral(value)) return copyGeneral(value)
+  if (isGeneralV15(value)) {
+    const { openAiFastMode: _retiredOpenAiFastMode, ...general } = value
+    return general
+  }
+  if (isGeneralV13(value)) {
+    return {
+      ...value,
+      autoContinueInterruptedTasks: DEFAULT_GENERAL_SETTINGS.autoContinueInterruptedTasks
+    }
+  }
   if (isGeneralV11(value)) {
     return {
       ...copyGeneralV11(value),
-      fastExtensionLoading: DEFAULT_GENERAL_SETTINGS.fastExtensionLoading
+      fastExtensionLoading: DEFAULT_GENERAL_SETTINGS.fastExtensionLoading,
+      autoContinueInterruptedTasks: DEFAULT_GENERAL_SETTINGS.autoContinueInterruptedTasks
     }
   }
   if (isLegacyGeneralWithBorderFlag(value)) {
@@ -1257,14 +1576,16 @@ function normalizeGeneral(value: unknown): GeneralSettings | null {
     return {
       startupWorkspaceRestore: value.startupWorkspaceRestore,
       doubleClickBorderMaximize: enabled,
-      fastExtensionLoading: DEFAULT_GENERAL_SETTINGS.fastExtensionLoading
+      fastExtensionLoading: DEFAULT_GENERAL_SETTINGS.fastExtensionLoading,
+      autoContinueInterruptedTasks: DEFAULT_GENERAL_SETTINGS.autoContinueInterruptedTasks
     }
   }
   if (isLegacyGeneral(value)) {
     return {
       startupWorkspaceRestore: value.startupWorkspaceRestore,
       doubleClickBorderMaximize: DEFAULT_GENERAL_SETTINGS.doubleClickBorderMaximize,
-      fastExtensionLoading: DEFAULT_GENERAL_SETTINGS.fastExtensionLoading
+      fastExtensionLoading: DEFAULT_GENERAL_SETTINGS.fastExtensionLoading,
+      autoContinueInterruptedTasks: DEFAULT_GENERAL_SETTINGS.autoContinueInterruptedTasks
     }
   }
   return null
@@ -1388,6 +1709,90 @@ function assertTaskKey(value: string): void {
 function isTaskKey(value: unknown): value is string {
   return typeof value === 'string' &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value)
+}
+
+function copyRestartContinuationCandidate(
+  candidate: RestartContinuationCandidate
+): RestartContinuationCandidate {
+  return {
+    id: candidate.id,
+    projectPath: candidate.projectPath,
+    sessionFile: candidate.sessionFile,
+    sessionId: candidate.sessionId,
+    capturedAt: candidate.capturedAt
+  }
+}
+
+function copyRestartContinuationRecord(
+  record: RestartContinuationRecord
+): RestartContinuationRecord {
+  return {
+    ...copyRestartContinuationCandidate(record),
+    status: record.status
+  }
+}
+
+function copyRestartContinuationFile(file: RestartContinuationFile): RestartContinuationFile {
+  return {
+    version: 1,
+    bootId: file.bootId,
+    candidates: file.candidates.map(copyRestartContinuationRecord)
+  }
+}
+
+function assertRestartContinuationId(id: string): void {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(id)) {
+    throw new Error('Invalid restart continuation candidate ID.')
+  }
+}
+
+function assertRestartContinuationCandidate(candidate: RestartContinuationCandidate): void {
+  if (!isRestartContinuationCandidate(candidate)) {
+    throw new Error('Invalid restart continuation candidate.')
+  }
+}
+
+function isRestartContinuationCandidate(
+  value: unknown
+): value is RestartContinuationCandidate {
+  if (!isRecord(value) || Object.keys(value).length !== 5) return false
+  if (typeof value.id !== 'string') return false
+  try {
+    assertRestartContinuationId(value.id)
+  } catch {
+    return false
+  }
+  return typeof value.projectPath === 'string' && isAbsolute(value.projectPath) &&
+    typeof value.sessionFile === 'string' && isAbsolute(value.sessionFile) &&
+    typeof value.sessionId === 'string' && value.sessionId.length > 0 && value.sessionId.length <= 256 &&
+    typeof value.capturedAt === 'number' &&
+    Number.isSafeInteger(value.capturedAt) &&
+    value.capturedAt >= 0
+}
+
+function isRestartContinuationRecord(value: unknown): value is RestartContinuationRecord {
+  if (!isRecord(value) || Object.keys(value).length !== 6) return false
+  const { status, ...candidate } = value
+  return (status === 'pending' || status === 'claimed') &&
+    isRestartContinuationCandidate(candidate)
+}
+
+function restartContinuationIdentity(candidate: RestartContinuationCandidate): string {
+  return `${candidate.projectPath}\u0000${candidate.sessionFile}\u0000${candidate.sessionId}`
+}
+
+function isRestartContinuationFile(value: unknown): value is RestartContinuationFile {
+  return isRecord(value) &&
+    Object.keys(value).length === 3 &&
+    value.version === 1 &&
+    (value.bootId === null || (
+      typeof value.bootId === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value.bootId)
+    )) &&
+    Array.isArray(value.candidates) &&
+    value.candidates.every(isRestartContinuationRecord) &&
+    new Set(value.candidates.map((candidate) => candidate.id)).size === value.candidates.length &&
+    new Set(value.candidates.map(restartContinuationIdentity)).size === value.candidates.length
 }
 
 function isTaskStateFile(value: unknown, taskRoot: string): value is TaskStateFile {

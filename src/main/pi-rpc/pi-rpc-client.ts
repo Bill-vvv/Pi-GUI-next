@@ -7,6 +7,10 @@ import type {
   ThinkingLevel,
   ThinkingLevelMap
 } from '../../shared/kernel-contract.ts'
+import {
+  OPENAI_FAST_MODE_ENTRY_TYPE,
+  parseOpenAiFastModeEntryData
+} from '../../../extensions/pi-gui-openai-fast-mode/src/protocol.mjs'
 import { isRecord } from '../utils/guards.ts'
 import { LfJsonlParser, type JsonlParseBatch } from './jsonl-framing.ts'
 
@@ -14,8 +18,6 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
 const DEFAULT_ABORT_TIMEOUT_MS = 120_000
 const DEFAULT_COMPACT_TIMEOUT_MS = 120_000
 const MAX_ENTRY_ID_LENGTH = 512
-const MAX_EXTENSION_COMMAND_NAME_LENGTH = 256
-const MAX_EXTENSION_COMMAND_ARGS_LENGTH = 64 * 1024
 const MAX_EXTENSION_EVENT_CHANNELS = 32
 const MAX_EXTENSION_EVENT_CHANNEL_LENGTH = 256
 export const PI_RPC_EXTENSION_EVENT_MAX_RECORD_BYTES = 256 * 1024
@@ -131,7 +133,10 @@ export type PiRpcSessionEntry = {
   parentId: string | null
   type: string
   timestamp: string
-  customType?: typeof ADVISOR_CAPABILITY_CUSTOM_TYPE | typeof MAGIC_CONTEXT_CUSTOM_TYPE
+  customType?:
+    | typeof ADVISOR_CAPABILITY_CUSTOM_TYPE
+    | typeof MAGIC_CONTEXT_CUSTOM_TYPE
+    | typeof OPENAI_FAST_MODE_ENTRY_TYPE
   data?: unknown
   message?: {
     role: string
@@ -246,7 +251,6 @@ type PiRpcCommandName =
   | 'get_available_models'
   | 'compact'
   | 'set_session_name'
-  | 'invoke_extension_command'
   | 'subscribe_extension_events'
   | 'get_extensions'
 
@@ -517,32 +521,6 @@ export class PiRpcClient {
 
   async setSessionName(name: string, timeoutMs = this.requestTimeoutMs): Promise<void> {
     await this.request({ type: 'set_session_name', name }, false, timeoutMs)
-  }
-
-  async invokeExtensionCommand(
-    name: string,
-    args?: string,
-    timeoutMs = this.requestTimeoutMs
-  ): Promise<void> {
-    const validatedName = validateIdentifier(
-      name,
-      'Pi RPC extension command name',
-      MAX_EXTENSION_COMMAND_NAME_LENGTH
-    )
-    const validatedArgs = validateExtensionCommandArgs(args)
-    const data = await this.request(
-      {
-        type: 'invoke_extension_command',
-        name: validatedName,
-        ...(args === undefined ? {} : { args: validatedArgs })
-      },
-      false,
-      timeoutMs,
-      true
-    )
-    if (data !== undefined) {
-      throw new Error('Invalid Pi RPC invoke_extension_command response')
-    }
   }
 
   async subscribeExtensionEvents(
@@ -913,8 +891,12 @@ function normalizePiRpcTreeResult(value: unknown): PiRpcTreeResult {
 
 function projectPiRpcTreeEntry(value: unknown): PiRpcSessionEntry {
   const entry = normalizePiRpcSessionEntry(value)
-  if (entry.customType === ADVISOR_CAPABILITY_CUSTOM_TYPE && 'data' in entry) {
-    const { data: _privateCapabilityData, ...projected } = entry
+  if (
+    (entry.customType === ADVISOR_CAPABILITY_CUSTOM_TYPE ||
+      entry.customType === OPENAI_FAST_MODE_ENTRY_TYPE) &&
+    'data' in entry
+  ) {
+    const { data: _privateInternalData, ...projected } = entry
     return projected
   }
   return entry
@@ -1010,17 +992,6 @@ function validateIdentifier(value: unknown, label: string, maxLength: number): s
   if (value.length > maxLength) throw new Error(`${label} exceeds maximum length of ${maxLength}`)
   if (value.trim() !== value || CONTROL_CHARACTER_PATTERN.test(value)) {
     throw new Error(`${label} is malformed`)
-  }
-  return value
-}
-
-function validateExtensionCommandArgs(value: unknown): string {
-  if (value === undefined) return ''
-  if (typeof value !== 'string') throw new Error('Pi RPC extension command args must be a string')
-  if (value.length > MAX_EXTENSION_COMMAND_ARGS_LENGTH) {
-    throw new Error(
-      `Pi RPC extension command args exceed maximum length of ${MAX_EXTENSION_COMMAND_ARGS_LENGTH}`
-    )
   }
   return value
 }
@@ -1168,7 +1139,8 @@ function normalizePiRpcSessionEntry(value: unknown): PiRpcSessionEntry {
     value.type === 'custom' &&
     (
       value.customType === ADVISOR_CAPABILITY_CUSTOM_TYPE ||
-      value.customType === MAGIC_CONTEXT_CUSTOM_TYPE
+      value.customType === MAGIC_CONTEXT_CUSTOM_TYPE ||
+      value.customType === OPENAI_FAST_MODE_ENTRY_TYPE
     )
   ) {
     return {
@@ -1176,7 +1148,9 @@ function normalizePiRpcSessionEntry(value: unknown): PiRpcSessionEntry {
       customType: value.customType,
       data: value.customType === MAGIC_CONTEXT_CUSTOM_TYPE
         ? normalizeMagicContextData(value.data)
-        : value.data
+        : value.customType === OPENAI_FAST_MODE_ENTRY_TYPE
+          ? normalizeOpenAiFastModeEntryData(value.data)
+          : value.data
     }
   }
   if (value.type !== 'message') {
@@ -1196,6 +1170,12 @@ function normalizePiRpcSessionEntry(value: unknown): PiRpcSessionEntry {
       content: normalizeUserContent(value.message.content)
     }
   }
+}
+
+function normalizeOpenAiFastModeEntryData(value: unknown): { enabled: boolean } {
+  const enabled = parseOpenAiFastModeEntryData(value)
+  if (enabled === null) throw new Error('Invalid Pi RPC get_entries response')
+  return { enabled }
 }
 
 function normalizeMagicContextData(value: unknown): unknown {

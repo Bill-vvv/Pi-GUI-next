@@ -3,6 +3,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import test from 'node:test'
+import { OPENAI_FAST_MODE_ENTRY_TYPE } from '../../../extensions/pi-gui-openai-fast-mode/src/protocol.mjs'
 import {
   PI_RPC_EXTENSION_EVENT_MAX_RECORD_BYTES,
   PI_RPC_TREE_MAX_DEPTH,
@@ -953,10 +954,18 @@ test('gets normalized entries without retaining image or non-user payloads', asy
           }
         },
         {
-          id: 'unrelated-custom-1',
+          id: 'fast-mode-1',
           parentId: 'advisor-capability-1',
           type: 'custom',
           timestamp: '2026-07-24T01:00:04.000Z',
+          customType: OPENAI_FAST_MODE_ENTRY_TYPE,
+          data: { enabled: true }
+        },
+        {
+          id: 'unrelated-custom-1',
+          parentId: 'fast-mode-1',
+          type: 'custom',
+          timestamp: '2026-07-24T01:00:05.000Z',
           customType: 'third-party/private',
           data: { secret: 'do-not-retain' }
         },
@@ -964,7 +973,7 @@ test('gets normalized entries without retaining image or non-user payloads', asy
           id: 'magic-context-status-1',
           parentId: 'unrelated-custom-1',
           type: 'custom',
-          timestamp: '2026-07-24T01:00:05.000Z',
+          timestamp: '2026-07-24T01:00:06.000Z',
           customType: 'ctx-status',
           data: {
             title: 'Dream complete',
@@ -1016,16 +1025,24 @@ test('gets normalized entries without retaining image or non-user payloads', asy
         }
       },
       {
-        id: 'unrelated-custom-1',
+        id: 'fast-mode-1',
         parentId: 'advisor-capability-1',
         type: 'custom',
-        timestamp: '2026-07-24T01:00:04.000Z'
+        timestamp: '2026-07-24T01:00:04.000Z',
+        customType: OPENAI_FAST_MODE_ENTRY_TYPE,
+        data: { enabled: true }
+      },
+      {
+        id: 'unrelated-custom-1',
+        parentId: 'fast-mode-1',
+        type: 'custom',
+        timestamp: '2026-07-24T01:00:05.000Z'
       },
       {
         id: 'magic-context-status-1',
         parentId: 'unrelated-custom-1',
         type: 'custom',
-        timestamp: '2026-07-24T01:00:05.000Z',
+        timestamp: '2026-07-24T01:00:06.000Z',
         customType: 'ctx-status',
         data: {
           title: 'Dream complete',
@@ -1043,6 +1060,17 @@ test('gets normalized entries without retaining image or non-user payloads', asy
 test('rejects malformed get_entries responses and unknown user content blocks', async () => {
   const invalidData = [
     { entries: [], leafId: 1 },
+    {
+      entries: [{
+        id: 'fast-mode-1',
+        parentId: null,
+        type: 'custom',
+        timestamp: 'now',
+        customType: OPENAI_FAST_MODE_ENTRY_TYPE,
+        data: { enabled: 'yes' }
+      }],
+      leafId: 'fast-mode-1'
+    },
     {
       entries: [{ id: '', parentId: null, type: 'message', timestamp: 'now', message: { role: 'user', content: '' } }],
       leafId: null
@@ -1114,14 +1142,12 @@ test('forks an exact entry ID and validates the fork response', async () => {
   await assert.rejects(malformed, /Invalid Pi RPC fork response/)
 })
 
-test('maps the P3 tree and extension commands with exact wire payloads and projected results', async () => {
+test('maps the P3 tree and extension event commands with exact wire payloads and projected results', async () => {
   const fake = createFakeProcess()
   const client = new PiRpcClient(fake.child)
 
   const tree = client.getTree()
   const navigate = client.navigateTree('树/leaf•')
-  const invoke = client.invokeExtensionCommand('扩展/status', 'alpha beta')
-  const invokeWithoutArgs = client.invokeExtensionCommand('status')
   const subscribe = client.subscribeExtensionEvents(['频道/status', '频道/status', 'other'])
   const requests = readRequests(fake.stdin) as Array<Record<string, unknown> & {
     id: string
@@ -1131,8 +1157,6 @@ test('maps the P3 tree and extension commands with exact wire payloads and proje
   assert.deepEqual(requests.map(({ id: _id, ...request }) => request), [
     { type: 'get_tree' },
     { type: 'navigate_tree', targetEntryId: '树/leaf•' },
-    { type: 'invoke_extension_command', name: '扩展/status', args: 'alpha beta' },
-    { type: 'invoke_extension_command', name: 'status' },
     { type: 'subscribe_extension_events', channels: ['频道/status', 'other'] }
   ])
 
@@ -1175,9 +1199,7 @@ test('maps the P3 tree and extension commands with exact wire payloads and proje
     leafId: 'root',
     editorText: 'restored draft'
   })
-  respondSuccess(fake, requests[2]!)
-  respondSuccess(fake, requests[3]!)
-  respondSuccess(fake, requests[4]!, { channels: ['频道/status', 'other'] })
+  respondSuccess(fake, requests[2]!, { channels: ['频道/status', 'other'] })
 
   const treeResult = await tree
   assert.deepEqual(treeResult, {
@@ -1221,16 +1243,13 @@ test('maps the P3 tree and extension commands with exact wire payloads and proje
     leafId: 'root',
     editorText: 'restored draft'
   })
-  await Promise.all([invoke, invokeWithoutArgs])
   assert.deepEqual(await subscribe, ['频道/status', 'other'])
 })
 
-test('accepts exact Pi identity, command args, and channel bounds and rejects the next value', async () => {
+test('accepts exact Pi identity and channel bounds and rejects the next value', async () => {
   const fake = createFakeProcess()
   const client = new PiRpcClient(fake.child)
   const target = `树${'x'.repeat(511)}`
-  const commandName = `命${'x'.repeat(255)}`
-  const args = 'a'.repeat(65_536)
   const channel = `频${'x'.repeat(255)}`
   const channels = [channel, ...Array.from({ length: 31 }, (_, index) => `channel-${index}`)]
 
@@ -1247,16 +1266,6 @@ test('accepts exact Pi identity, command args, and channel bounds and rejects th
   })
   await navigate
 
-  const invoke = client.invokeExtensionCommand(commandName, args)
-  const [invokeRequest] = readRequests(fake.stdin) as Array<Record<string, unknown> & {
-    id: string
-    type: string
-  }>
-  assert.equal((invokeRequest?.name as string).length, 256)
-  assert.equal((invokeRequest?.args as string).length, 65_536)
-  respondSuccess(fake, invokeRequest!)
-  await invoke
-
   const subscribe = client.subscribeExtensionEvents(channels)
   const [subscribeRequest] = readRequests(fake.stdin) as Array<Record<string, unknown> & {
     id: string
@@ -1271,14 +1280,6 @@ test('accepts exact Pi identity, command args, and channel bounds and rejects th
   for (const value of invalidIdentifiers) {
     await assert.rejects(client.navigateTree(value), /tree target entry ID/u)
   }
-  const invalidNames = ['', ' bad ', 'bad\u007fname', 'x'.repeat(257)]
-  for (const value of invalidNames) {
-    await assert.rejects(client.invokeExtensionCommand(value), /extension command name/u)
-  }
-  await assert.rejects(
-    client.invokeExtensionCommand('valid', 'x'.repeat(65_537)),
-    /args exceed maximum length/u
-  )
   await assert.rejects(
     client.subscribeExtensionEvents(Array.from({ length: 33 }, (_, index) => `channel-${index}`)),
     /channel count exceeds maximum/u
@@ -1318,14 +1319,6 @@ test('strictly validates P3 response command identities and result shapes', asyn
         data: { targetEntryId: 'other', cancelled: false, leafId: null }
       }),
       error: /Invalid Pi RPC navigate_tree response/u
-    },
-    {
-      start: (client) => client.invokeExtensionCommand('status'),
-      response: (request) => ({
-        type: 'response', id: request.id, command: 'invoke_extension_command', success: true,
-        data: {}
-      }),
-      error: /Invalid Pi RPC invoke_extension_command response/u
     },
     {
       start: (client) => client.subscribeExtensionEvents(['status']),

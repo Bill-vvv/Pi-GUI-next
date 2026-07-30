@@ -70,6 +70,7 @@ appendFileSync(${JSON.stringify(environmentLog)}, JSON.stringify({
   nodeOptions: process.env.NODE_OPTIONS,
   notificationSocket: process.env.PI_GUI_NOTIFICATION_SOCKET,
   notificationToken: process.env.PI_GUI_NOTIFICATION_TOKEN,
+  openAiFastMode: process.env.PI_GUI_OPENAI_FAST_MODE,
   argv: process.argv.slice(2)
 }) + '\\n')
 let input = ''
@@ -97,12 +98,14 @@ process.stdin.on('data', (chunk) => {
   const inheritedJitiTryNative = process.env.JITI_TRY_NATIVE
   const inheritedNotificationSocket = process.env.PI_GUI_NOTIFICATION_SOCKET
   const inheritedNotificationToken = process.env.PI_GUI_NOTIFICATION_TOKEN
+  const inheritedOpenAiFastMode = process.env.PI_GUI_OPENAI_FAST_MODE
   process.env.PI_SUBAGENT_MAX_DEPTH = '9'
   process.env.PI_PARALLEL_EXTENSION_IMPORTS = '1'
   process.env.PI_NATIVE_COMPILED_EXTENSION_IMPORTS = '1'
   process.env.JITI_TRY_NATIVE = '0'
   process.env.PI_GUI_NOTIFICATION_SOCKET = '/tmp/inherited-notification.sock'
   process.env.PI_GUI_NOTIFICATION_TOKEN = 'inherited-notification-token-that-must-be-removed'
+  process.env.PI_GUI_OPENAI_FAST_MODE = '1'
   t.after(() => {
     if (inheritedDepth === undefined) delete process.env.PI_SUBAGENT_MAX_DEPTH
     else process.env.PI_SUBAGENT_MAX_DEPTH = inheritedDepth
@@ -119,6 +122,8 @@ process.stdin.on('data', (chunk) => {
     else process.env.PI_GUI_NOTIFICATION_SOCKET = inheritedNotificationSocket
     if (inheritedNotificationToken === undefined) delete process.env.PI_GUI_NOTIFICATION_TOKEN
     else process.env.PI_GUI_NOTIFICATION_TOKEN = inheritedNotificationToken
+    if (inheritedOpenAiFastMode === undefined) delete process.env.PI_GUI_OPENAI_FAST_MODE
+    else process.env.PI_GUI_OPENAI_FAST_MODE = inheritedOpenAiFastMode
   })
 
   const inheritedRuntime = new LinuxLocalRuntime({
@@ -152,6 +157,7 @@ process.stdin.on('data', (chunk) => {
       nodeOptions?: string
       notificationSocket?: string
       notificationToken?: string
+      openAiFastMode?: string
       argv: string[]
     })
   assert.deepEqual(launches.map(({ depth }) => depth), ['9', '2'])
@@ -166,6 +172,10 @@ process.stdin.on('data', (chunk) => {
   assert.deepEqual(
     launches.map(({ notificationToken }) => notificationToken),
     [undefined, notificationToken]
+  )
+  assert.deepEqual(
+    launches.map(({ openAiFastMode }) => openAiFastMode),
+    [undefined, undefined]
   )
   assert.equal(launches.some(({ argv }) => argv.some((argument) => argument.includes('subagent'))), false)
 })
@@ -344,7 +354,7 @@ process.stdin.on('data', (chunk) => {
   ])
 })
 
-test('runtime forwards P3 tree and extension commands and isolates extension events', async (t) => {
+test('runtime maps app Extension commands to Pi prompt and isolates extension events', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'pi-runtime-tree-extension-'))
   t.after(async () => rm(directory, { recursive: true, force: true }))
   const executable = join(directory, 'pi')
@@ -472,7 +482,7 @@ process.stdin.on('data', (chunk) => {
   assert.deepEqual(requests.slice(-4), [
     { type: 'get_tree' },
     { type: 'navigate_tree', targetEntryId: 'root' },
-    { type: 'invoke_extension_command', name: 'status', args: 'server-a' },
+    { type: 'prompt', message: '/status server-a' },
     { type: 'subscribe_extension_events', channels: ['status/v1'] }
   ])
 })
@@ -545,7 +555,6 @@ appendFileSync(${JSON.stringify(launchLog)}, String(process.pid) + '\\n')
 const unsupported = new Set([
   'get_tree',
   'navigate_tree',
-  'invoke_extension_command',
   'subscribe_extension_events'
 ])
 let input = ''
@@ -585,7 +594,6 @@ process.stdin.on('data', (chunk) => {
   const commands = [
     { type: 'get_tree' as const },
     { type: 'navigate_tree' as const, targetEntryId: 'root' },
-    { type: 'invoke_extension_command' as const, name: 'status' },
     { type: 'subscribe_extension_events' as const, channels: ['status/v1'] }
   ]
   for (const command of commands) {
@@ -596,6 +604,10 @@ process.stdin.on('data', (chunk) => {
     assert.equal(runtime.getRpcPid(), pidBefore)
     assert.equal(runtime.getState().lastError, null)
   }
+  assert.deepEqual(
+    await runtime.send({ type: 'invoke_extension_command', name: 'status' }),
+    { type: 'accepted' }
+  )
   assert.deepEqual(await runtime.send({ type: 'get_messages' }), {
     type: 'messages',
     messages: []
@@ -613,8 +625,8 @@ process.stdin.on('data', (chunk) => {
     { type: 'get_state' },
     { type: 'get_tree' },
     { type: 'navigate_tree', targetEntryId: 'root' },
-    { type: 'invoke_extension_command', name: 'status' },
     { type: 'subscribe_extension_events', channels: ['status/v1'] },
+    { type: 'prompt', message: '/status' },
     { type: 'get_messages' }
   ])
 })

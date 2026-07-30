@@ -44,6 +44,10 @@ import type {
   RuntimeHostEvent,
   RuntimeHostState
 } from '../runtime/runtime-host.ts'
+import {
+  OPENAI_FAST_MODE_COMMAND_NAME,
+  OPENAI_FAST_MODE_ENTRY_TYPE
+} from '../runtime/openai-fast-mode.ts'
 import type {
   RuntimeHibernateLeaseResult,
   RuntimeQuiescenceQueryResult
@@ -795,8 +799,9 @@ test('advisor system toggle gates capability and refreshes the confirmed state',
   assert.equal(kernel.getState().advisor.systemEnabled, true)
 })
 
-test('advisor commands require strict boolean payloads', () => {
+test('boolean toggle commands require strict payloads', () => {
   for (const type of [
+    'kernel.set-openai-fast-mode',
     'kernel.set-advisor-system-enabled',
     'kernel.set-advisor-extension-enabled'
   ] as const) {
@@ -1385,31 +1390,49 @@ test('general settings default to restore and update only after persistence succ
   assert.deepEqual(kernel.getState().general, {
     startupWorkspaceRestore: 'restore',
     doubleClickBorderMaximize: true,
-    fastExtensionLoading: false
+    fastExtensionLoading: false,
+    autoContinueInterruptedTasks: false
   })
   await kernel.setGeneral({
     startupWorkspaceRestore: 'none',
     doubleClickBorderMaximize: true,
-    fastExtensionLoading: false
+    fastExtensionLoading: false,
+    autoContinueInterruptedTasks: false
   })
   assert.deepEqual(persisted, [{
     startupWorkspaceRestore: 'none',
     doubleClickBorderMaximize: true,
-    fastExtensionLoading: false
+    fastExtensionLoading: false,
+    autoContinueInterruptedTasks: false
   }])
   assert.deepEqual(kernel.getState().general, {
     startupWorkspaceRestore: 'none',
     doubleClickBorderMaximize: true,
-    fastExtensionLoading: false
+    fastExtensionLoading: false,
+    autoContinueInterruptedTasks: false
   })
   await assert.rejects(
     kernel.setGeneral({
       startupWorkspaceRestore: 'invalid',
       doubleClickBorderMaximize: true,
-      fastExtensionLoading: false
+      fastExtensionLoading: false,
+      autoContinueInterruptedTasks: false
     } as unknown as GeneralSettings),
     /Invalid general settings/
   )
+  await kernel.setGeneral({
+    startupWorkspaceRestore: 'none',
+    doubleClickBorderMaximize: true,
+    fastExtensionLoading: false,
+    autoContinueInterruptedTasks: true
+  })
+  assert.deepEqual(persisted[1], {
+    startupWorkspaceRestore: 'none',
+    doubleClickBorderMaximize: true,
+    fastExtensionLoading: false,
+    autoContinueInterruptedTasks: true
+  })
+  assert.equal(kernel.getState().general.autoContinueInterruptedTasks, true)
 })
 
 test('general settings can toggle double-click border maximize', async () => {
@@ -1428,25 +1451,27 @@ test('general settings can toggle double-click border maximize', async () => {
   await kernel.setGeneral({
     startupWorkspaceRestore: 'restore',
     doubleClickBorderMaximize: false,
-    fastExtensionLoading: false
+    fastExtensionLoading: false,
+    autoContinueInterruptedTasks: false
   })
   assert.deepEqual(persisted, [{
     startupWorkspaceRestore: 'restore',
     doubleClickBorderMaximize: false,
-    fastExtensionLoading: false
+    fastExtensionLoading: false,
+    autoContinueInterruptedTasks: false
   }])
   assert.equal(kernel.getState().general.doubleClickBorderMaximize, false)
 })
 
-test('fast extension loading is snapshotted only when a runtime is created', async () => {
+test('Runtime launch settings are snapshotted only when a Runtime is created', async () => {
   const runtimes = [
     new FakeRuntimeHost(),
     new FakeRuntimeHost({ sessionId: 'session-2', sessionFile: '/tmp/session-2.jsonl' })
   ]
-  const launches: boolean[] = []
+  const launches: Array<{ fastExtensionLoading: boolean }> = []
   const kernel = new WorkbenchKernel(
     (_project, launchOptions) => {
-      launches.push(launchOptions.fastExtensionLoading)
+      launches.push({ fastExtensionLoading: launchOptions.fastExtensionLoading })
       const runtime = runtimes.shift()
       assert.ok(runtime)
       return runtime
@@ -1459,12 +1484,384 @@ test('fast extension loading is snapshotted only when a runtime is created', asy
   await kernel.setGeneral({
     startupWorkspaceRestore: 'restore',
     doubleClickBorderMaximize: true,
-    fastExtensionLoading: true
+    fastExtensionLoading: true,
+    autoContinueInterruptedTasks: false
   })
-  assert.deepEqual(launches, [false])
+  assert.deepEqual(launches, [{ fastExtensionLoading: false }])
 
   await kernel.start()
-  assert.deepEqual(launches, [false, true])
+  assert.deepEqual(launches, [
+    { fastExtensionLoading: false },
+    { fastExtensionLoading: true }
+  ])
+})
+
+test('orderly shutdown captures every exact running persisted Session and excludes Ask waits', async () => {
+  const firstPointer: SessionPointer = {
+    projectPath: '/tmp/first-project',
+    sessionFile: '/tmp/first-session.jsonl',
+    sessionId: 'first-session',
+    sessionName: 'First'
+  }
+  const secondPointer: SessionPointer = {
+    projectPath: '/tmp/second-project',
+    sessionFile: '/tmp/second-session.jsonl',
+    sessionId: 'second-session',
+    sessionName: 'Second'
+  }
+  const firstRuntime = new FakeRuntimeHost({
+    sessionId: firstPointer.sessionId,
+    sessionFile: firstPointer.sessionFile,
+    sessionName: 'First',
+    thinkingLevel: 'medium',
+    isStreaming: false,
+    messageCount: 0,
+    pendingMessageCount: 0
+  })
+  const secondRuntime = new FakeRuntimeHost({
+    sessionId: secondPointer.sessionId,
+    sessionFile: secondPointer.sessionFile,
+    sessionName: 'Second',
+    thinkingLevel: 'medium',
+    isStreaming: false,
+    messageCount: 0,
+    pendingMessageCount: 0
+  })
+  const registries = new Map<string, ProjectSessionRegistry>([
+    [firstPointer.projectPath, sessionRegistry(firstPointer)],
+    [secondPointer.projectPath, sessionRegistry(secondPointer)]
+  ])
+  const kernel = new WorkbenchKernel(
+    (project) => project.path === firstPointer.projectPath ? firstRuntime : secondRuntime,
+    {
+      projects: [{ path: firstPointer.projectPath }, { path: secondPointer.projectPath }],
+      activeProjectKey: firstPointer.projectPath
+    },
+    {
+      ...kernelOptions(firstPointer),
+      sessionRegistriesByProject: registries,
+      general: {
+        startupWorkspaceRestore: 'restore',
+        doubleClickBorderMaximize: true,
+        fastExtensionLoading: false,
+        autoContinueInterruptedTasks: true
+      },
+      now: () => 1_700_000_000_000
+    }
+  )
+
+  await kernel.activateSession(firstPointer.sessionFile)
+  await kernel.prompt('Run first task')
+  await kernel.activateProject(
+    secondPointer.projectPath,
+    sessionRegistry(secondPointer)
+  )
+  await kernel.activateSession(secondPointer.sessionFile)
+  await kernel.prompt('Run second task')
+
+  const captured = kernel.captureRestartContinuations()
+  assert.deepEqual(captured.map(({ id: _id, capturedAt, ...identity }) => ({
+    ...identity,
+    capturedAt
+  })), [
+    {
+      projectPath: secondPointer.projectPath,
+      sessionFile: secondPointer.sessionFile,
+      sessionId: secondPointer.sessionId,
+      capturedAt: 1_700_000_000_000
+    },
+    {
+      projectPath: firstPointer.projectPath,
+      sessionFile: firstPointer.sessionFile,
+      sessionId: firstPointer.sessionId,
+      capturedAt: 1_700_000_000_000
+    }
+  ])
+
+  secondRuntime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'tool_execution_start',
+      toolCallId: 'ask-restart',
+      toolName: 'ask',
+      args: {
+        questions: [{
+          id: 'confirm',
+          prompt: 'Continue?',
+          type: 'single',
+          options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }]
+        }]
+      }
+    }
+  })
+  secondRuntime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'extension_ui_request',
+      id: 'ask-restart-ui',
+      method: 'select',
+      title: 'Ask · Continue?',
+      options: ['Yes', 'No', '其他（自行输入）']
+    }
+  })
+
+  assert.deepEqual(
+    kernel.captureRestartContinuations().map(({ projectPath, sessionFile, sessionId }) => ({
+      projectPath,
+      sessionFile,
+      sessionId
+    })),
+    [{
+      projectPath: firstPointer.projectPath,
+      sessionFile: firstPointer.sessionFile,
+      sessionId: firstPointer.sessionId
+    }]
+  )
+})
+
+test('startup resumes all claimed Sessions once without changing the foreground selection', async () => {
+  const firstPointer: SessionPointer = {
+    projectPath: '/tmp/first-project',
+    sessionFile: '/tmp/first-session.jsonl',
+    sessionId: 'first-session',
+    sessionName: 'First'
+  }
+  const secondPointer: SessionPointer = {
+    projectPath: '/tmp/second-project',
+    sessionFile: '/tmp/second-session.jsonl',
+    sessionId: 'second-session',
+    sessionName: 'Second'
+  }
+  const blockedPointer: SessionPointer = {
+    projectPath: '/tmp/blocked-project',
+    sessionFile: '/tmp/blocked-session.jsonl',
+    sessionId: 'blocked-session',
+    sessionName: 'Blocked'
+  }
+  const firstRuntime = new FakeRuntimeHost({
+    sessionId: firstPointer.sessionId,
+    sessionFile: firstPointer.sessionFile,
+    sessionName: 'First',
+    thinkingLevel: 'medium',
+    isStreaming: false,
+    messageCount: 1,
+    pendingMessageCount: 0
+  })
+  const secondRuntime = new FakeRuntimeHost({
+    sessionId: secondPointer.sessionId,
+    sessionFile: secondPointer.sessionFile,
+    sessionName: 'Second',
+    thinkingLevel: 'medium',
+    isStreaming: false,
+    messageCount: 1,
+    pendingMessageCount: 0
+  })
+  const claimed: string[] = []
+  const completed: string[] = []
+  const createdProjects: string[] = []
+  const persisted: SessionPointer[] = []
+  const firstId = '11111111-1111-4111-8111-111111111111'
+  const secondId = '22222222-2222-4222-8222-222222222222'
+  const blockedId = '33333333-3333-4333-8333-333333333333'
+  const candidates = [
+    { ...firstPointer, id: firstId, capturedAt: 1_700_000_000_000 },
+    { ...secondPointer, id: secondId, capturedAt: 1_700_000_000_001 },
+    { ...blockedPointer, id: blockedId, capturedAt: 1_700_000_000_002 }
+  ].map(({ sessionName: _sessionName, ...candidate }) => candidate)
+  const registries = new Map<string, ProjectSessionRegistry>([
+    [firstPointer.projectPath, sessionRegistry(firstPointer)],
+    [secondPointer.projectPath, sessionRegistry(secondPointer)],
+    [blockedPointer.projectPath, sessionRegistry(blockedPointer)]
+  ])
+  const kernel = new WorkbenchKernel(
+    (project) => {
+      createdProjects.push(project.path)
+      if (project.path === firstPointer.projectPath) return firstRuntime
+      if (project.path === secondPointer.projectPath) return secondRuntime
+      throw new Error('A project requiring a trust decision must not start automatically.')
+    },
+    {
+      projects: [
+        { path: firstPointer.projectPath },
+        { path: secondPointer.projectPath },
+        { path: blockedPointer.projectPath }
+      ],
+      activeProjectKey: firstPointer.projectPath
+    },
+    {
+      ...kernelOptions(firstPointer, persisted),
+      sessionRegistriesByProject: registries,
+      general: {
+        startupWorkspaceRestore: 'restore',
+        doubleClickBorderMaximize: true,
+        fastExtensionLoading: false,
+        autoContinueInterruptedTasks: true
+      },
+      restartContinuations: candidates,
+      claimRestartContinuation: async (id) => {
+        const projectPath = id === firstId
+          ? firstPointer.projectPath
+          : secondPointer.projectPath
+        assert.equal(createdProjects.includes(projectPath), false)
+        claimed.push(id)
+      },
+      completeRestartContinuation: async (id) => {
+        completed.push(id)
+      },
+      projectTrust: {
+        inspect: async (projectPath) => ({
+          requiresDecision: projectPath === blockedPointer.projectPath,
+          decision: null
+        }),
+        persist: async () => {}
+      }
+    }
+  )
+
+  await kernel.resumeInterruptedSessions()
+
+  assert.deepEqual(claimed, [firstId, secondId])
+  assert.deepEqual(completed, [firstId, secondId])
+  assert.equal(persisted.length, 0)
+  assert.equal(firstRuntime.startCalls, 1)
+  assert.equal(secondRuntime.startCalls, 1)
+  for (const runtime of [firstRuntime, secondRuntime]) {
+    const prompt = runtime.commands.find((command) => command.type === 'prompt')
+    assert.equal(prompt?.type, 'prompt')
+    assert.match(prompt?.type === 'prompt' ? prompt.message : '', /GUI 重启/)
+  }
+  const state = kernel.getState()
+  assert.equal(state.activeProjectKey, firstPointer.projectPath)
+  assert.equal(state.activeSessionKey, firstPointer.sessionFile)
+  assert.equal(state.runtime.status, 'running')
+  assert.deepEqual(
+    state.projects.map(({ path, busySessionCount }) => ({ path, busySessionCount })),
+    [
+      { path: firstPointer.projectPath, busySessionCount: 1 },
+      { path: secondPointer.projectPath, busySessionCount: 1 },
+      { path: blockedPointer.projectPath, busySessionCount: 0 }
+    ]
+  )
+  assert.equal(claimed.includes(blockedId), false)
+})
+
+test('background restart continuation preserves a blank startup foreground', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/background-restart',
+    sessionFile: '/tmp/background-restart.jsonl',
+    sessionId: 'background-restart',
+    sessionName: 'Background restart'
+  }
+  const candidateId = '55555555-5555-4555-8555-555555555555'
+  const runtime = new FakeRuntimeHost({
+    sessionId: pointer.sessionId,
+    sessionFile: pointer.sessionFile,
+    isStreaming: false,
+    messageCount: 1,
+    pendingMessageCount: 0
+  })
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: pointer.projectPath }], activeProjectKey: null },
+    {
+      ...kernelOptions(),
+      sessionRegistriesByProject: new Map([
+        [pointer.projectPath, sessionRegistry(pointer)]
+      ]),
+      general: {
+        startupWorkspaceRestore: 'none',
+        doubleClickBorderMaximize: true,
+        fastExtensionLoading: false,
+        autoContinueInterruptedTasks: true
+      },
+      restartContinuations: [{
+        id: candidateId,
+        projectPath: pointer.projectPath,
+        sessionFile: pointer.sessionFile,
+        sessionId: pointer.sessionId,
+        capturedAt: 1_700_000_000_000
+      }]
+    }
+  )
+
+  await kernel.resumeInterruptedSessions()
+
+  const state = kernel.getState()
+  assert.equal(state.activeProjectKey, null)
+  assert.equal(state.activeSessionKey, null)
+  assert.equal(state.runtime.status, 'stopped')
+  assert.equal(state.projects[0]?.busySessionCount, 1)
+  assert.equal(runtime.startCalls, 1)
+  assert.equal(runtime.commands.some(({ type }) => type === 'prompt'), true)
+})
+
+test('a claimed restart continuation never retries after Runtime launch failure', async () => {
+  class FailingRestartRuntime extends FakeRuntimeHost {
+    override async start(): Promise<void> {
+      this.startCalls += 1
+      throw new Error('restart launch failed')
+    }
+  }
+
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/restart-failure',
+    sessionFile: '/tmp/restart-failure.jsonl',
+    sessionId: 'restart-failure',
+    sessionName: 'Restart failure'
+  }
+  const candidateId = '44444444-4444-4444-8444-444444444444'
+  const runtime = new FailingRestartRuntime({
+    sessionId: pointer.sessionId,
+    sessionFile: pointer.sessionFile,
+    isStreaming: false,
+    messageCount: 1,
+    pendingMessageCount: 0
+  })
+  const claimed: string[] = []
+  const completed: string[] = []
+  let runtimeCreations = 0
+  const kernel = new WorkbenchKernel(
+    () => {
+      runtimeCreations += 1
+      return runtime
+    },
+    { projects: [{ path: pointer.projectPath }], activeProjectKey: pointer.projectPath },
+    {
+      ...kernelOptions(pointer),
+      sessionRegistriesByProject: new Map([
+        [pointer.projectPath, sessionRegistry(pointer)]
+      ]),
+      general: {
+        startupWorkspaceRestore: 'restore',
+        doubleClickBorderMaximize: true,
+        fastExtensionLoading: false,
+        autoContinueInterruptedTasks: true
+      },
+      restartContinuations: [{
+        id: candidateId,
+        projectPath: pointer.projectPath,
+        sessionFile: pointer.sessionFile,
+        sessionId: pointer.sessionId,
+        capturedAt: 1_700_000_000_000
+      }],
+      claimRestartContinuation: async (id) => {
+        assert.equal(runtimeCreations, 0)
+        claimed.push(id)
+      },
+      completeRestartContinuation: async (id) => {
+        completed.push(id)
+      }
+    }
+  )
+
+  await kernel.resumeInterruptedSessions()
+  await kernel.resumeInterruptedSessions()
+
+  assert.deepEqual(claimed, [candidateId])
+  assert.deepEqual(completed, [candidateId])
+  assert.equal(runtimeCreations, 1)
+  assert.equal(runtime.startCalls, 1)
+  assert.equal(runtime.commands.some(({ type }) => type === 'prompt'), false)
 })
 
 test('subagent settings update only after strict persistence succeeds', async () => {
@@ -1659,6 +2056,56 @@ test('exposes a normalized model catalog and keeps model selection typed', async
     thinkingLevelMap: {},
     contextWindow: null
   })
+})
+
+test('restores and toggles Session-scoped OpenAI Fast mode without prompting', async () => {
+  const runtime = new FakeRuntimeHost({
+    sessionId: 'session-1',
+    sessionFile: '/tmp/session-1.jsonl',
+    model: { id: 'gpt-5.6', provider: 'openai-codex' },
+    isStreaming: false
+  }, [], [], undefined, undefined, [
+    {
+      type: 'session',
+      id: 'root',
+      parentId: null,
+      timestamp: '2026-08-10T10:00:00.000Z',
+      cwd: '/tmp/project'
+    },
+    {
+      type: 'custom',
+      id: 'fast-on',
+      parentId: 'root',
+      timestamp: '2026-08-10T10:00:01.000Z',
+      customType: OPENAI_FAST_MODE_ENTRY_TYPE,
+      data: { enabled: true }
+    }
+  ], 'fast-on')
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+
+  await kernel.start()
+  assert.equal(kernel.getState().session.openAiFastMode, true)
+
+  await kernel.setOpenAiFastMode(false)
+  assert.deepEqual(runtime.commands.at(-1), {
+    type: 'invoke_extension_command',
+    name: OPENAI_FAST_MODE_COMMAND_NAME,
+    args: 'off'
+  })
+  assert.equal(kernel.getState().session.openAiFastMode, false)
+  assert.equal(runtime.commands.some(({ type }) => type === 'prompt'), false)
+
+  await kernel.setOpenAiFastMode(true)
+  assert.deepEqual(runtime.commands.at(-1), {
+    type: 'invoke_extension_command',
+    name: OPENAI_FAST_MODE_COMMAND_NAME,
+    args: 'on'
+  })
+  assert.equal(kernel.getState().session.openAiFastMode, true)
 })
 
 test('refreshes session usage after an assistant message reports usage', async () => {
@@ -6027,6 +6474,33 @@ test('resume session ID mismatch preserves the pointer and cleans up the runtime
   assert.equal(kernel.getState().runtime.status, 'crashed')
 })
 
+test('resume session file mismatch preserves the pointer and cleans up the runtime', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/stored-session.jsonl',
+    sessionId: 'stored-session',
+    sessionName: 'Stored session'
+  }
+  const persisted: SessionPointer[] = []
+  const runtime = new FakeRuntimeHost({
+    sessionId: pointer.sessionId,
+    sessionFile: '/tmp/different-session.jsonl'
+  })
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions(pointer, persisted)
+  )
+
+  await assert.rejects(kernel.resumeSession(), /session file mismatch/i)
+
+  assert.equal(runtime.stopCalls, 1)
+  assert.deepEqual(persisted, [])
+  assert.equal(kernel.getState().session.id, pointer.sessionId)
+  assert.equal(kernel.getState().session.resumeAvailable, true)
+  assert.equal(kernel.getState().runtime.status, 'crashed')
+})
+
 test('a crashed kernel without a pointer can explicitly start an additional runtime', async () => {
   const firstRuntime = new FakeRuntimeHost()
   const secondRuntime = new FakeRuntimeHost({
@@ -6307,6 +6781,28 @@ test('project switching preserves managed runtime ownership', async () => {
   assert.equal(kernel.getState().runtime.status, 'running')
 })
 
+test('adding a Task prunes stale empty Task workspaces from Kernel state', async () => {
+  const kernel = new WorkbenchKernel(
+    () => new FakeRuntimeHost(),
+    { projects: [], activeProjectKey: null },
+    kernelOptions()
+  )
+
+  await kernel.addTask(
+    { path: '/tmp/pi-gui-tasks/stale-task', taskKey: 'stale-task' },
+    sessionRegistry(null)
+  )
+  await kernel.addTask(
+    { path: '/tmp/pi-gui-tasks/current-task', taskKey: 'current-task' },
+    sessionRegistry(null)
+  )
+
+  assert.deepEqual(kernel.getState().projects.map(({ path, taskKey }) => ({ path, taskKey })), [{
+    path: '/tmp/pi-gui-tasks/current-task',
+    taskKey: 'current-task'
+  }])
+})
+
 test('new Task starts one hidden provisional Session and repeated starts stay idempotent', async () => {
   const runtime = new FakeRuntimeHost({
     sessionId: 'new-task-provisional',
@@ -6347,6 +6843,52 @@ test('new Task starts one hidden provisional Session and repeated starts stay id
   assert.equal(kernel.getState().activeSessionKey, provisionalKey)
   assert.equal(kernel.getState().sessions[0]?.provisional, true)
   assert.deepEqual(kernel.getState().projects[0]?.sessions, [])
+})
+
+test('reselecting a Task with an unregistered background Runtime cannot create a second Session', async () => {
+  const firstRuntime = new FakeRuntimeHost({
+    sessionId: 'task-background-session',
+    sessionFile: '/tmp/task-background-session.jsonl',
+    isStreaming: false
+  })
+  const duplicateRuntime = new FakeRuntimeHost({
+    sessionId: 'task-duplicate-session',
+    sessionFile: '/tmp/task-duplicate-session.jsonl',
+    isStreaming: false
+  })
+  const runtimes = [firstRuntime, duplicateRuntime]
+  const kernel = new WorkbenchKernel(
+    () => {
+      const runtime = runtimes.shift()
+      assert.ok(runtime)
+      return runtime
+    },
+    { projects: [], activeProjectKey: null },
+    {
+      ...kernelOptions(),
+      validateSession: async () => {
+        throw fileError('ENOENT', 'session file not written yet')
+      }
+    }
+  )
+
+  await kernel.addTask(
+    { path: '/tmp/pi-gui-tasks/background-task', taskKey: 'background-task' },
+    sessionRegistry(null)
+  )
+  await kernel.start()
+  await kernel.prompt('Keep this Task Runtime in the background')
+  await kernel.selectEmptyNavigator('project')
+  await kernel.activateTask('background-task', sessionRegistry(null))
+
+  const taskWorkspace = kernel.getState().projects.find(({ taskKey }) =>
+    taskKey === 'background-task'
+  )
+  assert.equal(taskWorkspace?.sessions?.length, 1)
+  await assert.rejects(kernel.start(), /Task already owns its Session/)
+  assert.equal(firstRuntime.startCalls, 1)
+  assert.equal(duplicateRuntime.startCalls, 0)
+  assert.equal(taskWorkspace?.sessions?.[0]?.id, 'task-background-session')
 })
 
 test('Task activation uses isolated workspace identity and preserves background Runtime ownership', async () => {
@@ -10694,7 +11236,28 @@ test('reactivating a reclaimed runtime relaunches the same identity from the tra
       sessionFile: hibernatePointer.sessionFile,
       sessionName: hibernatePointer.sessionName ?? undefined
     },
-    [{ role: 'assistant', content: [{ type: 'text', text: 'After relaunch' }], timestamp: 22 }]
+    [{ role: 'assistant', content: [{ type: 'text', text: 'After relaunch' }], timestamp: 22 }],
+    [],
+    undefined,
+    undefined,
+    [
+      {
+        type: 'session',
+        id: 'hibernate-root',
+        parentId: null,
+        timestamp: '2026-08-10T10:00:00.000Z',
+        cwd: '/tmp/project'
+      },
+      {
+        type: 'custom',
+        id: 'hibernate-fast-on',
+        parentId: 'hibernate-root',
+        timestamp: '2026-08-10T10:00:01.000Z',
+        customType: OPENAI_FAST_MODE_ENTRY_TYPE,
+        data: { enabled: true }
+      }
+    ],
+    'hibernate-fast-on'
   )
   const runtimes = [firstHibernateRuntime, activeRuntime, relaunchedRuntime]
   const launches: Array<{ sessionFile?: string }> = []
@@ -10716,6 +11279,7 @@ test('reactivating a reclaimed runtime relaunches the same identity from the tra
   )
 
   await kernel.activateSession(hibernatePointer.sessionFile)
+  await kernel.setOpenAiFastMode(true)
   await kernel.activateSession(activePointer.sessionFile)
   await kernel.reclaimInactiveRuntime(hibernatePointer.sessionFile)
   assert.equal(firstHibernateRuntime.stopCalls, 1)
@@ -10728,7 +11292,12 @@ test('reactivating a reclaimed runtime relaunches the same identity from the tra
   assert.equal(activeRuntime.stopCalls, 0)
   assert.equal(state.activeSessionKey, hibernatePointer.sessionFile)
   assert.equal(state.session.id, hibernatePointer.sessionId)
+  assert.equal(state.session.openAiFastMode, true)
   assert.equal(state.runtime.status, 'ready')
+  assert.equal(
+    relaunchedRuntime.commands.find(({ type }) => type === 'invoke_extension_command'),
+    undefined
+  )
   const recovered = state.conversation.entries[0]
   assert.equal(recovered?.kind === 'message' ? recovered.text : null, 'After relaunch')
   assert.equal(

@@ -53,13 +53,14 @@ test('projects nullable session values, integer fallbacks, and streaming state',
     messageCount: -1,
     pendingMessageCount: 1.5,
     isStreaming: true
-  } as never, false, usageFallback), {
+  } as never, false, usageFallback, true), {
     id: null,
     name: null,
     resumeAvailable: false,
     model: null,
     usage: usageFallback,
     thinkingLevel: null,
+    openAiFastMode: true,
     messageCount: 0,
     pendingMessageCount: 0,
     pendingSteeringMessages: [],

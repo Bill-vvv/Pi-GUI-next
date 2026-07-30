@@ -411,12 +411,15 @@ export type GeneralSettings = {
   /** Double-click window border toggles maximize/restore. Exclusive fullscreen uses F11. */
   doubleClickBorderMaximize: boolean
   fastExtensionLoading: boolean
+  /** Opt-in orderly-shutdown snapshot and one-shot continuation on next startup. */
+  autoContinueInterruptedTasks: boolean
 }
 
 export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   startupWorkspaceRestore: 'restore',
   doubleClickBorderMaximize: true,
-  fastExtensionLoading: false
+  fastExtensionLoading: false,
+  autoContinueInterruptedTasks: false
 }
 
 export const SUBAGENT_PACKAGE_NAME = 'pi-subagents'
@@ -471,6 +474,7 @@ export type KernelSessionState = {
   model: KernelModelState | null
   usage: KernelSessionUsage | null
   thinkingLevel: ThinkingLevel | null
+  openAiFastMode: boolean
   messageCount: number
   pendingMessageCount: number
   pendingSteeringMessages: string[]
@@ -1090,6 +1094,7 @@ export type KernelCommand =
   | { type: 'kernel.abort' }
   | { type: 'kernel.set-model'; provider: string; modelId: string }
   | { type: 'kernel.set-thinking-level'; level: ThinkingLevel }
+  | { type: 'kernel.set-openai-fast-mode'; enabled: boolean }
   | { type: 'kernel.set-session-naming'; settings: SessionNamingSettings }
   | { type: 'kernel.set-appearance'; settings: AppearanceSettings }
   | { type: 'kernel.set-general'; settings: GeneralSettings }
@@ -1236,6 +1241,7 @@ export type KernelApi = {
   abort: () => Promise<KernelMutationAck>
   setModel: (provider: string, modelId: string) => Promise<KernelMutationAck>
   setThinkingLevel: (level: ThinkingLevel) => Promise<KernelMutationAck>
+  setOpenAiFastMode: (enabled: boolean) => Promise<KernelMutationAck>
   setSessionNaming: (settings: SessionNamingSettings) => Promise<KernelMutationAck>
   setAppearance: (settings: AppearanceSettings) => Promise<KernelMutationAck>
   setGeneral: (settings: GeneralSettings) => Promise<KernelMutationAck>

@@ -130,6 +130,7 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
     return typeof value.source === 'string' && Object.keys(value).length === 2
   }
   if (
+    value.type === 'kernel.set-openai-fast-mode' ||
     value.type === 'kernel.set-subagent-enabled' ||
     value.type === 'kernel.set-magic-context-enabled' ||
     value.type === 'kernel.set-advisor-system-enabled' ||
@@ -498,10 +499,12 @@ function isNonNegativeFiniteNumber(value: unknown): value is number {
 
 function isGeneralSettings(value: unknown): value is GeneralSettings {
   return isRecord(value) &&
-    Object.keys(value).length === 3 &&
+    Object.keys(value).length === 4 &&
     (value.startupWorkspaceRestore === 'restore' || value.startupWorkspaceRestore === 'none') &&
     typeof value.doubleClickBorderMaximize === 'boolean' &&
-    typeof value.fastExtensionLoading === 'boolean'
+    typeof value.fastExtensionLoading === 'boolean' &&
+    typeof value.autoContinueInterruptedTasks === 'boolean' &&
+    (!value.autoContinueInterruptedTasks || value.startupWorkspaceRestore === 'restore')
 }
 
 function isSubagentSettings(value: unknown): value is SubagentSettings {

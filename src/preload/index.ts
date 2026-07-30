@@ -460,6 +460,11 @@ const kernelApi: KernelApi = {
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
+  setOpenAiFastMode: (enabled) => {
+    const command: KernelCommand = { type: 'kernel.set-openai-fast-mode', enabled }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
+  },
   setSessionNaming: (settings) => {
     const command: KernelCommand = { type: 'kernel.set-session-naming', settings }
 

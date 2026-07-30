@@ -74,6 +74,7 @@ const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
 let mainWindow: BrowserWindow | null = null
 let kernel: WorkbenchKernel | null = null
+let projectStoreForShutdown: ProjectStore | null = null
 let providerAuth: PiProviderAuth | null = null
 let desktopNotificationBroker: DesktopNotificationBroker | null = null
 let shutdownPromise: Promise<void> | null = null
@@ -162,7 +163,11 @@ async function startApplication(): Promise<void> {
     rendererFilePath: join(mainBundleDirectory, '../renderer/index.html')
   })
   const projectStore = new ProjectStore()
+  projectStoreForShutdown = projectStore
   const general = await projectStore.loadGeneral()
+  const restartContinuations = general.autoContinueInterruptedTasks
+    ? await projectStore.loadRestartContinuations()
+    : await projectStore.clearRestartContinuations().then(() => [])
   const storedProjects = await projectStore.loadProjects()
   const storedTasks = await projectStore.loadTasks()
   const sessionNaming = await projectStore.loadSessionNaming()
@@ -290,6 +295,9 @@ async function startApplication(): Promise<void> {
       persistAppearance: (settings) => projectStore.saveAppearance(settings),
       general,
       persistGeneral: (settings) => projectStore.saveGeneral(settings),
+      restartContinuations,
+      claimRestartContinuation: (id) => projectStore.claimRestartContinuation(id),
+      completeRestartContinuation: (id) => projectStore.completeRestartContinuation(id),
       subagent,
       persistSubagent: (settings) => projectStore.saveSubagent(settings),
       shortcuts,
@@ -298,6 +306,7 @@ async function startApplication(): Promise<void> {
       projectTrust
     }
   )
+  await kernel.resumeInterruptedSessions()
   await kernel.refreshSessionActivities()
   kernel.subscribe(forwardKernelEvent)
   autoHibernateTimer = setInterval(() => {
@@ -733,6 +742,9 @@ async function startApplication(): Promise<void> {
       case 'kernel.set-thinking-level':
         await kernel.setThinkingLevel(command.level)
         return kernel.acknowledge()
+      case 'kernel.set-openai-fast-mode':
+        await kernel.setOpenAiFastMode(command.enabled)
+        return kernel.acknowledge()
       case 'kernel.set-session-naming':
         await kernel.setSessionNaming(command.settings)
         return kernel.acknowledge()
@@ -937,6 +949,13 @@ async function listSystemFonts(): Promise<string[]> {
 }
 
 async function stopKernel(): Promise<void> {
+  const activeKernel = kernel
+  const projectStore = projectStoreForShutdown
+  const restartContinuations = activeKernel?.prepareRestartContinuationShutdown() ?? []
+  const kernelStopResult = activeKernel?.stop().then(
+    () => null,
+    (error: unknown) => error
+  ) ?? Promise.resolve(null)
   kernelEventForwarder.dispose()
   if (autoHibernateTimer !== null) {
     clearInterval(autoHibernateTimer)
@@ -946,7 +965,19 @@ async function stopKernel(): Promise<void> {
   desktopNotificationBroker = null
   await broker?.close()
   await providerAuth?.shutdown()
-  await kernel?.stop()
+  const kernelStopError = await kernelStopResult
+  if (kernelStopError !== null) throw kernelStopError
+  if (projectStore !== null) {
+    try {
+      await projectStore.replaceRestartContinuations(restartContinuations)
+    } catch (error) {
+      console.error(
+        `[Pi GUI] Restart continuation snapshot unavailable: ${errorMessage(error)}`
+      )
+    }
+  }
+  kernel = null
+  projectStoreForShutdown = null
 }
 
 function requireProviderAuth(): PiProviderAuth {

@@ -196,6 +196,7 @@ const previewProjects = {
           model: defaultModel,
           usage: previewUsage,
           thinkingLevel: 'high',
+          openAiFastMode: false,
           messageCount: 2,
           pendingMessageCount: 0,
           pendingSteeringMessages: [],
@@ -279,6 +280,7 @@ const previewProjects = {
           model: defaultModel,
           usage: previewUsage,
           thinkingLevel: 'medium',
+          openAiFastMode: false,
           messageCount: 8,
           pendingMessageCount: 0,
           pendingSteeringMessages: [],
@@ -305,6 +307,7 @@ const previewProjects = {
           model: defaultModel,
           usage: previewUsage,
           thinkingLevel: 'low',
+          openAiFastMode: false,
           messageCount: 14,
           pendingMessageCount: 0,
           pendingSteeringMessages: [],
@@ -336,6 +339,7 @@ const previewProjects = {
           model: defaultModel,
           usage: previewUsage,
           thinkingLevel: 'high',
+          openAiFastMode: false,
           messageCount: 6,
           pendingMessageCount: 0,
           pendingSteeringMessages: [],
@@ -362,6 +366,7 @@ const previewProjects = {
           model: defaultModel,
           usage: previewUsage,
           thinkingLevel: 'medium',
+          openAiFastMode: false,
           messageCount: 4,
           pendingMessageCount: 0,
           pendingSteeringMessages: [],
@@ -393,6 +398,7 @@ const previewProjects = {
           model: defaultModel,
           usage: previewUsage,
           thinkingLevel: 'xhigh',
+          openAiFastMode: false,
           messageCount: 10,
           pendingMessageCount: 0,
           pendingSteeringMessages: [],
@@ -444,7 +450,8 @@ const initialState: KernelState = {
   general: {
     startupWorkspaceRestore: 'restore',
     doubleClickBorderMaximize: true,
-    fastExtensionLoading: false
+    fastExtensionLoading: false,
+    autoContinueInterruptedTasks: false
   },
   subagent: { maxDepth: 3 },
   shortcuts: { ...DEFAULT_SHORTCUT_SETTINGS },
@@ -850,6 +857,7 @@ export function createPreviewKernelApi(): KernelApi {
               model: null,
               usage: null,
               thinkingLevel: null,
+              openAiFastMode: false,
               messageCount: 0,
               pendingMessageCount: 0,
               pendingSteeringMessages: [],
@@ -1265,6 +1273,8 @@ export function createPreviewKernelApi(): KernelApi {
     },
     setThinkingLevel: (thinkingLevel: ThinkingLevel) =>
       commit({ ...state, session: { ...state.session, thinkingLevel } }),
+    setOpenAiFastMode: (openAiFastMode) =>
+      commit({ ...state, session: { ...state.session, openAiFastMode } }),
     setSessionNaming: (sessionNaming) => commit({ ...state, sessionNaming }),
     setGeneral: (general) => commit({
       ...state,
