@@ -2357,11 +2357,10 @@ export class WorkbenchKernel {
     if (launchOptions.sessionFile !== undefined) {
       this.contextBySessionKey.set(contextKey(project.path, launchOptions.sessionFile), context)
     }
-    this.activeContext = context
-    this.unsubscribeRuntime = runtime.subscribe((event) => {
+    context.unsubscribeRuntime = runtime.subscribe((event) => {
       this.handleContextEvent(context, event)
     })
-    context.unsubscribeRuntime = this.unsubscribeRuntime
+    this.loadContext(context)
 
     this.state = {
       ...this.state,
@@ -3744,6 +3743,7 @@ export class WorkbenchKernel {
     } else if (event.type === 'agent_settled') {
       if (this.provisionalSession?.runtime === this.runtime) {
         this.provisionalSettled = true
+        context.provisionalSettled = true
         this.beginProvisionalCommit()
         return
       }
@@ -4197,39 +4197,49 @@ export class WorkbenchKernel {
   }
 
   private beginProvisionalCommit(): void {
+    const context = this.activeContext
     const provisional = this.provisionalSession
-    if (provisional === null || provisional.runtime !== this.runtime || this.provisionalCommit !== null) {
+    if (
+      context === null ||
+      context.runtime !== this.runtime ||
+      provisional === null ||
+      provisional.runtime !== context.runtime
+    ) {
       return
     }
-    const commit = this.commitProvisionalSession(provisional)
-    this.provisionalCommit = commit
-    void commit.finally(() => {
-      if (this.provisionalCommit === commit) this.provisionalCommit = null
-    })
+    this.captureActiveContext()
+    this.beginContextProvisionalCommit(context, provisional)
   }
 
-  /**
-   * Explicit background provisional materialization entry point.
-   * Stores the Promise only on the owning context and does not touch active
-   * provisional mirrors.
-   */
   private beginBackgroundProvisionalCommit(context: RuntimeContext): void {
     const provisional = context.provisionalSession
+    if (provisional === null || provisional.runtime !== context.runtime) return
+    this.beginContextProvisionalCommit(context, provisional)
+  }
+
+  private beginContextProvisionalCommit(
+    context: RuntimeContext,
+    provisional: NonNullable<RuntimeContext['provisionalSession']>
+  ): void {
     if (
-      provisional === null ||
-      provisional.runtime !== context.runtime ||
+      !this.contexts.has(context) ||
+      context.provisionalSession !== provisional ||
       context.provisionalCommit !== null
     ) {
       return
     }
-    const commit = this.commitBackgroundProvisional(context, provisional)
+    const commit = this.commitContextProvisional(context, provisional)
     context.provisionalCommit = commit
+    if (this.activeContext === context) this.provisionalCommit = commit
     void commit.finally(() => {
       if (context.provisionalCommit === commit) context.provisionalCommit = null
+      if (this.activeContext === context && this.provisionalCommit === commit) {
+        this.provisionalCommit = null
+      }
     })
   }
 
-  private async commitBackgroundProvisional(
+  private async commitContextProvisional(
     context: RuntimeContext,
     provisional: NonNullable<RuntimeContext['provisionalSession']>
   ): Promise<void> {
@@ -4272,7 +4282,9 @@ export class WorkbenchKernel {
       const stillOwned =
         this.contexts.has(context) && context.provisionalSession === provisional
       if (stillOwned) {
-        const previousSessionKey = context.state.activeSessionKey
+        const active = this.activeContext === context
+        const currentState = active ? this.state : context.state
+        const previousSessionKey = currentState.activeSessionKey
         if (
           typeof previousSessionKey === 'string' &&
           previousSessionKey !== pointer.sessionFile
@@ -4284,14 +4296,16 @@ export class WorkbenchKernel {
         }
         this.contextBySessionKey.set(contextKey(context.projectPath, pointer.sessionFile), context)
         context.provisionalSession = null
-        const settleDeferred = context.provisionalSettled
+        const settleDeferred = active
+          ? this.provisionalSettled
+          : context.provisionalSettled
         let nextState: KernelState = {
-          ...context.state,
+          ...currentState,
           activeSessionKey: pointer.sessionFile,
           session: {
-            ...context.state.session,
+            ...currentState.session,
             resumeAvailable: true,
-            settled: settleDeferred ? true : context.state.session.settled,
+            settled: settleDeferred ? true : currentState.session.settled,
             ...(settleDeferred
               ? {
                   pendingMessageCount: 0,
@@ -4302,16 +4316,21 @@ export class WorkbenchKernel {
           },
           runtime: settleDeferred
             ? toKernelRuntime('ready', context.runtime.getState())
-            : context.state.runtime,
+            : currentState.runtime,
           conversation: settleDeferred
-            ? settleConversationRun(context.state.conversation)
-            : context.state.conversation
+            ? settleConversationRun(currentState.conversation)
+            : currentState.conversation
         }
         if (settleDeferred) {
           nextState = this.withContextSessionActivity(context, nextState)
         }
         context.state = nextState
         context.provisionalSettled = false
+        if (active) {
+          this.provisionalSession = null
+          this.provisionalSettled = false
+          this.state = nextState
+        }
         if (pointer.sessionName === null && provisional.initialPrompt !== null) {
           const pending = {
             runtime: context.runtime,
@@ -4320,9 +4339,7 @@ export class WorkbenchKernel {
             userMessage: provisional.initialPrompt
           }
           context.pendingSessionName = pending
-          if (this.activeContext === context) {
-            this.pendingSessionName = pending
-          }
+          if (active) this.pendingSessionName = pending
           if (context.state.runtime.status === 'ready') {
             this.beginBackgroundSessionNameGeneration(context, pending)
           }
@@ -4339,8 +4356,7 @@ export class WorkbenchKernel {
       if (!this.contexts.has(context) || context.provisionalSession !== provisional) return
       if (isEnoent(error)) {
         // File may not exist yet at message_end. If agent_settled already ran while this
-        // commit was in flight, retry after the commit slot is cleared (macrotask so the
-        // beginBackgroundProvisionalCommit() finally handler runs first).
+        // commit was in flight, retry after the owning Context commit slot is cleared.
         if (context.provisionalSettled) {
           setTimeout(() => {
             if (
@@ -4348,121 +4364,39 @@ export class WorkbenchKernel {
               context.provisionalSession !== provisional ||
               context.provisionalCommit !== null
             ) return
-            this.beginBackgroundProvisionalCommit(context)
+            this.beginContextProvisionalCommit(context, provisional)
           }, 0)
+        } else if (this.activeContext === context) {
+          this.emitState()
         }
         return
       }
       const navigationBefore = this.projectNavigationState(context.projectPath)
+      const active = this.activeContext === context
+      const currentState = active ? this.state : context.state
       context.provisionalSession = null
       context.provisionalSettled = false
+      let nextState = currentState
       if (
-        context.state.activeSessionKey !== null &&
+        nextState.activeSessionKey !== null &&
         !(this.sessionPointersByProject.get(context.projectPath) ?? []).some(
-          (pointer) => pointer.sessionFile === context.state.activeSessionKey
+          (pointer) => pointer.sessionFile === nextState.activeSessionKey
         )
       ) {
-        context.state = { ...context.state, activeSessionKey: null }
+        nextState = { ...nextState, activeSessionKey: null }
       }
-      context.state = {
-        ...context.state,
+      nextState = {
+        ...nextState,
         runtime: toKernelRuntime('crashed', context.runtime.getState(), errorMessage(error))
+      }
+      context.state = nextState
+      if (active) {
+        this.provisionalSession = null
+        this.provisionalSettled = false
+        this.state = nextState
       }
       this.publishContextNavigationChange(context, navigationBefore)
     }
-  }
-
-  private async commitProvisionalSession(provisional: ProvisionalSession): Promise<void> {
-    try {
-      if (typeof this.validateSession !== 'function') {
-        throw new Error('Session validation is unavailable.')
-      }
-      let canonicalPointer = await this.validateSession(provisional.pointer)
-      if (this.provisionalSession !== provisional || this.runtime !== provisional.runtime) return
-      if (provisional.pointer.sessionName !== null) {
-        canonicalPointer = {
-          ...canonicalPointer,
-          sessionName: provisional.pointer.sessionName
-        }
-      }
-      await this.persistSession(canonicalPointer)
-      if (this.provisionalSession !== provisional || this.runtime !== provisional.runtime) return
-      this.sessionPointers = upsertSessionPointer(this.sessionPointers, canonicalPointer)
-      await this.captureSessionMetadata(canonicalPointer)
-      if (this.provisionalSession !== provisional || this.runtime !== provisional.runtime) return
-      this.queueSessionNameGeneration(provisional.runtime, canonicalPointer, provisional.initialPrompt)
-      const materializedContext = this.contextByRuntime.get(provisional.runtime)
-      if (materializedContext !== undefined) {
-        const previousSessionKey = materializedContext.state.activeSessionKey
-        if (
-          typeof previousSessionKey === 'string' &&
-          previousSessionKey !== canonicalPointer.sessionFile
-        ) {
-          this.clearToolImageCacheForSession(previousSessionKey)
-        }
-        for (const [key, candidate] of this.contextBySessionKey) {
-          if (candidate === materializedContext) this.contextBySessionKey.delete(key)
-        }
-        this.contextBySessionKey.set(
-          contextKey(canonicalPointer.projectPath, canonicalPointer.sessionFile),
-          materializedContext
-        )
-        materializedContext.provisionalSession = null
-      }
-      this.provisionalSession = null
-      this.state = {
-        ...this.state,
-        sessions: this.toSessionSummaries(),
-        activeSessionKey: canonicalPointer.sessionFile,
-        session: { ...this.state.session, resumeAvailable: true }
-      }
-      this.finishDeferredSettled(provisional.runtime)
-      this.emitState()
-      this.beginSessionNameGeneration()
-    } catch (error) {
-      if (this.provisionalSession !== provisional || this.runtime !== provisional.runtime) return
-      if (isEnoent(error)) {
-        // File may not exist yet at message_end. If agent_settled already ran while this
-        // commit was in flight, retry after the commit slot is cleared (macrotask so the
-        // beginProvisionalCommit() finally handler runs first).
-        if (this.provisionalSettled) {
-          setTimeout(() => {
-            if (
-              this.provisionalSession !== provisional ||
-              this.provisionalCommit !== null ||
-              this.runtime !== provisional.runtime
-            ) return
-            this.beginProvisionalCommit()
-          }, 0)
-          return
-        }
-        this.emitState()
-        return
-      }
-      this.provisionalSession = null
-      this.provisionalSettled = false
-      if (this.activeContext !== null) this.activeContext.provisionalSession = null
-      this.clearUnregisteredActiveSessionKey()
-      this.transition('crashed', errorMessage(error))
-    }
-  }
-
-  private finishDeferredSettled(runtime: RuntimeHost): void {
-    if (!this.provisionalSettled) return
-    this.provisionalSettled = false
-    if (this.runtime !== runtime || this.state.runtime.status !== 'running') return
-    this.state = this.withActiveSessionActivity({
-      ...this.state,
-      runtime: toKernelRuntime('ready', runtime.getState()),
-      session: {
-        ...this.state.session,
-        settled: true,
-        pendingMessageCount: 0,
-        pendingSteeringMessages: [],
-        pendingFollowUpMessages: []
-      },
-      conversation: settleConversationRun(this.state.conversation)
-    })
   }
 
   private ensureSessionNameGenerationQueued(): void {
