@@ -18,6 +18,7 @@ import type {
   KernelInstalledPackage,
   KernelModelPricingFetchResult,
   KernelNavigatorKind,
+  KernelPiPackageInstallJob,
   KernelPiDevCatalog,
   KernelProjectTrustChoice,
   KernelPromptAttachment,
@@ -116,6 +117,7 @@ type WorkbenchProps = {
   operationNotifications: ReactNode
   systemFonts: string[] | null
   systemFontsError: string | null
+  packageInstallJobs: KernelPiPackageInstallJob[]
   forkDialogOpen: boolean
   forkCandidates: KernelForkCandidate[]
   forkCandidatesLoading: boolean
@@ -243,6 +245,7 @@ export function Workbench({
   operationNotifications,
   systemFonts,
   systemFontsError,
+  packageInstallJobs,
   forkDialogOpen,
   forkCandidates,
   forkCandidatesLoading,
@@ -1126,6 +1129,7 @@ export function Workbench({
             onSearchPiDevExtensions={onSearchPiDevExtensions}
             onSearchPiDevPackages={onSearchPiDevPackages}
             onListPiPackages={onListPiPackages}
+            packageInstallJobs={packageInstallJobs}
             onInstallPiDevPackage={onInstallPiDevPackage}
             onRemovePiPackage={onRemovePiPackage}
             onUpdatePiPackage={onUpdatePiPackage}

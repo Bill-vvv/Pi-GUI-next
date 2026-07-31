@@ -546,26 +546,31 @@ export function createPreviewKernelApi(): KernelApi {
   let installedPackages = [
     {
       source: 'npm:example-skill-pack',
+      packageName: 'example-skill-pack',
       filtered: false,
       extensionEnabled: true
     },
     {
       source: 'git:github.com/example/pi-tools',
+      packageName: null,
       filtered: true,
       extensionEnabled: false
     },
     {
       source: `npm:${SUBAGENT_PACKAGE_NAME}@1.0.0`,
+      packageName: SUBAGENT_PACKAGE_NAME,
       filtered: false,
       extensionEnabled: true
     },
     {
       source: `npm:${MAGIC_CONTEXT_PACKAGE_NAME}@1.0.0`,
+      packageName: MAGIC_CONTEXT_PACKAGE_NAME,
       filtered: true,
       extensionEnabled: false
     },
     {
       source: 'npm:pi-gui-multi-advisor@1.0.0',
+      packageName: 'pi-gui-multi-advisor',
       filtered: false,
       extensionEnabled: true
     }
@@ -1042,12 +1047,13 @@ export function createPreviewKernelApi(): KernelApi {
       total: 2
     }),
     listPiPackages: async () => structuredClone(installedPackages),
+    listPiPackageInstallJobs: async () => [],
     installPiDevPackage: (name) => {
       const source = `npm:${name}`
       if (!installedPackages.some((pkg) => pkg.source === source || pkg.source.startsWith(`${source}@`))) {
         installedPackages = [
           ...installedPackages,
-          { source, filtered: false, extensionEnabled: true }
+          { source, packageName: name, filtered: false, extensionEnabled: true }
         ]
       }
       return currentAck()

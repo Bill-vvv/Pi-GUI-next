@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 
-import type { KernelInstalledPackage } from '../../../../shared/kernel-contract'
+import type {
+  KernelInstalledPackage,
+  KernelPiPackageInstallJob
+} from '../../../../shared/kernel-contract'
 import { Select } from '../../components/Select'
 import { unknownErrorMessage as errorMessage } from '../../unknown-error-message'
+import { findUniqueInstalledPackage } from './installed-package-selection'
 
 type AdaptedExtensionPackageControlProps = {
   heading: string
@@ -12,6 +16,7 @@ type AdaptedExtensionPackageControlProps = {
   description: string
   notice: React.ReactNode
   busy: boolean
+  packageInstallJobs: KernelPiPackageInstallJob[]
   onListPiPackages: () => Promise<KernelInstalledPackage[]>
   onInstallPiDevPackage: (name: string) => Promise<void>
   onSetEnabled: (enabled: boolean) => Promise<void>
@@ -26,6 +31,7 @@ export function AdaptedExtensionPackageControl({
   description,
   notice,
   busy,
+  packageInstallJobs,
   onListPiPackages,
   onInstallPiDevPackage,
   onSetEnabled,
@@ -52,7 +58,7 @@ export function AdaptedExtensionPackageControl({
     try {
       const packages = await onListPiPackages()
       if (requestRevision.current !== revision) return
-      const pkg = packages.find(({ source }) => isPackageSource(source, packageName)) ?? null
+      const pkg = findUniqueInstalledPackage(packages, packageName)
       setInstalledPackage(pkg)
     } catch (loadError) {
       if (requestRevision.current !== revision) return
@@ -71,7 +77,6 @@ export function AdaptedExtensionPackageControl({
     setError(null)
     try {
       await onInstallPiDevPackage(packageName)
-      await loadPackage()
     } catch (installError) {
       setError(`安装失败：${errorMessage(installError)}`)
     } finally {
@@ -93,11 +98,29 @@ export function AdaptedExtensionPackageControl({
   }
 
   const headingId = `${idPrefix}-heading`
+  const packageInstallJob = [...packageInstallJobs]
+    .reverse()
+    .find(({ name }) => name === packageName) ?? null
+  const packageInstalling = packageInstallJob?.status === 'queued' ||
+    packageInstallJob?.status === 'running'
+  const packageInstallError = packageInstallJob?.status === 'failed'
+    ? packageInstallJob.error
+    : null
+  useEffect(() => {
+    if (
+      packageInstallJob?.status !== 'succeeded' &&
+      packageInstallJob?.status !== 'failed'
+    ) return
+    void loadPackage()
+  }, [packageInstallJob?.id, packageInstallJob?.status])
   const status = loading
     ? '正在读取安装状态…'
+    : packageInstalling
+      ? packageInstallJob?.status === 'queued' ? '等待安装…' : '正在后台安装…'
     : installedPackage === null
-      ? '未安装'
+      ? packageInstallError === null ? '未安装' : '安装失败'
       : installedPackage.extensionEnabled ? '已开启' : '已关闭'
+  const displayedError = error ?? packageInstallError
 
   return (
     <section className="settings-group settings-group-inline" aria-labelledby={headingId}>
@@ -135,10 +158,10 @@ export function AdaptedExtensionPackageControl({
               <button
                 type="button"
                 className="settings-extension-remove"
-                disabled={busy || acting || loading}
+                disabled={busy || acting || loading || packageInstalling}
                 onClick={() => void installPackage()}
               >
-                {acting ? '安装中…' : '安装'}
+                {acting || packageInstalling ? '后台安装中…' : '安装'}
               </button>
             ) : (
               <div className="settings-subagent-package-select">
@@ -162,16 +185,13 @@ export function AdaptedExtensionPackageControl({
             )}
           </div>
         </div>
-        {error === null ? null : (
-          <p className="settings-subagent-error" role="alert">{error}</p>
+        {displayedError === null ? null : (
+          <p className="settings-subagent-error" role="alert">
+            {error === null ? `安装失败：${displayedError}` : displayedError}
+          </p>
         )}
       </div>
       <p className="settings-subagent-notice">{notice}</p>
     </section>
   )
-}
-
-function isPackageSource(source: string, packageName: string): boolean {
-  const base = `npm:${packageName}`
-  return source === base || source.startsWith(`${base}@`)
 }

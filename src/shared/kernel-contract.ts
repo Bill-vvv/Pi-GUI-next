@@ -163,8 +163,18 @@ export type KernelPiDevCatalog = {
 
 export type KernelInstalledPackage = {
   source: string
+  packageName: string | null
   filtered: boolean
   extensionEnabled: boolean
+}
+
+export type KernelPiPackageInstallStatus = 'queued' | 'running' | 'succeeded' | 'failed'
+
+export type KernelPiPackageInstallJob = {
+  id: string
+  name: string
+  status: KernelPiPackageInstallStatus
+  error: string | null
 }
 
 export type KernelModelPricingTier = {
@@ -1032,6 +1042,7 @@ export type KernelCommand =
   | { type: 'kernel.search-pi-dev-extensions'; query: string }
   | { type: 'kernel.search-pi-dev-packages'; query: string }
   | { type: 'kernel.list-pi-packages' }
+  | { type: 'kernel.list-pi-package-install-jobs' }
   | { type: 'kernel.install-pi-dev-package'; name: string }
   | { type: 'kernel.remove-pi-package'; source: string }
   | { type: 'kernel.set-subagent-enabled'; enabled: boolean }
@@ -1117,6 +1128,7 @@ export type KernelStateEvent =
 export type KernelEvent =
   | KernelStateEvent
   | { type: 'kernel.state-batch'; events: KernelStateEvent[] }
+  | { type: 'kernel.pi-package-install'; job: KernelPiPackageInstallJob }
   | {
       type: 'kernel.compaction-started'
       projectKey: string
@@ -1178,6 +1190,7 @@ export type KernelApi = {
   searchPiDevExtensions: (query: string) => Promise<KernelPiDevCatalog>
   searchPiDevPackages: (query: string) => Promise<KernelPiDevCatalog>
   listPiPackages: () => Promise<KernelInstalledPackage[]>
+  listPiPackageInstallJobs: () => Promise<KernelPiPackageInstallJob[]>
   installPiDevPackage: (name: string) => Promise<KernelMutationAck>
   removePiPackage: (source: string) => Promise<KernelMutationAck>
   setSubagentEnabled: (enabled: boolean) => Promise<KernelInstalledPackage[]>

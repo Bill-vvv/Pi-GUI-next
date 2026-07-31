@@ -9,6 +9,7 @@ import {
   type OpenDialogOptions
 } from 'electron'
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -27,6 +28,7 @@ import {
   WINDOW_TOGGLE_MAXIMIZE_CHANNEL,
   SUBAGENT_PACKAGE_NAME,
   type KernelEvent,
+  type KernelPiPackageInstallJob,
   type KernelProviderAuthEvent
 } from '../shared/kernel-contract.ts'
 import { GIT_COMMAND_CHANNEL } from '../shared/git-contract.ts'
@@ -80,6 +82,9 @@ let desktopNotificationBroker: DesktopNotificationBroker | null = null
 let shutdownPromise: Promise<void> | null = null
 let autoHibernateTimer: ReturnType<typeof setInterval> | null = null
 let allowQuit = false
+let packageInstallDrain: Promise<void> = Promise.resolve()
+
+const MAX_PACKAGE_INSTALL_JOBS = 32
 
 const kernelEventForwarder = createKernelEventForwarder({ send: sendKernelEvent })
 
@@ -185,12 +190,60 @@ async function startApplication(): Promise<void> {
     piExecutablePath: process.env.PI_GUI_PI_EXECUTABLE,
     fetch: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init)
   })
-  const subagentDefinitionStore = new SubagentDefinitionStore()
-  const advisorDefinitionStore = new AdvisorDefinitionStore()
   let subagentPackageEnabled = isSubagentPackageEnabled(await piDevPackageService.list())
   const refreshSubagentPackageEnabled = async (): Promise<void> => {
     subagentPackageEnabled = isSubagentPackageEnabled(await piDevPackageService.list())
   }
+  const packageInstallJobs = new Map<string, KernelPiPackageInstallJob>()
+  const activePackageInstallIds = new Map<string, string>()
+  let packageInstallQueue = Promise.resolve()
+  const publishPackageInstallJob = (job: KernelPiPackageInstallJob): void => {
+    packageInstallJobs.set(job.id, job)
+    while (packageInstallJobs.size > MAX_PACKAGE_INSTALL_JOBS) {
+      const oldest = packageInstallJobs.entries().next().value as [string, KernelPiPackageInstallJob] | undefined
+      if (oldest === undefined) break
+      if (oldest[1].status === 'queued' || oldest[1].status === 'running') break
+      packageInstallJobs.delete(oldest[0])
+    }
+    forwardKernelEvent({ type: 'kernel.pi-package-install', job })
+  }
+  const startPackageInstall = (name: string): void => {
+    piDevPackageService.validateInstallName(name)
+    const existingId = activePackageInstallIds.get(name)
+    if (existingId !== undefined) return
+
+    const jobId = randomUUID()
+    activePackageInstallIds.set(name, jobId)
+    publishPackageInstallJob({ id: jobId, name, status: 'queued', error: null })
+    const run = packageInstallQueue.then(async () => {
+      publishPackageInstallJob({ id: jobId, name, status: 'running', error: null })
+      try {
+        await piDevPackageService.install(name)
+        publishPackageInstallJob({ id: jobId, name, status: 'succeeded', error: null })
+        if (name === SUBAGENT_PACKAGE_NAME) {
+          try {
+            await refreshSubagentPackageEnabled()
+          } catch (error: unknown) {
+            console.error(`[Pi GUI] Subagent package state refresh failed: ${errorMessage(error)}`)
+          }
+        }
+      } catch (error: unknown) {
+        publishPackageInstallJob({
+          id: jobId,
+          name,
+          status: 'failed',
+          error: errorMessage(error)
+        })
+      } finally {
+        activePackageInstallIds.delete(name)
+      }
+    })
+    packageInstallQueue = run.then(() => undefined, () => undefined)
+    packageInstallDrain = packageInstallQueue
+  }
+  packageInstallDrain = packageInstallQueue
+  const subagentDefinitionStore = new SubagentDefinitionStore()
+  const advisorDefinitionStore = new AdvisorDefinitionStore()
   const projectTrust = new PiProjectTrust({
     explicitExecutable: process.env.PI_GUI_PI_EXECUTABLE
   })
@@ -572,25 +625,26 @@ async function startApplication(): Promise<void> {
         return piDevPackageService.catalog(command.query)
       case 'kernel.list-pi-packages':
         return piDevPackageService.list()
+      case 'kernel.list-pi-package-install-jobs':
+        return [...packageInstallJobs.values()]
       case 'kernel.install-pi-dev-package':
-        await piDevPackageService.install(command.name)
-        if (command.name === SUBAGENT_PACKAGE_NAME) await refreshSubagentPackageEnabled()
+        startPackageInstall(command.name)
         return kernel.acknowledge()
       case 'kernel.remove-pi-package':
         await piDevPackageService.remove(command.source)
-        if (isSubagentPackageSource(command.source)) await refreshSubagentPackageEnabled()
+        await refreshSubagentPackageEnabled()
         return kernel.acknowledge()
       case 'kernel.set-subagent-enabled': {
-        const packages = await piDevPackageService.setExtensionEnabled(
-          `npm:${SUBAGENT_PACKAGE_NAME}`,
+        const packages = await piDevPackageService.setPackageExtensionEnabled(
+          SUBAGENT_PACKAGE_NAME,
           command.enabled
         )
         subagentPackageEnabled = isSubagentPackageEnabled(packages)
         return packages
       }
       case 'kernel.set-magic-context-enabled':
-        return piDevPackageService.setExtensionEnabled(
-          `npm:${MAGIC_CONTEXT_PACKAGE_NAME}`,
+        return piDevPackageService.setPackageExtensionEnabled(
+          MAGIC_CONTEXT_PACKAGE_NAME,
           command.enabled
         )
       case 'kernel.set-advisor-system-enabled':
@@ -949,6 +1003,7 @@ async function listSystemFonts(): Promise<string[]> {
 }
 
 async function stopKernel(): Promise<void> {
+  await packageInstallDrain
   const activeKernel = kernel
   const projectStore = projectStoreForShutdown
   const restartContinuations = activeKernel?.prepareRestartContinuationShutdown() ?? []
@@ -1067,14 +1122,11 @@ function assertTrustedIpcSender(event: IpcMainInvokeEvent, rendererTarget: Rende
 }
 
 function isSubagentPackageEnabled(
-  packages: readonly { source: string, extensionEnabled: boolean }[]
+  packages: readonly { packageName: string | null, extensionEnabled: boolean }[]
 ): boolean {
-  return packages.some((pkg) => isSubagentPackageSource(pkg.source) && pkg.extensionEnabled)
-}
-
-function isSubagentPackageSource(source: string): boolean {
-  const base = `npm:${SUBAGENT_PACKAGE_NAME}`
-  return source === base || source.startsWith(`${base}@`)
+  return packages.some((pkg) =>
+    pkg.packageName === SUBAGENT_PACKAGE_NAME && pkg.extensionEnabled
+  )
 }
 
 function isAdvisorPackageSource(source: string): boolean {

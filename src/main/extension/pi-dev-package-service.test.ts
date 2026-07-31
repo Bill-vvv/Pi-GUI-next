@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -98,8 +98,18 @@ test('uses strict Pi command arguments and rejects invalid package names before 
 
   await service.install('@scope/good-name')
   assert.deepEqual(await service.list(), [
-    { source: 'npm:good-name@1.2.3', filtered: false, extensionEnabled: true },
-    { source: 'git:github.com/example/tools', filtered: true, extensionEnabled: false }
+    {
+      source: 'npm:good-name@1.2.3',
+      packageName: 'good-name',
+      filtered: false,
+      extensionEnabled: true
+    },
+    {
+      source: 'git:github.com/example/tools',
+      packageName: null,
+      filtered: true,
+      extensionEnabled: false
+    }
   ])
   await service.remove('npm:good-name')
   await service.update('git:github.com/example/tools')
@@ -147,9 +157,15 @@ test('toggles only the package extension filter while preserving other PackageSo
   const service = new PiDevPackageService({ agentDir })
 
   assert.deepEqual(await service.list(), [
-    { source: 'npm:plain', filtered: false, extensionEnabled: true },
+    {
+      source: 'npm:plain',
+      packageName: 'plain',
+      filtered: false,
+      extensionEnabled: true
+    },
     {
       source: 'npm:pi-subagents@1.0.0',
+      packageName: 'pi-subagents',
       filtered: true,
       extensionEnabled: false
     }
@@ -183,6 +199,95 @@ test('toggles only the package extension filter while preserving other PackageSo
   await assert.rejects(
     service.setExtensionEnabled('npm:missing', true),
     /not present in user settings/u
+  )
+})
+
+test('recognizes and toggles a local PackageSource by its manifest package name', async (t) => {
+  const agentDir = await mkdtemp(join(tmpdir(), 'pi-gui-local-package-toggle-'))
+  t.after(() => rm(agentDir, { recursive: true, force: true }))
+  const packageDirectory = join(agentDir, 'packages', 'pi-plugin')
+  await mkdir(packageDirectory, { recursive: true })
+  await writeFile(join(packageDirectory, 'package.json'), JSON.stringify({
+    name: '@cortexkit/pi-magic-context',
+    version: '0.33.0'
+  }), 'utf8')
+  await writeFile(join(agentDir, 'settings.json'), JSON.stringify({
+    packages: [{
+      source: './packages/pi-plugin',
+      extensions: [],
+      skills: ['skills'],
+      custom: { retained: true }
+    }]
+  }), 'utf8')
+  const service = new PiDevPackageService({ agentDir })
+
+  assert.deepEqual(await service.list(), [{
+    source: './packages/pi-plugin',
+    packageName: '@cortexkit/pi-magic-context',
+    filtered: true,
+    extensionEnabled: false
+  }])
+
+  await service.setPackageExtensionEnabled('@cortexkit/pi-magic-context', true)
+  let settings = JSON.parse(await readFile(join(agentDir, 'settings.json'), 'utf8')) as {
+    packages: Array<Record<string, unknown>>
+  }
+  assert.deepEqual(settings.packages[0], {
+    source: './packages/pi-plugin',
+    skills: ['skills'],
+    custom: { retained: true }
+  })
+
+  await service.setPackageExtensionEnabled('@cortexkit/pi-magic-context', false)
+  settings = JSON.parse(await readFile(join(agentDir, 'settings.json'), 'utf8')) as {
+    packages: Array<Record<string, unknown>>
+  }
+  assert.deepEqual(settings.packages[0], {
+    source: './packages/pi-plugin',
+    extensions: [],
+    skills: ['skills'],
+    custom: { retained: true }
+  })
+})
+
+test('keeps a local PackageSource listable when its manifest identity is unavailable', async (t) => {
+  const agentDir = await mkdtemp(join(tmpdir(), 'pi-gui-unavailable-package-name-'))
+  t.after(() => rm(agentDir, { recursive: true, force: true }))
+  const packageDirectory = join(agentDir, 'packages', 'invalid')
+  await mkdir(packageDirectory, { recursive: true })
+  await writeFile(join(packageDirectory, 'package.json'), '{ invalid', 'utf8')
+  await writeFile(join(agentDir, 'settings.json'), JSON.stringify({
+    packages: ['./packages/invalid']
+  }), 'utf8')
+  const service = new PiDevPackageService({ agentDir })
+
+  assert.deepEqual(await service.list(), [{
+    source: './packages/invalid',
+    packageName: null,
+    filtered: false,
+    extensionEnabled: true
+  }])
+})
+
+test('rejects ambiguous PackageSources that declare the same package name', async (t) => {
+  const agentDir = await mkdtemp(join(tmpdir(), 'pi-gui-ambiguous-package-toggle-'))
+  t.after(() => rm(agentDir, { recursive: true, force: true }))
+  const packageDirectory = join(agentDir, 'packages', 'pi-plugin')
+  await mkdir(packageDirectory, { recursive: true })
+  await writeFile(join(packageDirectory, 'package.json'), JSON.stringify({
+    name: '@cortexkit/pi-magic-context'
+  }), 'utf8')
+  await writeFile(join(agentDir, 'settings.json'), JSON.stringify({
+    packages: [
+      'npm:@cortexkit/pi-magic-context@0.33.0',
+      './packages/pi-plugin'
+    ]
+  }), 'utf8')
+  const service = new PiDevPackageService({ agentDir })
+
+  await assert.rejects(
+    service.setPackageExtensionEnabled('@cortexkit/pi-magic-context', false),
+    /must resolve uniquely/u
   )
 })
 

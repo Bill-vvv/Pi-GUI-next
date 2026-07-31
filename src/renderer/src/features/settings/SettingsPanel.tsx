@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import {
   MAGIC_CONTEXT_PACKAGE_NAME,
@@ -10,6 +10,7 @@ import type {
   KernelExtensionSelectionKind,
   KernelInstalledPackage,
   KernelModelPricingFetchResult,
+  KernelPiPackageInstallJob,
   KernelPiDevCatalog,
   KernelProviderAuthEvent,
   KernelProviderAuthType,
@@ -59,6 +60,7 @@ type SettingsPanelProps = {
   onSearchPiDevExtensions: (query: string) => Promise<KernelPiDevCatalog>
   onSearchPiDevPackages: (query: string) => Promise<KernelPiDevCatalog>
   onListPiPackages: () => Promise<KernelInstalledPackage[]>
+  packageInstallJobs: KernelPiPackageInstallJob[]
   onInstallPiDevPackage: (name: string) => Promise<void>
   onRemovePiPackage: (source: string) => Promise<void>
   onUpdatePiPackage: (source: string) => Promise<void>
@@ -127,6 +129,7 @@ export function SettingsPanel({
   onSearchPiDevExtensions,
   onSearchPiDevPackages,
   onListPiPackages,
+  packageInstallJobs,
   onInstallPiDevPackage,
   onRemovePiPackage,
   onUpdatePiPackage,
@@ -164,11 +167,24 @@ export function SettingsPanel({
 }: SettingsPanelProps): React.JSX.Element {
   const [removingExtensionPath, setRemovingExtensionPath] = useState<string | null>(null)
   const [packageRevision, setPackageRevision] = useState(0)
+  const handledPackageInstallJobs = useRef(new Set<string>())
   const namingValue = sessionNamingValue(state.sessionNaming)
   const selectedNamingModel = state.sessionNaming.mode === 'model' ? state.sessionNaming : null
   const selectedNamingModelAvailable = selectedNamingModel === null || state.availableModels.some(
     (model) => model.provider === selectedNamingModel.provider && model.id === selectedNamingModel.modelId
   )
+  const packageInstallActive = packageInstallJobs.some((job) =>
+    job.status === 'queued' || job.status === 'running'
+  )
+
+  useEffect(() => {
+    for (const job of packageInstallJobs) {
+      if (job.status !== 'succeeded' && job.status !== 'failed') continue
+      if (handledPackageInstallJobs.current.has(job.id)) continue
+      handledPackageInstallJobs.current.add(job.id)
+      setPackageRevision((revision) => revision + 1)
+    }
+  }, [packageInstallJobs])
   const namingOptionGroups: SelectOptionGroup[] = [
     {
       options: [
@@ -629,7 +645,7 @@ export function SettingsPanel({
               </h2>
             </div>
             <InstalledPackages
-              busy={busy}
+              busy={busy || packageInstallActive}
               pendingAction={pendingAction}
               revision={packageRevision}
               onList={onListPiPackages}
@@ -648,8 +664,9 @@ export function SettingsPanel({
             />
             <PiDevCatalog
               kind="package"
-              busy={busy}
+              busy={busy || packageInstallActive}
               pendingAction={pendingAction}
+              packageInstallJobs={packageInstallJobs}
               revision={packageRevision}
               onSearch={onSearchPiDevPackages}
               onInstall={async (name) => {
@@ -677,7 +694,8 @@ export function SettingsPanel({
               detailUrl="https://pi.dev/packages/pi-subagents"
               description="为 Pi 提供可委派的 Subagent Extension"
               notice="安装与启停会在新建或显式重载 Session 后生效。"
-              busy={busy}
+              busy={busy || packageInstallActive}
+              packageInstallJobs={packageInstallJobs}
               onListPiPackages={onListPiPackages}
               onInstallPiDevPackage={async (name) => {
                 await onInstallPiDevPackage(name)
@@ -700,7 +718,8 @@ export function SettingsPanel({
                   健康检查请运行 <code>npx @cortexkit/magic-context@latest doctor --harness pi</code>。
                 </>
               )}
-              busy={busy}
+              busy={busy || packageInstallActive}
+              packageInstallJobs={packageInstallJobs}
               onListPiPackages={onListPiPackages}
               onInstallPiDevPackage={async (name) => {
                 await onInstallPiDevPackage(name)
@@ -711,8 +730,9 @@ export function SettingsPanel({
             />
             <PiDevCatalog
               kind="extension"
-              busy={busy}
+              busy={busy || packageInstallActive}
               pendingAction={pendingAction}
+              packageInstallJobs={packageInstallJobs}
               revision={packageRevision}
               onSearch={onSearchPiDevExtensions}
               onInstall={async (name) => {

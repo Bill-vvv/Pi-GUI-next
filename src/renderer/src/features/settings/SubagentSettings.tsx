@@ -19,8 +19,8 @@ import {
 } from '../../thinking-level'
 import { unknownErrorMessage as errorMessage } from '../../unknown-error-message'
 import { SettingsField } from './SettingsField'
+import { findUniqueInstalledPackage } from './installed-package-selection'
 
-const SUBAGENT_PACKAGE_SOURCE = `npm:${SUBAGENT_PACKAGE_NAME}`
 const SUBAGENT_PAGE_SIZE = 6
 
 type SubagentPackageState = 'loading' | 'not-installed' | 'enabled' | 'disabled' | 'error'
@@ -141,10 +141,14 @@ export function SubagentSettings({
     void listPiPackagesRef.current().then(
       (packages) => {
         if (packageRequestRevision.current !== revision) return
-        const pkg = packages.find(({ source }) => isSubagentPackageSource(source)) ?? null
-        setPackageState(
-          pkg === null ? 'not-installed' : pkg.extensionEnabled ? 'enabled' : 'disabled'
-        )
+        try {
+          const pkg = findUniqueInstalledPackage(packages, SUBAGENT_PACKAGE_NAME)
+          setPackageState(
+            pkg === null ? 'not-installed' : pkg.extensionEnabled ? 'enabled' : 'disabled'
+          )
+        } catch {
+          setPackageState('error')
+        }
       },
       () => {
         if (packageRequestRevision.current === revision) setPackageState('error')
@@ -1444,8 +1448,4 @@ function listValue(value: string[] | null): string {
 function parseListValue(value: string): string[] | null {
   const items = value.split(',').map((item) => item.trim()).filter(Boolean)
   return items.length === 0 ? null : items
-}
-
-function isSubagentPackageSource(source: string): boolean {
-  return source === SUBAGENT_PACKAGE_SOURCE || source.startsWith(`${SUBAGENT_PACKAGE_SOURCE}@`)
 }

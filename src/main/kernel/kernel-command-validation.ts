@@ -36,6 +36,7 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
     value.type === 'kernel.list-providers' ||
     value.type === 'kernel.list-provider-credentials' ||
     value.type === 'kernel.list-pi-packages' ||
+    value.type === 'kernel.list-pi-package-install-jobs' ||
     value.type === 'kernel.list-advisor-definitions' ||
     value.type === 'kernel.list-subagent-definitions' ||
     value.type === 'kernel.update-pi-packages'

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, open, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 
 import { lock } from 'proper-lockfile'
@@ -19,6 +20,7 @@ const MAX_RESPONSE_BYTES = 1_000_000
 const MAX_PACKAGES = 50
 const COMMAND_TIMEOUT_MS = 180_000
 const MAX_COMMAND_OUTPUT_BYTES = 16_384
+const MAX_PACKAGE_MANIFEST_BYTES = 64 * 1024
 
 export interface PiDevCommandOptions {
   cwd: string
@@ -84,8 +86,12 @@ export class PiDevPackageService {
   }
 
   async install(name: string): Promise<void> {
-    assertValidNpmPackageName(name)
+    this.validateInstallName(name)
     await this.runPackageCommand(['install', `npm:${name}`, '--no-approve'])
+  }
+
+  validateInstallName(name: string): void {
+    assertValidNpmPackageName(name)
   }
 
   async list(): Promise<KernelInstalledPackage[]> {
@@ -96,8 +102,40 @@ export class PiDevPackageService {
     source: string,
     enabled: boolean
   ): Promise<KernelInstalledPackage[]> {
+    return this.updateExtensionEnabled(
+      enabled,
+      (packages) => findConfiguredPackageIndex(packages, source)
+    )
+  }
+
+  async setPackageExtensionEnabled(
+    packageName: string,
+    enabled: boolean
+  ): Promise<KernelInstalledPackage[]> {
+    assertValidNpmPackageName(packageName)
+    return this.updateExtensionEnabled(enabled, async (packages, settingsDirectory) => {
+      const descriptions = await describeInstalledPackages(packages, settingsDirectory)
+      const matches = descriptions.flatMap((pkg, index) =>
+        pkg.packageName === packageName ? [index] : []
+      )
+      if (matches.length === 0) return -1
+      if (matches.length > 1) {
+        throw new Error('Pi package source must resolve uniquely by package name.')
+      }
+      return matches[0]!
+    })
+  }
+
+  private async updateExtensionEnabled(
+    enabled: boolean,
+    findIndex: (
+      packages: Array<string | Record<string, unknown>>,
+      settingsDirectory: string
+    ) => number | Promise<number>
+  ): Promise<KernelInstalledPackage[]> {
     const settingsPath = join(this.agentDir, 'settings.json')
-    await mkdir(dirname(settingsPath), { recursive: true })
+    const settingsDirectory = dirname(settingsPath)
+    await mkdir(settingsDirectory, { recursive: true })
     const release = await lock(settingsPath, {
       realpath: false,
       retries: {
@@ -110,11 +148,13 @@ export class PiDevPackageService {
     try {
       const settings = await readSettings(settingsPath)
       const packages = readPackageSources(settings)
-      const index = findConfiguredPackageIndex(packages, source)
+      const index = await findIndex(packages, settingsDirectory)
       if (index === -1) throw new Error('Pi package is not present in user settings.')
       const current = packages[index]!
       if (enabled) {
-        if (typeof current === 'string') return describeInstalledPackages(packages)
+        if (typeof current === 'string') {
+          return describeInstalledPackages(packages, settingsDirectory)
+        }
         const next = { ...current }
         delete next.extensions
         if (next.autoload === false) delete next.autoload
@@ -126,7 +166,7 @@ export class PiDevPackageService {
       }
       settings.packages = packages
       await writeSettingsAtomically(settingsPath, settings)
-      return describeInstalledPackages(packages)
+      return describeInstalledPackages(packages, settingsDirectory)
     } finally {
       await release()
     }
@@ -321,7 +361,7 @@ async function readInstalledPackages(settingsPath: string): Promise<KernelInstal
     if (isMissingPathError(error)) return []
     throw error
   }
-  return describeInstalledPackages(readPackageSources(settings))
+  return describeInstalledPackages(readPackageSources(settings), dirname(settingsPath))
 }
 
 function readPackageSources(settings: Record<string, unknown>): Array<string | Record<string, unknown>> {
@@ -352,13 +392,15 @@ function readPackageSources(settings: Record<string, unknown>): Array<string | R
   return settings.packages as Array<string | Record<string, unknown>>
 }
 
-function describeInstalledPackages(
-  packages: readonly (string | Record<string, unknown>)[]
-): KernelInstalledPackage[] {
-  return packages.map((item) => {
+async function describeInstalledPackages(
+  packages: readonly (string | Record<string, unknown>)[],
+  settingsDirectory: string
+): Promise<KernelInstalledPackage[]> {
+  return Promise.all(packages.map(async (item) => {
     const source = typeof item === 'string' ? item : item.source as string
     return {
       source,
+      packageName: await packageNameFromSource(source, settingsDirectory),
       filtered: typeof item !== 'string',
       extensionEnabled: typeof item === 'string' || (
         Array.isArray(item.extensions)
@@ -366,7 +408,7 @@ function describeInstalledPackages(
           : item.autoload !== false
       )
     }
-  })
+  }))
 }
 
 function findConfiguredPackageIndex(
@@ -423,10 +465,60 @@ async function writeSettingsAtomically(
 
 async function readInstalledPackageNames(settingsPath: string): Promise<Set<string>> {
   const packages = await readInstalledPackages(settingsPath)
-  return new Set(packages.flatMap(({ source }) => {
-    const name = packageNameFromNpmSource(source)
-    return name === undefined ? [] : [name]
-  }))
+  return new Set(packages.flatMap(({ packageName }) =>
+    packageName === null ? [] : [packageName]
+  ))
+}
+
+async function packageNameFromSource(
+  source: string,
+  settingsDirectory: string
+): Promise<string | null> {
+  const npmPackageName = packageNameFromNpmSource(source)
+  if (npmPackageName !== undefined) return npmPackageName
+  if (!isLocalPackageSource(source)) return null
+  const packageDirectory = source.startsWith('~/')
+    ? resolve(homedir(), source.slice(2))
+    : resolve(settingsDirectory, source)
+  return readLocalPackageName(packageDirectory)
+}
+
+async function readLocalPackageName(packageDirectory: string): Promise<string | null> {
+  let manifest
+  try {
+    manifest = await open(join(packageDirectory, 'package.json'), 'r')
+  } catch {
+    return null
+  }
+  try {
+    const stats = await manifest.stat()
+    if (!stats.isFile()) return null
+    const bytes = Buffer.alloc(MAX_PACKAGE_MANIFEST_BYTES + 1)
+    let bytesRead = 0
+    while (bytesRead < bytes.byteLength) {
+      const result = await manifest.read(
+        bytes,
+        bytesRead,
+        bytes.byteLength - bytesRead,
+        bytesRead
+      )
+      if (result.bytesRead === 0) break
+      bytesRead += result.bytesRead
+    }
+    if (bytesRead > MAX_PACKAGE_MANIFEST_BYTES) return null
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(bytes.subarray(0, bytesRead).toString('utf8'))
+    } catch {
+      return null
+    }
+    if (!isRecord(parsed) || typeof parsed.name !== 'string') return null
+    return isValidNpmPackageName(parsed.name) ? parsed.name : null
+  } catch {
+    return null
+  } finally {
+    await manifest.close().catch(() => undefined)
+  }
 }
 
 function packageNameFromNpmSource(source: string): string | undefined {
@@ -446,6 +538,14 @@ function assertValidNpmPackageName(name: string): void {
 function isValidNpmPackageName(name: string): boolean {
   if (name.length === 0 || name.length > 214 || name !== name.toLowerCase()) return false
   return /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/u.test(name)
+}
+
+function isLocalPackageSource(source: string): boolean {
+  return source.startsWith('/') ||
+    source.startsWith('./') ||
+    source.startsWith('../') ||
+    source.startsWith('~/') ||
+    (!/^[a-z][a-z0-9+.-]*:/iu.test(source) && /[\\/]/u.test(source))
 }
 
 function isValidPackageFilterEntry(value: unknown): value is string {

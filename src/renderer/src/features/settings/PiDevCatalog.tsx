@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import type {
+  KernelPiPackageInstallJob,
   KernelPiDevCatalog,
   KernelPiDevPackage
 } from '../../../../shared/kernel-contract'
@@ -15,6 +16,7 @@ type PiDevCatalogProps = {
   kind: 'package' | 'extension'
   busy: boolean
   pendingAction: WorkbenchOperation | null
+  packageInstallJobs: KernelPiPackageInstallJob[]
   revision: number
   onSearch: (query: string) => Promise<KernelPiDevCatalog>
   onInstall: (name: string) => Promise<void>
@@ -26,6 +28,7 @@ export function PiDevCatalog({
   kind,
   busy,
   pendingAction,
+  packageInstallJobs,
   revision,
   onSearch,
   onInstall,
@@ -81,7 +84,7 @@ export function PiDevCatalog({
     try {
       if (pkg.installed) await onRemove(`npm:${pkg.name}`)
       else await onInstall(pkg.name)
-      await loadCatalog(activeQuery)
+      if (pkg.installed) await loadCatalog(activeQuery)
     } catch (error) {
       setCatalogError(`${action}失败：${errorMessage(error)}`)
     } finally {
@@ -92,6 +95,10 @@ export function PiDevCatalog({
   const packageActionPending =
     isWorkbenchAction(pendingAction, 'install-pi-dev-package') ||
     isWorkbenchAction(pendingAction, 'remove-pi-package')
+  const isPackageInstalling = (name: string): boolean => {
+    const job = [...packageInstallJobs].reverse().find((candidate) => candidate.name === name)
+    return job?.status === 'queued' || job?.status === 'running'
+  }
   const catalogLabel = kind === 'extension' ? 'Extension 类型 Package' : 'Package'
   const catalogUrl = kind === 'extension'
     ? 'https://pi.dev/packages?type=extension'
@@ -178,10 +185,10 @@ export function PiDevCatalog({
                     type="button"
                     className="settings-extension-remove"
                     data-installed={pkg.installed || undefined}
-                    disabled={busy || catalogLoading || packageActionPending}
+                    disabled={busy || catalogLoading || packageActionPending || isPackageInstalling(pkg.name)}
                     onClick={() => void changeInstallation(pkg)}
                   >
-                    {actingPackage === pkg.name
+                    {actingPackage === pkg.name || isPackageInstalling(pkg.name)
                       ? pkg.installed ? '卸载中…' : '安装中…'
                       : pkg.installed ? '卸载' : '安装'}
                   </button>

@@ -9,6 +9,7 @@ import {
   type KernelArchiveReceipt,
   type KernelForkCandidate,
   type KernelMutationAck,
+  type KernelPiPackageInstallJob,
   type KernelProjectTrustChoice,
   type KernelPromptAttachment,
   type KernelSessionPreview,
@@ -71,6 +72,7 @@ export function App(): React.JSX.Element {
   const [compactionNotice, setCompactionNotice] = useState<'cancelled' | 'failed' | null>(null)
   const [systemFonts, setSystemFonts] = useState<string[] | null>(null)
   const [systemFontsError, setSystemFontsError] = useState<string | null>(null)
+  const [packageInstallJobs, setPackageInstallJobs] = useState<KernelPiPackageInstallJob[]>([])
   const [completedAction, setCompletedAction] = useState<WorkbenchCompletedAction | null>(null)
   const [connectionAttempt, setConnectionAttempt] = useState(0)
   const kernelStateRef = useRef<KernelState | null>(null)
@@ -140,6 +142,21 @@ export function App(): React.JSX.Element {
       (error: unknown) => {
         if (!active) return
         setSystemFontsError(errorMessage(error))
+      }
+    )
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    void window.piGui.listPiPackageInstallJobs().then(
+      (jobs) => {
+        if (active) setPackageInstallJobs(jobs)
+      },
+      () => {
+        if (active) setPackageInstallJobs([])
       }
     )
     return () => {
@@ -226,6 +243,12 @@ export function App(): React.JSX.Element {
       unsubscribe = window.piGui.subscribe((event) => {
         if (!active) return
         try {
+          if (event.type === 'kernel.pi-package-install') {
+            setPackageInstallJobs((current) => [
+              ...current.filter(({ id }) => id !== event.job.id),
+              event.job
+            ].slice(-32))
+          }
           barrier.handleEvent(event)
           if (
             event.type === 'kernel.compaction-ended' &&
@@ -797,6 +820,7 @@ export function App(): React.JSX.Element {
       operationNotifications={operationNotifications}
       systemFonts={systemFonts}
       systemFontsError={systemFontsError}
+      packageInstallJobs={packageInstallJobs}
       forkDialogOpen={forkDialogOpen}
       forkCandidates={forkCandidates}
       forkCandidatesLoading={forkCandidatesLoading}

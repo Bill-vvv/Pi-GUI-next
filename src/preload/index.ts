@@ -18,6 +18,7 @@ import {
   type KernelCommand,
   type KernelEvent,
   type KernelInstalledPackage,
+  type KernelPiPackageInstallJob,
   type KernelModelPricingFetchResult,
   type KernelForkCandidate,
   type KernelForkResult,
@@ -245,6 +246,14 @@ const kernelApi: KernelApi = {
     const command: KernelCommand = { type: 'kernel.list-pi-packages' }
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelInstalledPackage[]>
+  },
+  listPiPackageInstallJobs: () => {
+    const command: KernelCommand = { type: 'kernel.list-pi-package-install-jobs' }
+
+    return ipcRenderer.invoke(
+      KERNEL_COMMAND_CHANNEL,
+      command
+    ) as Promise<KernelPiPackageInstallJob[]>
   },
   installPiDevPackage: (name) => {
     const command: KernelCommand = { type: 'kernel.install-pi-dev-package', name }
