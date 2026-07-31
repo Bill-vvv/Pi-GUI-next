@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 
 import type { KernelState, ThinkingLevel } from '../../../../shared/kernel-contract'
 import { Icon } from '../../components/Icon'
+import { IconButton } from '../../components/IconButton'
 import { useViewportPopoverPosition } from '../../components/useViewportPopoverPosition'
 import {
   localizedThinkingLevelLabel,
@@ -74,6 +75,9 @@ export function ComposerModelPicker({
   const modelPickerDialogLabel = openAiFastModeAvailable
     ? '模型、思考强度和 Fast mode 设置'
     : '模型和思考强度设置'
+  const openAiFastModeLabel = openAiFastMode
+    ? '关闭 Fast mode'
+    : '开启 Fast mode'
   const openAiFastModeTooltip = openAiFastMode
     ? 'Fast mode 已开启：当前请求使用 Priority processing，可能消耗更多订阅额度或按 Priority 费率计费。点击关闭。'
     : '开启 Fast mode：请求将使用 Priority processing，可能消耗更多订阅额度或按 Priority 费率计费。'
@@ -237,9 +241,7 @@ export function ComposerModelPicker({
           </span>
         ) : null}
         {openAiFastModeAvailable && openAiFastMode ? (
-          <span className="model-summary-fast">
-            <Icon name="bolt" size="sm" />
-          </span>
+          <span className="model-summary-meta">Fast</span>
         ) : null}
       </summary>
       {modelPickerOpen && modelPickerPosition !== null
@@ -302,25 +304,23 @@ export function ComposerModelPicker({
 
                 {openAiFastModeAvailable ? (
                   <section className="model-picker-fast-section" aria-label="Fast mode">
-                    <button
-                      className={`picker-option model-picker-item${openAiFastMode ? ' selected' : ''}`}
-                      type="button"
-                      aria-pressed={openAiFastMode}
-                      aria-busy={openAiFastModePending ? true : undefined}
-                      data-tooltip={openAiFastModeTooltip}
-                      data-tooltip-placement="right"
-                      disabled={busy || runtimeStatus !== 'ready'}
-                      onClick={() => {
-                        void onSetOpenAiFastMode(!openAiFastMode).catch(() => undefined)
-                      }}
-                    >
-                      <span className="model-picker-option-copy">
-                        <span className="model-picker-option-label">Fast mode</span>
-                      </span>
-                      {openAiFastMode
-                        ? <span className="model-picker-selected">当前</span>
-                        : null}
-                    </button>
+                    <div className="model-picker-fast-row">
+                      <span className="model-picker-option-label">Fast mode</span>
+                      <IconButton
+                        className={`model-picker-fast-action${openAiFastMode ? ' active' : ''}`}
+                        icon="bolt"
+                        iconSize="sm"
+                        label={openAiFastModeLabel}
+                        title={openAiFastModeTooltip}
+                        type="button"
+                        aria-pressed={openAiFastMode}
+                        aria-busy={openAiFastModePending ? true : undefined}
+                        disabled={busy || runtimeStatus !== 'ready'}
+                        onClick={() => {
+                          void onSetOpenAiFastMode(!openAiFastMode).catch(() => undefined)
+                        }}
+                      />
+                    </div>
                   </section>
                 ) : null}
 
