@@ -101,7 +101,7 @@ export function App(): React.JSX.Element {
     previewPendingKey,
     getSessionViewTarget,
     reconcileKernelState,
-    previewSession,
+    selectSession,
     clearSessionView,
     startSession,
     waitForSessionStart,
@@ -851,7 +851,7 @@ export function App(): React.JSX.Element {
       onResolveProjectTrust={resolveProjectTrust}
       onActivateSession={(sessionKey) => ensureSessionRuntime(sessionKey, 'immediate')}
       onEnsureSessionRuntime={ensureSessionRuntime}
-      onPreviewSession={previewSession}
+      onSelectSession={selectSession}
       onClearSessionPreview={clearSessionView}
       onClearArchivedSessionPreview={() => setArchivedSessionPreview(null)}
       onOpenForkDialog={openForkDialog}

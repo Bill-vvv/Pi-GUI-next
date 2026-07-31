@@ -139,7 +139,7 @@ type WorkbenchProps = {
     sessionKey: string,
     mode?: 'immediate' | 'settled'
   ) => Promise<void>
-  onPreviewSession: (sessionKey: string) => Promise<void>
+  onSelectSession: (sessionKey: string) => Promise<void>
   onClearSessionPreview: () => void
   onClearArchivedSessionPreview: () => void
   onOpenForkDialog: (preferredUserText?: string) => void
@@ -260,7 +260,7 @@ export function Workbench({
   onResolveProjectTrust,
   onActivateSession,
   onEnsureSessionRuntime,
-  onPreviewSession,
+  onSelectSession,
   onClearSessionPreview,
   onClearArchivedSessionPreview,
   onOpenForkDialog,
@@ -712,9 +712,12 @@ export function Workbench({
           completedAction.succeeded
           ? '已复制回答'
           : null
-  const contextActionStatus = sessionPreviewPending
-    ? '正在读取对话…'
-    : runtimeContextActionStatus(pendingAction)
+  const contextActionStatus =
+    sessionPreviewPending &&
+    sessionPreview === null &&
+    displayedConversation.entries.length === 0
+      ? '正在打开对话…'
+      : runtimeContextActionStatus(pendingAction)
   const extensionActionError = settingsOpen &&
     settingsSection === 'extensions' &&
     actionFailure?.owner === 'extension'
@@ -770,16 +773,9 @@ export function Workbench({
       return
     }
 
-    // Stopped/crashed historical targets: switch the view this frame, then dwell
-    // briefly so rapid browsing only starts the last selected Runtime.
-    if (!isLive) {
-      void onPreviewSession(sessionKey).catch(() => undefined)
-      void onEnsureSessionRuntime(sessionKey, 'settled').catch(() => undefined)
-      return
-    }
-
-    // Already-managed live Runtime: switch context immediately, no dwell.
-    void onEnsureSessionRuntime(sessionKey, 'immediate').catch(() => undefined)
+    // Historical targets publish their cached shell now, then share one dwell so
+    // rapid browsing starts preview/activation only for the latest selection.
+    void onSelectSession(sessionKey).catch(() => undefined)
   }
   const togglePinnedProject = (projectKey: string): void => {
     setPinnedProjectKeys((current) => {
@@ -1214,7 +1210,7 @@ export function Workbench({
                 onClick={onClearArchivedSessionPreview}
               />
             </span>
-          ) : sessionPreview !== null && viewingInactiveSession ? (
+          ) : sessionPreview !== null && viewingInactiveSession && !sessionPreviewPending ? (
             <span className="runtime-context-status">历史预览</span>
           ) : null}
           {contextActionStatus !== null ? (
@@ -1236,6 +1232,7 @@ export function Workbench({
             : viewingInactiveSession
             ? activeSession?.runtimeStatus ?? 'ready'
             : runtime.status}
+          loading={sessionPreviewPending}
           compactionActive={
             !viewingArchivedSession &&
             !viewingInactiveSession &&

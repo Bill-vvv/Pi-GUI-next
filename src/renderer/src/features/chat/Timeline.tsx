@@ -54,6 +54,7 @@ type TimelineProps = {
   entries: KernelConversationEntry[]
   activeRunStartIndex: number | null
   runtimeStatus: RuntimeStatus
+  loading: boolean
   compactionActive: boolean
   showPromptNavigation: boolean
   toolDisplayDensity: ToolDisplayDensity
@@ -130,6 +131,7 @@ export function Timeline({
   entries,
   activeRunStartIndex,
   runtimeStatus,
+  loading,
   compactionActive,
   showPromptNavigation,
   toolDisplayDensity,
@@ -963,7 +965,7 @@ export function Timeline({
           </>
         ) : (
           <p className="conversation-empty-state" role="status">
-            {emptyStateSlogan}
+            {loading ? '正在打开对话…' : emptyStateSlogan}
           </p>
         )}
       </div>

@@ -15,7 +15,7 @@ type SessionRuntimeControllerOptions = Omit<
 export type SessionRuntimeControllerApi = SessionRuntimeSnapshot & {
   getSessionViewTarget: () => SessionRuntimeSnapshot['sessionViewTarget']
   reconcileKernelState: (state: KernelState, initializing?: boolean) => void
-  previewSession: (sessionKey: string) => Promise<void>
+  selectSession: (sessionKey: string) => Promise<void>
   clearSessionView: () => void
   startSession: () => Promise<void>
   waitForSessionStart: () => Promise<void>
@@ -54,7 +54,9 @@ export function useSessionRuntimeController(
         optionsRef.current.onCompletedAction(action, succeeded),
       onClearArchivedPreview: () => optionsRef.current.onClearArchivedPreview(),
       setTimer: options.setTimer,
-      clearTimer: options.clearTimer
+      clearTimer: options.clearTimer,
+      setPostTask: options.setPostTask,
+      clearPostTask: options.clearPostTask
     })
   if (controllerRef.current === null) controllerRef.current = createController()
 
@@ -81,7 +83,7 @@ export function useSessionRuntimeController(
     getSessionViewTarget: () => getController().getSnapshot().sessionViewTarget,
     reconcileKernelState: (state, initializing) =>
       getController().reconcileKernelState(state, initializing),
-    previewSession: (sessionKey) => getController().preview(sessionKey),
+    selectSession: (sessionKey) => getController().select(sessionKey),
     clearSessionView: () => getController().clear(),
     startSession: () => getController().start(),
     waitForSessionStart: () => getController().waitForStart(),
