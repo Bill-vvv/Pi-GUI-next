@@ -49,6 +49,28 @@ import {
   type GitMutationResponse,
   type GitRefreshResponse
 } from '../shared/git-contract'
+import {
+  REMOTE_ADMIN_COMMAND_CHANNEL,
+  type RemoteAccessStatus,
+  type RemoteAdminApi,
+  type RemoteAdminCommand,
+  type RemotePairingCode
+} from '../shared/remote-admin-contract'
+
+const remoteAdminApi: RemoteAdminApi = {
+  getStatus: () => {
+    const command: RemoteAdminCommand = { type: 'remote-admin.get-status' }
+    return ipcRenderer.invoke(REMOTE_ADMIN_COMMAND_CHANNEL, command) as Promise<RemoteAccessStatus>
+  },
+  createPairingCode: () => {
+    const command: RemoteAdminCommand = { type: 'remote-admin.create-pairing-code' }
+    return ipcRenderer.invoke(REMOTE_ADMIN_COMMAND_CHANNEL, command) as Promise<RemotePairingCode>
+  },
+  revokeDevice: () => {
+    const command: RemoteAdminCommand = { type: 'remote-admin.revoke-device' }
+    return ipcRenderer.invoke(REMOTE_ADMIN_COMMAND_CHANNEL, command) as Promise<RemoteAccessStatus>
+  }
+}
 
 const gitApi: GitApi = {
   refresh: (projectKey) => {
@@ -588,3 +610,4 @@ const kernelApi: KernelApi = {
 
 contextBridge.exposeInMainWorld('piGui', kernelApi)
 contextBridge.exposeInMainWorld('piGit', gitApi)
+contextBridge.exposeInMainWorld('piRemote', remoteAdminApi)

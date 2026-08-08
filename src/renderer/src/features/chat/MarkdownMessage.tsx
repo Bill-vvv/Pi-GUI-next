@@ -13,7 +13,7 @@ import ReactMarkdown, { type Components, type Options as MarkdownOptions } from 
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math-extended'
 
-import { normalizeOpenTarget } from '../../../../shared/external-url'
+import { getRendererHost } from '../../host'
 import {
   buildStreamingMarkdownModel,
   type StreamingMarkdownBlock
@@ -129,11 +129,11 @@ function ExternalLink({
 
 function openExternalLink(event: MouseEvent<HTMLAnchorElement>, href: string): void {
   event.preventDefault()
-  void window.piGui.openExternal(href).catch((error: unknown) => {
+  void getRendererHost().openExternal(href).catch((error: unknown) => {
     console.error('Failed to open external Markdown link.', error)
   })
 }
 
 function normalizeMarkdownUrl(url: string): string {
-  return normalizeOpenTarget(url) ?? ''
+  return getRendererHost().normalizeOpenTarget(url) ?? ''
 }

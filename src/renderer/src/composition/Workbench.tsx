@@ -38,6 +38,10 @@ import type {
   ShortcutSettings,
   ThinkingLevel
 } from '../../../shared/kernel-contract'
+import type {
+  RemoteAccessStatus,
+  RemotePairingCode
+} from '../../../shared/remote-admin-contract'
 import {
   DEFAULT_SHORTCUT_SETTINGS,
   SHORTCUT_ACTION_IDS,
@@ -186,6 +190,9 @@ type WorkbenchProps = {
   onSubscribeProviderAuth: (
     listener: (event: KernelProviderAuthEvent) => void
   ) => () => void
+  onGetRemoteAccessStatus: () => Promise<RemoteAccessStatus>
+  onCreateRemotePairingCode: () => Promise<RemotePairingCode>
+  onRevokeRemoteDevice: () => Promise<RemoteAccessStatus>
   onSelectPromptAttachments: () => Promise<KernelPromptAttachment[]>
   onSearchProjectPaths: (query: string) => Promise<KernelProjectPathSearchResult>
   onSubmitAsk: (
@@ -296,6 +303,9 @@ export function Workbench({
   onCancelProviderLogin,
   onLogoutProvider,
   onSubscribeProviderAuth,
+  onGetRemoteAccessStatus,
+  onCreateRemotePairingCode,
+  onRevokeRemoteDevice,
   onSelectPromptAttachments,
   onSearchProjectPaths,
   onSubmitAsk,
@@ -1095,6 +1105,9 @@ export function Workbench({
             onCancelProviderLogin={onCancelProviderLogin}
             onLogoutProvider={onLogoutProvider}
             onSubscribeProviderAuth={onSubscribeProviderAuth}
+            onGetRemoteAccessStatus={onGetRemoteAccessStatus}
+            onCreateRemotePairingCode={onCreateRemotePairingCode}
+            onRevokeRemoteDevice={onRevokeRemoteDevice}
             onSetModel={(provider, modelId) => onSetModel(provider, modelId, 'settings')}
             onSetSessionNaming={onSetSessionNaming}
             onSetGeneral={onSetGeneral}

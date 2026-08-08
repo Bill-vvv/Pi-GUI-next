@@ -34,6 +34,7 @@ export type IconName =
   | 'undo'
   | 'unread'
   | 'preferences'
+  | 'remote'
   | 'settings'
   | 'skills'
   | 'stop'
@@ -302,6 +303,14 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
           <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.8" />
           <circle cx="12" cy="9" r="2.4" stroke="currentColor" strokeWidth="1.8" />
           <path d="M6.8 17c.75-2.45 2.5-3.7 5.2-3.7s4.45 1.25 5.2 3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      )
+    case 'remote':
+      return (
+        <svg {...common}>
+          <rect x="8" y="3.5" width="8" height="17" rx="2.2" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M10.5 6h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          <circle cx="12" cy="17.25" r="1" fill="currentColor" />
         </svg>
       )
     case 'settings':

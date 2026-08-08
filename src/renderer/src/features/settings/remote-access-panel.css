@@ -1,0 +1,148 @@
+.remote-access-panel {
+  min-width: 0;
+  display: grid;
+  gap: 24px;
+}
+
+.remote-access-error {
+  margin: 0;
+  padding: 0 12px;
+  color: var(--color-status-error);
+  font-size: var(--text-body-sm);
+  line-height: var(--line-body-sm);
+}
+
+.remote-access-origin {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-soft);
+  font-size: var(--text-meta);
+  line-height: var(--line-code);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-access-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.remote-access-action,
+.remote-access-dialog-actions button {
+  min-height: 36px;
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-control);
+  padding: 8px 12px;
+  color: var(--color-text-primary);
+  background: var(--color-surface-input);
+  font-size: var(--text-control);
+  line-height: var(--line-control);
+  cursor: pointer;
+  transition:
+    border-color var(--motion-duration-control) var(--motion-easing-standard),
+    background var(--motion-duration-control) var(--motion-easing-standard),
+    color var(--motion-duration-control) var(--motion-easing-standard);
+}
+
+.remote-access-action:hover:not(:disabled),
+.remote-access-dialog-actions button:hover:not(:disabled) {
+  border-color: var(--color-border-hover);
+  background: var(--color-surface-hover);
+}
+
+.remote-access-action:focus-visible,
+.remote-access-dialog-actions button:focus-visible {
+  outline: 2px solid var(--color-focus-outline);
+  outline-offset: 2px;
+}
+
+.remote-access-action:disabled,
+.remote-access-dialog-actions button:disabled {
+  color: var(--color-text-muted);
+  background: var(--color-surface-subtle);
+  cursor: not-allowed;
+}
+
+.remote-access-action-danger,
+.remote-access-dialog-actions .remote-access-action-danger {
+  color: var(--color-status-error);
+}
+
+.remote-access-code-status {
+  margin: 0 18px;
+  padding: 12px 0 4px;
+}
+
+.remote-access-code-empty,
+.remote-access-code-hint {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-body-sm);
+  line-height: var(--line-body-sm);
+}
+
+.remote-access-code-digits {
+  margin: 0 0 6px;
+  color: var(--color-text-primary);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: clamp(1.75rem, 2.4vw, 2.25rem);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.28em;
+  line-height: 1.2;
+  text-indent: 0.28em;
+}
+
+.remote-access-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: color-mix(in srgb, var(--color-bg-app) 55%, transparent);
+}
+
+.remote-access-dialog {
+  display: grid;
+  width: min(100%, 24rem);
+  gap: 0.85rem;
+  border: 1px solid var(--color-border-panel);
+  border-radius: var(--radius-panel);
+  padding: 1.1rem 1rem;
+  background: var(--color-surface-panel);
+  color: var(--color-text-primary);
+  box-shadow: var(--shadow-sidebar, none);
+}
+
+.remote-access-dialog h2 {
+  margin: 0;
+  font-size: var(--text-section-title);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-heading);
+}
+
+.remote-access-dialog > p {
+  margin: 0;
+  color: var(--color-text-soft);
+  font-size: var(--text-body-sm);
+  line-height: var(--line-body-sm);
+}
+
+.remote-access-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+@media (max-width: 500px) {
+  .remote-access-dialog-actions {
+    display: grid;
+  }
+
+  .remote-access-dialog-actions button {
+    width: 100%;
+  }
+}

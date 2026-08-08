@@ -26,12 +26,17 @@ import type {
   SubagentSettings as SubagentSettingsValue,
   ShortcutSettings
 } from '../../../../shared/kernel-contract'
+import type {
+  RemoteAccessStatus,
+  RemotePairingCode
+} from '../../../../shared/remote-admin-contract'
 import { FontSelect } from '../../components/FontSelect'
 import { Select, type SelectOptionGroup } from '../../components/Select'
 import { InstalledPackages } from './InstalledPackages'
 import { PiDevCatalog } from './PiDevCatalog'
 import { CredentialsPanel } from './CredentialsPanel'
 import { ModelSettings } from './ModelSettings'
+import { RemoteAccessPanel } from './RemoteAccessPanel'
 import { ShortcutSettingsPanel } from './ShortcutSettingsPanel'
 import { AdaptedExtensionPackageControl } from './AdaptedExtensionPackageControl'
 import { SubagentSettings } from './SubagentSettings'
@@ -90,6 +95,9 @@ type SettingsPanelProps = {
   onSubscribeProviderAuth: (
     listener: (event: KernelProviderAuthEvent) => void
   ) => () => void
+  onGetRemoteAccessStatus: () => Promise<RemoteAccessStatus>
+  onCreateRemotePairingCode: () => Promise<RemotePairingCode>
+  onRevokeRemoteDevice: () => Promise<RemoteAccessStatus>
   onSetModel: (provider: string, modelId: string) => Promise<void>
   onSetSessionNaming: (settings: SessionNamingSettings) => Promise<void>
   onSetGeneral: (settings: GeneralSettings) => Promise<void>
@@ -147,6 +155,9 @@ export function SettingsPanel({
   onCancelProviderLogin,
   onLogoutProvider,
   onSubscribeProviderAuth,
+  onGetRemoteAccessStatus,
+  onCreateRemotePairingCode,
+  onRevokeRemoteDevice,
   onSetModel,
   onSetSessionNaming,
   onSetGeneral,
@@ -869,6 +880,20 @@ export function SettingsPanel({
               onFetchModelPricing={onFetchModelPricing}
               onDirtyChange={onDirtyChange}
               onActiveOperationChange={onActiveOperationChange}
+            />
+          </>
+        ) : null}
+
+        {section === 'remote' ? (
+          <>
+            <div className="settings-section-heading">
+              <h2>远程访问</h2>
+            </div>
+            <RemoteAccessPanel
+              busy={busy}
+              onGetStatus={onGetRemoteAccessStatus}
+              onCreatePairingCode={onCreateRemotePairingCode}
+              onRevokeDevice={onRevokeRemoteDevice}
             />
           </>
         ) : null}

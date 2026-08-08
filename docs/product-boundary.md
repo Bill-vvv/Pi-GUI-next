@@ -20,12 +20,16 @@ Pi GUI 的长期方向是桌面 Agent Workbench。P1 只建立第一条可发布
 
 - 多 Project 或多 Session 并行。
 - Files、Git、Terminal、Browser、Activity Bar、Work Item、Plan 或 Kanban。
-- 插件管理 UI、动态后端发现和远程 transport。
+- 插件管理 UI、动态后端发现和作为第二 control plane 的远程后端。
 - Windows、WSL、macOS、SSH 或远程后端。
-- SQLite、Fastify、WebSocket、自动更新、远程访问和外部通知。
+- SQLite、Fastify、WebSocket、自动更新和公网多用户远程服务。
 - 自动重启、无限重试或静默 fallback。
 
 范围外能力不得通过空接口、占位模块或兼容层提前进入 P1。
+
+## 私有远程呈现面（opt-in，非 P1 必达）
+
+在桌面核心链路之外，产品允许一个**默认关闭**的私有远程呈现面：经受信 HTTPS 反代（如 Lucky）访问同一 Electron Main / WorkbenchKernel，传输为 SSE 事件流 + JSON 命令 POST，而不是 WebSocket 或第二套 Kernel/daemon。它只服务个人/家庭场景下的受控手机或浏览器查看与有限操作，不是公网多用户服务器，也不替代桌面 control plane。启用条件、鉴权、反代与验证见 [`remote-access.md`](remote-access.md) 与决策 D-065。
 
 ## 旧项目边界
 

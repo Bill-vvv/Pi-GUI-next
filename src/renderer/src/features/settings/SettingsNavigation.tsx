@@ -6,6 +6,7 @@ export type SettingsSection =
   | 'general'
   | 'models'
   | 'credentials'
+  | 'remote'
   | 'shortcuts'
   | 'appearance'
   | 'packages'
@@ -22,6 +23,7 @@ const SETTINGS_SECTIONS: ReadonlyArray<{
   { section: 'general', label: '常规', icon: 'settings' },
   { section: 'models', label: '模型', icon: 'model' },
   { section: 'credentials', label: '凭证', icon: 'preferences' },
+  { section: 'remote', label: '远程访问', icon: 'remote' },
   { section: 'shortcuts', label: '快捷键', icon: 'preferences' },
   { section: 'appearance', label: '外观', icon: 'appearance' },
   { section: 'packages', label: 'Package', icon: 'packages' },

@@ -52,8 +52,12 @@ async function bootstrap(): Promise<void> {
     previewRequested &&
     typeof window.piGui === 'undefined'
   ) {
-    const { createPreviewKernelApi } = await import('./preview/create-preview-kernel-api')
+    const {
+      createPreviewKernelApi,
+      createPreviewRemoteAdminApi
+    } = await import('./preview/create-preview-kernel-api')
     window.piGui = createPreviewKernelApi()
+    window.piRemote = createPreviewRemoteAdminApi()
     document.title = 'Pi GUI — Browser Preview'
   }
 

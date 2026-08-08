@@ -32,6 +32,14 @@ import {
   type KernelProviderAuthEvent
 } from '../shared/kernel-contract.ts'
 import { GIT_COMMAND_CHANNEL } from '../shared/git-contract.ts'
+import {
+  REMOTE_ADMIN_COMMAND_CHANNEL,
+  isRemoteAdminCommand,
+  type RemoteAccessStatus,
+  type RemoteAdminCommand,
+  type RemotePairingCode
+} from '../shared/remote-admin-contract.ts'
+import { isRemoteKernelCommand } from '../shared/remote-contract.ts'
 import { normalizeOpenTarget } from '../shared/external-url.ts'
 import { AdvisorDefinitionStore } from './advisor/advisor-definition-store.ts'
 import { PiExtensionStore } from './extension/pi-extension-store.ts'
@@ -48,10 +56,21 @@ import { GitCapabilityController } from './git/git-capability-controller.ts'
 import { isGitCommand } from './git/git-command-validation.ts'
 import { isKernelCommand } from './kernel/kernel-command-validation.ts'
 import { createKernelEventForwarder } from './kernel/kernel-event-forwarder.ts'
+import { dispatchTerminalKernelCommand } from './kernel/terminal-kernel-command-dispatcher.ts'
 import {
   AUTO_HIBERNATE_SWEEP_INTERVAL_MS,
   WorkbenchKernel
 } from './kernel/workbench-kernel.ts'
+import { assertRemoteKernelCommandPolicy } from './remote/remote-command-policy.ts'
+import { loadRemoteConfig } from './remote/remote-config.ts'
+import {
+  openRemoteDeviceStore,
+  type RemoteDeviceStore
+} from './remote/remote-device-store.ts'
+import {
+  startRemoteGateway,
+  type RemoteGateway
+} from './remote/remote-gateway.ts'
 import { readPromptAttachments } from './prompt/prompt-attachment-selection.ts'
 import { PiProviderStore } from './provider/pi-provider-store.ts'
 import { PiProviderAuth } from './provider/pi-provider-auth.ts'
@@ -59,7 +78,8 @@ import { fetchLiteLlmModelPricing } from './provider/litellm-model-pricing.ts'
 import { testProviderConnection } from './provider/provider-connection-test.ts'
 import { ProjectStore } from './project/project-store.ts'
 import { searchProjectPaths } from './project/project-path-search.ts'
-import { readSessionStatistics } from './project/session-statistics.ts'
+import { readSessionMetadata, readSessionStatistics } from './project/session-statistics.ts'
+import { readSessionMessagesTailFirst } from './project/session-transcript-tail.ts'
 import { readSessionActivityAt, readSessionMessages } from './project/session-transcript.ts'
 import { LinuxLocalRuntime, probePiRpc } from './runtime/linux-local-runtime.ts'
 import { generateSessionNameWithPi } from './runtime/session-name-generator.ts'
@@ -79,6 +99,8 @@ let kernel: WorkbenchKernel | null = null
 let projectStoreForShutdown: ProjectStore | null = null
 let providerAuth: PiProviderAuth | null = null
 let desktopNotificationBroker: DesktopNotificationBroker | null = null
+let remoteGateway: RemoteGateway | null = null
+let remoteDeviceStore: RemoteDeviceStore | null = null
 let shutdownPromise: Promise<void> | null = null
 let autoHibernateTimer: ReturnType<typeof setInterval> | null = null
 let allowQuit = false
@@ -333,6 +355,8 @@ async function startApplication(): Promise<void> {
       },
       navigatorKind,
       persistSession: (pointer) => projectStore.saveSession(pointer),
+      persistActiveSession: (projectPath, sessionKey, sessionId) =>
+        projectStore.setActiveSession(projectPath, sessionKey, sessionId),
       persistArchivedSession: (projectPath, sessionKey) =>
         projectStore.archiveSession(projectPath, sessionKey),
       restoreArchivedSession: (projectPath, sessionKey) =>
@@ -340,7 +364,9 @@ async function startApplication(): Promise<void> {
       validateSession: (pointer) => projectStore.validateSession(pointer),
       readSessionActivityAt,
       readSessionStatistics,
+      readSessionMetadata,
       readSessionMessages,
+      readSessionMessagesTailFirst,
       persistProjectOrder: (projectKeys) => projectStore.reorderProjects(projectKeys),
       sessionNaming,
       persistSessionNaming: (settings) => projectStore.saveSessionNaming(settings),
@@ -371,15 +397,108 @@ async function startApplication(): Promise<void> {
   }, AUTO_HIBERNATE_SWEEP_INTERVAL_MS)
   autoHibernateTimer.unref()
 
+  const remoteConfig = await loadRemoteConfig(process.env)
+  if (remoteConfig.enabled) {
+    const uid = process.getuid?.()
+    if (uid === undefined) {
+      throw new Error('Remote device store ownership can only be verified when process.getuid is available.')
+    }
+    remoteDeviceStore = await openRemoteDeviceStore({
+      path: remoteConfig.deviceStorePath,
+      uid
+    })
+    remoteGateway = await startRemoteGateway({
+      config: remoteConfig,
+      staticRoot: join(mainBundleDirectory, '../remote'),
+      deviceStore: remoteDeviceStore,
+      handlers: {
+        assertCommandPolicy: async (command) => {
+          const activeKernel = kernel
+          if (activeKernel === null) {
+            throw new Error('Workbench kernel is unavailable.')
+          }
+          await assertRemoteKernelCommandPolicy(command, {
+            kernel: activeKernel
+          })
+        },
+        dispatchCommand: async (command) => {
+          const activeKernel = kernel
+          if (activeKernel === null) {
+            throw new Error('Workbench kernel is unavailable.')
+          }
+          const result = await dispatchTerminalKernelCommand(command, {
+            kernel: activeKernel,
+            projectStore,
+            assertCurrentPolicy: () => assertRemoteKernelCommandPolicy(command, {
+              kernel: activeKernel
+            })
+          })
+          if (command.type !== 'kernel.activate-project') return result
+          await activeKernel.refreshWorkspaceMetadata(command.projectKey)
+          return activeKernel.acknowledge()
+        }
+      }
+    })
+    console.info(
+      `[Pi GUI] Remote gateway listening on ${remoteConfig.bindHost}:${remoteConfig.port}`
+    )
+  }
+
   const gitController = new GitCapabilityController(
     createActiveRegisteredGitProjectResolver(kernel, projectStore)
   )
+
+  type StaticSessionPreviewOwner = {
+    requestId: string
+    sender: IpcMainInvokeEvent['sender']
+    onInvalidated: () => void
+  }
+  let staticSessionPreviewOwner: StaticSessionPreviewOwner | null = null
+  const releaseStaticSessionPreviewOwner = (
+    owner: StaticSessionPreviewOwner,
+    cancel: boolean
+  ): void => {
+    if (staticSessionPreviewOwner !== owner) return
+    staticSessionPreviewOwner = null
+    owner.sender.removeListener('destroyed', owner.onInvalidated)
+    owner.sender.removeListener('render-process-gone', owner.onInvalidated)
+    owner.sender.removeListener('did-start-navigation', owner.onInvalidated)
+    if (cancel) kernel?.cancelSessionPreview(owner.requestId)
+  }
+  const claimStaticSessionPreviewOwner = (
+    requestId: string,
+    sender: IpcMainInvokeEvent['sender']
+  ): StaticSessionPreviewOwner => {
+    const previous = staticSessionPreviewOwner
+    if (previous !== null) releaseStaticSessionPreviewOwner(previous, true)
+    const owner: StaticSessionPreviewOwner = {
+      requestId,
+      sender,
+      onInvalidated: () => releaseStaticSessionPreviewOwner(owner, true)
+    }
+    staticSessionPreviewOwner = owner
+    sender.once('destroyed', owner.onInvalidated)
+    sender.once('render-process-gone', owner.onInvalidated)
+    sender.once('did-start-navigation', owner.onInvalidated)
+    return owner
+  }
 
   ipcMain.handle(GIT_COMMAND_CHANNEL, async (event, command: unknown) => {
     assertTrustedIpcSender(event, rendererTarget)
     if (!isGitCommand(command)) throw new Error('Unsupported Git command.')
     return await gitController.dispatch(command)
   })
+
+  ipcMain.handle(
+    REMOTE_ADMIN_COMMAND_CHANNEL,
+    async (event, command: unknown): Promise<RemoteAccessStatus | RemotePairingCode> => {
+      assertTrustedIpcSender(event, rendererTarget)
+      if (!isRemoteAdminCommand(command)) {
+        throw new Error('Unsupported remote admin command.')
+      }
+      return await dispatchRemoteAdminCommand(command)
+    }
+  )
 
   ipcMain.handle(KERNEL_COMMAND_CHANNEL, async (event, command: unknown) => {
     assertTrustedIpcSender(event, rendererTarget)
@@ -389,9 +508,10 @@ async function startApplication(): Promise<void> {
     if (kernel === null) {
       throw new Error('Workbench kernel is unavailable.')
     }
+    if (isRemoteKernelCommand(command)) {
+      return await dispatchTerminalKernelCommand(command, { kernel, projectStore })
+    }
     switch (command.type) {
-      case 'kernel.get-state':
-        return kernel.getSnapshot()
       case 'kernel.get-runtime-memory-diagnostics':
         return kernel.getRuntimeMemoryDiagnostics()
       case 'kernel.list-system-fonts':
@@ -406,14 +526,9 @@ async function startApplication(): Promise<void> {
         await kernel.addProject(projectPath, await projectStore.loadSessionRegistry(projectPath))
         return kernel.acknowledge()
       }
-      case 'kernel.activate-project': {
-        const projectPath = await projectStore.validateProjectPath(command.projectKey)
-        if (projectPath !== command.projectKey) {
-          throw new Error(`Registered project path no longer resolves canonically: ${command.projectKey}`)
-        }
-        await kernel.activateProject(projectPath, await projectStore.loadSessionRegistry(projectPath))
+      case 'kernel.refresh-workspace-metadata':
+        await kernel.refreshWorkspaceMetadata(command.workspaceKey)
         return kernel.acknowledge()
-      }
       case 'kernel.select-navigator': {
         if (command.kind === 'project') {
           const registry = await projectStore.loadProjects()
@@ -474,47 +589,11 @@ async function startApplication(): Promise<void> {
         await kernel.activateTask(task.key, await projectStore.loadSessionRegistry(task.path))
         return kernel.acknowledge()
       }
-      case 'kernel.start-session': {
-        const state = kernel.getState()
-        const project = configuredProject(state)
-        const canonicalPath = await projectStore.validateProjectPath(project.path)
-        if (canonicalPath !== project.path) {
-          throw new Error(`Active Runtime workspace path no longer resolves canonically: ${project.path}`)
-        }
-        if (project.workspaceKind === 'task') {
-          const activeSummary = state.activeSessionKey === null
-            ? null
-            : state.sessions.find(({ key }) => key === state.activeSessionKey) ?? null
-          const emptyProvisional = activeSummary?.provisional === true &&
-            !(project.sessions ?? []).some(({ key }) => key === activeSummary.key)
-          if (!emptyProvisional && (
-            state.activeSessionKey !== null ||
-            await projectStore.taskOwnsSession(project.path)
-          )) {
-            throw new Error('A Task already owns its Session; create another Task instead.')
-          }
-        }
-        await kernel.start()
-        return kernel.acknowledge()
-      }
-      case 'kernel.reload-session':
-        await kernel.reloadSession()
-        return kernel.acknowledge()
       case 'kernel.resolve-project-trust':
         await kernel.resolveProjectTrust(command.requestId, command.choice)
         return kernel.acknowledge()
-      case 'kernel.activate-session': {
-        const project = configuredProject(kernel.getState())
-        const canonicalPath = await projectStore.validateProjectPath(project.path)
-        if (canonicalPath !== project.path) {
-          throw new Error(`Active project path no longer resolves canonically: ${project.path}`)
-        }
-        await kernel.activateSession(
-          command.sessionKey,
-          await projectStore.loadSessionRegistry(project.path)
-        )
-        return kernel.acknowledge()
-      }
+      case 'kernel.get-last-assistant-final-answer':
+        return kernel.getLastAssistantFinalAnswer()
       case 'kernel.archive-session': {
         const project = configuredProject(kernel.getState())
         const receipt = await kernel.archiveSession(
@@ -527,11 +606,36 @@ async function startApplication(): Promise<void> {
         await kernel.undoArchiveSession(command.token)
         return kernel.acknowledge()
       case 'kernel.preview-session': {
-        const project = configuredProject(kernel.getState())
-        return kernel.previewSession(
-          command.sessionKey,
-          await projectStore.loadSessionRegistry(project.path)
-        )
+        const owner = claimStaticSessionPreviewOwner(command.requestId, event.sender)
+        try {
+          const projectPath = kernel.getActiveProjectPath()
+          return await kernel.previewSession(
+            command.sessionKey,
+            command.requestId,
+            () => projectStore.loadSessionRegistry(projectPath)
+          )
+        } catch (error) {
+          releaseStaticSessionPreviewOwner(owner, true)
+          throw error
+        }
+      }
+      case 'kernel.complete-session-preview': {
+        const owner = staticSessionPreviewOwner?.requestId === command.requestId
+          ? staticSessionPreviewOwner
+          : null
+        try {
+          return await kernel.completeSessionPreview(command.requestId)
+        } finally {
+          if (owner !== null) releaseStaticSessionPreviewOwner(owner, false)
+        }
+      }
+      case 'kernel.cancel-session-preview': {
+        const owner = staticSessionPreviewOwner?.requestId === command.requestId
+          ? staticSessionPreviewOwner
+          : null
+        kernel.cancelSessionPreview(command.requestId)
+        if (owner !== null) releaseStaticSessionPreviewOwner(owner, false)
+        return
       }
       case 'kernel.preview-archived-session':
         return kernel.previewArchivedSession(command.token)
@@ -541,18 +645,6 @@ async function startApplication(): Promise<void> {
         const result = await kernel.forkSession(command.entryId)
         return { ...kernel.acknowledge(), ...result }
       }
-      case 'kernel.get-message-image':
-        return kernel.getMessageImage(
-          command.sessionKey,
-          command.messageId,
-          command.attachmentIndex
-        )
-      case 'kernel.get-tool-image':
-        return kernel.getToolImage(
-          command.sessionKey,
-          command.toolCallId,
-          command.contentIndex
-        )
       case 'kernel.export-session': {
         const preparation = await kernel.prepareSessionExport()
         const options = {
@@ -769,35 +861,8 @@ async function startApplication(): Promise<void> {
         if (selection.canceled) return []
         return readPromptAttachments(selection.filePaths)
       }
-      case 'kernel.submit-ask':
-        await kernel.submitAsk(command.sessionKey, command.toolCallId, command.answers)
-        return kernel.acknowledge()
-      case 'kernel.cancel-ask':
-        await kernel.cancelAsk(command.sessionKey, command.toolCallId)
-        return kernel.acknowledge()
-      case 'kernel.prompt':
-        await kernel.prompt(command.message, command.attachments, command.expectedSessionKey)
-        return kernel.acknowledge()
       case 'kernel.navigate-history-prompt':
         await kernel.navigateHistoryPrompt(command.sessionKey, command.messageId)
-        return kernel.acknowledge()
-      case 'kernel.steer':
-        await kernel.steer(command.message, command.attachments)
-        return kernel.acknowledge()
-      case 'kernel.follow-up':
-        await kernel.followUp(command.message, command.attachments)
-        return kernel.acknowledge()
-      case 'kernel.abort':
-        await kernel.abort()
-        return kernel.acknowledge()
-      case 'kernel.set-model':
-        await kernel.setModel(command.provider, command.modelId)
-        return kernel.acknowledge()
-      case 'kernel.set-thinking-level':
-        await kernel.setThinkingLevel(command.level)
-        return kernel.acknowledge()
-      case 'kernel.set-openai-fast-mode':
-        await kernel.setOpenAiFastMode(command.enabled)
         return kernel.acknowledge()
       case 'kernel.set-session-naming':
         await kernel.setSessionNaming(command.settings)
@@ -925,8 +990,10 @@ function forwardKernelEvent(event: KernelEvent): void {
 
 function sendKernelEvent(event: KernelEvent): void {
   const window = mainWindow
-  if (window === null || window.isDestroyed()) return
-  window.webContents.send(KERNEL_EVENT_CHANNEL, event)
+  if (window !== null && !window.isDestroyed()) {
+    window.webContents.send(KERNEL_EVENT_CHANNEL, event)
+  }
+  remoteGateway?.publish(event)
 }
 
 function forwardProviderAuthEvent(event: KernelProviderAuthEvent): void {
@@ -1002,8 +1069,46 @@ async function listSystemFonts(): Promise<string[]> {
   return fonts
 }
 
+async function dispatchRemoteAdminCommand(
+  command: RemoteAdminCommand
+): Promise<RemoteAccessStatus | RemotePairingCode> {
+  switch (command.type) {
+    case 'remote-admin.get-status': {
+      const gateway = remoteGateway
+      if (gateway === null) {
+        return { enabled: false }
+      }
+      return gateway.getStatus()
+    }
+    case 'remote-admin.create-pairing-code': {
+      const gateway = remoteGateway
+      if (gateway === null) {
+        throw new Error('Remote access is disabled.')
+      }
+      return gateway.createPairingCode()
+    }
+    case 'remote-admin.revoke-device': {
+      const gateway = remoteGateway
+      if (gateway === null) {
+        throw new Error('Remote access is disabled.')
+      }
+      return await gateway.revokeDevice()
+    }
+    default: {
+      const exhaustive: never = command
+      throw new Error(`Unsupported remote admin command: ${JSON.stringify(exhaustive)}`)
+    }
+  }
+}
+
 async function stopKernel(): Promise<void> {
   await packageInstallDrain
+  const gateway = remoteGateway
+  remoteGateway = null
+  remoteDeviceStore = null
+  if (gateway !== null) {
+    await gateway.stop()
+  }
   const activeKernel = kernel
   const projectStore = projectStoreForShutdown
   const restartContinuations = activeKernel?.prepareRestartContinuationShutdown() ?? []

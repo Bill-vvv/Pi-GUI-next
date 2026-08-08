@@ -1004,6 +1004,9 @@ export function App(): React.JSX.Element {
       onCancelProviderLogin={window.piGui.cancelProviderLogin}
       onLogoutProvider={window.piGui.logoutProvider}
       onSubscribeProviderAuth={window.piGui.subscribeProviderAuth}
+      onGetRemoteAccessStatus={window.piRemote.getStatus}
+      onCreateRemotePairingCode={window.piRemote.createPairingCode}
+      onRevokeRemoteDevice={window.piRemote.revokeDevice}
       onSelectPromptAttachments={() => window.piGui.selectPromptAttachments()}
       onSearchProjectPaths={(query) => window.piGui.searchProjectPaths(query)}
       onSubmitAsk={(sessionKey, toolCallId, answers) =>

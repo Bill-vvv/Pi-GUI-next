@@ -30,6 +30,7 @@ import { Icon } from '../../components/Icon'
 import { IconButton } from '../../components/IconButton'
 import { useModalDialog } from '../../components/useModalDialog'
 import { formatDuration } from '../../format-duration.ts'
+import { getRendererHost } from '../../host'
 import { unknownErrorMessage } from '../../unknown-error-message'
 import { MarkdownMessage } from './MarkdownMessage'
 import { AskToolCard, AskToolInteractionContext } from './AskToolCard'
@@ -1020,7 +1021,7 @@ function ToolResultAttachments({
       error: null
     })
     try {
-      const image = await window.piGui.getToolImage(sessionKey, toolCallId, contentIndex)
+      const image = await getRendererHost().getToolImage(sessionKey, toolCallId, contentIndex)
       setViewer((current) => {
         if (current === null || !sameToolImageRequest(current.request, request)) return current
         return {
@@ -1163,10 +1164,11 @@ function TimelineContentEntry({
         : <SubagentCompletionNotice entry={entry} completion={entry.completion} />
     }
     const coordination = subagentCoordinationNoticePresentation(entry)
-    if (coordination !== null) {
+    if (entry.coordination !== undefined) {
+      if (coordination === null) return null
       return (
         <article
-          className={`subagent-notice coordination ${coordination.tone} ${entry.coordination?.status ?? 'pending'}`}
+          className={`subagent-notice coordination ${coordination.tone} ${entry.coordination.status}`}
           role={coordination.role}
         >
           <header className="subagent-notice-heading">
@@ -1347,7 +1349,7 @@ export function MessageAttachments({
       error: null
     })
     try {
-      const image = await window.piGui.getMessageImage(sessionKey, messageId, attachmentIndex)
+      const image = await getRendererHost().getMessageImage(sessionKey, messageId, attachmentIndex)
       setViewer((current) => {
         if (current === null || current.attachmentIndex !== attachmentIndex) return current
         return {

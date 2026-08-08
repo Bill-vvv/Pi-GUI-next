@@ -513,3 +513,19 @@
 - 决策：常规设置增加默认关闭的“重启后自动继续任务”。仅在正常 GUI shutdown 时，Workbench Kernel 从全部 managed Context 精确抓取当时 `running + unsettled` 的已持久化 Session，排除 provisional、Ask 等待、compaction、identity commit、stopping 和不完整 identity；Main 原子保存 exact Project/Session identity。下一次启动为该批状态绑定单次 boot ID，对每项先持久化 claim，再恢复 Runtime 并发送固定的安全继续 prompt；发送已开始或失败后均完成该 claim，不自动重放。恢复多个后台 Session 后还原启动前的前台 Project/Task/Session，且不写回 active selection。需要新 Project trust 决定的候选不绕过授权，只在用户正常打开并授权后尝试。
 - 原因：只看 transcript、`crashed`、文件 mtime 或 `settled=false` 无法证明 GUI 停止时 Agent 仍在执行，也可能重复工具副作用；只恢复前台又会丢失 D-017 允许的后台并行任务。正常 shutdown 的 Kernel-owned Runtime 状态是唯一足以判定“重启前正在运行”的事实边界，claim-before-send 与 boot-scoped expiry 则把重复执行风险压到 fail-closed。
 - 影响：强杀、崩溃、写入失败或 claim 后再次崩溃时宁可不继续，也不猜测或重复发送；Ask 等待继续由原交互恢复，不注入回答。该功能不是通用任务队列、checkpoint 或 exactly-once 工具事务，不保证模型可在任意工具中点无损恢复；用户启用时必须理解继续 prompt 仍可能让模型重做缺少明确结果的外部副作用。
+
+## D-065 — 私有远程呈现面使用 SSE+POST，而非第二 control plane
+
+- 日期：2026-08-02
+- 状态：Accepted；澄清 D-003“不并行建立 GUI server/WebSocket”在私有远程场景下的边界，不替代桌面 Main 单一 control plane
+- 决策：可选 Remote v1 默认关闭。仅当 `PI_GUI_REMOTE_ENABLED=1` 且显式提供 `PI_GUI_REMOTE_BIND_HOST`（固定非 wildcard IPv4）、`PI_GUI_REMOTE_PORT`、`PI_GUI_REMOTE_PUBLIC_ORIGIN`（精确 https origin）、`PI_GUI_REMOTE_TRUSTED_PROXY`（精确单 IPv4）与 `PI_GUI_REMOTE_TOKEN_FILE`（常规非 symlink、属主本人、模式严格为 `0600`、trim 后单行 32–4096 字符）时，Electron Main 在同一 WorkbenchKernel 上绑定 Node `http` 监听：托管静态 `out/remote`，`GET /api/session` 返回登录状态，`GET /api/state` 返回快照，`GET /api/events` 推送既有已批处理 `KernelEvent` SSE 流，`POST /api/session/login`、`POST /api/session/logout` 管理浏览器会话，`POST /api/command` 接受 `src/shared/remote-contract.ts` allowlist 内命令。不使用 WebSocket、第二 Kernel、daemon、DB、Renderer 中继或对外暴露 electron-vite dev server。登录用 token 交换绝对寿命 24 小时的内存随机 `HttpOnly` + `Secure` + `SameSite=Strict` 的 `__Host-` cookie；新登录使旧浏览器会话失效；token 不得进入 URL、localStorage 或日志。每个请求对端必须是受信代理，并要求精确 `X-Forwarded-Proto=https` 与匹配 public origin 的 `X-Forwarded-Host`；mutating/login POST 另要求精确 `Origin`。推荐拓扑为专用 HTTPS 动态 DNS 子域（Lucky/路由）反代到 `http://固定 PC 局域网 IP:18787`，保留 forwarded host、设置 proto=https、关闭 SSE 缓冲/缓存、拉长读超时，且不得把后端端口映射到 WAN；PC 固定 DHCP 并仅允许路由 IP 访问后端端口。
+- 原因：手机/外部浏览器需要查看并有限操作同一桌面工作台，但公网多用户服务器、WebSocket 双传输或第二 control plane 会扩大攻击面并分裂生命周期证据。SSE+POST 复用现有 Kernel 事件与 mutation 合同，受信反代 + cookie 会话把暴露面压在个人私有入口上。
+- 影响：Remote 是 opt-in 私有呈现面，不是 P1 必达能力，也不是运维平面。setup 只生成 token 文件与引用该文件的非秘密 env 模板，不改防火墙/路由/systemd、不自动重启 GUI。Remote v1 不增加跨桌面/手机的控制权租约，运维约束为同一时刻只使用一个交互控制端；状态与 Runtime 真相仍只在单一 Kernel。Main 侧变更必须完整退出并前台重启后生效，不能依赖 HMR。部署、鉴权与 curl 正/负验证见 [`remote-access.md`](remote-access.md)。
+
+## D-066 — Remote v2 用一次性手机配对替代人工长期 token 登录
+
+- 日期：2026-08-03
+- 状态：Accepted；替代 D-065 的登录、cookie 生命周期与单活动会话部分，保留其 SSE+POST、单一 Main/Kernel、受信 Lucky 反代和远程命令边界
+- 决策：`PI_GUI_REMOTE_TOKEN_FILE` 保留为 Main 内部 `0600` 机器密钥，但不得再由手机提交、显示或人工复制。桌面通过独立 `REMOTE_ADMIN_COMMAND_CHANNEL` typed IPC（不进入 Kernel 或 Remote command allowlist）生成精确 6 位密码学随机配对码；配对码只在 Main 内存保存 keyed digest，5 分钟、一次性、重新生成替代旧码，并在 5 次错误后消耗。手机只向 `POST /api/session/pair` 提交配对码；成功后 Main 签发至少 32 字节随机 `__Host-` 设备 cookie，使用 `Secure + HttpOnly + SameSite=Strict + Path=/` 和绝对 30 天到期。当前只保存一部设备：`${PI_GUI_REMOTE_TOKEN_FILE}.device` 以严格本人 `0600`、非 symlink、有界 JSON 原子保存设备凭证 SHA-256 与 pairedAt/expiresAt，不保存原始 cookie、配对码或机器密钥；新配对、手机 logout、桌面 revoke 和到期均使旧访问及 SSE 失效。设备存储损坏或权限不安全时 Remote 启动 Fail Fast；v1 `/api/session/login` 不保留兼容 fallback。
+- 原因：64 字符高熵值适合作为机器密钥，却不适合作为手机人工输入；把它改成短固定口令会把公网入口降级为可预测密码。一次性短码只负责在已持有桌面控制权时引导首配，高熵设备 cookie 承担长期认证，桌面撤销提供明确失效点，从而同时闭合手机可用性与公网安全。
+- 影响：Remote 协议升级为 v2，旧浏览器 cookie 与 v1 token 登录不再兼容；用户在桌面“设置 → 远程访问”生成配对码并可撤销已配对手机。setup 仍只准备内部机器密钥与 env，不显示用户登录秘密；同一时刻一个交互控制端的运维约束不变。完整部署与验证见 [`remote-access.md`](remote-access.md)。

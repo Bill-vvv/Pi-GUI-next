@@ -9,7 +9,10 @@ const timelineTurnsSource = await readFile(new URL('./TimelineTurns.tsx', import
 test('ordinary tool detail shows image attachment entry without waiting-only empty text', () => {
   assert.match(timelineTurnsSource, /function ToolResultAttachments\b/)
   assert.match(timelineTurnsSource, /data-tool-image-open="true"/)
-  assert.match(timelineTurnsSource, /window\.piGui\.getToolImage\(sessionKey, toolCallId, contentIndex\)/)
+  assert.match(
+    timelineTurnsSource,
+    /getRendererHost\(\)\.getToolImage\(sessionKey, toolCallId, contentIndex\)/
+  )
   assert.match(
     timelineTurnsSource,
     /const hasOutput = detail\.length > 0 \|\| attachments\.length > 0/

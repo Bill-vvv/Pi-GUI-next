@@ -14,9 +14,22 @@ pi --mode rpc
     -> pi-gui-task-notify / bounded local request
 DesktopNotificationBroker（Electron Main）
     -> notify-send / default action
+
+Optional private remote (disabled unless PI_GUI_REMOTE_ENABLED=1)
+Desktop Settings
+    -> typed RemoteAdmin IPC (generate one-time code / revoke remembered phone)
+Browser
+    -> HTTPS dedicated subdomain (Lucky on router or NAS)
+       -> http://fixed-LAN-IP:port   (exact Lucky peer only)
+Main remote http listener
+    -> static out/remote
+    -> GET /api/session, /api/state, /api/events (SSE KernelEvent stream)
+    -> POST /api/session/pair, /api/session/logout, /api/command (allowlisted Kernel commands)
+    -> 6-digit one-time pairing -> one hashed 30-day device credential
+    -> same Workbench Kernel (no second Kernel / no WebSocket)
 ```
 
-Electron Main 仍是唯一 control plane，但可同时管理多个相互隔离的 Session Runtime。当前主路径不建立 GUI server、WebSocket、SQLite、launcher/mirror 或直接 Pi SDK 的第二条主路径。
+Electron Main 仍是唯一 control plane，但可同时管理多个相互隔离的 Session Runtime。当前主路径不建立第二 Kernel、WebSocket、SQLite、launcher/mirror 或直接 Pi SDK 的第二条主路径。可选的私有远程呈现面（默认关闭）在同一 Main/Kernel 上提供 SSE + JSON POST，详见 [`remote-access.md`](remote-access.md)；它不是第二 control plane，也不把 electron-vite 开发服务器对外暴露。
 
 ## 所有权
 

@@ -12,13 +12,14 @@
   },
   "packageManager": "pnpm@11.9.0",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "node -e \"require('electron')\" && electron-vite dev",
     "preview:browser": "vite --config vite.browser-preview.config.ts",
     "typecheck": "tsc --noEmit",
-    "test:core": "node --test scripts/memory-event-metrics.test.mjs src/main/advisor/*.test.ts src/main/export/*.test.ts src/main/extension/*.test.ts src/main/git/*.test.ts src/main/pi-rpc/*.test.ts src/main/runtime/*.test.ts src/main/kernel/*.test.ts src/main/notification/*.test.ts src/main/project/*.test.ts src/main/provider/*.test.ts src/main/security/*.test.ts src/main/subagent/*.test.ts src/renderer/src/*.test.ts src/renderer/src/composition/*.test.ts src/renderer/src/features/chat/*.test.ts src/renderer/src/features/composer/*.test.ts src/renderer/src/features/git/*.test.ts src/renderer/src/features/project/*.test.ts src/shared/*.test.ts extensions/pi-gui-runtime-quiescence/tests/*.test.mjs extensions/pi-gui-multi-advisor/tests/quiescence-provider.test.mjs extensions/pi-gui-task-notify/tests/quiescence-provider.test.mjs extensions/pi-gui-ask/tests/quiescence-provider.test.mjs extensions/pi-gui-openai-fast-mode/tests/*.test.ts",
+    "test:core": "node --test scripts/memory-event-metrics.test.mjs src/main/advisor/*.test.ts src/main/export/*.test.ts src/main/extension/*.test.ts src/main/git/*.test.ts src/main/pi-rpc/*.test.ts src/main/runtime/*.test.ts src/main/kernel/*.test.ts src/main/notification/*.test.ts src/main/project/*.test.ts src/main/provider/*.test.ts src/main/remote/*.test.ts src/main/security/*.test.ts src/main/subagent/*.test.ts src/renderer/src/*.test.ts src/renderer/src/composition/*.test.ts src/renderer/src/features/chat/*.test.ts src/renderer/src/features/composer/*.test.ts src/renderer/src/features/git/*.test.ts src/renderer/src/features/project/*.test.ts src/renderer/src/features/settings/*.test.ts src/remote/*.test.ts src/shared/*.test.ts extensions/pi-gui-runtime-quiescence/tests/*.test.mjs extensions/pi-gui-history-navigation/tests/*.test.ts extensions/pi-gui-multi-advisor/tests/quiescence-provider.test.mjs extensions/pi-gui-task-notify/tests/quiescence-provider.test.mjs extensions/pi-gui-ask/tests/quiescence-provider.test.mjs extensions/pi-gui-openai-fast-mode/tests/*.test.ts",
     "bench:markdown": "node scripts/benchmark-streaming-markdown.ts",
     "smoke:pi": "pnpm build && PI_GUI_PROBE_ONLY=1 electron .",
-    "build": "electron-vite build",
+    "build:remote": "vite build --config vite.remote.config.ts",
+    "build": "electron-vite build && vite build --config vite.remote.config.ts",
     "package:linux": "pnpm build && electron-builder --linux AppImage --x64 --publish never",
     "verify:linux": "node scripts/verify-linux-release.mjs"
   },
