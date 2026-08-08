@@ -6,7 +6,7 @@ Pi GUI 是面向本地 Pi Coding Agent 的 Linux 桌面工作台。P1 Linux Core
 
 - Node.js 26.4.0
 - pnpm 11.9.0
-- Pi Coding Agent 0.80.10
+- Pi Coding Agent 0.83.0
 
 安装依赖：
 

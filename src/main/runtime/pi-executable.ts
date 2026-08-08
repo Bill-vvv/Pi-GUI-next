@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 
 import { errorMessage } from '../utils/errors.ts'
 
-export const SUPPORTED_PI_VERSION = '0.80.10'
+export const SUPPORTED_PI_VERSION = '0.83.0'
 
 const DEFAULT_VERSION_TIMEOUT_MS = 5_000
 const MAX_STDERR_BYTES = 4_096

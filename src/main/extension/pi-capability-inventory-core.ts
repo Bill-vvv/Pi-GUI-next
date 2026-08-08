@@ -211,7 +211,7 @@ export async function createCapabilityInventorySnapshot(
   }
 
   // Both Pi package-manager instances receive this binding-safe proxy. The only configurable
-  // command path used by Pi 0.80.10's package manager is getNpmCommand(); throwing here makes
+  // command path used by Pi 0.83.0's package manager is getNpmCommand(); throwing here makes
   // legacy global npm discovery fail closed without executing an absolute configured command.
   const settingsManager = createNoExecSettingsManager(rawSettingsManager)
   collectSettingsErrors(settingsManager, input, diagnostics, truncation, completeness)

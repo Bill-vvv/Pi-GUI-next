@@ -10,7 +10,7 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.80.0"
+    "@earendil-works/pi-coding-agent": "^0.83.0"
   },
   "engines": {
     "node": ">=22.19.0"

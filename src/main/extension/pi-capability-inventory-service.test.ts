@@ -20,7 +20,9 @@ import { PiCapabilityInventoryService, type PiCapabilityInventoryInput } from '.
 
 const SOURCE_WORKER_PATH = fileURLToPath(new URL('./pi-capability-inventory-worker.ts', import.meta.url))
 const BUILT_WORKER_PATH = resolve('out/main/pi-capability-inventory-worker.js')
-const REAL_PI_ROOT = '/home/vvv/.local/lib/node_modules/@earendil-works/pi-coding-agent'
+const REAL_PI_ROOT =
+  process.env.PI_GUI_TEST_PI_PACKAGE_ROOT ??
+  '/home/vvv/.local/lib/node_modules/@earendil-works/pi-coding-agent'
 const SENTINEL = 'UNLABELED-INVENTORY-SENTINEL-9f4c2b'
 
 type FakeData = {
@@ -471,7 +473,7 @@ async function createRealHarness(t: TestContext, options: { timeoutMs?: number, 
   agentDir: string
   service: PiCapabilityInventoryService
 }> {
-  assert.ok(existsSync(REAL_PI_ROOT), 'real Pi 0.80.10 package root is required')
+  assert.ok(existsSync(REAL_PI_ROOT), 'real Pi 0.83.0 package root is required')
   const root = await tempRoot(t, 'pi-gui-capability-real-')
   const cwd = join(root, 'project')
   const agentDir = join(root, 'agent')
@@ -1147,10 +1149,10 @@ test('wrong-name and escaped-root packages are rejected before their top-level m
   const marker = join(harness.root, 'wrong-package-executed')
   const wrongRoot = join(harness.root, 'wrong-package')
   await mkdir(join(wrongRoot, 'dist'), { recursive: true })
-  await writeFile(join(wrongRoot, 'dist', 'cli.js'), '#!/usr/bin/env node\nprocess.stdout.write("0.80.10\\n")\n', 'utf8')
+  await writeFile(join(wrongRoot, 'dist', 'cli.js'), '#!/usr/bin/env node\nprocess.stdout.write("0.83.0\\n")\n', 'utf8')
   await chmod(join(wrongRoot, 'dist', 'cli.js'), 0o700)
   await writeJson(join(wrongRoot, 'package.json'), {
-    name: '@wrong/pi-coding-agent', version: '0.80.10', type: 'module',
+    name: '@wrong/pi-coding-agent', version: '0.83.0', type: 'module',
     exports: { '.': { import: './index.mjs' } }
   })
   await writeFile(join(wrongRoot, 'index.mjs'), `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'yes')\nexport const SettingsManager = {}\n`, 'utf8')
@@ -1165,7 +1167,7 @@ test('wrong-name and escaped-root packages are rejected before their top-level m
 
   const wrongVersionRoot = join(harness.root, 'wrong-version-package')
   await mkdir(join(wrongVersionRoot, 'dist'), { recursive: true })
-  await writeFile(join(wrongVersionRoot, 'dist', 'cli.js'), '#!/usr/bin/env node\nprocess.stdout.write("0.80.10\\n")\n', 'utf8')
+  await writeFile(join(wrongVersionRoot, 'dist', 'cli.js'), '#!/usr/bin/env node\nprocess.stdout.write("0.83.0\\n")\n', 'utf8')
   await chmod(join(wrongVersionRoot, 'dist', 'cli.js'), 0o700)
   await writeJson(join(wrongVersionRoot, 'package.json'), {
     name: '@earendil-works/pi-coding-agent', version: '0.80.11', type: 'module',
@@ -1184,10 +1186,10 @@ test('wrong-name and escaped-root packages are rejected before their top-level m
   const escapedRoot = join(harness.root, 'escaped-package')
   const outsideEntry = join(harness.root, 'outside.mjs')
   await mkdir(join(escapedRoot, 'dist'), { recursive: true })
-  await writeFile(join(escapedRoot, 'dist', 'cli.js'), '#!/usr/bin/env node\nprocess.stdout.write("0.80.10\\n")\n', 'utf8')
+  await writeFile(join(escapedRoot, 'dist', 'cli.js'), '#!/usr/bin/env node\nprocess.stdout.write("0.83.0\\n")\n', 'utf8')
   await chmod(join(escapedRoot, 'dist', 'cli.js'), 0o700)
   await writeJson(join(escapedRoot, 'package.json'), {
-    name: '@earendil-works/pi-coding-agent', version: '0.80.10', type: 'module',
+    name: '@earendil-works/pi-coding-agent', version: '0.83.0', type: 'module',
     exports: { '.': { import: './index.mjs' } }
   })
   await writeFile(outsideEntry, `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'escaped')\n`, 'utf8')

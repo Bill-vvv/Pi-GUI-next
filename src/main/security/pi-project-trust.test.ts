@@ -18,11 +18,11 @@ test('uses only the exact Pi root export and isolates inherited and persisted tr
   await mkdir(dist, { recursive: true })
   await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
     type: 'module',
-    version: '0.80.10',
+    version: '0.83.0',
     exports: { '.': { import: './dist/index.js' } }
   }))
   await writeFile(join(dist, 'cli.js'), `#!/usr/bin/env node
-if (process.argv[2] === '--version') process.stdout.write('0.80.10\\n')
+if (process.argv[2] === '--version') process.stdout.write('0.83.0\\n')
 `, { mode: 0o755 })
   await writeFile(join(dist, 'index.js'), `
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -82,11 +82,11 @@ test('fails fast when the exact package root import export is missing', async (t
   await mkdir(dist, { recursive: true })
   await mkdir(project)
   await writeFile(join(root, 'package.json'), JSON.stringify({
-    version: '0.80.10',
+    version: '0.83.0',
     exports: { './private': './dist/index.js' }
   }))
   await writeFile(join(dist, 'cli.js'), `#!/usr/bin/env node
-if (process.argv[2] === '--version') process.stdout.write('0.80.10\\n')
+if (process.argv[2] === '--version') process.stdout.write('0.83.0\\n')
 `, { mode: 0o755 })
   const service = new PiProjectTrust({
     agentDir: join(root, 'agent'),
@@ -108,11 +108,11 @@ test('fails fast when the package root import export is a symlink outside the pa
   await mkdir(project)
   await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
     type: 'module',
-    version: '0.80.10',
+    version: '0.83.0',
     exports: { '.': { import: './dist/index.js' } }
   }))
   await writeFile(join(dist, 'cli.js'), `#!/usr/bin/env node
-if (process.argv[2] === '--version') process.stdout.write('0.80.10\\n')
+if (process.argv[2] === '--version') process.stdout.write('0.83.0\\n')
 `, { mode: 0o755 })
   await writeFile(join(outside, 'index.js'), `
 export function hasTrustRequiringProjectResources() { return false }

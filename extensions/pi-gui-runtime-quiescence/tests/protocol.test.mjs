@@ -225,7 +225,8 @@ test('arbitrary unregistered tool source becomes one generic count-only report',
       source: 'local',
       path: '/home/secret/evil-extension/index.ts'
     },
-    { name: 'read', source: 'builtin', path: '<builtin:read>' }
+    { name: 'read', source: 'builtin', path: '<builtin:read>' },
+    { name: 'llama', source: 'inline', path: '<inline:llama.cpp>' }
   ])
   assert.equal(classified.unregisteredToolSources, 1)
   assert.equal(classified.unregisteredNameOnlyTools, 0)
@@ -281,6 +282,21 @@ test('command-only extension source is counted without leaking paths', () => {
       sourceInfo: {
         source: 'local',
         path: '/opt/pi-gui/extensions/pi-gui-runtime-quiescence/src/index.ts'
+      }
+    },
+    {
+      name: 'pi-gui-history-navigation',
+      source: 'extension',
+      sourceInfo: { source: 'cli', scope: 'temporary', origin: 'top-level' }
+    },
+    {
+      name: 'llama',
+      source: 'extension',
+      sourceInfo: {
+        source: 'inline',
+        path: '<inline:llama.cpp>',
+        scope: 'temporary',
+        origin: 'top-level'
       }
     },
     {
@@ -515,6 +531,7 @@ test('registered provider roster marks missing, late, and invalid replies unknow
 test('exact inventory requires provider fences for task-notify, ask, MCP, and CPA', () => {
   const inventory = classifyExactExtensionInventory([
     '/opt/pi-gui/pi-gui-runtime-quiescence/src/index.ts',
+    '/opt/pi-gui/pi-gui-history-navigation/src/index.ts',
     '/opt/pi-gui/pi-gui-task-notify/src/index.ts',
     '/opt/pi-gui/pi-gui-ask/src/index.ts',
     '/home/user/.pi/agent/extensions/pi-mcp-adapter/index.ts',
@@ -540,6 +557,29 @@ test('exact inventory requires both the subagent owner fence and stable adapter 
   assert.deepEqual(inventory.expectedProviderIds, [PROVIDER_ID_SUBAGENTS])
   assert.equal(inventory.requiresSubagentsAdapter, true)
   assert.match(inventory.fingerprint, /providers=pi-subagents;subagents=1/u)
+})
+
+test('exact Pi 0.83 inline llama surface is certified as built-in without replacing self', () => {
+  const inventory = classifyExactExtensionInventory([
+    '/opt/pi-gui/pi-gui-runtime-quiescence/src/index.ts',
+    '<inline:llama.cpp>'
+  ])
+  assert.equal(inventory.ok, true)
+  assert.deepEqual(inventory.expectedProviderIds, [])
+  assert.deepEqual(inventory.certifiedCoreMarkers, ['inline:llama.cpp'])
+  assert.match(inventory.fingerprint, /core=inline:llama\.cpp/u)
+
+  assert.deepEqual(classifyExactExtensionInventory(['<inline:llama.cpp>']), {
+    ok: false,
+    reason: 'inventory-missing-self'
+  })
+  assert.deepEqual(
+    classifyExactExtensionInventory([
+      '/opt/pi-gui/pi-gui-runtime-quiescence/src/index.ts',
+      '<inline:llama.cpp>:unexpected'
+    ]),
+    { ok: false, reason: 'inventory-unknown-paths:1' }
+  )
 })
 
 test('exact inventory fails closed for unknown paths and never certifies required providers as core-idle', () => {

@@ -49,7 +49,7 @@ pnpm verify:linux -- --memory-diagnostics
 必须从打包产物而非开发服务器执行并记录：
 
 1. launch 与干净退出；
-2. Pi 0.80.10 probe；
+2. Pi 0.83.0 probe；
 3. project 路径选择与明确 cwd 启动；
 4. prompt、streaming、thinking 和真实 tool execution；
 5. abort 后 runtime/UI 状态一致；

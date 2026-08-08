@@ -74,10 +74,14 @@ export const SENTINEL_ID_UNREGISTERED_EXTENSION = 'unregistered-extension'
 /** Pi built-in tool source tokens that never require a quiescence provider. */
 export const BUILTIN_TOOL_SOURCE_TOKENS = Object.freeze(['builtin'])
 
-/** Source/path markers for the app-owned internal quiescence extension (never a blocker). */
+/** Exact Pi built-in extension surfaces that never require a quiescence provider. */
+export const BUILTIN_EXTENSION_PATH_TOKENS = Object.freeze(['<inline:llama.cpp>'])
+
+/** Source/path markers for app-owned extensions with no background work (never a blocker). */
 export const INTERNAL_QUIESCENCE_SOURCE_MARKERS = Object.freeze([
   'pi-gui-runtime-quiescence',
-  QUIESCENCE_COMMAND_NAME
+  QUIESCENCE_COMMAND_NAME,
+  'pi-gui-history-navigation'
 ])
 
 /** Source/path markers for known pi-subagents package identity. */
@@ -128,7 +132,7 @@ export const REQUIRED_PROVIDER_EXTENSION_MARKERS = Object.freeze([
 ])
 
 /** Supported Pi coding-agent version for the private ExtensionRunner inventory bridge. */
-export const SUPPORTED_PI_CODING_AGENT_VERSION = '0.80.10'
+export const SUPPORTED_PI_CODING_AGENT_VERSION = '0.83.0'
 
 /** Non-enumerable context accessors installed by the private runner bridge. */
 export const EXTENSION_INVENTORY_ACCESSOR = Symbol.for(
@@ -404,6 +408,7 @@ export function classifyToolEntries(entries, registeredProviderIds = new Set()) 
   let unregisteredNameOnlyTools = 0
   for (const entry of entries) {
     if (isBuiltinToolSource(entry.source)) continue
+    if (isBuiltinExtensionSurface(entry.source, entry.path)) continue
     if (matchesKnownSourceMarkers(entry.source, entry.path, INTERNAL_QUIESCENCE_SOURCE_MARKERS)) continue
     if (matchesKnownSourceMarkers(entry.source, entry.path, SUBAGENT_SOURCE_MARKERS)) continue
     if (SUBAGENT_TOOL_NAMES.includes(entry.name)) continue
@@ -524,8 +529,17 @@ export function isBuiltinToolSource(source) {
  * @param {string | undefined} path
  */
 export function isInternalQuiescenceSurface(name, source, path) {
-  if (name === QUIESCENCE_COMMAND_NAME) return true
+  if (INTERNAL_QUIESCENCE_SOURCE_MARKERS.includes(name)) return true
+  if (isBuiltinExtensionSurface(source, path)) return true
   return matchesKnownSourceMarkers(source, path, INTERNAL_QUIESCENCE_SOURCE_MARKERS)
+}
+
+/**
+ * @param {string | undefined} source
+ * @param {string | undefined} path
+ */
+export function isBuiltinExtensionSurface(source, path) {
+  return BUILTIN_EXTENSION_PATH_TOKENS.some((token) => source === token || path === token)
 }
 
 /**
@@ -983,6 +997,9 @@ export function classifyLoadedExtensionPath(extensionPath) {
   if (matchesMarkers(extensionPath, INTERNAL_QUIESCENCE_SOURCE_MARKERS)) {
     return { kind: 'self' }
   }
+  if (BUILTIN_EXTENSION_PATH_TOKENS.includes(extensionPath)) {
+    return { kind: 'certified-core', marker: extensionPath.slice(1, -1) }
+  }
   if (matchesMarkers(extensionPath, SUBAGENT_SOURCE_MARKERS)) {
     return { kind: 'subagents' }
   }
@@ -1025,6 +1042,8 @@ export function classifyExactExtensionInventory(extensionPaths) {
 
   /** @type {Set<string>} */
   const expectedProviderIds = new Set()
+  /** @type {Set<string>} */
+  const certifiedCoreMarkers = new Set()
   let requiresSubagentsAdapter = false
   let sawSelf = false
   let unknownCount = 0
@@ -1047,6 +1066,10 @@ export function classifyExactExtensionInventory(extensionPaths) {
       expectedProviderIds.add(classified.providerId)
       continue
     }
+    if (classified.kind === 'certified-core') {
+      certifiedCoreMarkers.add(classified.marker)
+      continue
+    }
     unknownCount += 1
   }
 
@@ -1062,17 +1085,20 @@ export function classifyExactExtensionInventory(extensionPaths) {
   }
 
   const providers = [...expectedProviderIds].sort()
+  const coreMarkers = [...certifiedCoreMarkers].sort()
   const fingerprint = boundInventoryFingerprint(
     [
       'v1',
       `providers=${providers.join(',') || '-'}`,
-      `subagents=${requiresSubagentsAdapter ? '1' : '0'}`
+      `subagents=${requiresSubagentsAdapter ? '1' : '0'}`,
+      `core=${coreMarkers.join(',') || '-'}`
     ].join(';')
   )
   return {
     ok: true,
     expectedProviderIds: providers,
     requiresSubagentsAdapter,
+    certifiedCoreMarkers: coreMarkers,
     fingerprint
   }
 }

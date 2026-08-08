@@ -48,7 +48,7 @@ export type PiCapabilityInventoryReadOptions = {
 }
 
 export type PiCapabilityInventoryServiceOptions = {
-  /** Main-owned Pi lookup only. The exact 0.80.10 package root is reverified before every worker spawn. */
+  /** Main-owned Pi lookup only. The exact 0.83.0 package root is reverified before every worker spawn. */
   piPackage?: PiPackageRootOptions
   /** Compiled worker entry. Tests may inject the source worker entry under the current Node runtime. */
   workerPath?: string

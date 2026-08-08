@@ -25,7 +25,7 @@
 “复刻”采用以下口径：
 
 - 对齐用户可感知的多 Advisor 行为、配置模型、交付语义和可观测性。
-- 复用固定 Pi 0.80.10 的 Package、Extension、Session、Provider、工具和认证能力。
+- 复用固定 Pi 0.83.0 的 Package、Extension、Session、Provider、工具和认证能力。
 - 不复制 OMP 的完整 coding-agent Runtime，也不把 OMP executable 作为第二后端。
 - OMP 源码采用 MIT License；如果实现移植了源码而不只是行为，需要保留许可证和来源说明。
 
@@ -157,7 +157,7 @@ GUI 首版只编辑用户 Agent dir 与 canonical Project 根目录的文件；�
 默认工具固定为 `read`、`grep`、`find`、`ls`。D-041 完成副作用工具审计后，S18-3 允许在
 单个 Advisor 的 WATCHDOG 定义中显式增加 `edit` / `write`；GUI 必须持续提示这些工具由
 独立 Advisor 直接执行，不经过主 Agent 审批。原生 `bash`、browser 和任意 Extension tool
-仍不开放；Pi 0.80.10 的公开 Shell 工具没有命令级 allowlist / sandbox / primary approval
+仍不开放；Pi 0.83.0 的公开 Shell 工具没有命令级 allowlist / sandbox / primary approval
 回调。Project 未受信任时，Extension 只加载用户级 WATCHDOG。
 
 保存受管字段时，Main 必须保留 GUI 未管理的合法 YAML 字段；如果无法安全 round-trip，
@@ -320,7 +320,7 @@ Extension 自身同时保留可脱离 GUI 使用的 `/advisor on`、`/advisor of
 
 | 阶段 | 目标 | 出口 |
 | --- | --- | --- |
-| S18-1 协议与单 Advisor 基线 | 审计固定 Pi 0.80.10 Extension API；冻结 Package、WATCHDOG schema、capability 和 advisory transport；实现一个默认关闭、只读、使用 `gpt-5.6-sol + medium` 的独立上下文 Advisor | 手动安装/启用后可在真实 Pi turn 后生成一条经 schema 校验的 advisory；目标模型不可用时明确暂停；关闭后不运行 |
+| S18-1 协议与单 Advisor 基线 | 审计固定 Pi 0.83.0 Extension API；冻结 Package、WATCHDOG schema、capability 和 advisory transport；实现一个默认关闭、只读、使用 `gpt-5.6-sol + medium` 的独立上下文 Advisor | 手动安装/启用后可在真实 Pi turn 后生成一条经 schema 校验的 advisory；目标模型不可用时明确暂停；关闭后不运行 |
 | S18-2 GUI 投影与控制 | Main 严格归一化历史/实时 advisory；增加 typed control、拓展页适配项、最小 Advisor 状态页和 Timeline Advisor 卡片 | `Complete`：历史与实时共用 strict projector；capability、Extension resource 与 live system 状态分离；Renderer 不接触 raw event |
 | S18-3 多 Advisor roster | `Complete`：实现 WATCHDOG 发现/合并、多个隔离 Advisor、protocol v2 与 Advisor 专页 typed CRUD | 用户级与 Project 级覆盖可解释；单项启停、模型、thinking、固定 tools 和指令在 reload 后真实生效；`edit/write` 显式授权，`bash` 不开放 |
 | S18-4 交付与韧性 | 实现 nit/concern/blocker、immune turns、有界 backlog、上下文维护、dedupe、quarantine、重试与错误/配额状态 | 多 Advisor 并行时无递归建议、无限积压或重复 emission；主 Agent 失败边界独立 |
@@ -343,7 +343,7 @@ Extension API 能保持独立预算、深度和权限边界时才实施；缺少
 
 已经冻结：
 
-1. Pi 0.80.10 Package root 的公开 `Agent`、`createReadOnlyTools`、`turn_end`、
+1. Pi 0.83.0 Package root 的公开 `Agent`、`createReadOnlyTools`、`turn_end`、
    `sendMessage`、`appendEntry`、command 与 renderer 足以实现基线，不使用 private deep import。
 2. WATCHDOG 精确 schema、slug、发现与覆盖规则按冻结 OMP commit 记录，并以 JSON schema
    随 Package 发布。
@@ -356,7 +356,7 @@ Extension API 能保持独立预算、深度和权限边界时才实施；缺少
    模型、reasoning 或 auth 不满足时明确暂停且不做静默 fallback。
 
 已通过 7 项纯逻辑测试、独立 TypeScript 校验、npm pack dry-run，以及隔离
-`PI_CODING_AGENT_DIR` 的 Pi 0.80.10 本地安装、Extension 加载、`/advisor` command 和
+`PI_CODING_AGENT_DIR` 的 Pi 0.83.0 本地安装、Extension 加载、`/advisor` command 和
 capability 探针。
 
 真实 Provider 验收使用 `vvqq-cpa/gpt-5.6-terra + low` 作为 primary、使用

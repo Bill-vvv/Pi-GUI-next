@@ -74,9 +74,9 @@ test('the exact supported version passes', async (t) => {
 
 test('a different Pi version fails', async (t) => {
   const directory = temporaryDirectory(t)
-  const executable = writeExecutable(directory, "process.stdout.write('0.80.9\\n')")
+  const executable = writeExecutable(directory, "process.stdout.write('0.82.9\\n')")
 
-  await assert.rejects(checkPiVersion({ executable, cwd: directory }), /Unsupported Pi version.*0\.80\.10/)
+  await assert.rejects(checkPiVersion({ executable, cwd: directory }), /Unsupported Pi version.*0\.83\.0/)
 })
 
 test('a non-zero version command reports stderr without logging its contents', async (t) => {

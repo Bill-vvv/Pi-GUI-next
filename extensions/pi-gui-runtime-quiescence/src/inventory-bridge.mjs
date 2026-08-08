@@ -1,5 +1,5 @@
 /**
- * Narrow, version-guarded private bridge into Pi 0.80.10 ExtensionRunner.
+ * Narrow, version-guarded private bridge into Pi 0.83.0 ExtensionRunner.
  *
  * ExtensionContext does not expose ResourceLoader. Before any runner instance is
  * used, patch ExtensionRunner.prototype so createContext/createCommandContext
@@ -10,7 +10,7 @@
 
 import { createRequire } from 'node:module'
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import {
@@ -198,6 +198,18 @@ function attachInventoryAccessors(ctx, runner) {
  */
 async function resolvePiCodingAgentModule() {
   const candidates = []
+
+  const testPackageRoot = process.env.PI_GUI_TEST_PI_PACKAGE_ROOT
+  if (testPackageRoot !== undefined) {
+    if (!isAbsolute(testPackageRoot)) {
+      return { ok: false, reason: 'test-package-root-invalid' }
+    }
+    try {
+      candidates.push(realpathSync(testPackageRoot))
+    } catch {
+      return { ok: false, reason: 'test-package-root-invalid' }
+    }
+  }
 
   // Prefer the Pi CLI package that is actually running this process.
   try {

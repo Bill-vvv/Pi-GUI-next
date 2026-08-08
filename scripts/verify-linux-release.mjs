@@ -51,7 +51,7 @@ const MEMORY_BUDGET_LIMITS = Object.freeze({
   maxSwapBytes: 0
 })
 const NON_RUN_GUARD_CODES = new Set(['E_VERIFY_ALREADY_RUNNING', 'E_DEV_GUI_RUNNING'])
-const PI_VERSION = '0.80.10'
+const PI_VERSION = '0.83.0'
 const APP_OWNED_PI_PACKAGE_NAMES = new Set([
   'pi-gui-ask',
   'pi-gui-openai-fast-mode',

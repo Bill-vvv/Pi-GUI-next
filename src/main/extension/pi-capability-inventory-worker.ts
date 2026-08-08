@@ -13,7 +13,7 @@ import {
 } from './pi-capability-inventory-core.ts'
 
 const SUPPORTED_PI_NAME = '@earendil-works/pi-coding-agent'
-const SUPPORTED_PI_VERSION = '0.80.10'
+const SUPPORTED_PI_VERSION = '0.83.0'
 const MAX_MANIFEST_BYTES = 64 * 1024
 
 type WorkerRequest = CapabilityInventoryWorkerInput & {
