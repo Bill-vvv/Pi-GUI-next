@@ -44,7 +44,12 @@ export function useSessionRuntimeController(
       getKernelState: () => optionsRef.current.getKernelState(),
       startSession: () => optionsRef.current.startSession(),
       activateSession: (sessionKey) => optionsRef.current.activateSession(sessionKey),
-      previewSession: (sessionKey) => optionsRef.current.previewSession(sessionKey),
+      previewSession: (sessionKey, requestId) =>
+        optionsRef.current.previewSession(sessionKey, requestId),
+      completeSessionPreview: (requestId) =>
+        optionsRef.current.completeSessionPreview(requestId),
+      cancelSessionPreview: (requestId) =>
+        optionsRef.current.cancelSessionPreview(requestId),
       beginActionPresentation: () => optionsRef.current.beginActionPresentation(),
       isActionPresentationCurrent: (revision) =>
         optionsRef.current.isActionPresentationCurrent(revision),

@@ -7,6 +7,7 @@ import {
   type AppearanceSettings,
   type GeneralSettings,
   type KernelArchiveReceipt,
+  type KernelConversationPageRequest,
   type KernelForkCandidate,
   type KernelMutationAck,
   type KernelPiPackageInstallJob,
@@ -97,6 +98,27 @@ export function App(): React.JSX.Element {
     return owner === null ? null : { owner, message: errorMessage(error) }
   }
 
+  function requestWorkspaceMetadataRefresh(workspaceKey: string): void {
+    const presentationRevision = actionPresentationRevision.current + 1
+    actionPresentationRevision.current = presentationRevision
+    void awaitMutationAck(() => window.piGui.refreshWorkspaceMetadata(workspaceKey)).then(
+      () => {
+        if (
+          actionPresentationRevision.current !== presentationRevision ||
+          kernelStateRef.current?.activeProjectKey !== workspaceKey
+        ) return
+        setActionFailure(null)
+      },
+      (error: unknown) => {
+        if (
+          actionPresentationRevision.current !== presentationRevision ||
+          kernelStateRef.current?.activeProjectKey !== workspaceKey
+        ) return
+        setActionFailure({ owner: 'header', message: errorMessage(error) })
+      }
+    )
+  }
+
   const {
     sessionViewTarget,
     sessionPreview,
@@ -116,7 +138,10 @@ export function App(): React.JSX.Element {
     startSession: () => awaitMutationAck(() => window.piGui.startSession()),
     activateSession: (sessionKey) =>
       awaitMutationAck(() => window.piGui.activateSession(sessionKey)),
-    previewSession: (sessionKey) => window.piGui.previewSession(sessionKey),
+    previewSession: (sessionKey, requestId) =>
+      window.piGui.previewSession(sessionKey, requestId),
+    completeSessionPreview: (requestId) => window.piGui.completeSessionPreview(requestId),
+    cancelSessionPreview: (requestId) => window.piGui.cancelSessionPreview(requestId),
     beginActionPresentation: () => {
       actionPresentationRevision.current += 1
       return actionPresentationRevision.current
@@ -540,20 +565,73 @@ export function App(): React.JSX.Element {
     }
   }
 
+  async function loadEarlierConversation(): Promise<void> {
+    const state = kernelStateRef.current
+    const firstEntry = state?.conversation.entries[0]
+    if (
+      state === null ||
+      state.activeProjectKey === null ||
+      state.activeSessionKey === null ||
+      state.session.id === null ||
+      state.conversation.startIndex <= 0 ||
+      firstEntry === undefined ||
+      getSessionViewTarget() !== null
+    ) {
+      throw new Error('当前对话没有可加载的更早历史。')
+    }
+    const request: KernelConversationPageRequest = {
+      projectKey: state.activeProjectKey,
+      sessionKey: state.activeSessionKey,
+      sessionId: state.session.id,
+      beforeIndex: state.conversation.startIndex,
+      beforeEntryId: firstEntry.id
+    }
+    const page = await window.piGui.loadEarlierConversation(request)
+    const barrier = revisionBarrierRef.current
+    const current = barrier?.getState() ?? null
+    if (
+      current === null ||
+      current.activeProjectKey !== request.projectKey ||
+      current.activeSessionKey !== request.sessionKey ||
+      current.session.id !== request.sessionId
+    ) {
+      throw new Error('Conversation page response is stale after a Session switch.')
+    }
+    barrier!.mergeConversationPage(page)
+  }
+
   async function copyLastAnswer(): Promise<void> {
     const state = kernelStateRef.current
     if (
       state === null ||
+      state.activeProjectKey === null ||
       state.activeSessionKey === null ||
+      state.session.id === null ||
       state.runtime.status !== 'ready' ||
       !state.session.settled ||
       getSessionViewTarget() !== null
     ) {
       throw new Error('当前对话暂时没有可复制的最终回答。')
     }
-    const answer = lastAssistantFinalAnswer(state)
-    if (answer === null) throw new Error('当前对话暂时没有可复制的最终回答。')
-    await copyAnswer(answer)
+    const identity = {
+      projectKey: state.activeProjectKey,
+      sessionKey: state.activeSessionKey,
+      sessionId: state.session.id
+    }
+    const answer = await window.piGui.getLastAssistantFinalAnswer()
+    const current = kernelStateRef.current
+    if (
+      answer.projectKey !== identity.projectKey ||
+      answer.sessionKey !== identity.sessionKey ||
+      answer.sessionId !== identity.sessionId ||
+      current?.activeProjectKey !== identity.projectKey ||
+      current.activeSessionKey !== identity.sessionKey ||
+      current.session.id !== identity.sessionId
+    ) {
+      throw new Error('Final answer response is stale after a Session switch.')
+    }
+    if (answer.text === null) throw new Error('当前对话暂时没有可复制的最终回答。')
+    await copyAnswer(answer.text)
   }
 
   async function navigateHistoryPrompt(
@@ -840,17 +918,7 @@ export function App(): React.JSX.Element {
           () => window.piGui.activateProject(projectKey)
         )
         clearSessionView()
-      }}
-      onSelectNavigator={async (kind) => {
-        setArchivedSessionPreview(null)
-        await waitForRuntimeEnsureIdle()
-        await runAction(
-          workbenchOp('select-navigator'),
-          () => window.piGui.selectNavigator(kind)
-        )
-        clearSessionView()
-        const sessionKey = kernelStateRef.current?.activeSessionKey ?? null
-        if (sessionKey !== null) await ensureSessionRuntime(sessionKey, 'immediate')
+        requestWorkspaceMetadataRefresh(projectKey)
       }}
       onCreateTask={async () => {
         setArchivedSessionPreview(null)
@@ -866,6 +934,8 @@ export function App(): React.JSX.Element {
           () => window.piGui.activateTask(taskKey)
         )
         clearSessionView()
+        const workspaceKey = kernelStateRef.current?.activeProjectKey ?? null
+        if (workspaceKey !== null) requestWorkspaceMetadataRefresh(workspaceKey)
         await ensureSessionRuntime(sessionKey, 'immediate')
       }}
       onStartSession={startSession}
@@ -883,6 +953,7 @@ export function App(): React.JSX.Element {
       onRetryForkCandidates={() => void loadForkCandidates()}
       onForkSession={forkSession}
       onExportSession={exportSession}
+      onLoadEarlierConversation={loadEarlierConversation}
       onCopyAnswer={copyAnswer}
       onCopyLastAnswer={copyLastAnswer}
       onArchiveSession={archiveSession}
@@ -1019,22 +1090,6 @@ export function App(): React.JSX.Element {
       onSetShortcuts={setShortcuts}
     />
   )
-}
-
-function lastAssistantFinalAnswer(state: KernelState): string | null {
-  for (let index = state.conversation.entries.length - 1; index >= 0; index -= 1) {
-    const entry = state.conversation.entries[index]
-    if (
-      entry.kind === 'message' &&
-      entry.role === 'assistant' &&
-      !entry.streaming &&
-      (entry.phase === 'final_answer' || entry.phase == null) &&
-      entry.text.trim().length > 0
-    ) {
-      return entry.text
-    }
-  }
-  return null
 }
 
 function applySelectedFont(

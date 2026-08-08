@@ -8,7 +8,8 @@ import {
 import {
   projectMessages,
   projectPiEvent,
-  projectSessionEntries
+  projectSessionEntries,
+  projectTranscriptMessages
 } from './conversation-projection.ts'
 
 test('historical messages with matching roles and timestamps retain unique identities and order', () => {
@@ -32,6 +33,170 @@ test('historical messages with matching roles and timestamps retain unique ident
   )
 })
 
+test('transcript tail and full phases derive stable identities from canonical entry IDs', () => {
+  const tailRecords = [
+    { entryId: 'u2', message: { role: 'user', content: 'second', timestamp: 3 } },
+    {
+      entryId: 'a2',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'second reply' }], timestamp: 4 }
+    }
+  ]
+  const tail = projectTranscriptMessages(tailRecords)
+  const full = projectTranscriptMessages([
+    { entryId: 'u1', message: { role: 'user', content: 'first', timestamp: 1 } },
+    {
+      entryId: 'a1',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'first reply' }], timestamp: 2 }
+    },
+    ...tailRecords
+  ])
+
+  assert.deepEqual(tail.map(({ id }) => id), [
+    'message:transcript:u2:user',
+    'message:transcript:a2:assistant'
+  ])
+  assert.deepEqual(full.slice(-tail.length).map(({ id }) => id), tail.map(({ id }) => id))
+})
+
+test('historical mutable projection remains equivalent to immutable message projection', () => {
+  const messages = [
+    { role: 'user', content: 'Inspect and update.', timestamp: 100 },
+    {
+      role: 'assistant',
+      content: [
+        { type: 'thinking', thinking: 'Inspecting.' },
+        { type: 'text', text: 'I will inspect the file.' },
+        { type: 'toolCall', id: 'read-1', name: 'read', arguments: { path: '/tmp/a' } }
+      ],
+      stopReason: 'toolUse',
+      timestamp: 101
+    },
+    {
+      role: 'toolResult',
+      toolCallId: 'read-1',
+      toolName: 'read',
+      content: [{ type: 'text', text: 'file contents' }],
+      timestamp: 102
+    },
+    {
+      role: 'assistant',
+      content: [{
+        type: 'toolCall',
+        id: 'todo-1',
+        name: 'todowrite',
+        arguments: { todos: [{ content: 'Update file', status: 'completed' }] }
+      }],
+      stopReason: 'toolUse',
+      timestamp: 103
+    },
+    {
+      role: 'toolResult',
+      toolCallId: 'todo-1',
+      toolName: 'todowrite',
+      content: [{ type: 'text', text: 'Updated.' }],
+      timestamp: 104
+    },
+    {
+      role: 'custom',
+      customType: 'subagent-notify',
+      content: 'Background task completed: **reviewer**\n\nReview complete.',
+      display: true,
+      timestamp: 105
+    },
+    {
+      role: 'custom',
+      customType: 'pi-gui.multi-advisor/advisory',
+      content: 'not projected',
+      display: true,
+      details: {
+        protocolVersion: 2,
+        advisorSlug: 'reviewer',
+        advisorName: 'Reviewer',
+        severity: 'concern',
+        guidance: 'Check ordering.',
+        note: 'Ordering is stable.',
+        delivery: 'aside',
+        timestamp: 106
+      },
+      timestamp: 106
+    }
+  ]
+
+  const historical = projectMessages(messages)
+  let immutable = [] as ReturnType<typeof projectMessages>
+  for (const message of messages) {
+    immutable = projectPiEvent(immutable, { type: 'message_end', message })
+  }
+  const withoutIdentity = (entries: ReturnType<typeof projectMessages>): unknown[] =>
+    entries.map(({ id: _id, ...entry }) => entry)
+
+  assert.deepEqual(withoutIdentity(historical), withoutIdentity(immutable))
+})
+
+test('historical tool updates retain first-seen positions across interleaved calls and results', () => {
+  const entries = projectMessages([
+    {
+      role: 'assistant',
+      content: [
+        { type: 'toolCall', id: 'tool-a', name: 'read', arguments: { path: '/tmp/a' } },
+        { type: 'text', text: 'Reading both files.' },
+        { type: 'toolCall', id: 'tool-b', name: 'read', arguments: { path: '/tmp/b' } }
+      ],
+      timestamp: 200
+    },
+    {
+      role: 'toolResult',
+      toolCallId: 'tool-a',
+      toolName: 'read',
+      content: [{ type: 'text', text: 'A' }],
+      timestamp: 201
+    },
+    {
+      role: 'assistant',
+      content: [
+        { type: 'toolCall', id: 'tool-a', name: 'read', arguments: { path: '/tmp/a' } }
+      ],
+      timestamp: 202
+    },
+    {
+      role: 'toolResult',
+      toolCallId: 'tool-b',
+      toolName: 'read',
+      content: [{ type: 'text', text: 'B' }],
+      timestamp: 203
+    }
+  ])
+
+  assert.deepEqual(entries.map((entry) => entry.id), [
+    'tool:tool-a',
+    'message:history:0:assistant',
+    'tool:tool-b'
+  ])
+  assert.deepEqual(
+    entries.filter((entry) => entry.kind === 'tool').map(({ toolCallId, status, output }) => ({
+      toolCallId,
+      status,
+      output
+    })),
+    [
+      { toolCallId: 'tool-a', status: 'success', output: 'A' },
+      { toolCallId: 'tool-b', status: 'success', output: 'B' }
+    ]
+  )
+})
+
+test('historical projection builders do not share arrays or entries across calls', () => {
+  const messages = [{ role: 'user', content: 'Stable history', timestamp: 300 }]
+  const first = projectMessages(messages)
+  const firstSnapshot = structuredClone(first)
+  const second = projectMessages(messages)
+
+  assert.notEqual(first, second)
+  assert.notEqual(first[0], second[0])
+  second.pop()
+  assert.deepEqual(first, firstSnapshot)
+})
+
 test('live assistant updates keep a stable identity and update in place', () => {
   const started = projectPiEvent([], {
     type: 'message_start',
@@ -44,6 +209,7 @@ test('live assistant updates keep a stable identity and update in place', () => 
       timestamp: 7
     }
   })
+  const startedSnapshot = structuredClone(started)
   const updated = projectPiEvent(started, {
     type: 'message_update',
     message: {
@@ -57,6 +223,8 @@ test('live assistant updates keep a stable identity and update in place', () => 
   })
 
   assert.equal(updated.length, 2)
+  assert.notEqual(updated, started)
+  assert.deepEqual(started, startedSnapshot)
   assert.deepEqual(updated.map((entry) => entry.id), started.map((entry) => entry.id))
   assert.equal(updated[0]?.kind === 'thinking' ? updated[0].text : null, 'Working')
   assert.equal(updated[0]?.kind === 'thinking' ? updated[0].summary : null, false)
@@ -673,6 +841,127 @@ test('coalesces structured Subagent attention into one supervisor request withou
   }])
   assert.equal(JSON.stringify(entries).includes('subagent({ action:'), false)
   assert.equal(JSON.stringify(entries).includes('privateField'), false)
+})
+
+test('projects large coordination-heavy history with stable order and resolved requests', () => {
+  const runCount = 1_000
+  const messages: unknown[] = []
+  for (let index = 0; index < runCount; index += 1) {
+    const runId = `run-large-${index}`
+    const requestId = `request-large-${index}`
+    const baseTimestamp = 10_000 + index * 6
+    messages.push(
+      {
+        role: 'custom',
+        customType: 'subagent_control_notice',
+        content: `Generic notice ${index}`,
+        display: true,
+        details: {
+          event: {
+            type: 'needs_attention',
+            runId,
+            agent: 'explorer',
+            index: 0,
+            reason: 'completion_guard',
+            message: `Generic notice ${index}`
+          }
+        },
+        timestamp: baseTimestamp
+      },
+      {
+        role: 'custom',
+        customType: 'subagent_control_notice',
+        content: `Supervisor notice ${index}`,
+        display: true,
+        details: {
+          event: {
+            type: 'needs_attention',
+            runId,
+            agent: 'explorer',
+            index: 0,
+            reason: 'supervisor_request',
+            message: `Supervisor notice ${index}`
+          }
+        },
+        timestamp: baseTimestamp + 1
+      },
+      {
+        role: 'custom',
+        customType: 'subagent_supervisor_request',
+        content: `Request ${index}`,
+        display: true,
+        details: {
+          id: requestId,
+          reason: 'need_decision',
+          expectsReply: true,
+          runId,
+          agent: 'explorer',
+          childIndex: 0
+        },
+        timestamp: baseTimestamp + 2
+      },
+      {
+        role: 'custom',
+        customType: 'subagent_control_notice',
+        content: `Late supervisor notice ${index}`,
+        display: true,
+        details: {
+          event: {
+            type: 'needs_attention',
+            runId,
+            agent: 'explorer',
+            index: 0,
+            reason: 'supervisor_request',
+            message: `Late supervisor notice ${index}`
+          }
+        },
+        timestamp: baseTimestamp + 3
+      },
+      {
+        role: 'assistant',
+        content: [{
+          type: 'toolCall',
+          id: `reply-large-${index}`,
+          name: 'subagent_supervisor',
+          arguments: {
+            action: 'reply',
+            replyTo: requestId,
+            message: `Reply ${index}`
+          }
+        }],
+        timestamp: baseTimestamp + 4
+      },
+      {
+        role: 'toolResult',
+        toolCallId: `reply-large-${index}`,
+        toolName: 'subagent_supervisor',
+        content: [{ type: 'text', text: 'Replied.' }],
+        isError: false,
+        timestamp: baseTimestamp + 5
+      }
+    )
+  }
+
+  const entries = projectMessages(messages)
+
+  assert.equal(entries.length, runCount * 3)
+  assert.deepEqual(entries.slice(0, 3).map((entry) => entry.id), [
+    'subagent-notice:control:run-large-0:0:needs_attention:completion_guard',
+    'subagent-notice:request:request-large-0',
+    'tool:reply-large-0'
+  ])
+  assert.deepEqual(entries.slice(-3).map((entry) => entry.id), [
+    `subagent-notice:control:run-large-${runCount - 1}:0:needs_attention:completion_guard`,
+    `subagent-notice:request:request-large-${runCount - 1}`,
+    `tool:reply-large-${runCount - 1}`
+  ])
+  const notices = entries.filter((entry) => entry.kind === 'subagent-notice')
+  assert.equal(notices.some((entry) => entry.coordination?.reason === 'supervisor_request'), false)
+  const requests = notices.filter((entry) => entry.noticeType === 'request')
+  assert.equal(requests.length, runCount)
+  assert.equal(requests.every((entry) => entry.coordination?.status === 'handled'), true)
+  assert.equal(requests[0]?.coordination?.resolvedAt, 10_005)
+  assert.equal(requests.at(-1)?.coordination?.resolvedAt, 10_005 + (runCount - 1) * 6)
 })
 
 test('marks a structured supervisor request handled after a successful reply tool result', () => {

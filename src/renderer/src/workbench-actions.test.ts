@@ -127,6 +127,34 @@ test('feature-local actions never publish through a global Workbench error surfa
   )
 })
 
+test('workspace metadata refresh uses the latest action presentation fence', () => {
+  const refreshFunction = appSource.match(
+    /function requestWorkspaceMetadataRefresh[\s\S]*?\n  }\n\n  const \{/
+  )?.[0]
+  assert.ok(refreshFunction)
+  assert.match(
+    refreshFunction,
+    /const presentationRevision = actionPresentationRevision\.current \+ 1/
+  )
+  assert.equal(
+    refreshFunction.match(
+      /actionPresentationRevision\.current !== presentationRevision/g
+    )?.length,
+    2
+  )
+  assert.equal(
+    refreshFunction.match(
+      /kernelStateRef\.current\?\.activeProjectKey !== workspaceKey/g
+    )?.length,
+    2
+  )
+  assert.match(refreshFunction, /setActionFailure\(null\)/)
+  assert.match(
+    refreshFunction,
+    /setActionFailure\(\{ owner: 'header', message: errorMessage\(error\) }\)/
+  )
+})
+
 test('Workbench routes only explicit owners and has no unclassified Header fallback', () => {
   assert.match(workbenchSource, /actionFailure\?\.owner === 'header'/)
   assert.match(workbenchSource, /actionFailure\?\.owner === 'timeline'/)

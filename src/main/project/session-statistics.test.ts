@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import type { SessionPointer } from './session-pointer.ts'
-import { readSessionStatistics } from './session-statistics.ts'
+import { readSessionMetadata, readSessionStatistics } from './session-statistics.ts'
 
 test('aggregates every append-order message across branches and metadata', async (t) => {
   const { pointer, write } = await sessionFixture(t)
@@ -26,7 +26,7 @@ test('aggregates every append-order message across branches and metadata', async
     entry('metadata', 'custom', 'session_info', undefined, { name: 'renamed' })
   ])
 
-  assert.deepEqual(await readSessionStatistics(pointer), {
+  const statistics = {
     userMessages: 1,
     assistantMessages: 2,
     toolCalls: 2,
@@ -38,6 +38,11 @@ test('aggregates every append-order message across branches and metadata', async
     cacheWriteTokens: 12,
     totalTokens: 45,
     cost: 0.75
+  }
+  assert.deepEqual(await readSessionStatistics(pointer), statistics)
+  assert.deepEqual(await readSessionMetadata(pointer), {
+    activityAt: Date.parse('2026-07-22T00:00:00.000Z'),
+    statistics
   })
 })
 

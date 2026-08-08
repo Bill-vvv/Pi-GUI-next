@@ -25,6 +25,11 @@ import {
 import { errorMessage } from '../utils/errors.ts'
 import type { SubagentSettings } from '../../shared/kernel-contract.ts'
 import {
+  HISTORY_NAVIGATION_COMMAND_DESCRIPTION,
+  HISTORY_NAVIGATION_COMMAND_NAME,
+  buildHistoryNavigationCommandArgs
+} from './history-navigation.ts'
+import {
   buildHibernateLeasePrompt,
   buildQuiescencePrompt,
   interpretHibernateLeaseStatusText,
@@ -442,9 +447,42 @@ export class LinuxLocalRuntime implements RuntimeHost {
       return { type: 'tree', ...await this.client.getTree() }
     }
     if (command.type === 'navigate_tree') {
+      const before = await this.client.getEntries()
+      const target = before.entries.find(({ id }) => id === command.targetEntryId)
+      if (
+        target?.type !== 'message' ||
+        target.message?.role !== 'user' ||
+        target.message.content === undefined
+      ) {
+        throw new Error('History navigation target must be a projected user message.')
+      }
+
+      const extensionCommand = (await this.client.getCommands()).find((candidate) =>
+        candidate.name === HISTORY_NAVIGATION_COMMAND_NAME &&
+        candidate.description === HISTORY_NAVIGATION_COMMAND_DESCRIPTION &&
+        candidate.source === 'extension' &&
+        candidate.sourceInfo?.source === 'cli' &&
+        candidate.sourceInfo.scope === 'temporary' &&
+        candidate.sourceInfo.origin === 'top-level'
+      )
+      if (extensionCommand === undefined) {
+        throw new Error('Pi GUI history navigation Extension command is unavailable.')
+      }
+
+      await this.client.prompt(buildExtensionCommandPrompt(
+        HISTORY_NAVIGATION_COMMAND_NAME,
+        buildHistoryNavigationCommandArgs(command.targetEntryId)
+      ))
+      const after = await this.client.getEntries()
+      if (after.leafId !== target.parentId) {
+        throw new Error('Pi history navigation did not select the prompt parent.')
+      }
       return {
         type: 'tree-navigation',
-        ...await this.client.navigateTree(command.targetEntryId)
+        targetEntryId: command.targetEntryId,
+        cancelled: false,
+        leafId: after.leafId,
+        editorText: target.message.content.text
       }
     }
     if (command.type === 'fork') {

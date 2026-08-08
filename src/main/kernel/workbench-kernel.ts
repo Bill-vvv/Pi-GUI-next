@@ -2,12 +2,15 @@ import type {
   AppearanceSettings,
   GeneralSettings,
   KernelArchiveReceipt,
+  KernelAssistantFinalAnswer,
   KernelAskAnswer,
   KernelAskQuestion,
   KernelCommandDescriptor,
   KernelCommandEntry,
   KernelConversationEntry,
   KernelConversationEntryPatch,
+  KernelConversationPage,
+  KernelConversationPageRequest,
   KernelConversationState,
   KernelExtensionStatusEntry,
   KernelCompactionReason,
@@ -52,6 +55,10 @@ import {
   FORK_SESSION_COMMAND_ID
 } from '../../shared/kernel-contract.ts'
 import {
+  KERNEL_CONVERSATION_PAGE_TURN_COUNT,
+  conversationTurnWindowStartIndex
+} from '../../shared/conversation-window.ts'
+import {
   copyShortcutSettings,
   DEFAULT_SHORTCUT_SETTINGS,
   isShortcutSettings
@@ -69,6 +76,10 @@ import {
 import { isAbsolute } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { RestartContinuationCandidate } from '../project/restart-continuation.ts'
+import type {
+  ReadSessionMessagesTailFirstOptions,
+  SessionTranscriptMessagePhase
+} from '../project/session-transcript-tail.ts'
 import {
   upsertSessionPointer,
   type ProjectSessionRegistry,
@@ -98,7 +109,8 @@ import {
 import {
   projectMessages,
   projectPiEvent,
-  projectSessionEntries
+  projectSessionEntries,
+  projectTranscriptMessages
 } from './conversation-projection.ts'
 import {
   askUiRequestMatchesStep,
@@ -190,6 +202,11 @@ export type ProjectTrustController = {
   persist: (projectPath: string, decision: boolean) => Promise<void>
 }
 
+type SessionMetadata = {
+  activityAt: number | null
+  statistics: KernelSessionStatistics | null
+}
+
 export type WorkbenchKernelOptions = {
   sessionRegistry: ProjectSessionRegistry
   /** 全部已登记 Project 的 Session 索引；用于 Navigator 多 Project 同时展开。 */
@@ -201,6 +218,11 @@ export type WorkbenchKernelOptions = {
   persistNavigatorKind?: (kind: 'project' | 'task') => Promise<void>
   navigatorKind?: 'project' | 'task'
   persistSession: (pointer: SessionPointer) => Promise<void>
+  persistActiveSession: (
+    projectPath: string,
+    sessionKey: string,
+    sessionId: string
+  ) => Promise<void>
   persistArchivedSession: (projectPath: string, sessionKey: string) => Promise<void>
   restoreArchivedSession?: (
     projectPath: string,
@@ -209,7 +231,12 @@ export type WorkbenchKernelOptions = {
   validateSession: (pointer: SessionPointer) => Promise<SessionPointer>
   readSessionActivityAt?: (pointer: SessionPointer) => Promise<number | null>
   readSessionStatistics?: (pointer: SessionPointer) => Promise<KernelSessionStatistics>
+  readSessionMetadata?: (pointer: SessionPointer) => Promise<SessionMetadata>
   readSessionMessages?: (pointer: SessionPointer) => Promise<unknown[]>
+  readSessionMessagesTailFirst?: (
+    pointer: SessionPointer,
+    options: ReadSessionMessagesTailFirstOptions
+  ) => Promise<SessionTranscriptMessagePhase>
   persistProjectOrder?: (projectKeys: string[]) => Promise<void>
   sessionNaming?: SessionNamingSettings
   persistSessionNaming?: (settings: SessionNamingSettings) => Promise<void>
@@ -259,6 +286,33 @@ type AskInteraction = {
   responsePlan: AskResponseStep[] | null
   nextResponseIndex: number
   cancelling: boolean
+}
+
+type SessionPreviewRegistrySource =
+  | ProjectSessionRegistry
+  | (() => Promise<ProjectSessionRegistry>)
+
+type PendingStaticSessionPreviewRequest = {
+  requestId: string
+  controller: AbortController
+}
+
+type StaticSessionPreviewOperation = {
+  requestId: string
+  projectPath: string
+  pointer: SessionPointer
+  registrySource: SessionPreviewRegistrySource
+  controller: AbortController
+  tail: Promise<KernelSessionPreview>
+  resolveTail: (preview: KernelSessionPreview) => void
+  rejectTail: (error: unknown) => void
+  completion: Promise<KernelSessionPreview>
+}
+
+type ConversationIdentity = {
+  projectKey: string
+  sessionKey: string
+  sessionId: string
 }
 
 type RuntimeContext = {
@@ -366,6 +420,7 @@ export class WorkbenchKernel {
   private readonly sessionActivityByProject = new Map<string, Map<string, number | null>>()
   private readonly sessionStatisticsByProject =
     new Map<string, Map<string, KernelSessionStatistics | null>>()
+  private readonly workspaceMetadataRefreshGeneration = new Map<string, number>()
   private readonly archiveUndoByToken = new Map<string, ArchiveUndoRecord>()
   private readonly sessionReloadRequired = new Set<string>()
   private readonly restartContinuations = new Map<string, RestartContinuationCandidate>()
@@ -406,6 +461,8 @@ export class WorkbenchKernel {
     reject: (error: Error) => void
     persistenceInFlight: boolean
   } | null = null
+  private pendingStaticSessionPreview: PendingStaticSessionPreviewRequest | null = null
+  private staticSessionPreview: StaticSessionPreviewOperation | null = null
 
   constructor(
     createRuntime: RuntimeFactory,
@@ -434,6 +491,7 @@ export class WorkbenchKernel {
     this.persistActiveTask = options.persistActiveTask ?? (async () => {})
     this.persistNavigatorKind = options.persistNavigatorKind ?? (async () => {})
     this.persistSession = options.persistSession
+    this.persistActiveSession = options.persistActiveSession
     this.persistArchivedSession = options.persistArchivedSession
     this.restoreArchivedSession = options.restoreArchivedSession ?? (async () => {
       throw new Error('Archived session restore is unavailable.')
@@ -441,7 +499,9 @@ export class WorkbenchKernel {
     this.validateSession = options.validateSession
     this.readSessionActivityAt = options.readSessionActivityAt ?? (async () => null)
     this.readSessionStatistics = options.readSessionStatistics ?? (async () => null)
+    this.readSessionMetadata = options.readSessionMetadata
     this.readSessionMessages = options.readSessionMessages
+    this.readSessionMessagesTailFirst = options.readSessionMessagesTailFirst
     this.persistProjectOrder = options.persistProjectOrder ?? (async () => {})
     this.persistSessionNaming = options.persistSessionNaming ?? (async () => {})
     this.persistAppearance = options.persistAppearance ?? (async () => {})
@@ -482,6 +542,11 @@ export class WorkbenchKernel {
   private readonly persistActiveTask: (taskKey: string) => Promise<void>
   private readonly persistNavigatorKind: (kind: 'project' | 'task') => Promise<void>
   private readonly persistSession: (pointer: SessionPointer) => Promise<void>
+  private readonly persistActiveSession: (
+    projectPath: string,
+    sessionKey: string,
+    sessionId: string
+  ) => Promise<void>
   private readonly persistArchivedSession: (projectPath: string, sessionKey: string) => Promise<void>
   private readonly restoreArchivedSession: (
     projectPath: string,
@@ -491,7 +556,13 @@ export class WorkbenchKernel {
   private readonly readSessionActivityAt: (pointer: SessionPointer) => Promise<number | null>
   private readonly readSessionStatistics:
     (pointer: SessionPointer) => Promise<KernelSessionStatistics | null>
+  private readonly readSessionMetadata:
+    ((pointer: SessionPointer) => Promise<SessionMetadata>) | undefined
   private readonly readSessionMessages: ((pointer: SessionPointer) => Promise<unknown[]>) | undefined
+  private readonly readSessionMessagesTailFirst: ((
+    pointer: SessionPointer,
+    options: ReadSessionMessagesTailFirstOptions
+  ) => Promise<SessionTranscriptMessagePhase>) | undefined
   private readonly persistProjectOrder: (projectKeys: string[]) => Promise<void>
   private readonly persistSessionNaming: (settings: SessionNamingSettings) => Promise<void>
   private readonly persistAppearance: (settings: AppearanceSettings) => Promise<void>
@@ -505,8 +576,81 @@ export class WorkbenchKernel {
   private readonly now: () => number
   private readonly readProcessMemory: (pid: number) => Promise<LinuxProcessMemoryReadResult>
 
+  getActiveProjectPath(): string {
+    return configuredProject(this.state).path
+  }
+
   getState(): KernelState {
-    const state = copyState(this.state)
+    return this.copyStateForConsumer(this.state.conversation)
+  }
+
+  /**
+   * Atomic snapshot for Renderer initialization/resync. Pairs the deep-copied
+   * KernelState with the current publish revision so clients never guess counters.
+   */
+  getSnapshot(): KernelSnapshot {
+    return {
+      revision: this.stateRevision,
+      state: this.getPublishedState()
+    }
+  }
+
+  loadEarlierConversation(request: KernelConversationPageRequest): KernelConversationPage {
+    const identity = this.activeConversationIdentity()
+    if (
+      identity === null ||
+      request.projectKey !== identity.projectKey ||
+      request.sessionKey !== identity.sessionKey ||
+      request.sessionId !== identity.sessionId
+    ) {
+      throw new Error('Conversation page request does not match the active Session identity.')
+    }
+
+    const entries = this.state.conversation.entries
+    const boundaryEntry = entries[request.beforeIndex]
+    if (
+      request.beforeIndex <= 0 ||
+      boundaryEntry === undefined ||
+      request.beforeEntryId !== boundaryEntry.id
+    ) {
+      throw new Error('Conversation page request is stale or does not match its boundary identity.')
+    }
+
+    const startIndex = conversationTurnWindowStartIndex(
+      entries,
+      request.beforeIndex,
+      KERNEL_CONVERSATION_PAGE_TURN_COUNT
+    )
+    const pageEntries = entries.slice(startIndex, request.beforeIndex)
+    if (pageEntries.length === 0) throw new Error('Conversation earlier page is empty.')
+    return {
+      ...request,
+      startIndex,
+      entries: pageEntries.map(copyConversationEntry)
+    }
+  }
+
+  getLastAssistantFinalAnswer(): KernelAssistantFinalAnswer {
+    const identity = this.activeConversationIdentity()
+    if (
+      identity === null ||
+      this.state.runtime.status !== 'ready' ||
+      !this.state.session.settled
+    ) {
+      throw new Error('A settled active persisted Session is required.')
+    }
+    return {
+      ...identity,
+      text: lastAssistantFinalAnswer(this.state.conversation.entries)
+    }
+  }
+
+  private getPublishedState(): KernelState {
+    return this.copyStateForConsumer(this.publishedConversation(this.state))
+  }
+
+  private copyStateForConsumer(conversation: KernelConversationState): KernelState {
+    const state = copyState(this.state, conversation)
     state.sessions = this.toSessionSummaries()
     state.projects = state.projects.map((project) => {
       const navigation = this.projectNavigationState(project.path)
@@ -520,14 +664,31 @@ export class WorkbenchKernel {
     return state
   }
 
-  /**
-   * Atomic snapshot for Renderer initialization/resync. Pairs the deep-copied
-   * KernelState with the current publish revision so clients never guess counters.
-   */
-  getSnapshot(): KernelSnapshot {
+  private activeConversationIdentity(): ConversationIdentity | null {
+    const projectKey = this.state.activeProjectKey
+    const sessionKey = this.state.activeSessionKey
+    const sessionId = this.state.session.id
+    return typeof projectKey === 'string' && typeof sessionKey === 'string' && typeof sessionId === 'string'
+      ? { projectKey, sessionKey, sessionId }
+      : null
+  }
+
+  private publishedConversation(state: KernelState): KernelConversationState {
+    const entries = state.conversation.entries
+    const activeRunStartIndex = state.conversation.activeRunStartIndex
+    const settledEnd = activeRunStartIndex ?? entries.length
+    if (!Number.isSafeInteger(settledEnd) || settledEnd < 0 || settledEnd > entries.length) {
+      throw new Error('Kernel Conversation active run index is invalid.')
+    }
+    const defaultStartIndex = conversationTurnWindowStartIndex(
+      entries,
+      settledEnd,
+      KERNEL_CONVERSATION_PAGE_TURN_COUNT
+    )
     return {
-      revision: this.stateRevision,
-      state: this.getState()
+      entries: entries.slice(defaultStartIndex),
+      startIndex: defaultStartIndex,
+      activeRunStartIndex
     }
   }
 
@@ -781,13 +942,15 @@ export class WorkbenchKernel {
     }))
     const activeProjectAtStart = this.state.activeProjectKey
     const metadataByProject = await Promise.all(snapshots.map(async ({ projectPath, pointers }) => {
-      const [activityAtByKey, statisticsByKey] = await Promise.all([
-        this.loadSessionActivities(pointers),
-        projectPath === activeProjectAtStart
-          ? this.loadSessionStatistics(pointers)
-          : Promise.resolve(undefined)
-      ])
-      return { projectPath, pointers, activityAtByKey, statisticsByKey }
+      if (projectPath === activeProjectAtStart) {
+        return { projectPath, pointers, ...await this.loadSessionMetadata(pointers) }
+      }
+      return {
+        projectPath,
+        pointers,
+        activityAtByKey: await this.loadSessionActivities(pointers),
+        statisticsByKey: undefined
+      }
     }))
     let changed = false
     for (const metadata of metadataByProject) {
@@ -819,6 +982,48 @@ export class WorkbenchKernel {
       sessions: this.toSessionSummaries()
     }
     this.emitState()
+  }
+
+  async refreshWorkspaceMetadata(path: string): Promise<void> {
+    if (!this.state.projects.some((workspace) => workspace.path === path)) {
+      throw new Error(`Unknown Runtime workspace: ${path}`)
+    }
+    const generation = (this.workspaceMetadataRefreshGeneration.get(path) ?? 0) + 1
+    this.workspaceMetadataRefreshGeneration.set(path, generation)
+    const pointers = (this.sessionPointersByProject.get(path) ?? [])
+      .map((pointer) => ({ ...pointer }))
+    const activityBaseline = new Map(this.sessionActivityByProject.get(path) ?? [])
+    const statisticsBaseline = new Map(this.sessionStatisticsByProject.get(path) ?? [])
+    let refreshed: Awaited<ReturnType<WorkbenchKernel['loadSessionMetadata']>>
+    try {
+      refreshed = await this.loadSessionMetadata(pointers)
+    } catch (error) {
+      if (this.workspaceMetadataRefreshGeneration.get(path) !== generation) return
+      throw error
+    }
+    if (this.workspaceMetadataRefreshGeneration.get(path) !== generation) return
+    const currentPointers = this.sessionPointersByProject.get(path) ?? []
+    const navigationBefore = this.projectNavigationState(path)
+    const activityAtByKey = mergeRefreshedMetadata(
+      currentPointers,
+      refreshed.activityAtByKey,
+      this.sessionActivityByProject.get(path) ?? new Map(),
+      activityBaseline
+    )
+    const statisticsByKey = mergeRefreshedMetadata(
+      currentPointers,
+      refreshed.statisticsByKey,
+      this.sessionStatisticsByProject.get(path) ?? new Map(),
+      statisticsBaseline
+    )
+    this.sessionActivityByProject.set(path, activityAtByKey)
+    this.sessionStatisticsByProject.set(path, statisticsByKey)
+    if (this.state.activeProjectKey === path) {
+      this.sessionPointers = currentPointers
+      this.sessionActivityAtByKey = activityAtByKey
+      this.sessionStatisticsByKey = statisticsByKey
+    }
+    this.publishProjectNavigationChange(path, navigationBefore)
   }
 
   async addProject(path: string, sessionRegistry: ProjectSessionRegistry): Promise<void> {
@@ -869,6 +1074,7 @@ export class WorkbenchKernel {
         this.sessionPointersByProject.delete(path)
         this.sessionActivityByProject.delete(path)
         this.sessionStatisticsByProject.delete(path)
+        this.workspaceMetadataRefreshGeneration.delete(path)
       }
       this.state = {
         ...this.state,
@@ -952,12 +1158,17 @@ export class WorkbenchKernel {
     else await this.persistActiveProject(path)
     const matchingRegistry = matchingSessionRegistry(workspace, sessionRegistry)
     const sessionPointers = matchingRegistry.sessions
-    const [activityAtByKey, statisticsByKey] = await Promise.all([
-      this.loadSessionActivities(sessionPointers),
-      this.loadSessionStatistics(sessionPointers)
-    ])
     await this.discardActiveEmptyProvisionalContext()
     this.captureActiveContext()
+
+    const activityAtByKey = metadataCacheForPointers(
+      sessionPointers,
+      this.sessionActivityByProject.get(path)
+    )
+    const statisticsByKey = metadataCacheForPointers(
+      sessionPointers,
+      this.sessionStatisticsByProject.get(path)
+    )
     this.sessionPointers = sessionPointers
     this.sessionActivityAtByKey = activityAtByKey
     this.sessionStatisticsByKey = statisticsByKey
@@ -1136,21 +1347,33 @@ export class WorkbenchKernel {
 
   async activateSession(
     sessionKey: string,
-    sessionRegistry?: ProjectSessionRegistry
+    sessionRegistry?: ProjectSessionRegistry | (() => Promise<ProjectSessionRegistry>)
   ): Promise<void> {
     if (!isAbsolute(sessionKey)) throw new Error(`Session key must be absolute: ${sessionKey}`)
     await this.beginLaunch(async () => {
       const project = configuredProject(this.state)
+      if (this.isActiveProvisionalSessionIdentity(project.path, sessionKey)) return
       let storedPointer = this.sessionPointers.find(
         (pointer) => pointer.projectPath === project.path && pointer.sessionFile === sessionKey
       )
+      if (storedPointer !== undefined) {
+        const warmManaged = this.findHealthyManagedSessionContext(project.path, storedPointer)
+        if (warmManaged !== undefined) {
+          await this.activateHealthyManagedSession(project.path, storedPointer, warmManaged)
+          return
+        }
+      }
       if (storedPointer === undefined) {
         // The Navigator may already reflect a durable/background materialization while
         // this active cache still trails it. Recover only an exact persisted target.
+        const registry = typeof sessionRegistry === 'function'
+          ? await sessionRegistry()
+          : sessionRegistry
+        this.assertLaunchActive()
         const refreshedPointer = this.findSessionPointerInRegistry(
           project.path,
           sessionKey,
-          sessionRegistry
+          registry
         )
         if (refreshedPointer !== undefined) {
           if (typeof this.validateSession !== 'function') {
@@ -1162,27 +1385,12 @@ export class WorkbenchKernel {
           await this.captureSessionMetadata(storedPointer)
           this.assertLaunchActive()
           this.sessionPointersByProject.set(project.path, this.sessionPointers)
+          const warmManaged = this.findHealthyManagedSessionContext(project.path, storedPointer)
+          if (warmManaged !== undefined) {
+            await this.activateHealthyManagedSession(project.path, storedPointer, warmManaged)
+            return
+          }
         }
-      }
-      const managed = this.contextBySessionKey.get(contextKey(project.path, sessionKey))
-      // Any managed crashed context must retry cleanup/relaunch — including inactive
-      // ones retained after a failed stop — rather than loading a crashed projection.
-      const restartManaged = managed !== undefined &&
-        managed.state.runtime.status === 'crashed'
-      if (managed !== undefined && !restartManaged) {
-        if (storedPointer !== undefined) {
-          await this.persistSession(storedPointer)
-          this.assertLaunchActive()
-        }
-        if (this.activeContext !== managed) {
-          await this.discardActiveEmptyProvisionalContext()
-          this.assertLaunchActive()
-        }
-        this.captureActiveContext()
-        this.touchWarmUse(managed)
-        this.loadContext(managed)
-        this.emitState()
-        return
       }
       if (storedPointer === undefined) {
         throw new Error(`Session is not registered for the active project: ${sessionKey}`)
@@ -1192,7 +1400,8 @@ export class WorkbenchKernel {
       }
       const pointer = await this.validateSession(storedPointer)
       this.assertLaunchActive()
-      if (restartManaged) {
+      const managed = this.contextBySessionKey.get(contextKey(project.path, sessionKey))
+      if (managed !== undefined) {
         await this.stopContext(managed)
         this.assertLaunchActive()
       }
@@ -1202,19 +1411,149 @@ export class WorkbenchKernel {
     })
   }
 
+  private async activateHealthyManagedSession(
+    projectPath: string,
+    pointer: SessionPointer,
+    managed: RuntimeContext
+  ): Promise<void> {
+    const emptyProvisional = this.activeContext === managed
+      ? null
+      : this.activeEmptyProvisionalContext()
+    await this.persistActiveSession(projectPath, pointer.sessionFile, pointer.sessionId)
+    this.assertLaunchActive()
+    this.captureActiveContext()
+    this.touchWarmUse(managed)
+    this.loadContext(managed)
+    this.emitState()
+    if (emptyProvisional === null) return
+    try {
+      await this.stopContext(emptyProvisional)
+    } catch (error) {
+      throw new Error(
+        `Warm Session activated, but empty provisional cleanup failed: ${errorMessage(error)}`
+      )
+    }
+    this.assertLaunchActive()
+  }
+
+  private isActiveProvisionalSessionIdentity(
+    projectPath: string,
+    sessionKey: string
+  ): boolean {
+    const context = this.activeContext
+    const provisional = this.provisionalSession
+    return context !== null &&
+      this.contexts.has(context) &&
+      context.projectPath === projectPath &&
+      this.contextBySessionKey.get(contextKey(projectPath, sessionKey)) === context &&
+      provisional !== null &&
+      provisional.runtime === context.runtime &&
+      provisional.pointer.projectPath === projectPath &&
+      provisional.pointer.sessionFile === sessionKey &&
+      this.state.activeSessionKey === sessionKey &&
+      this.state.session.id === provisional.pointer.sessionId &&
+      (this.state.runtime.status === 'ready' || this.state.runtime.status === 'running')
+  }
+
+  private findHealthyManagedSessionContext(
+    projectPath: string,
+    pointer: SessionPointer
+  ): RuntimeContext | undefined {
+    const managed = this.contextBySessionKey.get(contextKey(projectPath, pointer.sessionFile))
+    if (
+      managed === undefined ||
+      !this.contexts.has(managed) ||
+      managed.projectPath !== projectPath ||
+      managed.deferredEvents !== null
+    ) {
+      return undefined
+    }
+    const active = this.activeContext === managed
+    const stopRequested = active ? this.stopRequested : managed.stopRequested
+    const launchCommitting = active ? this.launchCommitting : managed.launchCommitting
+    const provisionalSession = active ? this.provisionalSession : managed.provisionalSession
+    const provisionalCommit = active ? this.provisionalCommit : managed.provisionalCommit
+    if (
+      stopRequested ||
+      launchCommitting ||
+      provisionalSession !== null ||
+      provisionalCommit !== null
+    ) {
+      return undefined
+    }
+    const state = active ? this.state : managed.state
+    if (state.runtime.status !== 'ready' && state.runtime.status !== 'running') return undefined
+    if (
+      state.activeProjectKey !== projectPath ||
+      state.activeSessionKey !== pointer.sessionFile ||
+      state.session.id !== pointer.sessionId
+    ) {
+      return undefined
+    }
+    const summary = this.toSessionSummariesForProject(projectPath)
+      .find(({ key }) => key === pointer.sessionFile)
+    if (summary === undefined || summary.id !== pointer.sessionId || summary.provisional === true) {
+      return undefined
+    }
+    return managed
+  }
+
   async previewSession(
     sessionKey: string,
-    sessionRegistry?: ProjectSessionRegistry
+    requestId: string,
+    sessionRegistry?: SessionPreviewRegistrySource
   ): Promise<KernelSessionPreview> {
     if (!isAbsolute(sessionKey)) throw new Error(`Session key must be absolute: ${sessionKey}`)
+    assertSessionPreviewRequestId(requestId)
+    this.cancelActiveStaticSessionPreview()
+
+    const request: PendingStaticSessionPreviewRequest = {
+      requestId,
+      controller: new AbortController()
+    }
+    this.pendingStaticSessionPreview = request
+    let operation: StaticSessionPreviewOperation | null = null
+    try {
+      operation = await this.prepareStaticSessionPreview(
+        sessionKey,
+        sessionRegistry,
+        request
+      )
+      return await operation.tail
+    } catch (error) {
+      if (this.pendingStaticSessionPreview === request) {
+        this.pendingStaticSessionPreview = null
+      }
+      if (operation !== null && this.staticSessionPreview === operation) {
+        this.staticSessionPreview = null
+      }
+      request.controller.abort()
+      throw error
+    }
+  }
+
+  private async prepareStaticSessionPreview(
+    sessionKey: string,
+    sessionRegistry: SessionPreviewRegistrySource | undefined,
+    request: PendingStaticSessionPreviewRequest
+  ): Promise<StaticSessionPreviewOperation> {
     const project = configuredProject(this.state)
+    const registrySource = sessionRegistry ?? (async () => ({
+      sessions: this.sessionPointers,
+      activeSessionKey: this.state.activeSessionKey
+    }))
+    const registry = await this.resolveSessionPreviewRegistry(registrySource)
+    this.assertPendingStaticSessionPreview(request)
+    if (this.state.activeProjectKey !== project.path) {
+      throw new Error('Session preview cancelled because the active project changed.')
+    }
     const cachedPointer = this.sessionPointers.find(
       (pointer) => pointer.projectPath === project.path && pointer.sessionFile === sessionKey
     )
     const storedPointer = cachedPointer ?? this.findSessionPointerInRegistry(
       project.path,
       sessionKey,
-      sessionRegistry
+      registry
     )
     if (storedPointer === undefined) {
       throw new Error(`Session is not registered for the active project: ${sessionKey}`)
@@ -1222,35 +1561,178 @@ export class WorkbenchKernel {
     if (typeof this.validateSession !== 'function') {
       throw new Error('Session validation is unavailable.')
     }
-    if (typeof this.readSessionMessages !== 'function') {
+    if (typeof this.readSessionMessagesTailFirst !== 'function') {
       throw new Error('Session preview is unavailable.')
     }
 
     const pointer = await this.validateSession(storedPointer)
-    const messages = await this.readSessionMessages(pointer)
-    if (
-      this.state.activeProjectKey !== project.path ||
-      (
-        cachedPointer !== undefined &&
-        !this.sessionPointers.some((candidate) =>
-          candidate.projectPath === project.path &&
-          candidate.sessionFile === pointer.sessionFile &&
-          candidate.sessionId === pointer.sessionId
-        )
-      )
-    ) {
-      throw new Error('Session preview cancelled because the active project changed.')
-    }
+    this.assertPendingStaticSessionPreview(request)
+    await this.assertStaticSessionPreviewIdentity(project.path, pointer, registrySource)
+    this.assertPendingStaticSessionPreview(request)
 
+    let resolveTail!: (preview: KernelSessionPreview) => void
+    let rejectTail!: (error: unknown) => void
+    const tail = new Promise<KernelSessionPreview>((resolve, reject) => {
+      resolveTail = resolve
+      rejectTail = reject
+    })
+    const operation: StaticSessionPreviewOperation = {
+      requestId: request.requestId,
+      projectPath: project.path,
+      pointer,
+      registrySource,
+      controller: request.controller,
+      tail,
+      resolveTail,
+      rejectTail,
+      completion: Promise.resolve(null as unknown as KernelSessionPreview)
+    }
+    this.pendingStaticSessionPreview = null
+    this.staticSessionPreview = operation
+    operation.completion = this.runStaticSessionPreview(operation)
+    void operation.completion.catch(() => undefined)
+    return operation
+  }
+
+  private assertPendingStaticSessionPreview(request: PendingStaticSessionPreviewRequest): void {
+    if (
+      this.pendingStaticSessionPreview !== request ||
+      request.controller.signal.aborted
+    ) {
+      throw sessionPreviewAbortError()
+    }
+  }
+
+  async completeSessionPreview(requestId: string): Promise<KernelSessionPreview> {
+    assertSessionPreviewRequestId(requestId)
+    const operation = this.staticSessionPreview
+    if (operation === null || operation.requestId !== requestId) {
+      throw new Error('Session preview request is not active.')
+    }
+    try {
+      return await operation.completion
+    } finally {
+      if (this.staticSessionPreview === operation) this.staticSessionPreview = null
+    }
+  }
+
+  cancelSessionPreview(requestId: string): void {
+    assertSessionPreviewRequestId(requestId)
+    const pending = this.pendingStaticSessionPreview
+    if (pending !== null && pending.requestId === requestId) {
+      this.pendingStaticSessionPreview = null
+      pending.controller.abort()
+      return
+    }
+    const operation = this.staticSessionPreview
+    if (operation === null || operation.requestId !== requestId) return
+    this.staticSessionPreview = null
+    operation.controller.abort()
+  }
+
+  private async runStaticSessionPreview(
+    operation: StaticSessionPreviewOperation
+  ): Promise<KernelSessionPreview> {
+    const readSessionMessagesTailFirst = this.readSessionMessagesTailFirst
+    if (readSessionMessagesTailFirst === undefined) {
+      throw new Error('Session preview is unavailable.')
+    }
+    try {
+      const full = await readSessionMessagesTailFirst(operation.pointer, {
+        signal: operation.controller.signal,
+        onTail: async (phase) => {
+          await this.assertStaticSessionPreviewBoundary(operation)
+          operation.resolveTail(this.projectStaticSessionPreview(operation, phase, false))
+        }
+      })
+      await this.assertStaticSessionPreviewBoundary(operation)
+      return this.projectStaticSessionPreview(operation, full, true)
+    } catch (error) {
+      operation.rejectTail(error)
+      throw error
+    }
+  }
+
+  private projectStaticSessionPreview(
+    operation: StaticSessionPreviewOperation,
+    phase: SessionTranscriptMessagePhase,
+    boundCompletedPreview: boolean
+  ): KernelSessionPreview {
+    const entries = projectTranscriptMessages(phase.messages)
+    const startIndex = boundCompletedPreview
+      ? conversationTurnWindowStartIndex(entries, entries.length, KERNEL_CONVERSATION_PAGE_TURN_COUNT)
+      : 0
     return {
-      projectKey: project.path,
-      sessionKey: pointer.sessionFile,
-      sessionId: pointer.sessionId,
-      sessionName: pointer.sessionName,
+      projectKey: operation.projectPath,
+      sessionKey: operation.pointer.sessionFile,
+      sessionId: operation.pointer.sessionId,
+      sessionName: operation.pointer.sessionName,
       conversation: {
-        entries: projectMessages(messages),
+        entries: entries.slice(startIndex),
         activeRunStartIndex: null
       }
+    }
+  }
+
+  private async assertStaticSessionPreviewBoundary(
+    operation: StaticSessionPreviewOperation
+  ): Promise<void> {
+    if (
+      this.staticSessionPreview !== operation ||
+      operation.controller.signal.aborted
+    ) {
+      throw sessionPreviewAbortError()
+    }
+    await this.assertStaticSessionPreviewIdentity(
+      operation.projectPath,
+      operation.pointer,
+      operation.registrySource
+    )
+    if (
+      this.staticSessionPreview !== operation ||
+      operation.controller.signal.aborted
+    ) {
+      throw sessionPreviewAbortError()
+    }
+  }
+
+  private async assertStaticSessionPreviewIdentity(
+    projectPath: string,
+    pointer: SessionPointer,
+    registrySource: SessionPreviewRegistrySource
+  ): Promise<void> {
+    if (this.state.activeProjectKey !== projectPath) {
+      throw new Error('Session preview cancelled because the active project changed.')
+    }
+    const registry = await this.resolveSessionPreviewRegistry(registrySource)
+    if (
+      this.state.activeProjectKey !== projectPath ||
+      !registry.sessions.some((candidate) =>
+        candidate.projectPath === projectPath &&
+        candidate.sessionFile === pointer.sessionFile &&
+        candidate.sessionId === pointer.sessionId
+      )
+    ) {
+      throw new Error('Session preview cancelled because the Session identity changed.')
+    }
+  }
+
+  private resolveSessionPreviewRegistry(
+    source: SessionPreviewRegistrySource
+  ): Promise<ProjectSessionRegistry> {
+    return typeof source === 'function' ? source() : Promise.resolve(source)
+  }
+
+  private cancelActiveStaticSessionPreview(): void {
+    const pending = this.pendingStaticSessionPreview
+    if (pending !== null) {
+      this.pendingStaticSessionPreview = null
+      pending.controller.abort()
+    }
+    const operation = this.staticSessionPreview
+    if (operation !== null) {
+      this.staticSessionPreview = null
+      operation.controller.abort()
     }
   }
 
@@ -1414,6 +1896,7 @@ export class WorkbenchKernel {
         },
         conversation: {
           entries: target.context.state.conversation.entries.slice(0, targetIndex),
+          startIndex: 0,
           activeRunStartIndex: null
         }
       }
@@ -1595,6 +2078,7 @@ export class WorkbenchKernel {
             session,
             conversation: {
               entries: projectedMessages,
+              startIndex: 0,
               activeRunStartIndex: null
             }
           }
@@ -1929,7 +2413,7 @@ export class WorkbenchKernel {
             commands: createCommandCatalog(),
             availableModels: [],
             session: { ...INITIAL_SESSION_STATE },
-            conversation: { entries: [], activeRunStartIndex: null }
+            conversation: { entries: [], startIndex: 0, activeRunStartIndex: null }
           }
         : { ...this.state, sessions }
       this.emitState()
@@ -2371,7 +2855,7 @@ export class WorkbenchKernel {
       ...(launchOptions.sessionFile === undefined
         ? {
             session: { ...INITIAL_SESSION_STATE },
-            conversation: { entries: [], activeRunStartIndex: null }
+            conversation: { entries: [], startIndex: 0, activeRunStartIndex: null }
           }
         : {})
     }
@@ -2503,6 +2987,7 @@ export class WorkbenchKernel {
           session: { ...session, resumeAvailable: false },
           conversation: {
             entries: projectedMessages,
+            startIndex: 0,
             activeRunStartIndex: null
           }
         }
@@ -2530,6 +3015,7 @@ export class WorkbenchKernel {
           session,
           conversation: {
             entries: projectedMessages,
+            startIndex: 0,
             activeRunStartIndex: null
           }
         }
@@ -3092,6 +3578,7 @@ export class WorkbenchKernel {
   }
 
   async stop(): Promise<void> {
+    this.cancelActiveStaticSessionPreview()
     if (this.pendingProjectTrust !== null) {
       this.stopRequested = true
       this.cancelPendingProjectTrust('Runtime start cancelled.')
@@ -4038,6 +4525,7 @@ export class WorkbenchKernel {
         },
         conversation: {
           entries,
+          startIndex: 0,
           activeRunStartIndex: stateResult.state.isStreaming === true ? entries.length : null
         }
       }
@@ -4255,10 +4743,7 @@ export class WorkbenchKernel {
       // Metadata is fallible, so read it before the durable index write. Once
       // persistSession succeeds there are no remaining awaits before registry
       // reconciliation; durable and in-memory pointers cannot diverge.
-      const [activityAt, statistics] = await Promise.all([
-        this.readSessionActivityAt(pointer),
-        this.readSessionStatistics(pointer)
-      ])
+      const { activityAt, statistics } = await this.readSessionMetadataForPointer(pointer)
       if (!this.contexts.has(context) || context.provisionalSession !== provisional) return
       await this.persistSession(pointer)
 
@@ -4813,28 +5298,49 @@ export class WorkbenchKernel {
     return new Map(entries)
   }
 
-  private async loadSessionStatistics(
+  private async loadSessionMetadata(
     pointers: SessionPointer[]
-  ): Promise<Map<string, KernelSessionStatistics | null>> {
+  ): Promise<{
+    activityAtByKey: Map<string, number | null>
+    statisticsByKey: Map<string, KernelSessionStatistics | null>
+  }> {
     const entries = await Promise.all(pointers.map(async (pointer) => [
       pointer.sessionFile,
-      await this.readSessionStatistics(pointer)
+      await this.readSessionMetadataForPointer(pointer)
     ] as const))
-    return new Map(entries)
+    return {
+      activityAtByKey: new Map(entries.map(([sessionFile, metadata]) => [
+        sessionFile,
+        metadata.activityAt
+      ])),
+      statisticsByKey: new Map(entries.map(([sessionFile, metadata]) => [
+        sessionFile,
+        metadata.statistics
+      ]))
+    }
+  }
+
+  private async readSessionMetadataForPointer(pointer: SessionPointer): Promise<SessionMetadata> {
+    if (this.readSessionMetadata !== undefined) return this.readSessionMetadata(pointer)
+    const [activityAt, statistics] = await Promise.all([
+      this.readSessionActivityAt(pointer),
+      this.readSessionStatistics(pointer)
+    ])
+    return { activityAt, statistics }
   }
 
   private async captureSessionMetadata(
     pointer: SessionPointer,
     knownStatistics?: KernelSessionStatistics
   ): Promise<void> {
-    const [activityAt, statistics] = await Promise.all([
-      this.readSessionActivityAt(pointer),
-      knownStatistics === undefined
-        ? this.readSessionStatistics(pointer)
-        : Promise.resolve(knownStatistics)
-    ])
-    this.sessionActivityAtByKey.set(pointer.sessionFile, activityAt)
-    this.sessionStatisticsByKey.set(pointer.sessionFile, statistics)
+    const metadata = knownStatistics === undefined
+      ? await this.readSessionMetadataForPointer(pointer)
+      : {
+          activityAt: await this.readSessionActivityAt(pointer),
+          statistics: knownStatistics
+        }
+    this.sessionActivityAtByKey.set(pointer.sessionFile, metadata.activityAt)
+    this.sessionStatisticsByKey.set(pointer.sessionFile, metadata.statistics)
     this.sessionActivityByProject.set(pointer.projectPath, this.sessionActivityAtByKey)
     this.sessionStatisticsByProject.set(pointer.projectPath, this.sessionStatisticsByKey)
   }
@@ -4956,7 +5462,7 @@ export class WorkbenchKernel {
     return summaries
   }
 
-  private async discardActiveEmptyProvisionalContext(): Promise<void> {
+  private activeEmptyProvisionalContext(): RuntimeContext | null {
     const context = this.activeContext
     const provisional = this.provisionalSession
     if (
@@ -4965,8 +5471,13 @@ export class WorkbenchKernel {
       provisional.runtime !== context.runtime ||
       provisional.initialPrompt !== null ||
       context.provisionalCommit !== null
-    ) return
-    await this.stopContext(context)
+    ) return null
+    return context
+  }
+
+  private async discardActiveEmptyProvisionalContext(): Promise<void> {
+    const context = this.activeEmptyProvisionalContext()
+    if (context !== null) await this.stopContext(context)
   }
 
   private clearProvisionalSession(runtime: RuntimeHost): void {
@@ -5674,7 +6185,7 @@ export class WorkbenchKernel {
     this.notifyListeners({
       type: 'kernel.state-changed',
       revision: this.stateRevision,
-      state: this.getState()
+      state: this.getPublishedState()
     })
   }
 
@@ -5687,6 +6198,35 @@ export class WorkbenchKernel {
       patch: copyPatch(patch)
     })
   }
+}
+
+function metadataCacheForPointers<T>(
+  pointers: SessionPointer[],
+  cached: ReadonlyMap<string, T | null> | undefined
+): Map<string, T | null> {
+  return new Map(pointers.map((pointer) => [
+    pointer.sessionFile,
+    cached?.get(pointer.sessionFile) ?? null
+  ]))
+}
+
+function mergeRefreshedMetadata<T>(
+  pointers: SessionPointer[],
+  refreshed: ReadonlyMap<string, T | null>,
+  current: ReadonlyMap<string, T | null>,
+  baseline: ReadonlyMap<string, T | null>
+): Map<string, T | null> {
+  return new Map(pointers.map((pointer) => {
+    const sessionFile = pointer.sessionFile
+    const currentHasValue = current.has(sessionFile)
+    const changedDuringRefresh =
+      currentHasValue !== baseline.has(sessionFile) ||
+      !Object.is(current.get(sessionFile), baseline.get(sessionFile))
+    const value = changedDuringRefresh
+      ? (currentHasValue ? current.get(sessionFile) ?? null : null)
+      : refreshed.get(sessionFile) ?? null
+    return [sessionFile, value] as const
+  }))
 }
 
 function configuredProject(state: Pick<KernelState, 'projects' | 'activeProjectKey'>): { path: string } {
@@ -5749,7 +6289,7 @@ function initialKernelState(
           name: activePointer.sessionName,
           resumeAvailable: true
         },
-    conversation: { entries: [], activeRunStartIndex: null }
+    conversation: { entries: [], startIndex: 0, activeRunStartIndex: null }
   }
 }
 
@@ -5970,7 +6510,10 @@ function copySessionSummary(session: KernelSessionSummary): KernelSessionSummary
   }
 }
 
-function copyState(state: KernelState): KernelState {
+function copyState(
+  state: KernelState,
+  conversation: KernelConversationState = state.conversation
+): KernelState {
   return {
     projects: state.projects.map((project) => ({
       ...project,
@@ -6019,8 +6562,9 @@ function copyState(state: KernelState): KernelState {
           }
     },
     conversation: {
-      entries: state.conversation.entries.map(copyConversationEntry),
-      activeRunStartIndex: state.conversation.activeRunStartIndex
+      entries: conversation.entries.map(copyConversationEntry),
+      startIndex: conversation.startIndex,
+      activeRunStartIndex: conversation.activeRunStartIndex
     }
   }
 }
@@ -6048,8 +6592,8 @@ function createStatePatch(previous: KernelState, next: KernelState): KernelState
     next.appearance !== previous.appearance ||
     next.general !== previous.general ||
     next.subagent !== previous.subagent ||
-    next.shortcuts !== previous.shortcuts
-    || next.advisor !== previous.advisor
+    next.shortcuts !== previous.shortcuts ||
+    next.advisor !== previous.advisor
   ) {
     return null
   }
@@ -6073,9 +6617,7 @@ function createStatePatch(previous: KernelState, next: KernelState): KernelState
         const previousEntry = previousEntries[index]
         if (previousEntry === undefined || previousEntry.id !== entry.id) return null
         if (previousEntry === entry) continue
-        const entryPatch = createConversationEntryPatch(previousEntry, entry, index)
-        if (entryPatch === null) return null
-        entries.push(entryPatch)
+        entries.push(createConversationEntryPatch(previousEntry, entry, index))
         continue
       }
       entries.push({ type: 'insert', index, entry })
@@ -6122,7 +6664,10 @@ function copyPatch(patch: KernelStatePatch): KernelStatePatch {
               ? {}
               : {
                   entries: patch.conversation.entries.map((entryPatch) => {
-                    if (entryPatch.type === 'insert') {
+                    if (
+                      entryPatch.type === 'insert' ||
+                      entryPatch.type === 'replace-entry'
+                    ) {
                       return { ...entryPatch, entry: copyConversationEntry(entryPatch.entry) }
                     }
                     if (entryPatch.type === 'append-tool-output') {
@@ -6153,17 +6698,16 @@ function createConversationEntryPatch(
   previous: KernelConversationEntry,
   next: KernelConversationEntry,
   index: number
-): KernelConversationEntryPatch | null {
-  if (previous.kind !== next.kind) return null
-
-  if (previous.kind === 'message' && next.kind === 'message') {
-    if (
-      previous.role !== next.role ||
-      previous.timestamp !== next.timestamp ||
-      !sameMessageAttachments(previous.attachments, next.attachments) ||
-      !next.text.startsWith(previous.text) ||
-      next.text.length === previous.text.length
-    ) return null
+): KernelConversationEntryPatch {
+  if (
+    previous.kind === 'message' &&
+    next.kind === 'message' &&
+    previous.role === next.role &&
+    previous.timestamp === next.timestamp &&
+    sameMessageAttachments(previous.attachments, next.attachments) &&
+    next.text.startsWith(previous.text) &&
+    next.text.length > previous.text.length
+  ) {
     return {
       type: 'append-message-text',
       index,
@@ -6175,12 +6719,13 @@ function createConversationEntryPatch(
     }
   }
 
-  if (previous.kind === 'thinking' && next.kind === 'thinking') {
-    if (
-      previous.timestamp !== next.timestamp ||
-      !next.text.startsWith(previous.text) ||
-      next.text.length === previous.text.length
-    ) return null
+  if (
+    previous.kind === 'thinking' &&
+    next.kind === 'thinking' &&
+    previous.timestamp === next.timestamp &&
+    next.text.startsWith(previous.text) &&
+    next.text.length > previous.text.length
+  ) {
     return {
       type: 'append-thinking-text',
       index,
@@ -6190,20 +6735,21 @@ function createConversationEntryPatch(
     }
   }
 
-  if (previous.kind === 'tool' && next.kind === 'tool') {
+  if (
+    previous.kind === 'tool' &&
+    next.kind === 'tool' &&
+    previous.toolCallId === next.toolCallId &&
+    previous.name === next.name &&
+    previous.args === next.args &&
+    previous.timestamp === next.timestamp &&
+    sameAskToolState(previous.ask, next.ask) &&
+    next.output.startsWith(previous.output)
+  ) {
     if (
-      previous.toolCallId !== next.toolCallId ||
-      previous.name !== next.name ||
-      previous.args !== next.args ||
-      previous.timestamp !== next.timestamp ||
-      !sameAskToolState(previous.ask, next.ask) ||
-      !next.output.startsWith(previous.output)
-    ) return null
-    if (next.output.length > previous.output.length) {
-      if (
-        !sameTodoItems(previous.todos, next.todos) ||
-        !sameToolImageAttachments(previous.attachments, next.attachments)
-      ) return null
+      next.output.length > previous.output.length &&
+      sameTodoItems(previous.todos, next.todos) &&
+      sameToolImageAttachments(previous.attachments, next.attachments)
+    ) {
       return {
         type: 'append-tool-output',
         index,
@@ -6217,17 +6763,24 @@ function createConversationEntryPatch(
         subagent: next.subagent
       }
     }
-    return {
-      type: 'replace-tool-metadata',
-      index,
-      toolCallId: next.toolCallId,
-      expectedOutputLength: previous.output.length,
-      expected: toolEntryPatchMetadata(previous),
-      metadata: toolEntryPatchMetadata(next)
+    if (next.output.length === previous.output.length) {
+      return {
+        type: 'replace-tool-metadata',
+        index,
+        toolCallId: next.toolCallId,
+        expectedOutputLength: previous.output.length,
+        expected: toolEntryPatchMetadata(previous),
+        metadata: toolEntryPatchMetadata(next)
+      }
     }
   }
 
-  return null
+  return {
+    type: 'replace-entry',
+    index,
+    expectedId: previous.id,
+    entry: next
+  }
 }
 
 function copyConversationEntry(entry: KernelConversationEntry): KernelConversationEntry {
@@ -6430,7 +6983,7 @@ function settleConversationRun(conversation: KernelConversationState): KernelCon
     ) return entry
     return { ...entry, status: 'error' as const }
   })
-  return { entries, activeRunStartIndex: null }
+  return { entries, startIndex: 0, activeRunStartIndex: null }
 }
 
 function selectSessionNameModel(
@@ -6669,6 +7222,22 @@ function lastAssistantMessage(entries: KernelConversationEntry[]): string | null
   return entry?.kind === 'message' ? entry.text : null
 }
 
+function lastAssistantFinalAnswer(entries: KernelConversationEntry[]): string | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]
+    if (
+      entry?.kind === 'message' &&
+      entry.role === 'assistant' &&
+      !entry.streaming &&
+      (entry.phase === 'final_answer' || entry.phase == null) &&
+      entry.text.trim().length > 0
+    ) {
+      return entry.text
+    }
+  }
+  return null
+}
+
 function thinkingLevel(value: unknown): ThinkingLevel | null {
   return value === 'off' ||
     value === 'minimal' ||
@@ -6705,6 +7274,22 @@ function parseModelArgument(argument: string): { provider: string, modelId: stri
 
 function stringValue(value: unknown): string | null {
   return typeof value === 'string' ? value : null
+}
+
+function assertSessionPreviewRequestId(requestId: string): void {
+  if (
+    requestId.length === 0 ||
+    requestId.length > 128 ||
+    !/^[A-Za-z0-9._:-]+$/u.test(requestId)
+  ) {
+    throw new Error('Session preview request ID is invalid.')
+  }
+}
+
+function sessionPreviewAbortError(): Error {
+  const error = new Error('Session preview was cancelled.')
+  error.name = 'AbortError'
+  return error
 }
 
 function isEnoent(error: unknown): boolean {

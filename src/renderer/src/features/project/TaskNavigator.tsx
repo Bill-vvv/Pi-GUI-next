@@ -46,7 +46,6 @@ type TaskNavigatorProps = {
   contextActionStatus: string | null
   tokenCountFormat: KernelState['appearance']['tokenCountFormat']
   onClearArchivedSessionPreview: () => void
-  onCreateTask: () => Promise<void>
   onActivateTask: (taskKey: string, sessionKey: string) => Promise<void>
   onOpenSession: (
     sessionKey: string,
@@ -69,7 +68,6 @@ export function TaskNavigator({
   contextActionStatus,
   tokenCountFormat,
   onClearArchivedSessionPreview,
-  onCreateTask,
   onActivateTask,
   onOpenSession,
   onArchiveSession
@@ -137,24 +135,10 @@ export function TaskNavigator({
     <section
       id="task-navigator-panel"
       className="sidebar-section project-list-section task-list-section"
-      role="tabpanel"
-      aria-labelledby="task-navigator-tab"
+      aria-labelledby="task-navigator-panel-toggle"
       aria-busy={contextActionStatus !== null}
       hidden={hidden}
     >
-      <div className="task-list-heading">
-        <strong>任务</strong>
-        <IconButton
-          className="task-create-button"
-          icon="plus"
-          label="新建任务"
-          aria-busy={isWorkbenchAction(pendingAction, 'create-task') ||
-            isWorkbenchAction(pendingAction, 'start-session') ? true : undefined}
-          disabled={!canChangeProjectOrSession}
-          onClick={() => void onCreateTask().catch(() => undefined)}
-        />
-      </div>
-
       {orderedTasks.length === 0 ? (
         <div className="empty-project-state task-empty-state">
           <span className="empty-project-state-icon" aria-hidden="true">
@@ -164,15 +148,6 @@ export function TaskNavigator({
             <strong>还没有任务</strong>
             <span>新建一个不属于任何项目的独立任务</span>
           </span>
-          <button
-            className="task-empty-create"
-            type="button"
-            disabled={!canChangeProjectOrSession}
-            onClick={() => void onCreateTask().catch(() => undefined)}
-          >
-            <Icon name="plus" size="control" />
-            <span>新建任务</span>
-          </button>
         </div>
       ) : (
         <div className="session-list task-session-list" id="task-sessions">

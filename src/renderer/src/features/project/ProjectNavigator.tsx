@@ -634,8 +634,7 @@ export function ProjectNavigator({
         id="project-navigator-panel"
         ref={projectListRef}
         className="sidebar-section project-list-section"
-        role="tabpanel"
-        aria-labelledby="project-navigator-tab"
+        aria-labelledby="project-navigator-panel-toggle"
         aria-busy={contextActionStatus !== null}
         data-reorder-enabled={!busy && orderedProjects.length > 1 ? 'true' : undefined}
         data-dragging={draggedProjectKey === null ? undefined : 'true'}

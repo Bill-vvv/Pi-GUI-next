@@ -199,7 +199,8 @@ const APP_OWNED_RUNTIME_EXTENSION_NAMES = [
   'pi-gui-runtime-quiescence',
   'pi-gui-task-notify',
   'pi-gui-ask',
-  'pi-gui-openai-fast-mode'
+  'pi-gui-openai-fast-mode',
+  'pi-gui-history-navigation'
 ] as const
 
 export function resolveRuntimeExtensionPaths(
@@ -222,7 +223,7 @@ function resolveAppOwnedExtensionPath(
 ): string {
   const candidates: string[] = []
   if (options.isPackaged === true && typeof options.resourcesPath === 'string') {
-    candidates.push(join(options.resourcesPath, `pi-extensions/${name}/src/index.ts`))
+    candidates.push(join(options.resourcesPath, `extensions/${name}/src/index.ts`))
   }
 
   const fromDirectory = options.fromDirectory ?? dirname(fileURLToPath(import.meta.url))
@@ -241,7 +242,7 @@ function resolveAppOwnedExtensionPath(
     if (existsSync(candidate)) return candidate
   }
   throw new Error(
-    `${name} was not found. Expected source or packaged pi-extensions path.`
+    `${name} was not found. Expected source or packaged extensions path.`
   )
 }
 

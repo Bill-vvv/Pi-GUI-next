@@ -15,6 +15,7 @@ import {
   SET_SESSION_NAME_COMMAND_ID,
   SET_THINKING_COMMAND_ID
 } from './command-catalog.ts'
+import { HISTORY_NAVIGATION_COMMAND_NAME } from '../runtime/history-navigation.ts'
 import { OPENAI_FAST_MODE_COMMAND_NAME } from '../runtime/openai-fast-mode.ts'
 import { QUIESCENCE_COMMAND_NAME } from '../runtime/runtime-quiescence.ts'
 
@@ -113,8 +114,15 @@ test('filters app-owned internal runtime commands from the user catalog', () => 
       description: 'Internal only',
       source: 'extension',
       sourceInfo: { source: 'pi-gui-openai-fast-mode', scope: 'temporary', origin: 'top-level' }
+    },
+    {
+      name: HISTORY_NAVIGATION_COMMAND_NAME,
+      description: 'Internal only',
+      source: 'extension',
+      sourceInfo: { source: 'pi-gui-history-navigation', scope: 'temporary', origin: 'top-level' }
     }
   ])
   assert.equal(catalog.some(({ name }) => name === QUIESCENCE_COMMAND_NAME), false)
   assert.equal(catalog.some(({ name }) => name === OPENAI_FAST_MODE_COMMAND_NAME), false)
+  assert.equal(catalog.some(({ name }) => name === HISTORY_NAVIGATION_COMMAND_NAME), false)
 })

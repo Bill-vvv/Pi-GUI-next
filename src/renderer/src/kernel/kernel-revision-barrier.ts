@@ -1,12 +1,17 @@
 import {
   isKernelMutationAck,
   isKernelSnapshot,
+  type KernelConversationPage,
   type KernelEvent,
   type KernelMutationAck,
   type KernelSnapshot,
   type KernelState,
   type KernelStatePatch
 } from '../../../shared/kernel-contract.ts'
+import {
+  mergeEarlierConversationPage,
+  preserveEarlierConversationWindow
+} from './conversation-page-merge.ts'
 
 export const DEFAULT_REVISION_WAIT_TIMEOUT_MS = 2_000
 export const DEFAULT_RESYNC_TIMEOUT_MS = 2_000
@@ -111,6 +116,19 @@ export class KernelRevisionBarrier {
     const ack = parseKernelMutationAck(value)
     await this.waitForRevision(ack.revision)
     return ack
+  }
+
+  mergeConversationPage(page: KernelConversationPage): KernelState {
+    if (this.disposed) throw new Error('Kernel revision barrier is disposed.')
+    if (this.currentState === null) throw new Error('Kernel revision barrier is not initialized.')
+    const nextState = mergeEarlierConversationPage(this.currentState, page)
+    if (nextState === this.currentState) return nextState
+    this.currentState = nextState
+    this.options.applyState(nextState, {
+      revision: this.appliedRevision,
+      initializing: false
+    })
+    return nextState
   }
 
   waitForRevision(revision: number): Promise<void> {
@@ -245,9 +263,12 @@ export class KernelRevisionBarrier {
     if (this.currentState !== null && revision < this.appliedRevision) return
     this.cancelFrame()
     this.pendingPatches = this.pendingPatches.filter((entry) => entry.revision > revision)
-    this.currentState = state
+    const nextState = this.currentState === null
+      ? state
+      : preserveEarlierConversationWindow(this.currentState, state)
+    this.currentState = nextState
     this.appliedRevision = revision
-    this.options.applyState(state, { revision, initializing })
+    this.options.applyState(nextState, { revision, initializing })
     this.resolveWaiters()
     if (this.pendingPatches.length > 0) this.scheduleFlush()
   }

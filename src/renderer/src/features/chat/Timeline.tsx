@@ -8,6 +8,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 
+import { KERNEL_CONVERSATION_PAGE_TURN_COUNT } from '../../../../shared/conversation-window.ts'
 import type {
   KernelAskAnswer,
   KernelConversationEntry,
@@ -64,11 +65,13 @@ type TimelineProps = {
   canExportSession: boolean
   canForkSession: boolean
   canEditHistoryPrompt: boolean
+  hasEarlierConversation: boolean
   conversationActionBusy: boolean
   conversationActionStatus: string | null
   conversationActionError: string | null
   onCopyAnswer: (text: string) => Promise<void>
   onExportSession: () => Promise<void>
+  onLoadEarlierConversation: () => Promise<void>
   onForkTurn: (userText: string) => void
   onNavigateHistoryPrompt: (messageId: string) => Promise<void>
   onSendHistoryPrompt: (message: string) => Promise<void>
@@ -108,15 +111,16 @@ type TimelineReadingAnchor = {
   fallbackViewportOffset: number
 }
 
-const COMPLETED_TURN_WINDOW_SIZE = 60
+const COMPLETED_TURN_WINDOW_SIZE = KERNEL_CONVERSATION_PAGE_TURN_COUNT
 const ACTIVE_PROMPT_SWITCH_GAP = 8
 const PROMPT_NAVIGATION_PREVIEW_DELAY_MS = 360
 const PROMPT_NAVIGATION_CLOSE_DELAY_MS = 180
-const PROMPT_NAVIGATION_FOCUS_SIGMA = 2.1
-const PROMPT_NAVIGATION_FOCUS_BASE_OPACITY = 0.4
-const PROMPT_NAVIGATION_FOCUS_OPACITY_SPAN = 0.5
-const PROMPT_NAVIGATION_FOCUS_BASE_WIDTH_PX = 9
-const PROMPT_NAVIGATION_FOCUS_WIDTH_SPAN_PX = 23
+const PROMPT_NAVIGATION_WINDOW_SIZE = 7
+const PROMPT_NAVIGATION_WHEEL_STEP_PX = 40
+const PROMPT_NAVIGATION_FOCUS_SIGMA = 1.25
+const PROMPT_NAVIGATION_FOCUS_BASE_OPACITY = 0.32
+const PROMPT_NAVIGATION_FOCUS_OPACITY_SPAN = 0.58
+const PROMPT_NAVIGATION_FOCUS_WIDTHS_PX = [18, 12, 10, 9] as const
 const MAGIC_CONTEXT_LIVE_STATUS_ID = 'extension-status:magic-context'
 const EMPTY_STATE_SLOGANS = [
   '从一个想法开始。',
@@ -141,11 +145,13 @@ export function Timeline({
   canExportSession,
   canForkSession,
   canEditHistoryPrompt,
+  hasEarlierConversation,
   conversationActionBusy,
   conversationActionStatus,
   conversationActionError,
   onCopyAnswer,
   onExportSession,
+  onLoadEarlierConversation,
   onForkTurn,
   onNavigateHistoryPrompt,
   onSendHistoryPrompt,
@@ -177,6 +183,8 @@ export function Timeline({
   const observedThinkingStartsRef = useRef(new Map<string, number>())
   const historyPromptTextareaRef = useRef<HTMLTextAreaElement>(null)
   const [completedTurnWindow, setCompletedTurnWindow] = useState(COMPLETED_TURN_WINDOW_SIZE)
+  const [earlierConversationLoading, setEarlierConversationLoading] = useState(false)
+  const [earlierConversationError, setEarlierConversationError] = useState<string | null>(null)
   const [actionTurnId, setActionTurnId] = useState<string | null>(null)
   const [actionFeedbackTurnId, setActionFeedbackTurnId] = useState<string | null>(null)
   const [historyPromptEdit, setHistoryPromptEdit] = useState<
@@ -239,6 +247,36 @@ export function Timeline({
   const detachedHistoryPromptEditor = historyPromptEdit !== null && editingTurnIndex < 0
   const isHistoryPromptEditing = historyPromptEdit !== null
   const hiddenCompletedTurnCount = completedTurns.length - visibleCompletedTurns.length
+  const canRevealEarlierConversation =
+    hiddenCompletedTurnCount > 0 || hasEarlierConversation || earlierConversationError !== null
+  const revealEarlierConversation = async (): Promise<void> => {
+    if (earlierConversationLoading) return
+    const viewport = viewportRef.current
+    setScrollMode('reading')
+    if (viewport !== null) {
+      revealScrollHeightRef.current = viewport.scrollHeight
+      captureReadingAnchor()
+    }
+    if (hiddenCompletedTurnCount > 0) {
+      setCompletedTurnWindow((count) => count + COMPLETED_TURN_WINDOW_SIZE)
+      return
+    }
+    if (!hasEarlierConversation) {
+      revealScrollHeightRef.current = null
+      return
+    }
+    setEarlierConversationLoading(true)
+    setEarlierConversationError(null)
+    try {
+      await onLoadEarlierConversation()
+      setCompletedTurnWindow((count) => count + COMPLETED_TURN_WINDOW_SIZE)
+    } catch (error: unknown) {
+      revealScrollHeightRef.current = null
+      setEarlierConversationError(unknownErrorMessage(error))
+    } finally {
+      setEarlierConversationLoading(false)
+    }
+  }
   const subagentTaskInteraction = useMemo<SubagentTaskInteraction>(() => ({
     selection: subagentTaskSelection,
     onOpen: onOpenSubagentTask
@@ -742,22 +780,27 @@ export function Timeline({
               aria-live={runtimeStatus === 'running' ? 'polite' : 'off'}
               aria-label="对话时间线"
             >
-              {historyPromptEdit === null && hiddenCompletedTurnCount > 0 ? (
-                <button
-                  className="conversation-history-reveal"
-                  type="button"
-                  onClick={() => {
-                    const viewport = viewportRef.current
-                    setScrollMode('reading')
-                    if (viewport) {
-                      revealScrollHeightRef.current = viewport.scrollHeight
-                      captureReadingAnchor()
-                    }
-                    setCompletedTurnWindow((count) => count + COMPLETED_TURN_WINDOW_SIZE)
-                  }}
-                >
-                  显示更早的 {Math.min(COMPLETED_TURN_WINDOW_SIZE, hiddenCompletedTurnCount)} 轮
-                </button>
+              {historyPromptEdit === null && canRevealEarlierConversation ? (
+                <>
+                  <button
+                    className="conversation-history-reveal"
+                    type="button"
+                    disabled={earlierConversationLoading}
+                    aria-busy={earlierConversationLoading ? true : undefined}
+                    onClick={() => void revealEarlierConversation()}
+                  >
+                    {earlierConversationLoading
+                      ? '正在加载更早历史…'
+                      : hiddenCompletedTurnCount > 0
+                        ? `显示更早的 ${Math.min(COMPLETED_TURN_WINDOW_SIZE, hiddenCompletedTurnCount)} 轮`
+                        : earlierConversationError === null ? '加载更早的 60 轮' : '重试加载更早历史'}
+                  </button>
+                  {earlierConversationError === null ? null : (
+                    <small className="conversation-history-error" role="alert">
+                      {earlierConversationError}
+                    </small>
+                  )}
+                </>
               ) : null}
               {renderedCompletedTurns.map((turn) => {
                 const historyPrompt = turnHistoryPrompt(turn)
@@ -1052,11 +1095,26 @@ function PromptNavigationRail({
   const closeDelayRef = useRef<number | null>(null)
   const focusFrameRef = useRef<number | null>(null)
   const pendingFocusPositionRef = useRef<number | null>(null)
+  const pendingBrowseItemIndexRef = useRef<number | null>(null)
+  const pendingKeyboardFocusItemIndexRef = useRef<number | null>(null)
+  const wheelDeltaRef = useRef(0)
   const previewModeRef = useRef(false)
   const [preview, setPreview] = useState<{
     item: PromptNavigationItem
     trigger: HTMLButtonElement
   } | null>(null)
+  const [windowAnchorIndex, setWindowAnchorIndex] = useState<number | null>(null)
+  const matchedActiveItemIndex = items.findIndex((item) => item.turnId === activeTurnId)
+  const activeItemIndex = matchedActiveItemIndex >= 0
+    ? matchedActiveItemIndex
+    : Math.max(0, items.length - 1)
+  const windowStart = promptNavigationWindowStart(
+    items.length,
+    windowAnchorIndex ?? activeItemIndex
+  )
+  const visibleItems = items
+    .slice(windowStart, windowStart + PROMPT_NAVIGATION_WINDOW_SIZE)
+    .map((item, localIndex) => ({ item, itemIndex: windowStart + localIndex }))
 
   const clearPreviewDelay = useCallback(() => {
     if (previewDelayRef.current === null) return
@@ -1093,8 +1151,12 @@ function PromptNavigationRail({
     clearPreviewDelay()
     clearCloseDelay()
     clearNavigationFocus()
+    pendingBrowseItemIndexRef.current = null
+    pendingKeyboardFocusItemIndexRef.current = null
+    wheelDeltaRef.current = 0
     previewModeRef.current = false
     setPreview(null)
+    setWindowAnchorIndex(null)
   }, [clearCloseDelay, clearNavigationFocus, clearPreviewDelay])
   const scheduleClosePreview = useCallback(() => {
     clearCloseDelay()
@@ -1129,6 +1191,27 @@ function PromptNavigationRail({
     }, PROMPT_NAVIGATION_PREVIEW_DELAY_MS)
   }, [clearCloseDelay, clearPreviewDelay, scheduleNavigationFocus])
 
+  useLayoutEffect(() => {
+    const pendingKeyboardFocusItemIndex = pendingKeyboardFocusItemIndexRef.current
+    if (pendingKeyboardFocusItemIndex !== null) {
+      const localIndex = pendingKeyboardFocusItemIndex - windowStart
+      const marker = markerRefs.current[localIndex]
+      if (marker !== undefined && marker !== null) {
+        pendingKeyboardFocusItemIndexRef.current = null
+        marker.focus()
+      }
+      return
+    }
+    const pendingBrowseItemIndex = pendingBrowseItemIndexRef.current
+    if (pendingBrowseItemIndex === null) return
+    const localIndex = pendingBrowseItemIndex - windowStart
+    const marker = markerRefs.current[localIndex]
+    const item = items[pendingBrowseItemIndex]
+    if (marker === undefined || marker === null || item === undefined) return
+    pendingBrowseItemIndexRef.current = null
+    showPreview(item, localIndex, marker, true)
+  }, [items, showPreview, windowStart])
+
   useEffect(() => {
     if (preview === null) return
     const handleKeyDown = (event: KeyboardEvent): void => {
@@ -1144,14 +1227,49 @@ function PromptNavigationRail({
     clearNavigationFocus()
   }, [clearCloseDelay, clearNavigationFocus, clearPreviewDelay])
 
-  const focusMarker = (index: number): void => {
-    markerRefs.current[Math.max(0, Math.min(items.length - 1, index))]?.focus()
+  const focusMarker = (itemIndex: number): void => {
+    const targetIndex = Math.max(0, Math.min(items.length - 1, itemIndex))
+    const localIndex = targetIndex - windowStart
+    const marker = markerRefs.current[localIndex]
+    if (marker !== undefined && marker !== null) {
+      marker.focus()
+      return
+    }
+    pendingKeyboardFocusItemIndexRef.current = targetIndex
+    setWindowAnchorIndex(targetIndex)
+  }
+
+  const handleWheel = (event: React.WheelEvent<HTMLOListElement>): void => {
+    if (items.length <= PROMPT_NAVIGATION_WINDOW_SIZE || event.deltaY === 0) return
+    event.preventDefault()
+    const pixelDelta = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? event.deltaY * 16
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? event.deltaY * window.innerHeight
+        : event.deltaY
+    wheelDeltaRef.current += Math.max(
+      -PROMPT_NAVIGATION_WHEEL_STEP_PX * 2,
+      Math.min(PROMPT_NAVIGATION_WHEEL_STEP_PX * 2, pixelDelta)
+    )
+    const steps = Math.trunc(wheelDeltaRef.current / PROMPT_NAVIGATION_WHEEL_STEP_PX)
+    if (steps === 0) return
+    wheelDeltaRef.current -= steps * PROMPT_NAVIGATION_WHEEL_STEP_PX
+    const previewItemIndex = preview === null
+      ? -1
+      : items.findIndex((item) => item.turnId === preview.item.turnId)
+    const currentIndex = previewItemIndex >= 0
+      ? previewItemIndex
+      : windowAnchorIndex ?? activeItemIndex
+    const targetIndex = Math.max(0, Math.min(items.length - 1, currentIndex + steps))
+    if (targetIndex === currentIndex) return
+    pendingBrowseItemIndexRef.current = targetIndex
+    setWindowAnchorIndex(targetIndex)
   }
 
   return (
     <nav
       className="prompt-navigation-rail"
-      aria-label="提示词导航"
+      aria-label="提示词导航，可滚动浏览"
       data-expanded={preview === null ? undefined : 'true'}
       onPointerEnter={clearCloseDelay}
       onPointerLeave={(event) => {
@@ -1160,11 +1278,13 @@ function PromptNavigationRail({
         else closePreview()
       }}
       onBlur={(event) => {
+        if (pendingKeyboardFocusItemIndexRef.current !== null) return
         if (!event.currentTarget.contains(event.relatedTarget)) closePreview()
       }}
     >
       <ol
         className="prompt-navigation-list"
+        onWheel={handleWheel}
         onPointerMove={(event) => {
           if (!previewModeRef.current || event.pointerType === 'touch') return
           const position = promptNavigationPointerPosition(
@@ -1174,33 +1294,34 @@ function PromptNavigationRail({
           if (position !== null) scheduleNavigationFocus(position)
         }}
       >
-        {items.map((item, index) => {
+        {visibleItems.map(({ item, itemIndex }, localIndex) => {
           const active = item.turnId === activeTurnId
           const described = preview?.item.turnId === item.turnId
+          const keyboardCurrent = windowAnchorIndex ?? activeItemIndex
           return (
             <li key={item.turnId}>
               <button
                 ref={(element) => {
-                  markerRefs.current[index] = element
+                  markerRefs.current[localIndex] = element
                 }}
                 className="prompt-navigation-marker"
                 type="button"
-                tabIndex={active || (activeTurnId === null && index === 0) ? 0 : -1}
+                tabIndex={itemIndex === keyboardCurrent ? 0 : -1}
                 aria-current={active ? 'location' : undefined}
                 aria-describedby={described ? 'prompt-navigation-preview' : undefined}
                 aria-label={`跳转到提示词 ${item.ordinal}：${promptNavigationLabel(item.prompt)}`}
                 data-navigation-focus={described ? 'true' : undefined}
                 onPointerEnter={(event) =>
-                  showPreview(item, index, event.currentTarget, previewModeRef.current)}
-                onFocus={(event) => showPreview(item, index, event.currentTarget, true)}
+                  showPreview(item, localIndex, event.currentTarget, previewModeRef.current)}
+                onFocus={(event) => showPreview(item, localIndex, event.currentTarget, true)}
                 onClick={() => onNavigate(item.turnId)}
                 onKeyDown={(event) => {
                   if (event.key === 'ArrowUp') {
                     event.preventDefault()
-                    focusMarker(index - 1)
+                    focusMarker(itemIndex - 1)
                   } else if (event.key === 'ArrowDown') {
                     event.preventDefault()
-                    focusMarker(index + 1)
+                    focusMarker(itemIndex + 1)
                   } else if (event.key === 'Home') {
                     event.preventDefault()
                     focusMarker(0)
@@ -1227,6 +1348,25 @@ function PromptNavigationRail({
   )
 }
 
+function promptNavigationWindowStart(itemCount: number, anchorIndex: number): number {
+  const maxStart = Math.max(0, itemCount - PROMPT_NAVIGATION_WINDOW_SIZE)
+  return Math.max(
+    0,
+    Math.min(maxStart, anchorIndex - Math.floor(PROMPT_NAVIGATION_WINDOW_SIZE / 2))
+  )
+}
+
+function promptNavigationMarkerWidth(distance: number): number {
+  const lastIndex = PROMPT_NAVIGATION_FOCUS_WIDTHS_PX.length - 1
+  if (distance >= lastIndex) return PROMPT_NAVIGATION_FOCUS_WIDTHS_PX[lastIndex]
+  const lowerIndex = Math.floor(distance)
+  const upperIndex = Math.ceil(distance)
+  const progress = distance - lowerIndex
+  const lowerWidth = PROMPT_NAVIGATION_FOCUS_WIDTHS_PX[lowerIndex]
+  const upperWidth = PROMPT_NAVIGATION_FOCUS_WIDTHS_PX[upperIndex]
+  return Math.round(lowerWidth + (upperWidth - lowerWidth) * progress)
+}
+
 function applyPromptNavigationFocus(
   markers: Array<HTMLButtonElement | null>,
   focusedPosition: number | null
@@ -1251,10 +1391,7 @@ function applyPromptNavigationFocus(
     )
     marker.style.setProperty(
       '--prompt-navigation-marker-width',
-      `${Math.round(
-        PROMPT_NAVIGATION_FOCUS_BASE_WIDTH_PX +
-        weight * PROMPT_NAVIGATION_FOCUS_WIDTH_SPAN_PX
-      )}px`
+      `${promptNavigationMarkerWidth(distance)}px`
     )
   })
 }

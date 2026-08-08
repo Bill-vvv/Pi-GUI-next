@@ -25,15 +25,14 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 
 ```text
 ┌─ Project / Task Navigator ────┬─ Active Workspace ─────────────┬─ Optional Right Sidebar ─┐
-│ [ Project ] [ Task ]          │ Session Header                 │ [ concrete module tabs ] │
-│                               │ scope / session / runtime      ├──────────────────────────┤
-│ Project                       ├────────────────────────────────┤ active module content    │
-│ ▾ Project A               ＋  │                                │                          │
-│   ● Session A1               │ Turn-based Conversation        │                          │
-│     Session A2               │ Timeline                       │                          │
-│                               │                                │                          │
-│ Task                          ├────────────────────────────────┤                          │
-│   Standalone task             │ Composer + Command Menu        │                          │
+│ ▾ 项目                     ＋ │ Session Header                 │ [ concrete module tabs ] │
+│   ▾ Project A             ＋ │ scope / session / runtime      ├──────────────────────────┤
+│     ● Session A1             ├────────────────────────────────┤ active module content    │
+│       Session A2             │                                │                          │
+│                               │ Turn-based Conversation        │                          │
+│ ▾ 任务                     ＋ │ Timeline                       │                          │
+│     Standalone task           ├────────────────────────────────┤                          │
+│                               │ Composer + Command Menu        │                          │
 └───────────────────────────────┴────────────────────────────────┴──────────────────────────┘
 ```
 
@@ -43,12 +42,12 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 
 ### 3.1 左侧 Navigator
 
-- 顶层以可访问 Tab 区分“项目”和“任务”；切换 Tab 同时恢复该类别最后查看的目标，不停止其他 Runtime。
-- 项目视图同时展示多个 Project；每个 Project 下展示其 Session。
-- 任务视图扁平展示独立任务；一个任务严格对应一个 Session，不再增加容器层。
-- Project 行负责选择 Project，并提供该 Project 的新建 Session 入口。
+- 顶层同时展示“项目”和“任务”两个独立 disclosure 分组；二者在每次 Renderer 生命周期开始时都默认展开，可分别收起，展开一组不收起另一组。展开状态只属于当前 Renderer，不持久化、不进入 Kernel，也不改变 Runtime 生命周期。
+- 两个分组按“项目”在上、“任务”在下共享 Navigator 的单一连续滚动区；不建立嵌套滚动、等高分栏或 sticky 分组标题。
+- 项目分组同时展示多个 Project；每个 Project 下展示其 Session。任务分组扁平展示独立任务；一个任务严格对应一个 Session，不再增加容器层。
+- 分组标题通过 `aria-expanded` / `aria-controls` 只控制本组显隐；当前 `navigatorKind` 只提供活动类别强调与真实运行数量，不把分组标题重新变成类别切换按钮。
+- “项目”分组标题的独立 `＋` 是唯一添加 Project 入口；“任务”分组标题的独立 `＋` 创建 Task。Project 行继续提供该 Project 的新建 Session 入口；操作按钮不得触发父级 disclosure。
 - Session 行负责打开已有 Session；选中的 Project 和 Session 必须有唯一、清晰的选中态。
-- 全局只保留一个“添加 Project”入口。
 - Project path 放在 Project 行的次级信息或 tooltip，不继续占用 Composer 底部。
 - Navigator 只展示已经贯通真实能力的行内操作；Session/Task 归档已接入，搜索和其他管理入口仍不得提前展示。
 - Task 的应用私有 Runtime path 不进入 Project 行、Header、hover card 或设置作用域；Renderer 只依据 typed `workspaceKind` / `taskKey` 判断类别。
@@ -76,10 +75,10 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 - 固定适配的 `ask` 交互仍附着在原 `toolCallId` 对应的运行中 tool entry 上，以同一 Timeline 工具卡展示严格归一化的问题、提交和取消状态；它不成为脱离 Conversation 的弹窗式第二事实，也不让 Renderer 解析原始 extension UI payload。
 - 以一次 user turn 和随后一个 agent run 形成可辨识的 turn group。
 - 活动 run 线性展示 thinking 与 tool；Renderer 将同一 turn 内连续的 thinking entry 合为一个视觉阶段，任意非-thinking 过程项封口，同时保留 Kernel 中每条 entry 的原始 identity 与顺序。若 error 或其他 content entry 将活动 run 切成多个过程 chunk，后续 chunk 出现新 thinking 时只挂载最新含 thinking chunk 的 thinking；更早 thinking 在 settled 后的完成过程展开中恢复，跨 chunk 的 tool、commentary 与 error 继续保留。活动阶段以最新摘要作为标题且不在正文重复该行，完成阶段仅有一个非空源码行的短思考直接显示正文，多行或多段内容才保留一个“思考” disclosure；重叠的现场 thinking 计时取最长完整观测跨度，不相加。普通工具批次只有一个 entry 时，外层汇总展开后直接显示真实详情而不重复该工具标题。settled 后的工作过程摘要与最终回答保持在同一 turn group 内，不作为脱离回答的独立大卡片。
-- 保留按 `toolCallId` 原地更新、最近 60 轮渐进挂载、用户离开底部后停止自动跟随等现有行为。当前 60-turn 规则只限制 Renderer 的 DOM 挂载，不代表活动 Conversation 已完成分页读取、状态拆分或工作集驱逐。
-- 固定适配的 `pi-subagents` 在拉起后进入同一 turn：唤起中与运行中的 Subagent 必须直接显示，不得藏入 thinking 或通用工具详情 disclosure；前台运行默认按参与者显示紧凑、可聚焦的任务胶囊和同行整体状态。胶囊用“当前展示 Conversation identity + Subagent toolCallId + participant.index”作为稳定目标；点击后选择共享右侧栏中的“子任务”Tab。宽窗口右侧栏作为真实第三列与 Timeline / Composer 并排，用户可通过可访问 separator 指针或键盘调宽，并可收起后从 Conversation 重新展开；较窄窗口复用同一右侧栏 contract，在主工作区显示带返回入口的完整详情面。关闭、返回、Escape、Project/Session/Conversation identity 变化和目标消失继续按稳定 locator 恢复或清理焦点/选择。`SubagentTaskDetail` 自己拥有领域标题与正文，composition 不解析或复制其内容。详情按状态重排：运行中显示当前活动，完成态显示结果或输出文件，失败态显示错误，暂停态显示已有输出与最后活动；实际模型、input/output/cache token、费用、轮次、工具数和耗时跟随归一化 patch 更新。普通完成通知在 Timeline 只形成轻量可点击的完成任务胶囊，并保留通知协议中的原始 Agent 名称作为胶囊标签；Main 移除重复 completion envelope 与 Session file 行，把固定 `Output saved to` 协议投影为 metadata-only 输出引用，用户可显式打开但 GUI 不读取正文。通知未携带模型或 usage 时明确 unavailable，不从配置或 Session 猜测。关闭/返回/Escape 恢复合理焦点；Project、Session、新对话、归档预览 identity 变化、目标消失或设置页打开时关闭旧详情。`subagent list/status`、`subagent_wait` 以及 supervisor/intercom 的 pending/status/list 是内部发现或轮询，不进入 Timeline；控制、转向、暂停、停止、回复与 Watchdog 警告仍以独立通知显示。Main 从白名单 details 投影 supervisor request 的稳定 identity 与 pending/handled 生命周期，同一 run participant 的具体 request 替代泛化 attention，成功 reply 原地更新。该协作默认不作为用户 alert，只有 completion guard 与 Watchdog blocker 使用 alert。GUI 不读取子 Session transcript 或普通 artifact，不建立任务数据库或运行控制，也不按通知文案猜测原 run identity。
+- 保留按 `toolCallId` 原地更新、用户离开底部后停止自动跟随等现有行为。Main 的 RuntimeContext 保留完整 active-branch Conversation；Renderer 的权威工作窗口初始只接收最近 60 个 settled turn 与完整 active run，并按每次最多 60 轮向前读取。向前读取不推进 Kernel revision，也不扩张 Main 后续 snapshot；Renderer 仅在新权威尾窗与本地窗口存在连续 entry identity 重叠时保留已加载前缀。patch index 与 active-run 边界使用完整 Conversation 的绝对 index，Renderer 依据窗口起点定位；向前读取必须绑定 Project、Session、Session ID、边界 index 与边界 entry ID，过期结果明确拒绝。
+- 固定适配的 `pi-subagents` 在拉起后进入同一 turn：唤起中与运行中的 Subagent 必须直接显示，不得藏入 thinking 或通用工具详情 disclosure；前台运行默认按参与者显示紧凑、可聚焦的任务胶囊和同行整体状态。胶囊用“当前展示 Conversation identity + Subagent toolCallId + participant.index”作为稳定目标；点击后选择共享右侧栏中的“子任务”Tab。宽窗口右侧栏作为真实第三列与 Timeline / Composer 并排，用户可通过可访问 separator 指针或键盘调宽，并可收起后从 Conversation 重新展开；较窄窗口复用同一右侧栏 contract，在主工作区显示带返回入口的完整详情面。关闭、返回、Escape、Project/Session/Conversation identity 变化和目标消失继续按稳定 locator 恢复或清理焦点/选择。`SubagentTaskDetail` 自己拥有领域标题与正文，composition 不解析或复制其内容。详情按状态重排：运行中显示当前活动，完成态显示结果或输出文件，失败态显示错误，暂停态显示已有输出与最后活动；实际模型、input/output/cache token、费用、轮次、工具数和耗时跟随归一化 patch 更新；模型已报告时，任务胶囊在主标签后显示模型 ID 最后一段，完整 provider/model 留在 tooltip 与运行摘要，未报告时不显示占位也不从配置猜测。普通完成通知在 Timeline 只形成轻量可点击的完成任务胶囊，并保留通知协议中的原始 Agent 名称作为胶囊标签；Main 移除重复 completion envelope 与 Session file 行，把固定 `Output saved to` 协议投影为 metadata-only 输出引用，用户可显式打开但 GUI 不读取正文。通知未携带模型或 usage 时明确 unavailable，不从配置或 Session 猜测。关闭/返回/Escape 恢复合理焦点；Project、Session、新对话、归档预览 identity 变化、目标消失或设置页打开时关闭旧详情。`subagent list/status`、`subagent_wait` 以及 supervisor/intercom 的 pending/status/list 是内部发现或轮询，不进入 Timeline；控制、转向、暂停、停止、回复与 Watchdog 警告仍以独立通知显示。Main 从白名单 details 投影 supervisor request 的稳定 identity 与 pending/handled 生命周期，同一 run participant 的具体 request 替代泛化 attention，成功 reply 原地更新；Renderer 不把 pending/handled 请求渲染到 Timeline，确需用户决策时由主 Agent 在普通 Assistant 对话中提出。只有 completion guard 与 Watchdog blocker 使用 alert。GUI 不读取子 Session transcript 或普通 artifact，不建立任务数据库或运行控制，也不按通知文案猜测原 run identity。
 - 既有 Session 中合法的历史 Advisor advisory 继续留在触发它的 turn 内，按归一化 entry 时序只读显示名称、严重度、正文和 guidance；blocker 不覆盖 Assistant 最终回答，Renderer 不解析 raw custom message 或 XML，也不恢复已退役的 Advisor 安装、启停或 roster 控制面。
-- Navigator 完全展开时，Timeline 左缘显示与真实用户轮次对应的 Prompt 导航短标记；悬浮或键盘聚焦可预览内容，首次悬浮成立后扩展为连续命中带，邻近标记保持固定线高和矩形端点、只按整数像素成组延长，短暂离轨不会立即收起，点击定位对应轮次；折叠与窄窗口下隐藏。不在 Session Header 下粘着当前阅读轮次的用户 prompt。
+- Navigator 完全展开时，Timeline 左缘显示与真实用户轮次对应的 Prompt 导航短标记；默认只挂载以当前阅读轮次为中心、最多 7 条的局部窗口，悬浮后可用滚轮、键盘和预览跨窗口浏览其余 Prompt，点击定位对应轮次，离轨收起后回到当前阅读窗口。首次悬浮成立后扩展为连续命中带，邻近标记保持固定线高和矩形端点，宽度使用有界离散层级并只在相邻层级间按整数像素插值，短暂离轨不会立即收起；折叠与窄窗口下隐藏。不在 Session Header 下粘着当前阅读轮次的用户 prompt。
 - 复制回答、导出 HTML 与分叉对话属于当前 Conversation 操作：每个具备真实操作能力的已完成 turn 都在下方常驻预留同高的内联图标槽，悬停该 turn 或用键盘聚焦槽内按钮时只切换图标可见性与命中，不改变后续内容位置，也不占用 Session Header。复制/导出反馈固定留在发起操作的同一 turn 槽内，并以单行省略保持槽高；没有 turn 来源的快捷键反馈才使用时间线末尾的稳定位置。图标保持无底板的轻量外观。导出与分叉仍是会话级能力；复制作用于当前聚焦轮次的最终回答。
 - Project 或 Session 选择变化时，Timeline identity 随活动二元组变化，不复用上一 Session 的滚动和 disclosure 状态。
 
@@ -109,7 +108,7 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 
 - 已持久化 Session 的 GUI 主键使用 canonical `sessionFile`。
 - `sessionId` 是 Pi 返回并在 resume 时校验的身份字段，不单独作为跨 Project 主键。
-- Pi 0.80.10 的新 Session 在 `get_state` 返回 `sessionFile`、`sessionId` 时，JSONL 文件仍可能尚未创建；此时 Kernel 只保留进程内 provisional identity，**不写 XDG Session 索引**。
+- Pi 0.83.0 的新 Session 在 `get_state` 返回 `sessionFile`、`sessionId` 时，JSONL 文件仍可能尚未创建；此时 Kernel 只保留进程内 provisional identity，**不写 XDG Session 索引**。
 - Kernel 可立即把 provisional identity 投影进活动工作区的 `sessions[]`（`provisional: true`）并设 `activeSessionKey`，供 Composer、模型和首条消息使用；但在首条 prompt 被 Runtime 接受前，不把该空 identity 投影进 Project 的 Navigator `projects[].sessions`，也不计入 Project Session 数量。用户切换到其他 Project/Session 时回收该空 Runtime，不留下不可访问的后台 context。
 - 首条 prompt 被 Runtime 接受后，同一 provisional identity 立即进入 Project Navigator；它仍不可 resume/archive/export。第一个 assistant `message_end` 后等待 Pi 将 JSONL 落盘，再 canonicalize、校验普通文件并持久化；只有全部成功才把同一导航项升级为正式 Session identity。发送失败时重新隐藏空 identity，落盘失败时不得登记 ghost Session。
 - Session 索引持久化于 XDG state，只保存恢复和导航必需的指针及名称；不复制 Conversation 内容。
@@ -120,7 +119,7 @@ Workbench Kernel 按 Session 管理多个相互隔离的 RuntimeContext。Render
 
 ```text
 projects[]             # Kernel 内部 Runtime workspace；Task 带 workspaceKind/taskKey
-navigatorKind          # 当前 Project / Task Navigator Tab
+navigatorKind          # 当前活动 workspace 类别；服务 Header、Composer 与快捷键，不拥有分组展开状态
 activeProjectKey       # 当前内部 Runtime workspace path，不直接用于 Task 展示
 
 sessions[]             # 当前 workspace 导航摘要，含各 Session 的 Runtime 状态
@@ -144,8 +143,10 @@ S9 先加入 `projects[]` 与 `activeProjectKey`，S10 再加入 Session 集合�
 ### S10
 
 - `kernel.start-session`：在活动 Project 或已创建 Task workspace 中创建新 Session。
-- `kernel.activate-session { sessionKey }`：验证指针后打开并恢复已有 Session。
-- `kernel.select-navigator { kind }`：切换 Project/Task 顶层视图并恢复该类别最后目标；空类别不自动创建 Runtime。
+- `kernel.activate-session { sessionKey }`：验证指针后打开并恢复已有 Session，只发布有界的权威 Conversation 尾窗。
+- `kernel.load-earlier-conversation { request }`：只为当前权威 Session 按稳定 identity 与窗口边界前置最多 60 个完整 turn，不返回或替换 Main 内部完整 Conversation。
+- `kernel.get-last-assistant-final-answer`：由 Main 从完整权威 Conversation 选择最后一条 Assistant 最终回答，Renderer 当前页不承担完整性判断。
+- `kernel.select-navigator { kind }`：保留明确的 Project/Task 类别选择能力并恢复该类别最后目标；空类别不自动创建 Runtime。当前可见 Navigator 不再用顶层 Tab 调用它，普通选择由 activate Project/Task 直接设置活动类别。
 - `kernel.create-task`：创建独立 Task workspace；重复请求复用当前空 provisional Task。
 - `kernel.activate-task { taskKey }`：按稳定 Task identity 激活其唯一 Session，不把隐藏 path 当作 Project command 参数。
 
@@ -171,16 +172,16 @@ S9 先加入 `projects[]` 与 `activeProjectKey`，S10 再加入 Session 集合�
 ### 6.2 Session 切换
 
 1. Renderer 先切换可见目标，再异步加载目标 Session；快速连续切换只接受最后一次读取结果。
-2. 目标 Session 已有受管 RuntimeContext 时直接切换当前投影，不停止原 Session 或其他后台 Runtime。
+2. 目标 Session 已有受管 RuntimeContext 时直接切换当前投影，不停止原 Session 或其他后台 Runtime；发布给 Renderer 的权威 Conversation 只包含最近 60 个 settled turn 与完整 active run，较早历史按 60 轮向前读取。
 3. 停止状态的历史 Session 在点击时立即切换可见目标，并后台激活 Runtime；先校验 canonical `sessionFile`、普通文件、可读性和 `sessionId`，再启动或恢复。可先异步投影历史，不要求用户再点“启动 Pi”。
 4. 后台启动不得阻塞导航：不把 `activate-session` / `start-session` 做成全局 exclusive busy；侧栏在启动过程中仍可继续点击。快速连点历史 Session 时以短 settle（约 120ms）合并启动意图，只真正启动最后停留的目标；已有受管 Runtime 的目标立即切换，无 settle。Kernel 侧 launch 仍单飞，Renderer 用串行 ensure 泵对齐。目标 Session 已进入 `starting` 后，Composer 仍可先接受一条普通 prompt，并等待同一启动任务完成后提交；slash 命令必须等目标命令目录可用。
 5. 新 Session 先进入可输入的空白工作区，后台启动 Runtime；首次提交复用同一启动任务。
 6. 失败时保留目标页面并显式展示错误，不把旧 Conversation 标成新目标，也不静默新建 Session。
 7. 普通选择或切换不得收口原 Runtime；归档、显式 reload/stop、应用退出等生命周期操作才可停止对应进程。S26 只在 Main/Kernel 内保留单个后台持久 Runtime 的回收原语，用于复用严格 busy gate、stop ownership、launch 串行化与同 Pi Session 恢复；它不经 typed IPC 暴露，Renderer 没有 Session、Project 或全局主动休眠入口。未来自动回收必须先取得 Kernel 与已加载 Extension 的 quiescence/operation lease 事实，再由策略选择候选；未知状态 fail-closed，自动回收与 LRU 当前仍未交付。
 
-### 6.3 Project / Task Tab 切换
+### 6.3 Project / Task 类别切换
 
-1. 切换 Tab 先持久化目标类别，再恢复该类别最后一个仍有效的 Project 或 Task Session；没有目标时发布明确空态，不自动创建。
+1. Project 与 Task 分组同时存在；展开/收起只改变 Renderer 显示。点击具体 Project、Session 或 Task 才改变活动目标，`activate-project` / `activate-task` 同步更新 `navigatorKind`，但不改另一分组的展开状态。
 2. Task 的隐藏 workspace 只参与 Main/Kernel Runtime ownership、Session pointer 和通知定位；Renderer 只显示 Task 名称与状态。
 3. 从空 provisional Task 切走时遵循 D-057，停止并移除不可持久化 Runtime；已接受首条 prompt 的 Task 与普通 Project Session 一样保持后台运行。
 4. Task 不启用 Project `@` 路径搜索、Project trust 对话框、Project scope 设置/Agent/Skill 或同 workspace Fork；用户级能力、附件、绝对路径、归档、导出和 Subagent 保持可用。
@@ -215,4 +216,4 @@ S9 先加入 `projects[]` 与 `activeProjectKey`，S10 再加入 Session 集合�
 - S8 验收时的低保真实现只使用当时真实的单 Project/Session state；未增加假列表、假命令或空后端 contract。S9 后续按本文件边界加入真实多 Project contract。
 - 用户已确认低保真结构方向；S8 完成，后续实现按本文件边界进入 S9。
 - S8 审计后，Composer 已提供无假命令的 S11 空态，Navigator 只保留一个全局“添加项目”入口；同时把 `sessionFile` canonicalization 和成功后原子提交明确为 S10 验收约束，不代表 S8 提前实现多 Session。
-- S10 审计后以真实 Pi 0.80.10 确认新 Session 文件采用延迟落盘；Kernel 使用 provisional identity 等待首个 assistant 消息完成后再登记，并修复切换持久化期间进程退出后错误回到 `ready`。正常 GUI 同时增加单实例锁，避免跨进程 XDG Session 索引丢失更新。
+- S10 审计后以真实 Pi 0.83.0 确认新 Session 文件采用延迟落盘；Kernel 使用 provisional identity 等待首个 assistant 消息完成后再登记，并修复切换持久化期间进程退出后错误回到 `ready`。正常 GUI 同时增加单实例锁，避免跨进程 XDG Session 索引丢失更新。

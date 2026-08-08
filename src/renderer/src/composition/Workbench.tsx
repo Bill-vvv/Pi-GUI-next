@@ -4,7 +4,6 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode
 } from 'react'
@@ -81,6 +80,7 @@ import { GitChangesPanel } from '../features/git/GitChangesPanel'
 import { ProjectTrustDialog } from '../features/trust/ProjectTrustDialog'
 import { RIGHT_SIDEBAR_ID, RightSidebar } from './RightSidebar'
 import { reconcileRightSidebarActiveTab } from './right-sidebar-model'
+import { timelineConversation } from './conversation-presentation'
 import {
   DEFAULT_TOOL_DISPLAY_DENSITY,
   isToolDisplayDensity,
@@ -126,7 +126,6 @@ type WorkbenchProps = {
   forkPreferredUserText: string | null
   onAddProject: () => Promise<void>
   onActivateProject: (projectKey: string) => Promise<void>
-  onSelectNavigator: (kind: KernelNavigatorKind) => Promise<void>
   onCreateTask: () => Promise<void>
   onActivateTask: (taskKey: string, sessionKey: string) => Promise<void>
   onStartSession: () => Promise<void>
@@ -149,6 +148,7 @@ type WorkbenchProps = {
   onRetryForkCandidates: () => void
   onForkSession: (entryId: string) => Promise<void>
   onExportSession: () => Promise<void>
+  onLoadEarlierConversation: () => Promise<void>
   onCopyAnswer: (text: string) => Promise<void>
   onCopyLastAnswer: () => Promise<void>
   onArchiveSession: (sessionKey: string) => Promise<void>
@@ -254,7 +254,6 @@ export function Workbench({
   forkPreferredUserText,
   onAddProject,
   onActivateProject,
-  onSelectNavigator,
   onCreateTask,
   onActivateTask,
   onStartSession,
@@ -271,6 +270,7 @@ export function Workbench({
   onRetryForkCandidates,
   onForkSession,
   onExportSession,
+  onLoadEarlierConversation,
   onCopyAnswer,
   onCopyLastAnswer,
   onArchiveSession,
@@ -324,6 +324,8 @@ export function Workbench({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => window.matchMedia('(max-width: 700px)').matches
   )
+  const [projectNavigatorExpanded, setProjectNavigatorExpanded] = useState(true)
+  const [taskNavigatorExpanded, setTaskNavigatorExpanded] = useState(true)
   const {
     settingsOpen,
     settingsSection,
@@ -378,8 +380,6 @@ export function Workbench({
   } = state
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
   const rightSidebarShellTriggerRef = useRef<HTMLButtonElement>(null)
-  const projectNavigatorTabRef = useRef<HTMLButtonElement>(null)
-  const taskNavigatorTabRef = useRef<HTMLButtonElement>(null)
   const mainChatRef = useRef<HTMLElement>(null)
   const timelineStabilizeRef = useRef<(() => void) | null>(null)
   const subagentTaskDetailRef = useRef<HTMLElement>(null)
@@ -551,13 +551,25 @@ export function Workbench({
   const interactionBusy = busy || historyPromptEditing
   const canChangeProjectOrSession = !interactionBusy
   const canStartSession = canChangeProjectOrSession && activeProject !== null
+  const displayingAuthoritativeConversation =
+    archivedSessionPreview === null &&
+    sessionPreview === null &&
+    !viewingInactiveSession &&
+    (!viewingNewSession || newSessionPrepared)
   const displayedConversation = archivedSessionPreview?.conversation ?? (
     viewingNewSession && !newSessionPrepared
     ? { entries: [], activeRunStartIndex: null }
     : sessionPreview?.conversation ?? (
-        viewingInactiveSession ? { entries: [], activeRunStartIndex: null } : conversation
+        viewingInactiveSession
+          ? { entries: [], activeRunStartIndex: null }
+          : timelineConversation(conversation)
       )
   )
+  const hasEarlierAuthoritativeConversation =
+    displayingAuthoritativeConversation &&
+    !viewingNewSession &&
+    activeSessionKey !== null &&
+    conversation.startIndex > 0
   const displayedTodos = currentTurnTodos(displayedConversation.entries)
   const displayedConversationIdentity = workbenchConversationIdentity({
     activeProjectKey,
@@ -692,15 +704,7 @@ export function Workbench({
     runtime.status !== 'running' &&
     runtime.status !== 'stopping' &&
     state.session.settled
-  const canCopyLastAnswer =
-    canUseSettledSessionActions &&
-    displayedConversation.entries.some((entry) =>
-      entry.kind === 'message' &&
-      entry.role === 'assistant' &&
-      !entry.streaming &&
-      (entry.phase === 'final_answer' || entry.phase == null) &&
-      entry.text.trim().length > 0
-    )
+  const canCopyLastAnswer = canUseSettledSessionActions
   const settingsState = activeWorkspace?.workspaceKind === 'task'
     ? { ...state, activeProjectKey: null }
     : state
@@ -715,12 +719,7 @@ export function Workbench({
           completedAction.succeeded
           ? '已复制回答'
           : null
-  const contextActionStatus =
-    sessionPreviewPending &&
-    sessionPreview === null &&
-    displayedConversation.entries.length === 0
-      ? '正在打开对话…'
-      : runtimeContextActionStatus(pendingAction)
+  const contextActionStatus = runtimeContextActionStatus(pendingAction)
   const extensionActionError = settingsOpen &&
     settingsSection === 'extensions' &&
     actionFailure?.owner === 'extension'
@@ -788,24 +787,6 @@ export function Workbench({
       window.localStorage.setItem(PINNED_PROJECTS_STORAGE_KEY, JSON.stringify([...next]))
       return next
     })
-  }
-  const handleNavigatorTabKeyDown = (
-    event: ReactKeyboardEvent<HTMLButtonElement>,
-    kind: KernelNavigatorKind
-  ): void => {
-    const targetKind = event.key === 'ArrowLeft' || event.key === 'Home'
-      ? 'project'
-      : event.key === 'ArrowRight' || event.key === 'End'
-        ? 'task'
-        : null
-    if (targetKind === null) return
-    event.preventDefault()
-    const target = targetKind === 'project' ? projectNavigatorTabRef.current : taskNavigatorTabRef.current
-    target?.focus()
-    if (targetKind !== kind && !interactionBusy) {
-      invalidateRightSidebarFocusRestoration()
-      void onSelectNavigator(targetKind).catch(() => undefined)
-    }
   }
   const requestComposerControl = (action: ComposerControlRequest['action']): void => {
     composerControlRevisionRef.current += 1
@@ -943,109 +924,95 @@ export function Workbench({
               }}
             />
           ) : null}
-          {settingsOpen ? null : (
-            <div className="workspace-navigator-tabs" role="tablist" aria-label="工作类型">
-              <button
-                ref={projectNavigatorTabRef}
-                id="project-navigator-tab"
-                className="workspace-navigator-tab"
-                type="button"
-                role="tab"
-                aria-controls="project-navigator-panel"
-                aria-selected={navigatorKind === 'project'}
-                tabIndex={navigatorKind === 'project' ? 0 : -1}
-                disabled={interactionBusy}
-                onKeyDown={(event) => handleNavigatorTabKeyDown(event, 'project')}
-                onClick={() => {
-                  if (navigatorKind !== 'project') {
-                    invalidateRightSidebarFocusRestoration()
-                    void onSelectNavigator('project').catch(() => undefined)
-                  }
-                }}
-              >
-                <span>项目</span>
-                {projectBusyCount > 0 ? <span className="navigator-busy-count">{projectBusyCount}</span> : null}
-              </button>
-              <button
-                ref={taskNavigatorTabRef}
-                id="task-navigator-tab"
-                className="workspace-navigator-tab"
-                type="button"
-                role="tab"
-                aria-controls="task-navigator-panel"
-                aria-selected={navigatorKind === 'task'}
-                tabIndex={navigatorKind === 'task' ? 0 : -1}
-                disabled={interactionBusy}
-                onKeyDown={(event) => handleNavigatorTabKeyDown(event, 'task')}
-                onClick={() => {
-                  if (navigatorKind !== 'task') {
-                    invalidateRightSidebarFocusRestoration()
-                    void onSelectNavigator('task').catch(() => undefined)
-                  }
-                }}
-              >
-                <span>任务</span>
-                {taskBusyCount > 0 ? <span className="navigator-busy-count">{taskBusyCount}</span> : null}
-              </button>
-            </div>
-          )}
-          <ProjectNavigator
-            hidden={settingsOpen || navigatorKind !== 'project'}
-            projects={displayedProjects}
-            activeProjectKey={activeProject?.path ?? null}
-            activeSessionKey={activeSessionKey}
-            sessions={sessions}
-            displayedSessionKey={displayedSessionKey}
-            viewedSessionKey={viewedSessionKey}
-            viewingArchivedSession={viewingArchivedSession}
-            sidebarCollapsed={sidebarCollapsed}
-            busy={interactionBusy}
-            canChangeProjectOrSession={canChangeProjectOrSession}
-            sessionPreviewPending={sessionPreviewPending}
-            pendingAction={pendingAction}
-            contextActionStatus={contextActionStatus}
-            tokenCountFormat={state.appearance.tokenCountFormat}
-            pinnedProjectKeys={pinnedProjectKeys}
-            onTogglePinnedProject={togglePinnedProject}
-            onExpandSidebar={() => setSidebarCollapsed(false)}
-            onClearArchivedSessionPreview={onClearArchivedSessionPreview}
-            onActivateProject={(projectKey) => {
-              invalidateRightSidebarFocusRestoration()
-              return onActivateProject(projectKey)
-            }}
-            onStartSession={() => {
-              invalidateRightSidebarFocusRestoration()
-              return onStartSession()
-            }}
-            onOpenSession={openSession}
-            onArchiveSession={onArchiveSession}
-            onReorderProjects={onReorderProjects}
-          />
-          <TaskNavigator
-            hidden={settingsOpen || navigatorKind !== 'task'}
-            tasks={orderedTaskItems}
-            activeWorkspaceKey={activeWorkspace?.workspaceKind === 'task' ? activeWorkspace.path : null}
-            displayedSessionKey={displayedSessionKey}
-            viewedSessionKey={viewedSessionKey}
-            viewingArchivedSession={viewingArchivedSession}
-            busy={interactionBusy}
-            canChangeProjectOrSession={canChangeProjectOrSession}
-            sessionPreviewPending={sessionPreviewPending}
-            pendingAction={pendingAction}
-            contextActionStatus={contextActionStatus}
-            tokenCountFormat={state.appearance.tokenCountFormat}
-            onClearArchivedSessionPreview={onClearArchivedSessionPreview}
-            onCreateTask={() => {
+          <WorkspaceNavigatorGroup
+            hidden={settingsOpen}
+            kind="project"
+            contentId="project-navigator-panel"
+            label="项目"
+            expanded={projectNavigatorExpanded}
+            active={navigatorKind === 'project'}
+            busyCount={projectBusyCount}
+            addLabel="添加项目"
+            addBusy={isWorkbenchAction(pendingAction, 'add-project')}
+            addDisabled={!canChangeProjectOrSession}
+            onToggle={() => setProjectNavigatorExpanded((current) => !current)}
+            onAdd={onAddProject}
+          >
+            <ProjectNavigator
+              hidden={settingsOpen || !projectNavigatorExpanded}
+              projects={displayedProjects}
+              activeProjectKey={activeProject?.path ?? null}
+              activeSessionKey={activeSessionKey}
+              sessions={sessions}
+              displayedSessionKey={displayedSessionKey}
+              viewedSessionKey={viewedSessionKey}
+              viewingArchivedSession={viewingArchivedSession}
+              sidebarCollapsed={sidebarCollapsed}
+              busy={interactionBusy}
+              canChangeProjectOrSession={canChangeProjectOrSession}
+              sessionPreviewPending={sessionPreviewPending}
+              pendingAction={pendingAction}
+              contextActionStatus={contextActionStatus}
+              tokenCountFormat={state.appearance.tokenCountFormat}
+              pinnedProjectKeys={pinnedProjectKeys}
+              onTogglePinnedProject={togglePinnedProject}
+              onExpandSidebar={() => setSidebarCollapsed(false)}
+              onClearArchivedSessionPreview={onClearArchivedSessionPreview}
+              onActivateProject={(projectKey) => {
+                invalidateRightSidebarFocusRestoration()
+                return onActivateProject(projectKey)
+              }}
+              onStartSession={() => {
+                invalidateRightSidebarFocusRestoration()
+                return onStartSession()
+              }}
+              onOpenSession={openSession}
+              onArchiveSession={onArchiveSession}
+              onReorderProjects={onReorderProjects}
+            />
+          </WorkspaceNavigatorGroup>
+          <WorkspaceNavigatorGroup
+            hidden={settingsOpen}
+            kind="task"
+            contentId="task-navigator-panel"
+            label="任务"
+            expanded={taskNavigatorExpanded}
+            active={navigatorKind === 'task'}
+            busyCount={taskBusyCount}
+            addLabel="新建任务"
+            addBusy={
+              isWorkbenchAction(pendingAction, 'create-task') ||
+              isWorkbenchAction(pendingAction, 'start-session')
+            }
+            addDisabled={!canChangeProjectOrSession}
+            onToggle={() => setTaskNavigatorExpanded((current) => !current)}
+            onAdd={() => {
               invalidateRightSidebarFocusRestoration()
               return onCreateTask()
             }}
-            onActivateTask={(taskKey, sessionKey) => {
-              invalidateRightSidebarFocusRestoration()
-              return onActivateTask(taskKey, sessionKey)
-            }}
-            onOpenSession={openSession}
-            onArchiveSession={onArchiveSession}
-          />
+          >
+            <TaskNavigator
+              hidden={settingsOpen || !taskNavigatorExpanded}
+              tasks={orderedTaskItems}
+              activeWorkspaceKey={activeWorkspace?.workspaceKind === 'task' ? activeWorkspace.path : null}
+              displayedSessionKey={displayedSessionKey}
+              viewedSessionKey={viewedSessionKey}
+              viewingArchivedSession={viewingArchivedSession}
+              busy={interactionBusy}
+              canChangeProjectOrSession={canChangeProjectOrSession}
+              sessionPreviewPending={sessionPreviewPending}
+              pendingAction={pendingAction}
+              contextActionStatus={contextActionStatus}
+              tokenCountFormat={state.appearance.tokenCountFormat}
+              onClearArchivedSessionPreview={onClearArchivedSessionPreview}
+              onActivateTask={(taskKey, sessionKey) => {
+                invalidateRightSidebarFocusRestoration()
+                return onActivateTask(taskKey, sessionKey)
+              }}
+              onOpenSession={openSession}
+              onArchiveSession={onArchiveSession}
+            />
+          </WorkspaceNavigatorGroup>
         </div>
 
         {settingsOpen ? null : (
@@ -1057,28 +1024,6 @@ export function Workbench({
               label="收起侧边栏"
               onClick={() => setSidebarCollapsed(true)}
             />
-            {navigatorKind === 'task' ? null : userProjects.length === 0 ? (
-              <button
-                className="add-project-entry add-project-empty-entry"
-                type="button"
-                aria-busy={isWorkbenchAction(pendingAction, 'add-project') ? true : undefined}
-                disabled={!canChangeProjectOrSession}
-                onClick={() => void onAddProject().catch(() => undefined)}
-              >
-                <Icon name="plus" size="control" />
-                <span>{isWorkbenchAction(pendingAction, 'add-project') ? '正在添加…' : '添加项目'}</span>
-              </button>
-            ) : (
-              <IconButton
-                className="add-project-entry"
-                icon="plus"
-                iconSize="lg"
-                label="添加项目"
-                aria-busy={isWorkbenchAction(pendingAction, 'add-project') ? true : undefined}
-                disabled={!canChangeProjectOrSession}
-                onClick={() => void onAddProject().catch(() => undefined)}
-              />
-            )}
             <IconButton
               ref={settingsButtonRef}
               className="sidebar-settings-toggle"
@@ -1261,11 +1206,13 @@ export function Workbench({
           canExportSession={canExportSession}
           canForkSession={canForkSession}
           canEditHistoryPrompt={canForkSession}
+          hasEarlierConversation={hasEarlierAuthoritativeConversation}
           conversationActionBusy={busy}
           conversationActionStatus={conversationActionStatus}
           conversationActionError={conversationActionError}
           onCopyAnswer={onCopyAnswer}
           onExportSession={onExportSession}
+          onLoadEarlierConversation={onLoadEarlierConversation}
           onForkTurn={onOpenForkDialog}
           onNavigateHistoryPrompt={(messageId) => {
             if (activeSessionKey === null) {
@@ -1391,6 +1338,83 @@ export function Workbench({
         />
       ) : null}
     </main>
+  )
+}
+
+type WorkspaceNavigatorGroupProps = {
+  hidden: boolean
+  kind: KernelNavigatorKind
+  contentId: string
+  label: string
+  expanded: boolean
+  active: boolean
+  busyCount: number
+  addLabel: string
+  addBusy: boolean
+  addDisabled: boolean
+  onToggle: () => void
+  onAdd: () => Promise<void>
+  children: ReactNode
+}
+
+function WorkspaceNavigatorGroup({
+  hidden,
+  kind,
+  contentId,
+  label,
+  expanded,
+  active,
+  busyCount,
+  addLabel,
+  addBusy,
+  addDisabled,
+  onToggle,
+  onAdd,
+  children
+}: WorkspaceNavigatorGroupProps): React.JSX.Element {
+  const toggleId = `${contentId}-toggle`
+  return (
+    <div
+      className="workspace-navigator-group"
+      data-kind={kind}
+      hidden={hidden}
+    >
+      <div className="workspace-navigator-group-header">
+        <button
+          id={toggleId}
+          className="workspace-navigator-group-toggle"
+          type="button"
+          aria-controls={contentId}
+          aria-expanded={expanded}
+          data-active={active ? 'true' : undefined}
+          onClick={onToggle}
+        >
+          <span className="workspace-navigator-group-chevron" aria-hidden="true">
+            <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size="sm" />
+          </span>
+          <span className="workspace-navigator-group-label">{label}</span>
+          {busyCount > 0 ? (
+            <span
+              className="navigator-busy-count"
+              aria-label={`${busyCount} 个进行中`}
+            >
+              <span className="navigator-busy-count-text">{busyCount}</span>
+            </span>
+          ) : null}
+        </button>
+        <div className="workspace-navigator-group-action-slot">
+          <IconButton
+            className="workspace-navigator-group-add"
+            icon="plus"
+            label={addLabel}
+            aria-busy={addBusy ? true : undefined}
+            disabled={addDisabled}
+            onClick={() => void onAdd().catch(() => undefined)}
+          />
+        </div>
+      </div>
+      {children}
+    </div>
   )
 }
 

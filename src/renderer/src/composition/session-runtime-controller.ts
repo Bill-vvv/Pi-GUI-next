@@ -1,9 +1,11 @@
 import type {
+  KernelConversationPreviewState,
   KernelConversationState,
   KernelMutationAck,
   KernelSessionPreview,
   KernelState
 } from '../../../shared/kernel-contract'
+import { conversationTurnWindowStartIndex } from '../../../shared/conversation-window.ts'
 
 export type SessionViewTarget =
   | {
@@ -43,6 +45,13 @@ type RuntimeEnsureWaiter = {
 
 type TimerHandle = number | ReturnType<typeof setTimeout>
 
+type ActiveStaticSessionPreview = {
+  requestId: string
+  target: Extract<RuntimeEnsureTarget, { kind: 'session' }>
+  requestRevision: number
+  tailAccepted: boolean
+}
+
 type SessionSwitchCacheEntry = {
   preview: KernelSessionPreview
   estimatedBytes: number
@@ -63,7 +72,9 @@ export type SessionRuntimeControllerDependencies = {
   getKernelState: () => KernelState | null
   startSession: () => Promise<KernelMutationAck>
   activateSession: (sessionKey: string) => Promise<KernelMutationAck>
-  previewSession: (sessionKey: string) => Promise<KernelSessionPreview>
+  previewSession: (sessionKey: string, requestId: string) => Promise<KernelSessionPreview>
+  completeSessionPreview: (requestId: string) => Promise<KernelSessionPreview>
+  cancelSessionPreview: (requestId: string) => Promise<void>
   beginActionPresentation: () => number
   isActionPresentationCurrent: (revision: number) => boolean
   onSnapshot: (snapshot: SessionRuntimeSnapshot) => void
@@ -86,6 +97,8 @@ export class SessionRuntimeController {
     previewPendingKey: null
   }
   private previewRequestRevision = 0
+  private previewRequestSequence = 0
+  private activeStaticSessionPreview: ActiveStaticSessionPreview | null = null
   private readonly sessionSwitchCache = new Map<string, SessionSwitchCacheEntry>()
   private readonly sessionSwitchCacheTasks = new Map<string, TimerHandle>()
   private sessionSwitchCacheEstimatedBytes = 0
@@ -127,6 +140,17 @@ export class SessionRuntimeController {
             sessionKey: state.activeSessionKey
           }
       : keepValidSessionViewTarget(this.snapshot.sessionViewTarget, state)
+    const activePreview = this.activeStaticSessionPreview
+    if (
+      activePreview !== null &&
+      (
+        nextTarget?.kind !== 'session' ||
+        !sessionViewTargetsEqual(nextTarget, activePreview.target) ||
+        authoritativeRuntimeOwnsTarget(state, activePreview.target)
+      )
+    ) {
+      this.cancelActiveStaticSessionPreview(true)
+    }
     this.updateSnapshot({
       ...this.snapshot,
       sessionViewTarget: nextTarget,
@@ -174,9 +198,13 @@ export class SessionRuntimeController {
     }
     this.publishSessionView(state, target)
     this.dependencies.onError(null)
+    const runtimeStatus = state.sessions.find(({ key }) => key === sessionKey)?.runtimeStatus
+    const mode = runtimeStatus === 'ready' || runtimeStatus === 'running'
+      ? 'immediate'
+      : 'settled'
     return this.enqueueRuntimeEnsure(
       target,
-      'settled',
+      mode,
       sessionNeedsHistoricalPreview(state, target)
     )
   }
@@ -190,7 +218,7 @@ export class SessionRuntimeController {
       this.runtimeEnsureGeneration += 1
       this.supersedeRuntimeEnsureWaiters(this.executingRuntimeEnsure)
     }
-    this.previewRequestRevision += 1
+    this.cancelActiveStaticSessionPreview(true)
     this.updateSnapshot({
       sessionViewTarget: null,
       sessionPreview: null,
@@ -208,7 +236,7 @@ export class SessionRuntimeController {
       return Promise.reject(new Error('No active project is available.'))
     }
     const projectKey = state.activeProjectKey
-    this.previewRequestRevision += 1
+    this.cancelActiveStaticSessionPreview(true)
     this.updateSnapshot({
       sessionViewTarget: {
         kind: 'new',
@@ -275,6 +303,7 @@ export class SessionRuntimeController {
 
   async waitForIdle(): Promise<void> {
     this.assertActive()
+    this.cancelActiveStaticSessionPreview(true)
     this.cancelSettleTimer()
     this.desiredRuntimeEnsure = null
     this.desiredRuntimeEnsurePreview = false
@@ -287,8 +316,8 @@ export class SessionRuntimeController {
 
   dispose(): void {
     if (this.disposed) return
+    this.cancelActiveStaticSessionPreview(true)
     this.disposed = true
-    this.previewRequestRevision += 1
     this.cancelSettleTimer()
     this.cancelSessionSwitchCacheTasks()
     this.desiredRuntimeEnsure = null
@@ -400,8 +429,6 @@ export class SessionRuntimeController {
     }
 
     if (target.kind === 'session' && preview && sessionNeedsHistoricalPreview(state, target)) {
-      // Historical projection is presentation-only. A stale or slow preview must
-      // never hold the Runtime queue or prevent a newer target from activating.
       void this.loadSessionPreview(target, this.previewRequestRevision).catch(() => undefined)
     }
 
@@ -444,7 +471,14 @@ export class SessionRuntimeController {
         this.dependencies.isActionPresentationCurrent(presentationRevision) &&
         this.viewTargetMatchesRuntimeTarget(target)
       ) {
-        if (target.kind === 'session' && this.snapshot.previewPendingKey === target.sessionKey) {
+        if (
+          target.kind === 'session' &&
+          this.snapshot.previewPendingKey === target.sessionKey &&
+          (
+            this.activeStaticSessionPreview === null ||
+            !sessionViewTargetsEqual(this.activeStaticSessionPreview.target, target)
+          )
+        ) {
           this.updateSnapshot({ ...this.snapshot, previewPendingKey: null })
         }
         this.dependencies.onError(error)
@@ -500,6 +534,7 @@ export class SessionRuntimeController {
     state: KernelState,
     target: Extract<RuntimeEnsureTarget, { kind: 'session' }>
   ): number {
+    this.cancelActiveStaticSessionPreview(true)
     const cached = this.getTargetCachedPreview(state, target.sessionKey)
     const requestRevision = this.previewRequestRevision + 1
     this.previewRequestRevision = requestRevision
@@ -519,24 +554,35 @@ export class SessionRuntimeController {
     target: Extract<RuntimeEnsureTarget, { kind: 'session' }>,
     requestRevision: number
   ): Promise<void> {
+    this.cancelActiveStaticSessionPreview(false)
+    const operation: ActiveStaticSessionPreview = {
+      requestId: this.createSessionPreviewRequestId(),
+      target,
+      requestRevision,
+      tailAccepted: false
+    }
+    this.activeStaticSessionPreview = operation
     try {
-      const preview = await this.dependencies.previewSession(target.sessionKey)
-      if (this.disposed) return
-      this.scheduleRememberPreview(preview)
-      if (
-        this.previewRequestRevision !== requestRevision ||
-        !sessionViewTargetsEqual(this.snapshot.sessionViewTarget, target)
-      ) return
-      this.updateSnapshot({ ...this.snapshot, sessionPreview: preview })
+      const tail = await this.dependencies.previewSession(target.sessionKey, operation.requestId)
+      if (!this.staticSessionPreviewIsCurrent(operation)) return
+      operation.tailAccepted = true
+      this.updateSnapshot({ ...this.snapshot, sessionPreview: tail })
+
+      const full = await this.dependencies.completeSessionPreview(operation.requestId)
+      if (!this.staticSessionPreviewIsCurrent(operation)) return
+      this.scheduleRememberPreview(full)
+      this.updateSnapshot({ ...this.snapshot, sessionPreview: full })
     } catch (error) {
-      if (
-        this.disposed ||
-        this.previewRequestRevision !== requestRevision ||
-        !sessionViewTargetsEqual(this.snapshot.sessionViewTarget, target)
-      ) return
+      if (!this.staticSessionPreviewIsCurrent(operation)) return
+      if (!operation.tailAccepted) {
+        this.updateSnapshot({ ...this.snapshot, sessionPreview: null })
+      }
       this.dependencies.onError(error)
       throw error
     } finally {
+      if (this.activeStaticSessionPreview === operation) {
+        this.activeStaticSessionPreview = null
+      }
       if (
         !this.disposed &&
         this.previewRequestRevision === requestRevision &&
@@ -547,6 +593,26 @@ export class SessionRuntimeController {
     }
   }
 
+  private staticSessionPreviewIsCurrent(operation: ActiveStaticSessionPreview): boolean {
+    return !this.disposed &&
+      this.activeStaticSessionPreview === operation &&
+      this.previewRequestRevision === operation.requestRevision &&
+      sessionViewTargetsEqual(this.snapshot.sessionViewTarget, operation.target)
+  }
+
+  private cancelActiveStaticSessionPreview(invalidateRevision: boolean): void {
+    if (invalidateRevision) this.previewRequestRevision += 1
+    const operation = this.activeStaticSessionPreview
+    if (operation === null) return
+    this.activeStaticSessionPreview = null
+    void this.dependencies.cancelSessionPreview(operation.requestId).catch(() => undefined)
+  }
+
+  private createSessionPreviewRequestId(): string {
+    this.previewRequestSequence = (this.previewRequestSequence % 1_000_000_000) + 1
+    return `preview-${this.previewRequestSequence.toString(36)}`
+  }
+
   private scheduleRememberActiveSession(state: KernelState): void {
     const projectKey = state.activeProjectKey
     const sessionKey = state.activeSessionKey
@@ -554,12 +620,16 @@ export class SessionRuntimeController {
     if (projectKey === null || sessionKey === null || sessionId === null) return
     const summary = state.sessions.find((session) => session.key === sessionKey)
     if (summary === undefined || summary.id !== sessionId || summary.provisional === true) return
-    this.scheduleRememberPreview({
-      projectKey,
-      sessionKey,
-      sessionId,
-      sessionName: state.session.name ?? summary.name,
-      conversation: state.conversation
+    const identity = { projectKey, sessionKey, sessionId }
+    const sessionName = state.session.name ?? summary.name
+    const conversation = state.conversation
+    const key = sessionSwitchCacheKey(identity)
+    this.scheduleSessionSwitchCacheTask(`write\0${key}`, () => {
+      this.writePreviewToCache({
+        ...identity,
+        sessionName,
+        conversation: sessionSwitchConversation(conversation)
+      })
     })
   }
 
@@ -573,7 +643,7 @@ export class SessionRuntimeController {
   private writePreviewToCache(preview: KernelSessionPreview): void {
     const cachedPreview: KernelSessionPreview = {
       ...preview,
-      conversation: sessionSwitchConversation(preview.conversation)
+      conversation: preview.conversation
     }
     const key = sessionSwitchCacheKey(cachedPreview)
     const estimatedBytes = JSON.stringify(cachedPreview).length * 2
@@ -740,23 +810,27 @@ export function nextDesiredRuntimeEnsureAfterCompletion(
 /** Keep two settled turns, or the previous settled turn plus the complete active run. */
 export function sessionSwitchConversation(
   conversation: KernelConversationState
-): KernelConversationState {
+): KernelConversationPreviewState {
   const entries = conversation.entries
-  if (entries.length === 0) return conversation
   const activeBoundary = conversation.activeRunStartIndex === null
     ? null
-    : Math.max(0, Math.min(conversation.activeRunStartIndex, entries.length))
+    : conversation.activeRunStartIndex - conversation.startIndex
+  if (
+    activeBoundary !== null &&
+    (!Number.isSafeInteger(activeBoundary) || activeBoundary < 0 || activeBoundary > entries.length)
+  ) {
+    throw new Error('Conversation active run boundary is outside the loaded window.')
+  }
   const completedBoundary = activeBoundary ?? entries.length
   const completedTurnsToKeep = activeBoundary === null ? 2 : 1
-  const startIndex = conversationWindowStartIndex(
+  const localStartIndex = conversationTurnWindowStartIndex(
     entries,
     completedBoundary,
     completedTurnsToKeep
   )
-  if (startIndex === 0) return conversation
   return {
-    entries: entries.slice(startIndex),
-    activeRunStartIndex: activeBoundary === null ? null : activeBoundary - startIndex
+    entries: entries.slice(localStartIndex),
+    activeRunStartIndex: activeBoundary === null ? null : activeBoundary - localStartIndex
   }
 }
 
@@ -813,36 +887,6 @@ export function keepValidSessionViewTarget(
   return target.sawProvisional ? target : { ...target, sawProvisional: true }
 }
 
-function conversationWindowStartIndex(
-  entries: KernelConversationState['entries'],
-  end: number,
-  turnCount: number
-): number {
-  let start = end
-  for (let remaining = turnCount; remaining > 0 && start > 0; remaining -= 1) {
-    const lastEntry = entries[start - 1]!
-    if (lastEntry.kind === 'command') {
-      start -= 1
-      continue
-    }
-    let index = start - 1
-    while (index >= 0) {
-      const entry = entries[index]!
-      if (entry.kind === 'message' && entry.role === 'user') {
-        start = index
-        break
-      }
-      if (entry.kind === 'command') {
-        start = index + 1
-        break
-      }
-      index -= 1
-    }
-    if (index < 0) start = 0
-  }
-  return start
-}
-
 function sessionSwitchCacheKey(identity: {
   projectKey: string
   sessionKey: string
@@ -869,6 +913,19 @@ function activeSessionIsListedInProject(state: KernelState): boolean {
 
 function sessionIsRegistered(state: KernelState, sessionKey: string): boolean {
   return state.sessions.some(({ key }) => key === sessionKey)
+}
+
+function authoritativeRuntimeOwnsTarget(
+  state: KernelState,
+  target: Extract<RuntimeEnsureTarget, { kind: 'session' }>
+): boolean {
+  if (state.activeProjectKey !== target.projectKey || state.activeSessionKey !== target.sessionKey) {
+    return false
+  }
+  const summary = state.sessions.find(({ key }) => key === target.sessionKey)
+  return state.session.id !== null &&
+    summary?.id === state.session.id &&
+    (summary.runtimeStatus === 'ready' || summary.runtimeStatus === 'running')
 }
 
 function sessionNeedsHistoricalPreview(

@@ -9,7 +9,7 @@ Pi GUI 的长期方向是桌面 Agent Workbench。P1 只建立第一条可发布
 ## P1 范围内
 
 - Linux Electron 应用的启动、关闭和进程收口。
-- 显式配置 Pi executable，严格支持 Pi Coding Agent 0.80.10。
+- 显式配置 Pi executable，严格支持 Pi Coding Agent 0.83.0。
 - 单 Project、单 Runtime、单 Session。
 - 显式项目目录；选择后直接启动 Pi，不增加 GUI 自定义的信任等级。
 - prompt、assistant streaming、thinking、tool call/result 和 abort。

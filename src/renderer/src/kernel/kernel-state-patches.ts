@@ -12,6 +12,7 @@ export function applyStatePatches(
   let runtime = state.runtime
   let session = state.session
   let entries = state.conversation.entries
+  const conversationStartIndex = state.conversation.startIndex
   let activeRunStartIndex = state.conversation.activeRunStartIndex
   let conversationChanged = false
   let entriesCopied = false
@@ -25,23 +26,38 @@ export function applyStatePatches(
     if (patch.session !== undefined) session = patch.session
     if (patch.conversation === undefined) continue
     if (patch.conversation.entries !== undefined) {
-      if (!entriesCopied) {
-        entries = entries.slice()
-        entriesCopied = true
-      }
-      conversationChanged = true
       for (const change of patch.conversation.entries) {
+        const localIndex = change.index - conversationStartIndex
+        if (change.type !== 'insert' && localIndex < 0) continue
+        if (!entriesCopied) {
+          entries = entries.slice()
+          entriesCopied = true
+        }
+        conversationChanged = true
         if (change.type === 'insert') {
-          if (change.index === entries.length) entries.push(change.entry)
-          else if (entries[change.index]?.id !== change.entry.id) {
-            throw new Error(`Conversation insert index ${change.index} is out of sequence.`)
+          if (localIndex === entries.length) entries.push(change.entry)
+          else if (localIndex < 0 || localIndex > entries.length) {
+            throw new Error(`Conversation insert index ${change.index} is outside the loaded window.`)
+          } else if (entries[localIndex]?.id !== change.entry.id) {
+            throw new Error(`Conversation insert index ${change.index} has an identity mismatch.`)
           }
           continue
         }
 
-        const current = entries[change.index]
+        const current = entries[localIndex]
         if (current === undefined) {
-          throw new Error(`Conversation patch index ${change.index} does not exist.`)
+          throw new Error(`Conversation patch index ${change.index} is outside the loaded window.`)
+        }
+        if (change.type === 'replace-entry') {
+          if (
+            current.id !== change.expectedId ||
+            change.entry.id !== change.expectedId
+          ) {
+            throw new Error('Conversation replacement patch identity mismatch.')
+          }
+          if (sameProjectedValue(current, change.entry)) continue
+          entries[localIndex] = change.entry
+          continue
         }
         if (change.type === 'append-message-text') {
           if (current.kind !== 'message') {
@@ -49,7 +65,7 @@ export function applyStatePatches(
           }
           const text = appendProjectedText(current.text, change.from, change.text)
           if (text === null) continue
-          entries[change.index] = {
+          entries[localIndex] = {
             ...current,
             text,
             streaming: change.streaming,
@@ -64,7 +80,7 @@ export function applyStatePatches(
           }
           const text = appendProjectedText(current.text, change.from, change.text)
           if (text === null) continue
-          entries[change.index] = { ...current, text, streaming: change.streaming }
+          entries[localIndex] = { ...current, text, streaming: change.streaming }
           continue
         }
         if (current.kind !== 'tool') {
@@ -80,7 +96,7 @@ export function applyStatePatches(
             current.output.length !== change.expectedOutputLength ||
             !sameProjectedValue(currentMetadata, change.expected)
           ) continue
-          entries[change.index] = {
+          entries[localIndex] = {
             ...current,
             ...change.metadata,
             ...(change.metadata.todos === undefined
@@ -98,7 +114,7 @@ export function applyStatePatches(
         }
         const output = appendProjectedText(current.output, change.from, change.output)
         if (output === null) continue
-        entries[change.index] = {
+        entries[localIndex] = {
           ...current,
           output,
           status: change.status,
@@ -120,7 +136,7 @@ export function applyStatePatches(
     runtime,
     session,
     conversation: conversationChanged
-      ? { entries, activeRunStartIndex }
+      ? { entries, startIndex: conversationStartIndex, activeRunStartIndex }
       : state.conversation
   }
 }

@@ -73,14 +73,14 @@
 }
 
 .prompt-navigation-rail[data-expanded='true'] {
-  width: 60px;
+  width: 44px;
 }
 
 .prompt-navigation-list {
-  --prompt-navigation-marker-base-width: 6px;
-  --prompt-navigation-marker-hover-width: 19px;
-  --prompt-navigation-marker-active-width: 12px;
-  --prompt-navigation-marker-active-hover-width: 22px;
+  --prompt-navigation-marker-base-width: 9px;
+  --prompt-navigation-marker-hover-width: 18px;
+  --prompt-navigation-marker-active-width: 13px;
+  --prompt-navigation-marker-active-hover-width: 18px;
   display: flex;
   width: 100%;
   height: 100%;
@@ -107,7 +107,7 @@
   display: flex;
   width: 100%;
   min-height: 1px;
-  flex: 0 1 10px;
+  flex: 0 0 10px;
   justify-content: center;
 }
 
@@ -295,6 +295,13 @@
   border-color: var(--color-border-hover);
   background: var(--color-hover-subtle);
   color: var(--color-text-soft);
+}
+
+.conversation-history-error {
+  align-self: center;
+  margin: calc(var(--conversation-block-gap) * -0.5) 0 var(--conversation-block-gap);
+  color: var(--color-error-text);
+  font-size: var(--text-caption);
 }
 
 .conversation-compaction-status {
@@ -1713,9 +1720,21 @@ button.subagent-run-chip:focus-visible {
 }
 
 .subagent-run-chip-label {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   color: var(--color-text-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-run-chip-model {
+  flex: none;
+  max-width: 7rem;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--text-meta);
+  line-height: var(--line-meta);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2627,15 +2646,6 @@ button.subagent-run-chip:focus-visible {
   .activity-text-shimmer,
   .activity-text-shimmer * {
     -webkit-text-fill-color: currentColor;
-  }
-}
-
-@media (min-width: 1201px) {
-  .prompt-navigation-list {
-    --prompt-navigation-marker-base-width: 8px;
-    --prompt-navigation-marker-hover-width: 24px;
-    --prompt-navigation-marker-active-width: 17px;
-    --prompt-navigation-marker-active-hover-width: 27px;
   }
 }
 

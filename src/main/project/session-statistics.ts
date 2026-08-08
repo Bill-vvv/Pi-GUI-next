@@ -1,8 +1,29 @@
 import type { KernelSessionStatistics } from '../../shared/kernel-contract.ts'
 import type { SessionPointer } from './session-pointer.ts'
-import { readSessionTranscript } from './session-transcript.ts'
+import {
+  readSessionTranscript,
+  sessionActivityAt,
+  type SessionTranscriptEntry
+} from './session-transcript.ts'
+
+export type SessionMetadata = {
+  activityAt: number | null
+  statistics: KernelSessionStatistics
+}
+
+export async function readSessionMetadata(pointer: SessionPointer): Promise<SessionMetadata> {
+  const entries = await readSessionTranscript(pointer)
+  return {
+    activityAt: sessionActivityAt(entries),
+    statistics: sessionStatistics(entries)
+  }
+}
 
 export async function readSessionStatistics(pointer: SessionPointer): Promise<KernelSessionStatistics> {
+  return sessionStatistics(await readSessionTranscript(pointer))
+}
+
+function sessionStatistics(entries: SessionTranscriptEntry[]): KernelSessionStatistics {
   const statistics: KernelSessionStatistics = {
     userMessages: 0,
     assistantMessages: 0,
@@ -17,7 +38,7 @@ export async function readSessionStatistics(pointer: SessionPointer): Promise<Ke
     cost: 0
   }
 
-  for (const entry of await readSessionTranscript(pointer)) {
+  for (const entry of entries) {
     if (entry.type !== 'message') continue
     statistics.totalMessages = addSafeInteger(statistics.totalMessages, 1)
 

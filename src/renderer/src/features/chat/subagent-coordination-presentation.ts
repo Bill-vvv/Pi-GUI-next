@@ -19,7 +19,7 @@ export function subagentCoordinationNoticePresentation(
   entry: KernelSubagentNoticeEntry
 ): SubagentCoordinationNoticePresentation | null {
   const coordination = entry.coordination
-  if (coordination === undefined) return null
+  if (coordination === undefined || entry.noticeType === 'request') return null
   const agent = coordination.agent.trim() || 'Subagent'
 
   if (coordination.status === 'handled') {
@@ -27,23 +27,6 @@ export function subagentCoordinationNoticePresentation(
       title: `${agent} 已获得所需信息`,
       meta: '已处理',
       tone: 'quiet',
-      role: 'status'
-    }
-  }
-
-  if (entry.noticeType === 'request') {
-    if (!coordination.requiresReply && coordination.reason === 'progress_update') {
-      return {
-        title: `${agent} 更新了协作进度`,
-        meta: '进度',
-        tone: 'quiet',
-        role: 'status'
-      }
-    }
-    return {
-      title: `${agent} 等待主代理`,
-      meta: '等待回复',
-      tone: 'attention',
       role: 'status'
     }
   }

@@ -371,6 +371,56 @@ test('pending patch queue overflow discards the diff queue and resyncs once', as
   assert.equal(harness.latest()?.activeSessionKey, '/tmp/overflow.jsonl')
 })
 
+test('read-only page merge keeps revision and subsequent absolute patches use the expanded window', () => {
+  const harness = createBarrierHarness()
+  const initial = baseState({ activeSessionKey: '/tmp/session.jsonl' })
+  initial.session = { ...initial.session, id: 'session-1', settled: true }
+  initial.conversation = {
+    startIndex: 2,
+    entries: [{ id: 'e2', kind: 'message', role: 'assistant', text: 'a', timestamp: 1, streaming: true, stopReason: null, error: null }],
+    activeRunStartIndex: 2
+  }
+  harness.barrier.handleSnapshot({ revision: 7, state: initial })
+  harness.barrier.mergeConversationPage({
+    projectKey: '/tmp/project', sessionKey: '/tmp/session.jsonl', sessionId: 'session-1',
+    beforeIndex: 2, beforeEntryId: 'e2', startIndex: 1,
+    entries: [{ id: 'e1', kind: 'message', role: 'user', text: 'q', timestamp: 1, streaming: false, stopReason: null, error: null }]
+  })
+  assert.equal(harness.barrier.getAppliedRevision(), 7)
+  const boundedAuthority = baseState({ activeSessionKey: '/tmp/session.jsonl' })
+  boundedAuthority.session = { ...boundedAuthority.session, id: 'session-1', settled: false }
+  boundedAuthority.conversation = {
+    startIndex: 2,
+    entries: [{ id: 'e2', kind: 'message', role: 'assistant', text: 'ab', timestamp: 1, streaming: true, stopReason: null, error: null }],
+    activeRunStartIndex: 2
+  }
+  harness.barrier.handleEvent({
+    type: 'kernel.state-changed', revision: 8, state: boundedAuthority
+  })
+  assert.deepEqual(harness.latest()?.conversation.entries.map(({ id }) => id), ['e1', 'e2'])
+  assert.equal(harness.latest()?.conversation.startIndex, 1)
+  assert.equal(harness.barrier.getAppliedRevision(), 8)
+
+  harness.barrier.handleEvent({
+    type: 'kernel.state-patched', revision: 9,
+    patch: {
+      projectKey: '/tmp/project', sessionKey: '/tmp/session.jsonl',
+      conversation: { entries: [{ type: 'append-message-text', index: 2, from: 2, text: 'c', streaming: false, stopReason: 'stop', error: null }] }
+    }
+  })
+  harness.flushFrames()
+  const patchedEntry = harness.latest()?.conversation.entries[1]
+  assert.equal(patchedEntry?.kind === 'message' ? patchedEntry.text : null, 'abc')
+
+  harness.barrier.handleEvent({
+    type: 'kernel.state-changed',
+    revision: 10,
+    state: baseState({ activeSessionKey: '/tmp/other.jsonl' })
+  })
+  assert.equal(harness.latest()?.conversation.startIndex, 0)
+  assert.deepEqual(harness.latest()?.conversation.entries, [])
+})
+
 function createBarrierHarness(options?: {
   waitTimeoutMs?: number
   resyncTimeoutMs?: number
@@ -447,7 +497,7 @@ function baseState(overrides?: {
     activeSessionKey: overrides?.activeSessionKey ?? null,
     runtime: { status: 'ready' },
     session: { settled: true },
-    conversation: { entries: [], activeRunStartIndex: null }
+    conversation: { entries: [], startIndex: 0, activeRunStartIndex: null }
   } as unknown as KernelState
 }
 

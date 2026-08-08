@@ -2273,6 +2273,7 @@ async function installMemoryEventProbe(cdp) {
         insertedPayloadChars: 0,
         entryPatches: {
           insert: 0,
+          replaceEntry: 0,
           appendMessageText: 0,
           appendThinkingText: 0,
           appendToolOutput: 0,
@@ -2314,6 +2315,9 @@ async function installMemoryEventProbe(cdp) {
           for (const patch of event.patch.conversation.entries ?? []) {
             if (patch.type === 'insert') {
               metrics.entryPatches.insert += 1
+              metrics.insertedPayloadChars += stringChars(patch.entry)
+            } else if (patch.type === 'replace-entry') {
+              metrics.entryPatches.replaceEntry += 1
               metrics.insertedPayloadChars += stringChars(patch.entry)
             } else if (patch.type === 'append-message-text') {
               metrics.entryPatches.appendMessageText += 1

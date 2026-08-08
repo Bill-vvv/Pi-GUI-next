@@ -1,3 +1,5 @@
+import { isAbsolute } from 'node:path'
+
 import {
   KERNEL_PROVIDER_APIS,
   ADVISOR_TOOL_NAMES,
@@ -24,6 +26,7 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
   if (
     value.type === 'kernel.get-state' ||
     value.type === 'kernel.get-runtime-memory-diagnostics' ||
+    value.type === 'kernel.get-last-assistant-final-answer' ||
     value.type === 'kernel.list-system-fonts' ||
     value.type === 'kernel.add-project' ||
     value.type === 'kernel.create-task' ||
@@ -46,6 +49,12 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
   if (value.type === 'kernel.activate-project') {
     return typeof value.projectKey === 'string' && Object.keys(value).length === 2
   }
+  if (value.type === 'kernel.refresh-workspace-metadata') {
+    return typeof value.workspaceKey === 'string' && Object.keys(value).length === 2
+  }
+  if (value.type === 'kernel.load-earlier-conversation') {
+    return isConversationPageRequest(value.request) && Object.keys(value).length === 2
+  }
   if (value.type === 'kernel.select-navigator') {
     return (value.kind === 'project' || value.kind === 'task') && Object.keys(value).length === 2
   }
@@ -59,10 +68,20 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
   }
   if (
     value.type === 'kernel.activate-session' ||
-    value.type === 'kernel.archive-session' ||
-    value.type === 'kernel.preview-session'
+    value.type === 'kernel.archive-session'
   ) {
     return typeof value.sessionKey === 'string' && Object.keys(value).length === 2
+  }
+  if (value.type === 'kernel.preview-session') {
+    return isSessionPreviewSessionKey(value.sessionKey) &&
+      isSessionPreviewRequestId(value.requestId) &&
+      Object.keys(value).length === 3
+  }
+  if (
+    value.type === 'kernel.complete-session-preview' ||
+    value.type === 'kernel.cancel-session-preview'
+  ) {
+    return isSessionPreviewRequestId(value.requestId) && Object.keys(value).length === 2
   }
   if (
     value.type === 'kernel.undo-archive-session' ||
@@ -276,6 +295,38 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
     isThinkingLevel(value.level) &&
     Object.keys(value).length === 2
   )
+}
+
+function isConversationPageRequest(value: unknown): boolean {
+  return isRecord(value) &&
+    Object.keys(value).length === 5 &&
+    isBoundedIdentity(value.projectKey, 4_096) &&
+    isBoundedIdentity(value.sessionKey, 4_096) &&
+    isBoundedIdentity(value.sessionId, 256) &&
+    isBoundedNonNegativeInteger(value.beforeIndex, Number.MAX_SAFE_INTEGER) &&
+    isBoundedIdentity(value.beforeEntryId, 256)
+}
+
+function isBoundedIdentity(value: unknown, maxLength: number): value is string {
+  return typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= maxLength &&
+    !value.includes('\0')
+}
+
+function isSessionPreviewSessionKey(value: unknown): value is string {
+  return typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 4_096 &&
+    !value.includes('\0') &&
+    isAbsolute(value)
+}
+
+function isSessionPreviewRequestId(value: unknown): value is string {
+  return typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 128 &&
+    /^[A-Za-z0-9._:-]+$/u.test(value)
 }
 
 function isAskIdentity(value: unknown): value is string {

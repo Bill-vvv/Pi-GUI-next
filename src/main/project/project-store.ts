@@ -873,6 +873,40 @@ export class ProjectStore {
     })
   }
 
+  setActiveSession(
+    projectPath: string,
+    sessionKey: string,
+    sessionId: string
+  ): Promise<void> {
+    assertAbsolute(projectPath, 'Project path')
+    assertAbsolute(sessionKey, 'Session key')
+    if (sessionId.length === 0) throw new Error('Session ID must not be empty.')
+    return this.enqueueSave(async () => {
+      const state = await this.readSessionState()
+      if (!state.sessions.some((pointer) =>
+        pointer.projectPath === projectPath &&
+        pointer.sessionFile === sessionKey &&
+        pointer.sessionId === sessionId
+      )) {
+        throw new Error(`Session identity is not registered for the project: ${sessionKey}`)
+      }
+      if (state.archivedSessionKeys.some((selection) =>
+        selection.projectPath === projectPath && selection.sessionKey === sessionKey
+      )) {
+        throw new Error(`Session is archived for the project: ${sessionKey}`)
+      }
+      await writeJson(this.stateFile, {
+        version: 6,
+        sessions: state.sessions,
+        activeSessionKeys: [
+          ...state.activeSessionKeys.filter((selection) => selection.projectPath !== projectPath),
+          { projectPath, sessionKey }
+        ],
+        archivedSessionKeys: state.archivedSessionKeys
+      } satisfies ProjectStateFile)
+    })
+  }
+
   archiveSession(projectPath: string, sessionKey: string): Promise<void> {
     assertAbsolute(projectPath, 'Project path')
     assertAbsolute(sessionKey, 'Session key')

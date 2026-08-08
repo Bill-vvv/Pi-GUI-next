@@ -755,8 +755,17 @@ export type KernelConversationEntry =
   | KernelCommandEntry
   | KernelErrorEntry
 
+export type KernelConversationPreviewState = {
+  entries: KernelConversationEntry[]
+  /** Preview-local index; previews are read-only and are never patched. */
+  activeRunStartIndex: number | null
+}
+
 export type KernelConversationState = {
   entries: KernelConversationEntry[]
+  /** Absolute index of entries[0] in Main's complete active Conversation. */
+  startIndex: number
+  /** Absolute index in Main's complete active Conversation. */
   activeRunStartIndex: number | null
 }
 
@@ -765,7 +774,27 @@ export type KernelSessionPreview = {
   sessionKey: string
   sessionId: string
   sessionName: string | null
-  conversation: KernelConversationState
+  conversation: KernelConversationPreviewState
+}
+
+export type KernelConversationPageRequest = {
+  projectKey: string
+  sessionKey: string
+  sessionId: string
+  beforeIndex: number
+  beforeEntryId: string
+}
+
+export type KernelConversationPage = KernelConversationPageRequest & {
+  startIndex: number
+  entries: KernelConversationEntry[]
+}
+
+export type KernelAssistantFinalAnswer = {
+  projectKey: string
+  sessionKey: string
+  sessionId: string
+  text: string | null
 }
 
 export type KernelForkCandidate = {
@@ -949,6 +978,12 @@ export type KernelState = {
 export type KernelConversationEntryPatch =
   | { type: 'insert'; index: number; entry: KernelConversationEntry }
   | {
+      type: 'replace-entry'
+      index: number
+      expectedId: string
+      entry: KernelConversationEntry
+    }
+  | {
       type: 'append-message-text'
       index: number
       from: number
@@ -1004,6 +1039,7 @@ export type KernelCommand =
   | { type: 'kernel.list-system-fonts' }
   | { type: 'kernel.add-project' }
   | { type: 'kernel.activate-project'; projectKey: string }
+  | { type: 'kernel.refresh-workspace-metadata'; workspaceKey: string }
   | { type: 'kernel.select-navigator'; kind: KernelNavigatorKind }
   | { type: 'kernel.create-task' }
   | { type: 'kernel.activate-task'; taskKey: string }
@@ -1015,9 +1051,13 @@ export type KernelCommand =
       choice: KernelProjectTrustChoice
     }
   | { type: 'kernel.activate-session'; sessionKey: string }
+  | { type: 'kernel.load-earlier-conversation'; request: KernelConversationPageRequest }
+  | { type: 'kernel.get-last-assistant-final-answer' }
   | { type: 'kernel.archive-session'; sessionKey: string }
   | { type: 'kernel.undo-archive-session'; token: string }
-  | { type: 'kernel.preview-session'; sessionKey: string }
+  | { type: 'kernel.preview-session'; sessionKey: string; requestId: string }
+  | { type: 'kernel.complete-session-preview'; requestId: string }
+  | { type: 'kernel.cancel-session-preview'; requestId: string }
   | { type: 'kernel.preview-archived-session'; token: string }
   | { type: 'kernel.list-fork-candidates' }
   | { type: 'kernel.fork-session'; entryId: string }
@@ -1155,6 +1195,7 @@ export type KernelApi = {
   listSystemFonts: () => Promise<string[]>
   addProject: () => Promise<KernelMutationAck>
   activateProject: (projectKey: string) => Promise<KernelMutationAck>
+  refreshWorkspaceMetadata: (workspaceKey: string) => Promise<KernelMutationAck>
   selectNavigator: (kind: KernelNavigatorKind) => Promise<KernelMutationAck>
   createTask: () => Promise<KernelMutationAck>
   activateTask: (taskKey: string) => Promise<KernelMutationAck>
@@ -1165,9 +1206,15 @@ export type KernelApi = {
     choice: KernelProjectTrustChoice
   ) => Promise<KernelMutationAck>
   activateSession: (sessionKey: string) => Promise<KernelMutationAck>
+  loadEarlierConversation: (
+    request: KernelConversationPageRequest
+  ) => Promise<KernelConversationPage>
+  getLastAssistantFinalAnswer: () => Promise<KernelAssistantFinalAnswer>
   archiveSession: (sessionKey: string) => Promise<KernelArchiveResult>
   undoArchiveSession: (token: string) => Promise<KernelMutationAck>
-  previewSession: (sessionKey: string) => Promise<KernelSessionPreview>
+  previewSession: (sessionKey: string, requestId: string) => Promise<KernelSessionPreview>
+  completeSessionPreview: (requestId: string) => Promise<KernelSessionPreview>
+  cancelSessionPreview: (requestId: string) => Promise<void>
   previewArchivedSession: (token: string) => Promise<KernelSessionPreview>
   listForkCandidates: () => Promise<KernelForkCandidate[]>
   forkSession: (entryId: string) => Promise<KernelForkResult>

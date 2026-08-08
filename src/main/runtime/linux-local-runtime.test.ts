@@ -59,7 +59,7 @@ test('runtime controls fast extension loading and merges it with subagent depth'
     `#!/usr/bin/env node
 const { appendFileSync } = require('node:fs')
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 appendFileSync(${JSON.stringify(environmentLog)}, JSON.stringify({
@@ -227,7 +227,7 @@ test('runtime forwards native images for prompt, steer, and follow-up', async (t
     `#!/usr/bin/env node
 const { appendFileSync } = require('node:fs')
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 let input = ''
@@ -281,7 +281,7 @@ test('runtime forwards get_entries and fork through the Pi RPC client', async (t
     `#!/usr/bin/env node
 const { appendFileSync } = require('node:fs')
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 let input = ''
@@ -364,7 +364,7 @@ test('runtime maps app Extension commands to Pi prompt and isolates extension ev
     `#!/usr/bin/env node
 const { appendFileSync } = require('node:fs')
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 let input = ''
@@ -390,13 +390,30 @@ process.stdin.on('data', (chunk) => {
             }],
             leafId: 'root'
           }
-        : request.type === 'navigate_tree'
+        : request.type === 'get_commands'
           ? {
-              targetEntryId: request.targetEntryId,
-              cancelled: false,
-              leafId: 'root',
-              editorText: 'Original prompt'
+              commands: [{
+                name: 'pi-gui-history-navigation',
+                description: 'Internal Pi GUI history prompt navigation. Not a user command.',
+                source: 'extension',
+                sourceInfo: { source: 'cli', scope: 'temporary', origin: 'top-level' }
+              }]
             }
+          : request.type === 'get_entries'
+            ? {
+                entries: [
+                {
+                  id: 'base', parentId: null, type: 'model_change',
+                  timestamp: '2026-07-29T00:00:00.000Z'
+                },
+                {
+                  id: 'prompt', parentId: 'base', type: 'message',
+                  timestamp: '2026-07-29T00:00:01.000Z',
+                  message: { role: 'user', content: 'Original prompt' }
+                }
+                ],
+                leafId: 'base'
+              }
           : request.type === 'subscribe_extension_events'
             ? { channels: request.channels }
             : undefined
@@ -432,7 +449,7 @@ process.stdin.on('data', (chunk) => {
 
   await runtime.start()
   const tree = await runtime.send({ type: 'get_tree' })
-  const navigation = await runtime.send({ type: 'navigate_tree', targetEntryId: 'root' })
+  const navigation = await runtime.send({ type: 'navigate_tree', targetEntryId: 'prompt' })
   const invoked = await runtime.send({
     type: 'invoke_extension_command',
     name: 'status',
@@ -458,9 +475,9 @@ process.stdin.on('data', (chunk) => {
   })
   assert.deepEqual(navigation, {
     type: 'tree-navigation',
-    targetEntryId: 'root',
+    targetEntryId: 'prompt',
     cancelled: false,
-    leafId: 'root',
+    leafId: 'base',
     editorText: 'Original prompt'
   })
   assert.deepEqual(invoked, { type: 'accepted' })
@@ -479,12 +496,77 @@ process.stdin.on('data', (chunk) => {
     .split('\n')
     .map((line) => JSON.parse(line) as Record<string, unknown>)
     .map(({ id: _id, ...request }) => request)
-  assert.deepEqual(requests.slice(-4), [
+  assert.deepEqual(requests.slice(-7), [
     { type: 'get_tree' },
-    { type: 'navigate_tree', targetEntryId: 'root' },
+    { type: 'get_entries' },
+    { type: 'get_commands' },
+    { type: 'prompt', message: '/pi-gui-history-navigation prompt' },
+    { type: 'get_entries' },
     { type: 'prompt', message: '/status server-a' },
     { type: 'subscribe_extension_events', channels: ['status/v1'] }
   ])
+})
+
+test('history navigation fails before prompt when the app Extension command is unavailable', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-runtime-history-command-missing-'))
+  t.after(async () => rm(directory, { recursive: true, force: true }))
+  const executable = join(directory, 'pi')
+  const requestLog = join(directory, 'requests.jsonl')
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs')
+if (process.argv[2] === '--version') {
+  process.stdout.write('0.83.0\\n')
+  process.exit(0)
+}
+let input = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  input += chunk
+  let newline
+  while ((newline = input.indexOf('\\n')) >= 0) {
+    const request = JSON.parse(input.slice(0, newline))
+    input = input.slice(newline + 1)
+    appendFileSync(${JSON.stringify(requestLog)}, JSON.stringify(request) + '\\n')
+    const data = request.type === 'get_state'
+      ? {}
+      : request.type === 'get_entries'
+        ? {
+            entries: [{
+              id: 'prompt', parentId: null, type: 'message',
+              timestamp: '2026-07-29T00:00:00.000Z',
+              message: { role: 'user', content: 'Original prompt' }
+            }],
+            leafId: 'answer'
+          }
+        : request.type === 'get_commands'
+          ? { commands: [] }
+          : undefined
+    process.stdout.write(JSON.stringify({
+      type: 'response', id: request.id, command: request.type, success: true,
+      ...(data === undefined ? {} : { data })
+    }) + '\\n')
+  }
+})
+`,
+    { mode: 0o755 }
+  )
+  const runtime = new LinuxLocalRuntime({ cwd: directory, explicitExecutable: executable })
+
+  await runtime.start()
+  await assert.rejects(
+    runtime.send({ type: 'navigate_tree', targetEntryId: 'prompt' }),
+    /history navigation Extension command is unavailable/u
+  )
+  await runtime.stop()
+
+  const requests = (await readFile(requestLog, 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as { type: string })
+  assert.deepEqual(requests.slice(-2).map(({ type }) => type), ['get_entries', 'get_commands'])
+  assert.equal(requests.some(({ type }) => type === 'prompt'), false)
 })
 
 test('runtime drops extension events emitted after stop begins', async (t) => {
@@ -495,7 +577,7 @@ test('runtime drops extension events emitted after stop begins', async (t) => {
     executable,
     `#!/usr/bin/env node
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 let input = ''
@@ -548,7 +630,7 @@ test('old Pi unknown P3 commands reject without fallback or runtime restart', as
     `#!/usr/bin/env node
 const { appendFileSync } = require('node:fs')
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 appendFileSync(${JSON.stringify(launchLog)}, String(process.pid) + '\\n')
@@ -593,7 +675,6 @@ process.stdin.on('data', (chunk) => {
   const pidBefore = runtime.getRpcPid()
   const commands = [
     { type: 'get_tree' as const },
-    { type: 'navigate_tree' as const, targetEntryId: 'root' },
     { type: 'subscribe_extension_events' as const, channels: ['status/v1'] }
   ]
   for (const command of commands) {
@@ -624,7 +705,6 @@ process.stdin.on('data', (chunk) => {
   assert.deepEqual(requests, [
     { type: 'get_state' },
     { type: 'get_tree' },
-    { type: 'navigate_tree', targetEntryId: 'root' },
     { type: 'subscribe_extension_events', channels: ['status/v1'] },
     { type: 'prompt', message: '/status' },
     { type: 'get_messages' }
@@ -641,7 +721,7 @@ test('runtime exposes the strict loaded-Extension inventory without routing thro
     `#!/usr/bin/env node
 const { appendFileSync } = require('node:fs')
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 let input = ''
@@ -709,7 +789,7 @@ test('current Pi rejects get_extensions without fallback or restarting the usabl
     `#!/usr/bin/env node
 const { appendFileSync } = require('node:fs')
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 appendFileSync(${JSON.stringify(launchLog)}, String(process.pid) + '\\n')
@@ -806,7 +886,7 @@ test('runtime forwards get_session_stats through the Pi RPC client', async (t) =
     `#!/usr/bin/env node
 const { appendFileSync } = require('node:fs')
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 let input = ''
@@ -860,7 +940,7 @@ test('stale get_state snapshots cannot revive a settled activity', async (t) => 
     executable,
     `#!/usr/bin/env node
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 let input = ''
@@ -918,7 +998,7 @@ test('runtime state summarizes stderr without retaining secret text', async (t) 
     executable,
     `#!/usr/bin/env node
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 process.stderr.write(${JSON.stringify(secret)})
@@ -956,7 +1036,7 @@ test('getRpcPid exposes the live root Pi RPC pid and clears after stop', async (
     executable,
     `#!/usr/bin/env node
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 let input = ''
@@ -996,7 +1076,7 @@ test('stop during the version check cancels start before spawning RPC', async (t
   const rpcMarker = join(directory, 'rpc-started')
   await writeFile(
     executable,
-    '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  sleep 0.1\n  printf "0.80.10\\n"\n  exit 0\nfi\nprintf "started" > rpc-started\n',
+    '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  sleep 0.1\n  printf "0.83.0\\n"\n  exit 0\nfi\nprintf "started" > rpc-started\n',
     { mode: 0o755 }
   )
   const runtime = new LinuxLocalRuntime({

@@ -15,7 +15,10 @@ import {
   type KernelAdvisorConfiguration,
   type KernelAskAnswer,
   type KernelArchiveResult,
+  type KernelAssistantFinalAnswer,
   type KernelCommand,
+  type KernelConversationPage,
+  type KernelConversationPageRequest,
   type KernelEvent,
   type KernelInstalledPackage,
   type KernelPiPackageInstallJob,
@@ -113,6 +116,11 @@ const kernelApi: KernelApi = {
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
+  refreshWorkspaceMetadata: (workspaceKey) => {
+    const command: KernelCommand = { type: 'kernel.refresh-workspace-metadata', workspaceKey }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
+  },
   selectNavigator: (kind: KernelNavigatorKind) => {
     const command: KernelCommand = { type: 'kernel.select-navigator', kind }
 
@@ -148,6 +156,16 @@ const kernelApi: KernelApi = {
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
+  loadEarlierConversation: (request: KernelConversationPageRequest) => {
+    const command: KernelCommand = { type: 'kernel.load-earlier-conversation', request }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelConversationPage>
+  },
+  getLastAssistantFinalAnswer: () => {
+    const command: KernelCommand = { type: 'kernel.get-last-assistant-final-answer' }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelAssistantFinalAnswer>
+  },
   archiveSession: (sessionKey) => {
     const command: KernelCommand = { type: 'kernel.archive-session', sessionKey }
 
@@ -158,10 +176,20 @@ const kernelApi: KernelApi = {
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },
-  previewSession: (sessionKey) => {
-    const command: KernelCommand = { type: 'kernel.preview-session', sessionKey }
+  previewSession: (sessionKey, requestId) => {
+    const command: KernelCommand = { type: 'kernel.preview-session', sessionKey, requestId }
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelSessionPreview>
+  },
+  completeSessionPreview: (requestId) => {
+    const command: KernelCommand = { type: 'kernel.complete-session-preview', requestId }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelSessionPreview>
+  },
+  cancelSessionPreview: (requestId) => {
+    const command: KernelCommand = { type: 'kernel.cancel-session-preview', requestId }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<void>
   },
   previewArchivedSession: (token) => {
     const command: KernelCommand = { type: 'kernel.preview-archived-session', token }

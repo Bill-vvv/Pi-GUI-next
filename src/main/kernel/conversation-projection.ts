@@ -23,6 +23,11 @@ import {
   mergeToolImageAttachments,
   projectToolResultContent
 } from './tool-result-images.ts'
+import {
+  createHistoricalProjectionSink,
+  createImmutableProjectionSink,
+  type ConversationProjectionSink
+} from './conversation-projection-sink.ts'
 
 const MAX_DISPLAY_CHARS = 30_000
 const MAX_ADVISOR_SLUG_CHARS = 128
@@ -46,14 +51,39 @@ const ADVISORY_DETAIL_KEYS = [
   'timestamp'
 ] as const
 
+export type CanonicalTranscriptMessage = {
+  entryId: string
+  message: unknown
+}
+
 export function projectMessages(messages: unknown[]): KernelConversationEntry[] {
-  let entries: KernelConversationEntry[] = []
-  for (const [messageIndex, message] of messages.entries()) {
-    entries = projectMessage(entries, message, false, `history:${messageIndex}`)
+  return projectHistoricalMessages(
+    messages.map((message, messageIndex) => ({
+      identity: `history:${messageIndex}`,
+      message
+    }))
+  )
+}
+
+/** Projects static transcript phases with identities derived from canonical JSONL entry IDs. */
+export function projectTranscriptMessages(
+  records: readonly CanonicalTranscriptMessage[]
+): KernelConversationEntry[] {
+  return projectHistoricalMessages(
+    records.map(({ entryId, message }) => ({ identity: `transcript:${entryId}`, message }))
+  )
+}
+
+function projectHistoricalMessages(
+  records: readonly { identity: string; message: unknown }[]
+): KernelConversationEntry[] {
+  const sink = createHistoricalProjectionSink()
+  for (const { identity, message } of records) {
+    projectMessage(sink, message, false, identity)
   }
   // History loads an idle session snapshot. Any tool still missing a result was
   // interrupted mid-run (abort/crash/kill) and must not stay pending/running.
-  return settleInterruptedHistoricalTools(entries)
+  return settleInterruptedHistoricalTools(sink.result())
 }
 
 export function projectSessionEntries(
@@ -117,7 +147,9 @@ export function projectPiEvent(
     event.type === 'message_update' ||
     event.type === 'message_end'
   ) {
-    return projectMessage(entries, event.message, event.type === 'message_update')
+    const sink = createImmutableProjectionSink(entries)
+    projectMessage(sink, event.message, event.type === 'message_update')
+    return sink.result()
   }
 
   if (event.type === 'tool_execution_start') {
@@ -220,9 +252,10 @@ export function projectPiEvent(
       ...todoItemsField(name, existing?.args, existing),
       ...toolAttachmentsField(undefined, attachments)
     })
-    return event.isError === true
-      ? nextEntries
-      : resolveSubagentSupervisorRequest(nextEntries, name, existing?.args, now)
+    if (event.isError === true) return nextEntries
+    const sink = createImmutableProjectionSink(nextEntries)
+    resolveSubagentSupervisorRequest(sink, name, existing?.args, now)
+    return sink.result()
   }
 
   if (event.type === 'extension_error') {
@@ -276,12 +309,12 @@ export function projectPiEvent(
 }
 
 function projectMessage(
-  entries: KernelConversationEntry[],
+  sink: ConversationProjectionSink,
   value: unknown,
   streaming: boolean,
   historicalIdentity?: string
-): KernelConversationEntry[] {
-  if (!isRecord(value) || typeof value.role !== 'string') return entries
+): void {
+  if (!isRecord(value) || typeof value.role !== 'string') return
   const timestamp = numberValue(value.timestamp) ?? Date.now()
 
   if (value.role === 'user') {
@@ -301,7 +334,8 @@ function projectMessage(
       error: null,
       ...(display.attachments.length === 0 ? {} : { attachments: display.attachments })
     }
-    return upsert(entries, entry)
+    sink.upsert(entry)
+    return
   }
 
   if (value.role === 'assistant') {
@@ -311,7 +345,6 @@ function projectMessage(
       ? `message:assistant:${timestamp}`
       : `message:${historicalIdentity}:assistant`
     const lastTextIndex = content.findLastIndex((item) => isRecord(item) && item.type === 'text')
-    let nextEntries = entries
     let messageProjected = false
     for (const [contentIndex, item] of content.entries()) {
       if (!isRecord(item)) continue
@@ -324,7 +357,7 @@ function projectMessage(
           timestamp,
           streaming
         }
-        nextEntries = upsert(nextEntries, thinkingEntry)
+        sink.upsert(thinkingEntry)
         continue
       }
       if (item.type === 'text') {
@@ -339,16 +372,16 @@ function projectMessage(
           stopReason: contentIndex === lastTextIndex ? stringValue(value.stopReason) : null,
           error: contentIndex === lastTextIndex ? stringValue(value.errorMessage) : null
         }
-        nextEntries = upsert(nextEntries, messageEntry)
+        sink.upsert(messageEntry)
         messageProjected = true
         continue
       }
       if (item.type !== 'toolCall') continue
       const toolCallId = stringValue(item.id)
       if (toolCallId === null) continue
-      const existing = findTool(nextEntries, toolCallId)
+      const existing = sink.findTool(toolCallId)
       const name = stringValue(item.name) ?? existing?.name ?? 'tool'
-      nextEntries = upsert(nextEntries, {
+      sink.upsert({
         id: `tool:${toolCallId}`,
         kind: 'tool',
         toolCallId,
@@ -372,7 +405,7 @@ function projectMessage(
     }
     const error = stringValue(value.errorMessage)
     if (!messageProjected && error !== null) {
-      nextEntries = upsert(nextEntries, {
+      sink.upsert({
         id: messageId,
         kind: 'message',
         role: 'assistant',
@@ -384,20 +417,20 @@ function projectMessage(
         error
       })
     }
-    return nextEntries
+    return
   }
 
   if (value.role === 'toolResult') {
     const toolCallId = stringValue(value.toolCallId)
-    if (toolCallId === null) return entries
-    const existing = findTool(entries, toolCallId)
+    if (toolCallId === null) return
+    const existing = sink.findTool(toolCallId)
     const projected = projectToolResultContent(value.content)
     const limited = limitText(projected.text)
     const name = stringValue(value.toolName) ?? existing?.name ?? 'tool'
     const attachments = isSubagentToolName(name)
       ? undefined
       : projected.attachments.length > 0 ? projected.attachments : undefined
-    const nextEntries = upsert(entries, {
+    sink.upsert({
       id: `tool:${toolCallId}`,
       kind: 'tool',
       toolCallId,
@@ -417,14 +450,15 @@ function projectMessage(
       ...todoItemsField(name, existing?.args, existing),
       ...toolAttachmentsField(undefined, attachments)
     })
-    return value.isError === true
-      ? nextEntries
-      : resolveSubagentSupervisorRequest(nextEntries, name, existing?.args, timestamp)
+    if (value.isError !== true) {
+      resolveSubagentSupervisorRequest(sink, name, existing?.args, timestamp)
+    }
+    return
   }
 
   if (value.role === 'custom') {
     const customType = stringValue(value.customType)
-    const subagentProjected = projectSubagentCustomMessage(entries, {
+    const subagentProjected = projectSubagentCustomMessage(sink, {
       customType,
       content: value.content,
       details: value.details,
@@ -432,11 +466,10 @@ function projectMessage(
       timestamp,
       historicalIdentity
     })
-    if (subagentProjected !== null) return subagentProjected
-    if (value.display !== true) return entries
+    if (subagentProjected || value.display !== true) return
     if (customType === ADVISORY_TYPE) {
       const details = projectAdvisoryDetails(value.details)
-      if (details === null) return entries
+      if (details === null) return
       const entry: KernelAdvisorEntry = {
         id: historicalIdentity === undefined
           ? `advisor:${details.advisorSlug}:${details.timestamp}`
@@ -450,12 +483,9 @@ function projectMessage(
         delivery: details.delivery,
         timestamp: details.timestamp
       }
-      return upsert(entries, entry)
+      sink.upsert(entry)
     }
-    return entries
   }
-
-  return entries
 }
 
 function projectMagicContextEntry(

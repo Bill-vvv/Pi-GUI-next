@@ -59,7 +59,10 @@ export async function readSessionActivityAt(pointer: SessionPointer): Promise<nu
   } catch {
     return null
   }
+  return sessionActivityAt(entries)
+}
 
+export function sessionActivityAt(entries: SessionTranscriptEntry[]): number | null {
   const branch = activeSessionBranch(entries)
   for (let index = branch.length - 1; index >= 0; index -= 1) {
     const entry = branch[index]

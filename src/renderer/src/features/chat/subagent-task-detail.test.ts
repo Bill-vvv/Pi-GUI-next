@@ -66,6 +66,25 @@ test('SubagentTaskCapsule SSR exposes button, selection and stable trigger ident
   assert.match(html, /data-subagent-participant-index="2"/)
   assert.match(html, /subagent-run-chip-kind">Agent<\/span>/)
   assert.match(html, /subagent-run-chip-label">Review renderer<\/span>/)
+  assert.doesNotMatch(html, /subagent-run-chip-model/)
+  assert.doesNotMatch(html, /尚未报告/)
+})
+
+test('SubagentTaskCapsule shows a compact reported model and preserves the full identity', () => {
+  const html = renderToStaticMarkup(createElement(SubagentTaskCapsule, {
+    target: {
+      kind: 'tool',
+      toolCallId: 'subagent-call',
+      participantIndex: 2
+    },
+    participant: participant({ model: 'vvqq-cpa/grok-4.5' }),
+    selected: false,
+    onClick: () => undefined
+  }))
+
+  assert.match(html, /aria-label="查看子任务：Review renderer，模型 vvqq-cpa\/grok-4\.5"/)
+  assert.match(html, /data-tooltip="reviewer · vvqq-cpa\/grok-4\.5 · Review renderer"/)
+  assert.match(html, /subagent-run-chip-model">· grok-4\.5<\/span>/)
 })
 
 test('a selected completed Subagent keeps its process expanded and capsule mounted', () => {
@@ -345,7 +364,7 @@ test('SubagentTaskDetail presents parallel completion output references without 
   assert.doesNotMatch(html, /Background task completed/)
 })
 
-test('Timeline renders supervisor coordination as a concise status lifecycle', () => {
+test('Timeline omits structured supervisor request lifecycles', () => {
   const pending: KernelSubagentNoticeEntry = {
     id: 'subagent-notice:request:request-1',
     kind: 'subagent-notice',
@@ -370,13 +389,9 @@ test('Timeline renders supervisor coordination as a concise status lifecycle', (
     thinkingElapsedByEntryId: new Map()
   }))
 
-  assert.match(pendingHtml, /class="subagent-notice coordination attention pending"/)
-  assert.match(pendingHtml, /role="status"/)
-  assert.match(pendingHtml, /explorer 等待主代理/)
-  assert.match(pendingHtml, /等待回复/)
-  assert.match(pendingHtml, /请提供当前 Git 状态。/)
-  assert.doesNotMatch(pendingHtml, /Reply with:/)
-  assert.doesNotMatch(pendingHtml, /subagent_supervisor/)
+  assert.doesNotMatch(pendingHtml, /explorer 等待主代理/)
+  assert.doesNotMatch(pendingHtml, /等待回复/)
+  assert.doesNotMatch(pendingHtml, /请提供当前 Git 状态。/)
 
   const handledHtml = renderToStaticMarkup(createElement(CompletedTurn, {
     turn: {
@@ -394,10 +409,8 @@ test('Timeline renders supervisor coordination as a concise status lifecycle', (
     runElapsedMs: null,
     thinkingElapsedByEntryId: new Map()
   }))
-  assert.match(handledHtml, /class="subagent-notice coordination quiet handled"/)
-  assert.match(handledHtml, /explorer 已获得所需信息/)
-  assert.match(handledHtml, /已处理/)
-  assert.doesNotMatch(handledHtml, /role="alert"/)
+  assert.doesNotMatch(handledHtml, /explorer 已获得所需信息/)
+  assert.doesNotMatch(handledHtml, /请提供当前 Git 状态。/)
 })
 
 test('SubagentTaskDetail SSR renders normalized domain fields and error before output', () => {

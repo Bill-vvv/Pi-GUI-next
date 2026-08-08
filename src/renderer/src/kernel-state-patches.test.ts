@@ -308,6 +308,68 @@ test('tool patches reject a different toolCallId at the same index', () => {
   )
 })
 
+test('entry replacement updates one matching identity and rejects mismatches', () => {
+  const current = messageEntry('first', 'complete')
+  const untouched = messageEntry('second', 'stable')
+  const replacement = {
+    ...current,
+    streaming: false,
+    stopReason: 'stop'
+  }
+  const state = kernelState([current, untouched])
+  const next = applyStatePatches(state, [{
+    projectKey: state.activeProjectKey,
+    sessionKey: state.activeSessionKey,
+    conversation: {
+      entries: [{
+        type: 'replace-entry',
+        index: 0,
+        expectedId: current.id,
+        entry: replacement
+      }]
+    }
+  }])
+
+  assert.equal(next.conversation.entries[0], replacement)
+  assert.equal(next.conversation.entries[1], untouched)
+  assert.throws(
+    () => applyStatePatches(state, [{
+      projectKey: state.activeProjectKey,
+      sessionKey: state.activeSessionKey,
+      conversation: {
+        entries: [{
+          type: 'replace-entry',
+          index: 0,
+          expectedId: 'different',
+          entry: replacement
+        }]
+      }
+    }]),
+    /replacement patch identity mismatch/
+  )
+})
+
+test('patches for intentionally omitted earlier history advance without copying the visible window', () => {
+  const visible = messageEntry('visible', 'stable')
+  const state = kernelState([visible])
+  state.conversation.startIndex = 10
+  const next = applyStatePatches(state, [{
+    projectKey: state.activeProjectKey,
+    sessionKey: state.activeSessionKey,
+    conversation: {
+      entries: [{
+        type: 'replace-entry',
+        index: 4,
+        expectedId: 'omitted',
+        entry: messageEntry('omitted', 'settled')
+      }]
+    }
+  }])
+
+  assert.equal(next.conversation, state.conversation)
+  assert.equal(next.conversation.entries[0], visible)
+})
+
 test('out-of-sequence inserts and entry-kind mismatches fail fast', () => {
   const state = kernelState([messageEntry('first', 'hello')])
   assert.throws(
@@ -322,7 +384,7 @@ test('out-of-sequence inserts and entry-kind mismatches fail fast', () => {
         }]
       }
     }]),
-    /insert index 0 is out of sequence/
+    /insert index 0 has an identity mismatch/
   )
   assert.throws(
     () => applyStatePatches(state, [{
@@ -348,7 +410,7 @@ function kernelState(entries: KernelConversationEntry[]): KernelState {
     activeSessionKey: '/tmp/session.jsonl',
     runtime: { status: 'running' },
     session: {},
-    conversation: { entries, activeRunStartIndex: null }
+    conversation: { entries, startIndex: 0, activeRunStartIndex: null }
   } as unknown as KernelState
 }
 

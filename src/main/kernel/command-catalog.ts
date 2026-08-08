@@ -5,6 +5,7 @@ import {
   type KernelCommandDescriptor
 } from '../../shared/kernel-contract.ts'
 import type { PiRpcSlashCommand } from '../pi-rpc/pi-rpc-client.ts'
+import { isInternalHistoryNavigationCommandName } from '../runtime/history-navigation.ts'
 import { isInternalOpenAiFastModeCommandName } from '../runtime/openai-fast-mode.ts'
 import { isInternalQuiescenceCommandName } from '../runtime/runtime-quiescence.ts'
 
@@ -103,7 +104,8 @@ export function createCommandCatalog(
     // App-owned internal runtime commands are invoked only by RuntimeHost, never offered to users.
     if (
       isInternalQuiescenceCommandName(command.name) ||
-      isInternalOpenAiFastModeCommandName(command.name)
+      isInternalOpenAiFastModeCommandName(command.name) ||
+      isInternalHistoryNavigationCommandName(command.name)
     ) continue
     const normalizedName = command.name.toLocaleLowerCase()
     if (knownNames.has(normalizedName)) continue

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import test from 'node:test'
 
 import {
@@ -57,25 +57,55 @@ test('resolveRuntimeQuiescenceExtensionPath finds the source extension', () => {
 
 test('resolveRuntimeExtensionPaths includes all app-owned extensions in stable order', () => {
   const paths = resolveRuntimeExtensionPaths()
-  assert.equal(paths.length, 4)
+  assert.equal(paths.length, 5)
   assert.match(paths[0]!, /pi-gui-runtime-quiescence\/src\/index\.ts$/u)
   assert.match(paths[1]!, /pi-gui-task-notify\/src\/index\.ts$/u)
   assert.match(paths[2]!, /pi-gui-ask\/src\/index\.ts$/u)
   assert.match(paths[3]!, /pi-gui-openai-fast-mode\/src\/index\.ts$/u)
+  assert.match(paths[4]!, /pi-gui-history-navigation\/src\/index\.ts$/u)
 })
 
-test('resolveRuntimeQuiescenceExtensionPath prefers packaged resources when present', async (t) => {
+test('electron-builder packages every app-owned extension under resources/extensions', async () => {
+  const packageJson = JSON.parse(
+    await readFile(new URL('../../../package.json', import.meta.url), 'utf8')
+  ) as {
+    build?: { extraResources?: Array<{ from?: string, to?: string }> }
+  }
+  const resources = packageJson.build?.extraResources ?? []
+  for (const name of [
+    'pi-gui-runtime-quiescence',
+    'pi-gui-task-notify',
+    'pi-gui-ask',
+    'pi-gui-openai-fast-mode',
+    'pi-gui-history-navigation'
+  ]) {
+    assert.equal(resources.some((entry) =>
+      entry.from === `extensions/${name}` && entry.to === `extensions/${name}`
+    ), true)
+  }
+})
+
+test('resolveRuntimeExtensionPaths matches packaged extraResources layout', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-gui-quiescence-packaged-'))
   t.after(async () => rm(root, { recursive: true, force: true }))
   const { mkdir } = await import('node:fs/promises')
-  const packaged = join(root, 'pi-extensions/pi-gui-runtime-quiescence/src/index.ts')
-  await mkdir(join(root, 'pi-extensions/pi-gui-runtime-quiescence/src'), { recursive: true })
-  await writeFile(packaged, 'export default () => {}\n')
-  const path = resolveRuntimeQuiescenceExtensionPath({
+  const names = [
+    'pi-gui-runtime-quiescence',
+    'pi-gui-task-notify',
+    'pi-gui-ask',
+    'pi-gui-openai-fast-mode',
+    'pi-gui-history-navigation'
+  ]
+  const packaged = names.map((name) => join(root, `extensions/${name}/src/index.ts`))
+  for (const path of packaged) {
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, 'export default () => {}\n')
+  }
+  const paths = resolveRuntimeExtensionPaths({
     isPackaged: true,
     resourcesPath: root
   })
-  assert.equal(path, packaged)
+  assert.deepEqual(paths, packaged)
 })
 
 test('interpretQuiescenceStatusText correlates nonce and rejects malformed payloads', () => {
@@ -150,7 +180,7 @@ test('LinuxLocalRuntime.queryQuiescence correlates setStatus nonce and swallows 
 const { appendFileSync } = require('node:fs')
 const logPath = ${JSON.stringify(join(directory, 'rpc.jsonl'))}
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 let input = ''
@@ -267,7 +297,7 @@ test('LinuxLocalRuntime.queryQuiescence fails closed on timeout and malformed no
     executable,
     `#!/usr/bin/env node
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 let mode = process.env.PI_GUI_TEST_MODE || 'timeout'
@@ -385,7 +415,7 @@ test('queryQuiescence rejects new queries once stop starts and settles in-flight
     executable,
     `#!/usr/bin/env node
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 let input = ''
@@ -457,7 +487,7 @@ test('queryQuiescence isolates two concurrent nonces with interleaved replies', 
 const { appendFileSync } = require('node:fs')
 const logPath = ${JSON.stringify(join(directory, 'prompts.jsonl'))}
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 let input = ''
@@ -562,7 +592,7 @@ test('queryQuiescence settles runtime-not-running on natural exit after prompt a
     executable,
     `#!/usr/bin/env node
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 let input = ''
@@ -634,7 +664,7 @@ test('RuntimeHost hibernate fence blocks mutations and stale release stays fail-
     executable,
     `#!/usr/bin/env node
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 let input = ''
@@ -746,7 +776,7 @@ test('queryQuiescence rejects non-finite timeout before prompt', async (t) => {
     executable,
     `#!/usr/bin/env node
 if (process.argv[2] === '--version') {
-  process.stdout.write('0.80.10\\n')
+  process.stdout.write('0.83.0\\n')
   process.exit(0)
 }
 let input = ''

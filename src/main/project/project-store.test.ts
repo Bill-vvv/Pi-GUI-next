@@ -66,6 +66,52 @@ test('invalid config and missing project paths fail fast', async (t) => {
   await assert.rejects(store.validateProjectPath(join(root, 'missing')), /ENOENT/)
 })
 
+test('active Session selection persists without filesystem pointer revalidation', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-gui-project-store-active-session-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const stateHome = join(root, 'state')
+  const stateDirectory = join(stateHome, 'pi-gui-next')
+  const projectPath = join(root, 'missing-project')
+  const firstSessionFile = join(root, 'missing-first-session.jsonl')
+  const secondSessionFile = join(root, 'missing-second-session.jsonl')
+  const firstPointer = {
+    projectPath,
+    sessionFile: firstSessionFile,
+    sessionId: 'first-session',
+    sessionName: null
+  }
+  const secondPointer = {
+    projectPath,
+    sessionFile: secondSessionFile,
+    sessionId: 'second-session',
+    sessionName: null
+  }
+  await mkdir(stateDirectory, { recursive: true })
+  await writeFile(join(stateDirectory, 'state.json'), JSON.stringify({
+    version: 6,
+    sessions: [firstPointer, secondPointer],
+    activeSessionKeys: [{ projectPath, sessionKey: firstSessionFile }],
+    archivedSessionKeys: []
+  }))
+  const store = new ProjectStore({ configHome: join(root, 'config'), stateHome })
+
+  await store.setActiveSession(projectPath, secondSessionFile, secondPointer.sessionId)
+  assert.deepEqual(await store.loadSessionRegistry(projectPath), {
+    sessions: [firstPointer, secondPointer],
+    activeSessionKey: secondSessionFile
+  })
+
+  await assert.rejects(
+    store.setActiveSession(projectPath, secondSessionFile, 'different-session'),
+    /Session identity is not registered/
+  )
+  await assert.rejects(
+    store.setActiveSession(projectPath, join(root, 'missing-unregistered.jsonl'), 'missing'),
+    /Session identity is not registered/
+  )
+  assert.equal((await store.loadSessionRegistry(projectPath)).activeSessionKey, secondSessionFile)
+})
+
 test('restart continuation records claim once and never replay a claimed Session', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-gui-restart-continuations-'))
   t.after(() => rm(root, { recursive: true, force: true }))

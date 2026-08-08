@@ -52,19 +52,9 @@ function tool(
   }
 }
 
-test('presents supervisor requests as internal coordination rather than user alerts', () => {
-  assert.deepEqual(subagentCoordinationNoticePresentation(requestNotice('pending')), {
-    title: 'explorer 等待主代理',
-    meta: '等待回复',
-    tone: 'attention',
-    role: 'status'
-  })
-  assert.deepEqual(subagentCoordinationNoticePresentation(requestNotice('handled')), {
-    title: 'explorer 已获得所需信息',
-    meta: '已处理',
-    tone: 'quiet',
-    role: 'status'
-  })
+test('omits structured supervisor request lifecycles from the Timeline', () => {
+  assert.equal(subagentCoordinationNoticePresentation(requestNotice('pending')), null)
+  assert.equal(subagentCoordinationNoticePresentation(requestNotice('handled')), null)
 })
 
 test('reserves alert semantics for structured completion guards', () => {

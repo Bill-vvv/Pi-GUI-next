@@ -25,6 +25,14 @@ const workbenchSource = await readFile(
   new URL('../../composition/Workbench.tsx', import.meta.url),
   'utf8'
 )
+const workbenchCssSource = await readFile(
+  new URL('../../composition/workbench.css', import.meta.url),
+  'utf8'
+)
+const taskNavigatorSource = await readFile(
+  new URL('./TaskNavigator.tsx', import.meta.url),
+  'utf8'
+)
 const composerSource = await readFile(
   new URL('../composer/Composer.tsx', import.meta.url),
   'utf8'
@@ -107,12 +115,50 @@ test('Task ordering does not project one Session identity through stale Task wor
   assert.equal(ordered[0]?.taskKey, 'stale-running')
 })
 
-test('Workbench exposes mutually selected Project and Task tabs', () => {
-  assert.match(workbenchSource, /role="tablist" aria-label="工作类型"/)
-  assert.match(workbenchSource, /id="project-navigator-tab"[\s\S]*aria-selected=\{navigatorKind === 'project'\}/)
-  assert.match(workbenchSource, /id="task-navigator-tab"[\s\S]*aria-selected=\{navigatorKind === 'task'\}/)
-  assert.match(workbenchSource, /onSelectNavigator\('project'\)/)
-  assert.match(workbenchSource, /onSelectNavigator\('task'\)/)
+test('Workbench exposes independent Project and Task disclosure groups', () => {
+  assert.doesNotMatch(workbenchSource, /role="tablist"|role="tab"/)
+  assert.doesNotMatch(workbenchSource, /onSelectNavigator|workspace-navigator-tabs/)
+  assert.match(
+    workbenchSource,
+    /const \[projectNavigatorExpanded, setProjectNavigatorExpanded\] = useState\(true\)/
+  )
+  assert.match(
+    workbenchSource,
+    /const \[taskNavigatorExpanded, setTaskNavigatorExpanded\] = useState\(true\)/
+  )
+  assert.match(
+    workbenchSource,
+    /kind="project"[\s\S]*contentId="project-navigator-panel"[\s\S]*addLabel="添加项目"/
+  )
+  assert.match(
+    workbenchSource,
+    /kind="task"[\s\S]*contentId="task-navigator-panel"[\s\S]*addLabel="新建任务"/
+  )
+  assert.match(workbenchSource, /hidden=\{settingsOpen \|\| !projectNavigatorExpanded\}/)
+  assert.match(workbenchSource, /hidden=\{settingsOpen \|\| !taskNavigatorExpanded\}/)
+  assert.match(workbenchSource, /aria-expanded=\{expanded\}/)
+  assert.match(workbenchSource, /aria-controls=\{contentId\}/)
+  assert.match(
+    workbenchSource,
+    /className="workspace-navigator-group-action-slot"[\s\S]*className="workspace-navigator-group-add"/
+  )
+  assert.match(
+    workbenchCssSource,
+    /workspace-navigator-group-action-slot \{[\s\S]*margin-right: 0\.25rem;/
+  )
+  assert.match(
+    workbenchCssSource,
+    /data-kind='project'[\s\S]*workspace-navigator-group-add \{[\s\S]*opacity: 0;/
+  )
+  assert.match(
+    workbenchCssSource,
+    /workspace-navigator-group-action-slot:hover[\s\S]*workspace-navigator-group-add:not\(:disabled\)/
+  )
+  assert.doesNotMatch(workbenchSource, /className="add-project-entry/)
+})
+
+test('Task Navigator delegates task creation to the parent disclosure group', () => {
+  assert.doesNotMatch(taskNavigatorSource, /task-empty-create|onCreateTask/)
 })
 
 test('Task Composer disables Project-only path and generic Session creation capabilities', () => {
@@ -138,7 +184,6 @@ test('Task Navigator gives pending ask replies priority over lifecycle and unrea
     contextActionStatus: null,
     tokenCountFormat: 'full',
     onClearArchivedSessionPreview: () => {},
-    onCreateTask: () => Promise.resolve(),
     onActivateTask: () => Promise.resolve(),
     onOpenSession: () => {},
     onArchiveSession: () => Promise.resolve()
@@ -165,14 +210,14 @@ test('Task Navigator exposes a flat task list without hidden workspace paths', (
     contextActionStatus: null,
     tokenCountFormat: 'full',
     onClearArchivedSessionPreview: () => {},
-    onCreateTask: () => Promise.resolve(),
     onActivateTask: () => Promise.resolve(),
     onOpenSession: () => {},
     onArchiveSession: () => Promise.resolve()
   }))
 
-  assert.match(html, /role="tabpanel"/)
+  assert.doesNotMatch(html, /role="tabpanel"/)
+  assert.match(html, /aria-labelledby="task-navigator-panel-toggle"/)
   assert.match(html, />任务 1</)
-  assert.match(html, /aria-label="新建任务"/)
+  assert.doesNotMatch(html, /aria-label="新建任务"/)
   assert.doesNotMatch(html, /\/tmp\/task-1\.jsonl/)
 })

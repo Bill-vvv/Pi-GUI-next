@@ -47,12 +47,17 @@ export function SubagentTaskCapsule({
   const label = target.kind === 'notice'
     ? participant.agent.trim() || subagentParticipantLabel(participant)
     : subagentParticipantLabel(participant)
+  const model = participant.model?.trim() || null
+  const modelLabel = model === null ? null : compactSubagentModelLabel(model)
+  const tooltip = [participant.agent.trim(), model, participant.task.trim()]
+    .filter((value): value is string => value !== null && value.length > 0)
+    .join(' · ')
   const triggerData = subagentTaskTriggerData(target)
   return (
     <button
       className={`subagent-run-chip ${participant.status}${selected ? ' selected' : ''}`}
       type="button"
-      aria-label={`查看子任务：${label}`}
+      aria-label={`查看子任务：${label}${model === null ? '' : `，模型 ${model}`}`}
       aria-pressed={selected}
       aria-controls={selected ? SUBAGENT_TASK_DETAIL_ID : undefined}
       data-selected={selected ? 'true' : undefined}
@@ -60,7 +65,7 @@ export function SubagentTaskCapsule({
       data-subagent-tool-call-id={triggerData.toolCallId}
       data-subagent-participant-index={triggerData.participantIndex}
       data-subagent-notice-id={triggerData.noticeId}
-      data-tooltip={`${participant.agent}${participant.task ? ` · ${participant.task}` : ''}`}
+      data-tooltip={tooltip}
       onClick={(event) => onClick(event.currentTarget)}
     >
       <span className="subagent-run-chip-icon">
@@ -68,8 +73,15 @@ export function SubagentTaskCapsule({
       </span>
       <span className="subagent-run-chip-kind">Agent</span>
       <span className="subagent-run-chip-label">{label}</span>
+      {modelLabel === null ? null : (
+        <span className="subagent-run-chip-model">· {modelLabel}</span>
+      )}
     </button>
   )
+}
+
+function compactSubagentModelLabel(model: string): string {
+  return model.split('/').at(-1) || model
 }
 
 export function SubagentTaskDetail({

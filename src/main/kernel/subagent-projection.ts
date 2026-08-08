@@ -1,5 +1,4 @@
 import type {
-  KernelConversationEntry,
   KernelSubagentCoordination,
   KernelSubagentNoticeEntry,
   KernelSubagentOutputReference,
@@ -9,6 +8,7 @@ import type {
   KernelSubagentUsage
 } from '../../shared/kernel-contract.ts'
 import { isRecord } from '../utils/guards.ts'
+import type { ConversationProjectionSink } from './conversation-projection-sink.ts'
 
 const MAX_DISPLAY_CHARS = 30_000
 const MAX_SUBAGENT_TEXT_CHARS = 6_000
@@ -71,11 +71,11 @@ export function projectSubagentRun(
 }
 
 /**
- * Project subagent-owned custom messages.
- * Returns updated entries when the custom type is subagent-owned; null otherwise.
+ * Project subagent-owned custom messages into the caller-owned container.
+ * Returns true when the custom type is subagent-owned, even if it was ignored.
  */
 export function projectSubagentCustomMessage(
-  entries: KernelConversationEntry[],
+  sink: ConversationProjectionSink,
   args: {
     customType: string | null
     content: unknown
@@ -84,52 +84,54 @@ export function projectSubagentCustomMessage(
     timestamp: number
     historicalIdentity?: string
   }
-): KernelConversationEntry[] | null {
+): boolean {
   const { customType, content, details, display, timestamp, historicalIdentity } = args
 
   if (customType === SUBAGENT_SLASH_RESULT_TYPE) {
     const requestId = slashRequestId(details)
     const text = limitText(textFromContent(content)).text
-    if (requestId === null || text.trim().length === 0) return entries
-    const entry: KernelSubagentNoticeEntry = {
-      id: `subagent-notice:slash:${requestId}`,
-      kind: 'subagent-notice',
-      noticeType: 'command',
-      text,
-      timestamp
+    if (requestId !== null && text.trim().length > 0) {
+      sink.upsert({
+        id: `subagent-notice:slash:${requestId}`,
+        kind: 'subagent-notice',
+        noticeType: 'command',
+        text,
+        timestamp
+      })
     }
-    return upsert(entries, entry)
+    return true
   }
 
   // Non-display customs are not claimed here so the caller can apply the shared
   // display gate before advisor / other projections.
-  if (display !== true) return null
+  if (display !== true) return false
 
   if (customType === SUBAGENT_WATCHDOG_TYPE) {
     const warning = projectWatchdogWarning(details)
-    if (warning === null) return entries
-    const entry: KernelSubagentNoticeEntry = {
-      id: historicalIdentity === undefined
-        ? `subagent-notice:watchdog:${timestamp}`
-        : `subagent-notice:${historicalIdentity}`,
-      kind: 'subagent-notice',
-      noticeType: warning.severity === 'blocker'
-        ? 'watchdog-blocker'
-        : 'watchdog-concern',
-      text: [
-        warning.summary,
-        `**证据：** ${warning.evidence}`,
-        `**建议：** ${warning.recommendedAction}`
-      ].join('\n\n'),
-      timestamp
+    if (warning !== null) {
+      sink.upsert({
+        id: historicalIdentity === undefined
+          ? `subagent-notice:watchdog:${timestamp}`
+          : `subagent-notice:${historicalIdentity}`,
+        kind: 'subagent-notice',
+        noticeType: warning.severity === 'blocker'
+          ? 'watchdog-blocker'
+          : 'watchdog-concern',
+        text: [
+          warning.summary,
+          `**证据：** ${warning.evidence}`,
+          `**建议：** ${warning.recommendedAction}`
+        ].join('\n\n'),
+        timestamp
+      })
     }
-    return upsert(entries, entry)
+    return true
   }
 
-  if (customType === null || !(customType in SUBAGENT_NOTICE_TYPES)) return null
+  if (customType === null || !(customType in SUBAGENT_NOTICE_TYPES)) return false
 
   const text = limitText(textFromContent(content)).text
-  if (text.trim().length === 0) return entries
+  if (text.trim().length === 0) return true
   const noticeType = SUBAGENT_NOTICE_TYPES[customType as keyof typeof SUBAGENT_NOTICE_TYPES]
   const projectedCoordination = projectSubagentCoordination(
     noticeType,
@@ -139,7 +141,7 @@ export function projectSubagentCustomMessage(
   const completion = noticeType === 'completion'
     ? projectSubagentCompletion(text)
     : undefined
-  const entry: KernelSubagentNoticeEntry = {
+  upsertSubagentNotice(sink, {
     id: projectedCoordination?.id ?? (historicalIdentity === undefined
       ? `subagent-notice:${customType}:${timestamp}`
       : `subagent-notice:${historicalIdentity}`),
@@ -155,42 +157,34 @@ export function projectSubagentCustomMessage(
     ...(projectedCoordination === null
       ? {}
       : { coordination: projectedCoordination.coordination })
-  }
-  return upsertSubagentNotice(entries, entry)
+  })
+  return true
 }
 
 export function resolveSubagentSupervisorRequest(
-  entries: KernelConversationEntry[],
+  sink: ConversationProjectionSink,
   toolName: string,
   argsValue: unknown,
   resolvedAt: number
-): KernelConversationEntry[] {
+): void {
   const name = toolName.trim().toLowerCase().split(/[.:/]/u).at(-1)
-  if (name !== 'subagent_supervisor' && name !== 'intercom') return entries
+  if (name !== 'subagent_supervisor' && name !== 'intercom') return
   const args = parseRecordValue(argsValue)
-  if (args?.action !== 'reply') return entries
+  if (args?.action !== 'reply') return
   const requestId = boundedStringValue(args.replyTo, MAX_CUSTOM_ID_CHARS)
-  if (requestId === null) return entries
+  if (requestId === null) return
 
-  let changed = false
-  const nextEntries = entries.map((entry) => {
-    if (
-      entry.kind !== 'subagent-notice' ||
-      entry.noticeType !== 'request' ||
-      entry.coordination?.requestId !== requestId ||
-      entry.coordination.status === 'handled'
-    ) return entry
-    changed = true
-    return {
-      ...entry,
-      coordination: {
-        ...entry.coordination,
-        status: 'handled' as const,
-        resolvedAt
-      }
+  const entry = sink.findSubagentRequest(requestId)
+  if (entry?.coordination?.status === 'handled') return
+  if (entry?.coordination === undefined) return
+  sink.upsert({
+    ...entry,
+    coordination: {
+      ...entry.coordination,
+      status: 'handled',
+      resolvedAt
     }
   })
-  return changed ? nextEntries : entries
 }
 
 function slashRequestId(value: unknown): string | null {
@@ -296,38 +290,35 @@ function cleanSupervisorRequestText(value: string): string {
 }
 
 function upsertSubagentNotice(
-  entries: KernelConversationEntry[],
+  sink: ConversationProjectionSink,
   entry: KernelSubagentNoticeEntry
-): KernelConversationEntry[] {
+): void {
   const coordination = entry.coordination
-  if (coordination === undefined) return upsert(entries, entry)
+  if (coordination === undefined) {
+    sink.upsert(entry)
+    return
+  }
 
-  let nextEntries = entries
   if (entry.noticeType === 'request') {
-    nextEntries = entries.filter((candidate) =>
-      candidate.kind !== 'subagent-notice' ||
-      candidate.noticeType !== 'control' ||
-      candidate.coordination?.reason !== 'supervisor_request' ||
-      !sameSubagentCoordinationTarget(candidate.coordination, coordination)
+    sink.removeSubagentSupervisorControlsFor(
+      coordination.runId,
+      coordination.participantIndex
     )
   } else if (
     entry.noticeType === 'control' &&
     coordination.reason === 'supervisor_request' &&
-    entries.some((candidate) =>
-      candidate.kind === 'subagent-notice' &&
-      candidate.noticeType === 'request' &&
-      candidate.coordination !== undefined &&
-      sameSubagentCoordinationTarget(candidate.coordination, coordination)
-    )
+    sink.hasSubagentRequestFor(coordination.runId, coordination.participantIndex)
   ) {
-    return entries
+    return
   }
 
-  const existing = nextEntries.find((candidate): candidate is KernelSubagentNoticeEntry =>
-    candidate.kind === 'subagent-notice' && candidate.id === entry.id
-  )
-  if (existing?.coordination?.status === 'handled' && coordination.status === 'pending') {
-    return upsert(nextEntries, {
+  const existing = sink.findById(entry.id)
+  if (
+    existing?.kind === 'subagent-notice' &&
+    existing.coordination?.status === 'handled' &&
+    coordination.status === 'pending'
+  ) {
+    sink.upsert({
       ...entry,
       coordination: {
         ...coordination,
@@ -335,15 +326,9 @@ function upsertSubagentNotice(
         resolvedAt: existing.coordination.resolvedAt
       }
     })
+    return
   }
-  return upsert(nextEntries, entry)
-}
-
-function sameSubagentCoordinationTarget(
-  left: KernelSubagentCoordination,
-  right: KernelSubagentCoordination
-): boolean {
-  return left.runId === right.runId && left.participantIndex === right.participantIndex
+  sink.upsert(entry)
 }
 
 function projectSubagentCompletion(text: string): KernelSubagentParticipant {
@@ -675,17 +660,6 @@ function subagentStatus(
   const exitCode = numberValue(result?.exitCode)
   if (exitCode !== null) return exitCode === 0 ? 'completed' : 'failed'
   return 'pending'
-}
-
-function upsert(
-  entries: KernelConversationEntry[],
-  entry: KernelConversationEntry
-): KernelConversationEntry[] {
-  const index = entries.findIndex((candidate) => candidate.id === entry.id)
-  if (index === -1) return [...entries, entry]
-  const nextEntries = entries.slice()
-  nextEntries[index] = entry
-  return nextEntries
 }
 
 function textFromContent(value: unknown): string {
