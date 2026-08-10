@@ -1,0 +1,203 @@
+# P4 Cross-platform Desktop Plan
+
+> Status: Windows Bootstrap In Progress
+> Baseline commit: `d4f524784a8abd91f0e9f5f33066c8f8e65c3f90`
+> Last updated: 2026-08-10
+> Scope owner: the main Agent remains the integration and acceptance owner
+
+## 1. Goal
+
+P4 brings the existing Linux Pi GUI product to three native desktop targets without splitting it into separate products:
+
+| Platform | Minimum supported system | Architecture | First public artifact |
+| --- | --- | --- | --- |
+| Linux | Existing Arch/Linux baseline | x64 | AppImage |
+| Windows | Windows 11 | x64 | NSIS installer |
+| macOS | macOS 14 Sonoma | Apple Silicon arm64 | DMG |
+
+The implementation order is fixed:
+
+1. Windows 11 x64.
+2. macOS 14+ arm64.
+3. Evaluate WSL only after native Windows is stable and a real need exists.
+
+Windows 10, Windows 32-bit, Windows ARM64, Intel/universal macOS, application stores, automatic updates and WSL are outside the first P4 release.
+
+## 2. Relationship with P3
+
+P3 remains the primary product-function track. P4 advances in parallel through an isolated worktree and stays one accepted P3 checkpoint behind when shared code is changing.
+
+```text
+P3 implements and accepts checkpoint N
+→ pushes the stable checkpoint
+→ P4 synchronizes checkpoint N
+→ classifies Windows impact
+→ changes or verifies Windows as required
+```
+
+Rules:
+
+- The canonical `/home/vvv/Projects/pi-gui-next` worktree remains owned by P3.
+- P4 uses an isolated local worktree and branch.
+- P4 does not write into a dirty canonical worktree.
+- Shared Main, preload, Kernel or Runtime changes are integrated only at an explicit foreground maintenance boundary after the canonical GUI/dev supervisor is stopped and the source-maintenance lock is acquired.
+- No unfinished P4 commit enters P3 automatically. The main Agent reviews, integrates and validates it.
+- macOS implementation does not begin until the Windows platform boundary is stable; macOS environment preparation may happen earlier.
+
+## 3. Capability ownership
+
+P4 validates complete product capability chains rather than only Renderer files.
+
+### GUI/Electron Host
+
+- Renderer, preload, Electron Main and Kernel.
+- Pi process discovery, launch, stop and recovery.
+- Project and application-state storage.
+- File, path, Git, notification, font and memory integration.
+- Native packaging and release gates.
+
+### App-owned Runtime Extensions
+
+The packaged Runtime automatically loads and P4 must validate:
+
+- `pi-gui-ask`
+- `pi-gui-history-navigation`
+- `pi-gui-openai-fast-mode`
+- `pi-gui-runtime-quiescence`
+- `pi-gui-task-notify`
+
+Platform-neutral extensions may need no source change, but still require native loading and complete-chain verification. Extensions that use paths, commands, permissions, IPC or native dependencies require platform adaptation.
+
+### Adapted upstream Packages
+
+- `pi-subagents`
+- Magic Context
+
+P4 distinguishes GUI adapter defects from upstream Package portability defects. It does not hide an unsupported upstream path with a silent fallback.
+
+`pi-gui-multi-advisor` is retired from the active product surface; P4 only preserves valid historical Session projection. `pi-subagent-workspace-vcs` remains outside the core release gate unless it is separately admitted as a product capability.
+
+## 4. External dependency policy
+
+Linux, Windows and macOS all use user-installed Pi, Node and Git. AppImage, NSIS and DMG do not bundle a second Pi Runtime, Node installation or Git distribution.
+
+Dependency discovery is fail-fast:
+
+1. Validate a saved explicit executable path.
+2. If no explicit path is saved, probe the current process `PATH`.
+3. If unresolved, show dependency setup and let the user select the executable explicitly.
+4. Main validates the selected ordinary file and the exact supported Pi version.
+5. Persist the platform-local path.
+6. If a saved path becomes invalid, report the real error and do not silently select another installation.
+
+Executable paths, Project absolute paths, application directories, process identities, notification endpoints and credentials are device-local data.
+
+## 5. Data scope
+
+P4 provides independent local operation on each device. It does not provide cross-device Session or application-state synchronization.
+
+Cross-device synchronization is a desired future capability and must be planned separately, including logical Project identity, transcript conflicts, path mapping, Package/Extension configuration and credential isolation. P4 does not add speculative synchronization abstractions.
+
+## 6. Delivery slices
+
+### P4-W0 — Linux preparation and Windows baseline
+
+- Maintain this plan and capability ledger.
+- Identify current Linux bindings.
+- Add only platform behavior required by the first real Windows path.
+- Run typecheck, build and focused tests on Linux.
+- On the Windows machine, install dependencies, clone the same repository, build, package and record the first native failure.
+
+### P4-W1 — Windows core Runtime
+
+- Discover and validate external Pi, Node and Git.
+- Open a local Project.
+- Start or resume one Pi Session.
+- Complete prompt and streaming response.
+- Stop the Runtime and exit without residual owned processes.
+
+### P4-W2 — Windows product parity
+
+- Project, Task and multi-Session workflows.
+- File and Git workflows.
+- App-owned Runtime Extensions.
+- `pi-subagents` and Magic Context.
+- Notifications, file opening, settings and recovery.
+
+### P4-W3 — Windows internal artifact
+
+- Unsigned Windows 11 x64 NSIS package.
+- Installation, upgrade, uninstall and real packaged-app gate.
+
+An unsigned artifact may prove internal adaptation but is not public-release evidence.
+
+### P4-W4 — Windows public release
+
+- Select and configure Windows code signing.
+- Verify the signed installer and installed application.
+
+### P4-M1 through P4-M3 — macOS adaptation and release
+
+- Reuse the proven narrow platform boundaries.
+- Produce an internal unsigned arm64 app/DMG.
+- Add Developer ID signing, Hardened Runtime, notarization and stapling before public release.
+- Gate macOS 14 and the latest supported macOS release.
+
+### P4-R — Unified three-platform release
+
+The same version and source commit produce native Linux x64, Windows 11 x64 and macOS 14+ arm64 artifacts. Each artifact is built and verified on its native operating system. Platform-specific proof is not inferred from another platform.
+
+## 7. Evidence vocabulary
+
+Every conclusion must state its evidence level:
+
+- `committed_source`: present in a commit.
+- `local_source_snapshot`: present only in an uncommitted or isolated source snapshot.
+- `built_artifact`: included in a produced artifact.
+- `verified_current`: exercised successfully in the current native environment.
+- `released/deployed`: delivered through the intended release path.
+
+Static Linux tests cannot mark Windows behavior `verified_current`.
+
+## 8. Cross-platform capability ledger
+
+Every discovered platform difference remains in this table after it is resolved. A blank cell is not an accepted status.
+
+Status values:
+
+- `identified`
+- `planned`
+- `local_source_snapshot`
+- `committed_source`
+- `built_artifact`
+- `verified_current`
+- `deferred`
+- `not-applicable`
+
+| Capability | Owner | Linux state | Windows state | macOS state | Synchronization trigger | Native validation |
+| --- | --- | --- | --- | --- | --- | --- |
+| Pi executable discovery | Main Runtime | `verified_current`: `pi` in PATH or `~/.local/bin/pi` | `local_source_snapshot`: Linux-tested PATH/PATHEXT ordering plus explicit `.exe`/`.com`/`.bat`/`.cmd` validation; not yet run on Windows | `identified`: PATH and explicit selection; Finder environment must be checked | Pi installation method, supported Pi version or dependency settings change | Resolve the intended installation and reject missing/ambiguous/invalid paths |
+| Pi command invocation | Main Runtime and command callers | `verified_current`: direct executable spawn | `identified`: npm `pi.cmd` cannot be assumed to have the same direct-spawn contract as a native executable | `planned`: direct executable spawn must be verified | Any Pi command caller or process-launch contract changes | Version probe, Runtime RPC, Package commands, trust and provider probes |
+| Exact Pi version | Main Runtime | `verified_current`: `0.83.0` | `planned` | `planned` | Pi dependency upgrade | Exact version succeeds; every other or malformed version fails clearly |
+| Application data directories | Main stores | XDG config/state | `identified`: Windows application-data directories | `identified`: Application Support and platform state directory | Store schema or file-location change | Persist, restart, upgrade and preserve user data |
+| Runtime process lifecycle | Main Runtime and Kernel | POSIX signals and Linux process inspection | `identified`: Windows process-tree termination and ownership | `identified`: POSIX behavior still requires native verification | Runtime start, abort, crash, hibernation or shutdown changes | Start, abort, crash, restart, close and no residual owned process |
+| Project path safety | Main Project services | `/proc`, symlink and Linux descriptor rules | `identified`: drive, UNC, junction and reparse-point rules | `identified`: symlink and descriptor strategy | Search, trust or filesystem boundary changes | Native race/link/path security probes |
+| Git file safety | Main Git service | Linux `O_NOFOLLOW` contract | `identified` | `identified` | Git diff/read/mutation contract changes | Native path and link safety plus real Git workflow |
+| Task notification | Extension + Main Broker + Session activation | Unix socket and Linux presenter | `identified`: transport and Windows notification presenter | `identified`: transport and macOS notification presenter | Notification payload, token, identity or click behavior changes | Deliver, click and activate the exact Project/Task/Session |
+| System fonts | Electron Main | `fc-list` | `identified` | `identified` | Font settings or enumeration changes | Enumerate, select and render an installed font |
+| Process memory evidence | Main diagnostics + release gate | Linux `/proc` metrics | `identified` | `identified` | Runtime ownership or release-budget change | Native metric with explicitly documented semantics |
+| App-owned Extensions | Extension + Runtime + GUI adapter | `verified_current` in existing Linux gates | `planned` | `planned` | Extension protocol, packaging or activation change | Packaged loading plus complete capability-chain test |
+| `pi-subagents` | Upstream Package + GUI adapter | Existing Linux integration | `planned` | `planned` | Package version or GUI projection change | Install/load/run/project status and native dependency checks |
+| Magic Context | Upstream Package + GUI adapter | Existing Linux integration | `planned` | `planned` | Package version, setup/doctor or GUI status change | Setup, doctor, Session loading and persistence |
+| Packaging | electron-builder + release scripts | AppImage | `planned`: NSIS x64 | `planned`: DMG arm64 | Electron, builder, native dependency or resource change | Build and exercise the installed native artifact |
+| Signing | Release process | Existing Linux release policy | `deferred`: decide before public release | `deferred`: Developer ID required before public release | Release credential or distribution-policy change | Verify the signed/notarized final artifact |
+
+## 9. Change review rule
+
+Every later feature or dependency change checks the ledger and records one outcome for each affected platform:
+
+- `requires-change`: platform code must change.
+- `review-only`: no code change, but native verification is required.
+- `not-applicable`: the capability does not apply, with a recorded reason.
+
+Code and ledger updates are one completion unit. A platform adaptation is not complete when its implementation location, affected platforms, synchronization trigger or native validation requirement is unknown.

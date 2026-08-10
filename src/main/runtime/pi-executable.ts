@@ -1,6 +1,6 @@
 import { accessSync, constants, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { delimiter, join, resolve } from 'node:path'
+import { delimiter, extname, join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 
 import { errorMessage } from '../utils/errors.ts'
@@ -10,11 +10,14 @@ export const SUPPORTED_PI_VERSION = '0.83.0'
 const DEFAULT_VERSION_TIMEOUT_MS = 5_000
 const MAX_STDERR_BYTES = 4_096
 const MAX_STDOUT_BYTES = 4_096
+const WINDOWS_RUNNABLE_EXTENSIONS = new Set(['.com', '.exe', '.bat', '.cmd'])
 
 export interface ResolvePiExecutableOptions {
   explicitPath?: string
   path?: string
   homeDir?: string
+  platform?: NodeJS.Platform
+  pathExt?: string
 }
 
 export interface CheckPiVersionOptions {
@@ -24,35 +27,45 @@ export interface CheckPiVersionOptions {
 }
 
 export function resolvePiExecutable(options: ResolvePiExecutableOptions = {}): string {
+  const platform = options.platform ?? process.platform
+
   if (options.explicitPath !== undefined) {
     if (options.explicitPath.trim().length === 0) {
       throw new Error('The explicit Pi executable path is empty. Choose the Pi executable file and try again.')
     }
 
     const executable = resolve(options.explicitPath)
-    assertExplicitExecutable(executable)
+    assertExplicitExecutable(executable, platform)
     return executable
   }
 
   const pathValue = options.path ?? process.env.PATH ?? ''
+  const executableNames =
+    platform === 'win32' ? windowsPiExecutableNames(options.pathExt ?? process.env.PATHEXT) : ['pi']
+  const pathDelimiter = platform === 'win32' ? ';' : delimiter
 
-  for (const directory of pathValue.split(delimiter)) {
+  for (const directory of pathValue.split(pathDelimiter)) {
     if (directory.length === 0) {
       continue
     }
 
-    const candidate = resolve(join(directory, 'pi'))
-    if (isExecutableFile(candidate)) {
-      return candidate
+    for (const executableName of executableNames) {
+      const candidate = resolve(join(directory, executableName))
+      if (isRunnableFile(candidate, platform)) {
+        return candidate
+      }
     }
   }
 
-  const userLocalExecutable = resolve(options.homeDir ?? homedir(), '.local/bin/pi')
-  if (isExecutableFile(userLocalExecutable)) {
-    return userLocalExecutable
+  if (platform !== 'win32') {
+    const userLocalExecutable = resolve(options.homeDir ?? homedir(), '.local/bin/pi')
+    if (isRunnableFile(userLocalExecutable, platform)) {
+      return userLocalExecutable
+    }
   }
 
-  throw new Error('Pi was not found in the current PATH or ~/.local/bin. Provide the path to the Pi executable and try again.')
+  const searchedLocations = platform === 'win32' ? 'the current PATH using PATHEXT' : 'the current PATH or ~/.local/bin'
+  throw new Error(`Pi was not found in ${searchedLocations}. Provide the path to the Pi executable and try again.`)
 }
 
 export async function checkPiVersion(options: CheckPiVersionOptions): Promise<string> {
@@ -164,7 +177,7 @@ export async function checkPiVersion(options: CheckPiVersionOptions): Promise<st
   })
 }
 
-function assertExplicitExecutable(executable: string): void {
+function assertExplicitExecutable(executable: string, platform: NodeJS.Platform): void {
   let stats
 
   try {
@@ -177,6 +190,15 @@ function assertExplicitExecutable(executable: string): void {
     throw new Error(`The explicit Pi executable is not a file: ${executable}. Choose the Pi executable file.`)
   }
 
+  if (platform === 'win32') {
+    if (!WINDOWS_RUNNABLE_EXTENSIONS.has(extname(executable).toLowerCase())) {
+      throw new Error(
+        `The explicit Pi executable is not a supported Windows command file: ${executable}. Choose a .exe, .com, .bat, or .cmd file.`
+      )
+    }
+    return
+  }
+
   try {
     accessSync(executable, constants.X_OK)
   } catch {
@@ -184,12 +206,34 @@ function assertExplicitExecutable(executable: string): void {
   }
 }
 
-function isExecutableFile(candidate: string): boolean {
+function isRunnableFile(candidate: string, platform: NodeJS.Platform): boolean {
   try {
-    return statSync(candidate).isFile() && (accessSync(candidate, constants.X_OK), true)
+    if (!statSync(candidate).isFile()) {
+      return false
+    }
+
+    if (platform === 'win32') {
+      return WINDOWS_RUNNABLE_EXTENSIONS.has(extname(candidate).toLowerCase())
+    }
+
+    accessSync(candidate, constants.X_OK)
+    return true
   } catch {
     return false
   }
+}
+
+function windowsPiExecutableNames(pathExt: string | undefined): string[] {
+  const extensions = pathExt
+    ?.split(';')
+    .map((extension) => extension.trim().toLowerCase())
+    .filter((extension, index, values) => WINDOWS_RUNNABLE_EXTENSIONS.has(extension) && values.indexOf(extension) === index)
+
+  if (extensions === undefined || extensions.length === 0) {
+    throw new Error('Windows PATHEXT does not contain a supported executable extension for Pi (.exe, .com, .bat, or .cmd).')
+  }
+
+  return extensions.map((extension) => `pi${extension}`)
 }
 
 function stderrDiagnostic(stderr: Buffer, truncated: boolean): string {

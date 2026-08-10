@@ -18,6 +18,12 @@ function writeExecutable(directory: string, body = ''): string {
   return executable
 }
 
+function writeWindowsCommand(directory: string, extension: '.cmd' | '.exe'): string {
+  const executable = join(directory, `pi${extension}`)
+  writeFileSync(executable, '', { mode: 0o644 })
+  return executable
+}
+
 test('an explicit executable takes priority over PATH', (t) => {
   const root = temporaryDirectory(t)
   const explicitDirectory = join(root, 'explicit')
@@ -40,6 +46,64 @@ test('PATH directories are checked in order', (t) => {
   writeExecutable(secondDirectory)
 
   assert.equal(resolvePiExecutable({ path: `${firstDirectory}:${secondDirectory}` }), resolve(first))
+})
+
+test('Windows PATH directories are checked before later directories', (t) => {
+  const root = temporaryDirectory(t)
+  const firstDirectory = join(root, 'first')
+  const secondDirectory = join(root, 'second')
+  mkdirSync(firstDirectory)
+  mkdirSync(secondDirectory)
+  const first = writeWindowsCommand(firstDirectory, '.cmd')
+  writeWindowsCommand(secondDirectory, '.exe')
+
+  assert.equal(
+    resolvePiExecutable({
+      path: `${firstDirectory};${secondDirectory}`,
+      platform: 'win32',
+      pathExt: '.EXE;.CMD'
+    }),
+    resolve(first)
+  )
+})
+
+test('Windows PATHEXT order selects the first matching command type', (t) => {
+  const directory = temporaryDirectory(t)
+  const command = writeWindowsCommand(directory, '.cmd')
+  writeWindowsCommand(directory, '.exe')
+
+  assert.equal(
+    resolvePiExecutable({ path: directory, platform: 'win32', pathExt: '.CMD;.EXE' }),
+    resolve(command)
+  )
+})
+
+test('an explicit Windows command file does not require a POSIX execute bit', (t) => {
+  const directory = temporaryDirectory(t)
+  const command = writeWindowsCommand(directory, '.cmd')
+
+  assert.equal(resolvePiExecutable({ explicitPath: command, platform: 'win32' }), resolve(command))
+})
+
+test('Windows resolution does not use the POSIX user-local fallback', (t) => {
+  const root = temporaryDirectory(t)
+  const directory = join(root, '.local/bin')
+  mkdirSync(directory, { recursive: true })
+  writeExecutable(directory)
+
+  assert.throws(
+    () => resolvePiExecutable({ path: '', homeDir: root, platform: 'win32', pathExt: '.EXE;.CMD' }),
+    /not found.*PATH using PATHEXT/i
+  )
+})
+
+test('Windows resolution fails fast when PATHEXT has no supported command type', (t) => {
+  const directory = temporaryDirectory(t)
+
+  assert.throws(
+    () => resolvePiExecutable({ path: directory, platform: 'win32', pathExt: '.PS1' }),
+    /PATHEXT.*supported executable extension/i
+  )
 })
 
 test('the user-local Pi install is found when Electron PATH omits it', (t) => {
