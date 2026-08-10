@@ -1,9 +1,8 @@
 import { accessSync, constants, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, extname, join, resolve } from 'node:path'
-import { spawn } from 'node:child_process'
-
 import { errorMessage } from '../utils/errors.ts'
+import { spawnPiCommand } from './pi-spawn.ts'
 
 export const SUPPORTED_PI_VERSION = '0.83.0'
 
@@ -76,10 +75,10 @@ export async function checkPiVersion(options: CheckPiVersionOptions): Promise<st
   }
 
   return new Promise<string>((resolveVersion, rejectVersion) => {
-    let child: ReturnType<typeof spawn>
+    let child: ReturnType<typeof spawnPiCommand>
 
     try {
-      child = spawn(options.executable, ['--version'], {
+      child = spawnPiCommand(options.executable, ['--version'], {
         cwd: options.cwd,
         shell: false,
         stdio: ['ignore', 'pipe', 'pipe']

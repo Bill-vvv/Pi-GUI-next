@@ -92,6 +92,7 @@
   },
   "dependencies": {
     "@tanstack/react-virtual": "3.14.9",
+    "cross-spawn": "7.0.6",
     "ignore": "7.0.5",
     "katex": "0.16.47",
     "proper-lockfile": "4.1.2",
@@ -107,6 +108,7 @@
     "yaml": "2.8.1"
   },
   "devDependencies": {
+    "@types/cross-spawn": "6.0.6",
     "@types/node": "26.1.1",
     "@types/proper-lockfile": "4.1.4",
     "@types/react": "19.2.17",

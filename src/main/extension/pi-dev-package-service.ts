@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -12,6 +11,7 @@ import type {
   KernelPiDevPackage
 } from '../../shared/kernel-contract.ts'
 import { resolvePiExecutable } from '../runtime/pi-executable.ts'
+import { spawnPiCommand } from '../runtime/pi-spawn.ts'
 import { resolvePiAgentDir } from './pi-extension-store.ts'
 
 const CATALOG_URL = 'https://pi.dev/packages'
@@ -583,7 +583,7 @@ async function runPiCommand(
   options: PiDevCommandOptions
 ): Promise<void> {
   await new Promise<void>((resolveCommand, rejectCommand) => {
-    const child = spawn(executable, [...args], {
+    const child = spawnPiCommand(executable, [...args], {
       cwd: options.cwd,
       shell: options.shell,
       env: options.env,

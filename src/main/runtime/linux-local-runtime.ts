@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { isAbsolute } from 'node:path'
 
 import {
@@ -22,6 +22,7 @@ import {
   resolvePiExecutable,
   type ResolvePiExecutableOptions
 } from './pi-executable.ts'
+import { spawnPiCommand } from './pi-spawn.ts'
 import { errorMessage } from '../utils/errors.ts'
 import type { SubagentSettings } from '../../shared/kernel-contract.ts'
 import {
@@ -335,7 +336,7 @@ export class LinuxLocalRuntime implements RuntimeHost {
         ? []
         : [this.options.quiescenceExtensionPath])
     ])]
-    const child = spawn(
+    const child = spawnPiCommand(
       executable,
       buildPiRpcArguments(
         this.options.sessionFile,
