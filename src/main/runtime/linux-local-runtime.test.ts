@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -47,6 +47,71 @@ test('runtime does not add legacy subagent arguments', () => {
     }),
     /token is invalid/u
   )
+})
+
+test('runtime rejects a workspace that no longer resolves to its registered canonical path', {
+  skip: process.platform !== 'linux'
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-runtime-workspace-drift-'))
+  t.after(async () => rm(root, { recursive: true, force: true }))
+  const workspace = join(root, 'workspace')
+  const replacement = join(root, 'replacement')
+  await mkdir(workspace)
+  await mkdir(replacement)
+
+  const runtime = new LinuxLocalRuntime({
+    cwd: workspace,
+    explicitExecutable: join(root, 'unused-pi')
+  })
+  await rm(workspace, { recursive: true })
+  await symlink(replacement, workspace)
+
+  await assert.rejects(
+    runtime.start(),
+    /Runtime workspace path no longer resolves canonically/u
+  )
+  assert.equal(runtime.getRpcPid(), null)
+})
+
+test('runtime revalidates the workspace after the version probe and before RPC spawn', {
+  skip: process.platform !== 'linux'
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-runtime-workspace-version-drift-'))
+  t.after(async () => rm(root, { recursive: true, force: true }))
+  const workspace = join(root, 'workspace')
+  const replacement = join(root, 'replacement')
+  const executable = join(root, 'pi')
+  const rpcMarker = join(root, 'rpc-started')
+  await mkdir(workspace)
+  await mkdir(replacement)
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+const { rmSync, symlinkSync, writeFileSync } = require('node:fs')
+const workspace = ${JSON.stringify(workspace)}
+const replacement = ${JSON.stringify(replacement)}
+const rpcMarker = ${JSON.stringify(rpcMarker)}
+if (process.argv[2] === '--version') {
+  rmSync(workspace, { recursive: true })
+  symlinkSync(replacement, workspace, 'dir')
+  process.stdout.write('0.83.0\\n')
+  process.exit(0)
+}
+writeFileSync(rpcMarker, 'started')
+`,
+    { mode: 0o755 }
+  )
+
+  const runtime = new LinuxLocalRuntime({ cwd: workspace, explicitExecutable: executable })
+  await assert.rejects(
+    runtime.start(),
+    /Runtime workspace path no longer resolves canonically/u
+  )
+  await assert.rejects(access(rpcMarker), (error: unknown) => {
+    assert.equal((error as NodeJS.ErrnoException).code, 'ENOENT')
+    return true
+  })
+  assert.equal(runtime.getRpcPid(), null)
 })
 
 test('runtime controls fast extension loading and merges it with subagent depth', async (t) => {

@@ -77,7 +77,10 @@ import { PiProviderAuth } from './provider/pi-provider-auth.ts'
 import { fetchLiteLlmModelPricing } from './provider/litellm-model-pricing.ts'
 import { testProviderConnection } from './provider/provider-connection-test.ts'
 import { ProjectStore } from './project/project-store.ts'
-import { searchProjectPaths } from './project/project-path-search.ts'
+import {
+  assertProjectPathSearchAvailable,
+  searchProjectPaths
+} from './project/project-path-search.ts'
 import { readSessionMetadata, readSessionStatistics } from './project/session-statistics.ts'
 import { readSessionMessagesTailFirst } from './project/session-transcript-tail.ts'
 import { readSessionActivityAt, readSessionMessages } from './project/session-transcript.ts'
@@ -190,6 +193,7 @@ async function startApplication(): Promise<void> {
     rendererFilePath: join(mainBundleDirectory, '../renderer/index.html')
   })
   const projectStore = new ProjectStore()
+  await projectStore.validatePlatformStorage()
   projectStoreForShutdown = projectStore
   const general = await projectStore.loadGeneral()
   const restartContinuations = general.autoContinueInterruptedTasks
@@ -668,6 +672,7 @@ async function startApplication(): Promise<void> {
         return { saved: true }
       }
       case 'kernel.search-project-paths': {
+        assertProjectPathSearchAvailable()
         const project = configuredUserProject(kernel.getState())
         const canonicalPath = await projectStore.validateProjectPath(project.path)
         if (canonicalPath !== project.path) {

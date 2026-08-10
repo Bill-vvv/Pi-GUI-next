@@ -2,7 +2,7 @@ import { access, chmod, mkdir, open, readFile, realpath, rename, rm, stat, unlin
 import { constants } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, posix, win32 } from 'node:path'
+import { dirname, isAbsolute, join, posix } from 'node:path'
 
 import {
   DEFAULT_APPEARANCE_SETTINGS,
@@ -30,6 +30,12 @@ import type {
   RestartContinuationCandidate,
   RestartContinuationRecord
 } from './restart-continuation.ts'
+import {
+  normalizeWindowsDriveLetterPath,
+  validateProjectDirectory,
+  validateWindowsFixedStorageDirectory
+} from './project-path-policy.ts'
+
 
 type ProjectConfigFileV1 = {
   version: 1
@@ -292,17 +298,7 @@ export function resolveProjectStoreHomes(options: {
   }
 
   if (platform === 'win32') {
-    const localAppData = env.LOCALAPPDATA
-    if (
-      typeof localAppData !== 'string' ||
-      localAppData.length === 0 ||
-      localAppData.trim() !== localAppData ||
-      /[\0\r\n]/u.test(localAppData) ||
-      !win32.isAbsolute(localAppData) ||
-      !/^[A-Za-z]:\\$/u.test(win32.parse(localAppData).root)
-    ) {
-      throw new Error('LOCALAPPDATA must be an exact absolute local-drive Windows path.')
-    }
+    const localAppData = normalizeWindowsDriveLetterPath(env.LOCALAPPDATA, 'LOCALAPPDATA')
     return {
       configHome: localAppData,
       stateHome: localAppData
@@ -313,6 +309,8 @@ export function resolveProjectStoreHomes(options: {
 }
 
 export class ProjectStore {
+  private readonly configDirectory: string
+  private readonly stateDirectory: string
   private readonly configFile: string
   private readonly stateFile: string
   private readonly taskStateFile: string
@@ -332,15 +330,24 @@ export class ProjectStore {
     }
     const absoluteConfigHome = assertAbsolute(configHome, 'ProjectStore config home')
     const absoluteStateHome = assertAbsolute(stateHome, 'ProjectStore state home')
-    this.configFile = join(absoluteConfigHome, 'pi-gui-next', 'config.json')
-    this.stateFile = join(absoluteStateHome, 'pi-gui-next', 'state.json')
-    this.taskStateFile = join(absoluteStateHome, 'pi-gui-next', 'tasks.json')
-    this.restartContinuationFile = join(
-      absoluteStateHome,
-      'pi-gui-next',
-      'restart-continuations.json'
-    )
-    this.taskRoot = join(absoluteStateHome, 'pi-gui-next', 'tasks')
+    this.configDirectory = join(absoluteConfigHome, 'pi-gui-next')
+    this.stateDirectory = join(absoluteStateHome, 'pi-gui-next')
+    this.configFile = join(this.configDirectory, 'config.json')
+    this.stateFile = join(this.stateDirectory, 'state.json')
+    this.taskStateFile = join(this.stateDirectory, 'tasks.json')
+    this.restartContinuationFile = join(this.stateDirectory, 'restart-continuations.json')
+    this.taskRoot = join(this.stateDirectory, 'tasks')
+  }
+
+  async validatePlatformStorage(): Promise<void> {
+    if (process.platform !== 'win32') return
+    const directories = new Set([this.configDirectory, this.stateDirectory])
+    const homes = new Set([...directories].map((directory) => dirname(directory)))
+    for (const home of homes) await validateWindowsFixedStorageDirectory(home)
+    for (const directory of directories) {
+      await mkdir(directory, { recursive: true })
+      await validateWindowsFixedStorageDirectory(directory)
+    }
   }
 
   async loadProjects(): Promise<ProjectRegistry> {
@@ -809,12 +816,7 @@ export class ProjectStore {
   }
 
   async validateProjectPath(path: string): Promise<string> {
-    assertAbsolute(path, 'Project path')
-    const canonicalPath = await realpath(path)
-    const projectStat = await stat(canonicalPath)
-    if (!projectStat.isDirectory()) throw new Error(`Project path is not a directory: ${canonicalPath}`)
-    await access(canonicalPath, constants.R_OK | constants.X_OK)
-    return canonicalPath
+    return validateProjectDirectory(path)
   }
 
   async taskOwnsSession(taskPath: string): Promise<boolean> {

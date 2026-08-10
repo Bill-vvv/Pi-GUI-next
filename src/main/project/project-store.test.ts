@@ -5,6 +5,12 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { ProjectStore, resolveProjectStoreHomes } from './project-store.ts'
+import {
+  assertWindowsFixedDrivePath,
+  normalizeProjectPathForPlatform,
+  sameWindowsPathIdentity,
+  WINDOWS_FIXED_DRIVE_REQUIRED_CODE
+} from './project-path-policy.ts'
 import { DEFAULT_SUBAGENT_SETTINGS } from '../../shared/kernel-contract.ts'
 import { DEFAULT_SHORTCUT_SETTINGS } from '../../shared/shortcut-settings.ts'
 
@@ -48,7 +54,7 @@ test('resolves Linux ProjectStore homes from XDG without changing existing defau
   )
 })
 
-test('resolves Windows ProjectStore homes only from machine-local LOCALAPPDATA', () => {
+test('resolves Windows ProjectStore homes only from drive-letter LOCALAPPDATA', () => {
   const localAppData = 'C:\\Users\\Tester\\AppData\\Local'
   assert.deepEqual(
     resolveProjectStoreHomes({
@@ -68,22 +74,105 @@ test('resolves Windows ProjectStore homes only from machine-local LOCALAPPDATA',
       platform: 'win32',
       env: { APPDATA: 'C:\\Users\\Tester\\AppData\\Roaming' }
     }),
-    /LOCALAPPDATA must be an exact absolute local-drive Windows path/u
+    /LOCALAPPDATA must be an exact absolute Windows drive-letter path/u
   )
   assert.throws(
     () => resolveProjectStoreHomes({
       platform: 'win32',
       env: { LOCALAPPDATA: 'AppData\\Local' }
     }),
-    /LOCALAPPDATA must be an exact absolute local-drive Windows path/u
+    /LOCALAPPDATA must be an exact absolute Windows drive-letter path/u
   )
   assert.throws(
     () => resolveProjectStoreHomes({
       platform: 'win32',
       env: { LOCALAPPDATA: '\\\\nas\\profile\\AppData\\Local' }
     }),
-    /LOCALAPPDATA must be an exact absolute local-drive Windows path/u
+    /LOCALAPPDATA must be an exact absolute Windows drive-letter path/u
   )
+})
+
+test('normalizes only Windows drive-letter Project paths', () => {
+  assert.equal(
+    normalizeProjectPathForPlatform('c:/Projects/Pi GUI', 'win32'),
+    'C:\\Projects\\Pi GUI'
+  )
+  assert.equal(
+    normalizeProjectPathForPlatform('D:\\Projects\\..\\工作区', 'win32'),
+    'D:\\工作区'
+  )
+  assert.equal(normalizeProjectPathForPlatform('Z:\\', 'win32'), 'Z:\\')
+  assert.equal(
+    sameWindowsPathIdentity('c:\\Users\\Tester\\AppData\\Local', 'C:/users/tester/appdata/local'),
+    true
+  )
+  assert.equal(
+    sameWindowsPathIdentity('C:\\Users\\Tester\\AppData\\Local', 'C:\\Other\\Local'),
+    false
+  )
+
+  for (const path of [
+    'project',
+    '.\\project',
+    'C:project',
+    '\\\\server\\share\\project',
+    '\\\\?\\C:\\project',
+    '\\\\.\\C:\\project',
+    '\\\\?\\UNC\\server\\share\\project',
+    ' C:\\project',
+    'C:\\project\t',
+    'C:\\project\n'
+  ]) {
+    assert.throws(
+      () => normalizeProjectPathForPlatform(path, 'win32'),
+      /Project path must be an exact absolute Windows drive-letter path/u
+    )
+  }
+
+  assert.equal(normalizeProjectPathForPlatform('/srv/project', 'linux'), '/srv/project')
+  assert.throws(
+    () => normalizeProjectPathForPlatform('relative', 'linux'),
+    /Project path must be an absolute path/u
+  )
+  assert.throws(
+    () => normalizeProjectPathForPlatform('/Users/tester/project', 'darwin'),
+    /Project path validation is not implemented for darwin/u
+  )
+})
+
+test('Windows Project paths require a fixed drive type without fallback', async () => {
+  const queriedRoots: string[] = []
+  await assertWindowsFixedDrivePath('c:\\Projects\\pi-gui-next', {
+    platform: 'win32',
+    queryDriveType: async (root) => {
+      queriedRoots.push(root)
+      return 3
+    }
+  })
+  assert.deepEqual(queriedRoots, ['C:\\'])
+
+  for (const driveType of [0, 1, 2, 4, 5, 6]) {
+    await assert.rejects(
+      assertWindowsFixedDrivePath('Z:\\Projects\\pi-gui-next', {
+        platform: 'win32',
+        queryDriveType: async () => driveType
+      }),
+      (error: unknown) => {
+        assert.equal((error as NodeJS.ErrnoException).code, WINDOWS_FIXED_DRIVE_REQUIRED_CODE)
+        return true
+      }
+    )
+  }
+
+  let linuxProbeCalled = false
+  await assertWindowsFixedDrivePath('/srv/project', {
+    platform: 'linux',
+    queryDriveType: async () => {
+      linuxProbeCalled = true
+      return 4
+    }
+  })
+  assert.equal(linuxProbeCalled, false)
 })
 
 test('fails fast before macOS ProjectStore paths are implemented', () => {

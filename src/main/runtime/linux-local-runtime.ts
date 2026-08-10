@@ -29,6 +29,7 @@ import {
   stopRuntimeProcess
 } from './runtime-process-lifecycle.ts'
 import { errorMessage } from '../utils/errors.ts'
+import { validateProjectDirectory } from '../project/project-path-policy.ts'
 import type { SubagentSettings } from '../../shared/kernel-contract.ts'
 import {
   HISTORY_NAVIGATION_COMMAND_DESCRIPTION,
@@ -294,6 +295,9 @@ export class LinuxLocalRuntime implements RuntimeHost {
   }
 
   private async startRuntime(): Promise<void> {
+    await this.assertCanonicalWorkspace()
+    this.assertStartNotCancelled()
+
     const resolveOptions: ResolvePiExecutableOptions = {
       explicitPath: this.options.explicitExecutable,
       path: this.options.path,
@@ -344,6 +348,9 @@ export class LinuxLocalRuntime implements RuntimeHost {
         ? []
         : [this.options.quiescenceExtensionPath])
     ])]
+    await this.assertCanonicalWorkspace()
+    this.assertStartNotCancelled()
+
     const child = spawnPiCommand(
       executable,
       buildPiRpcArguments(
@@ -1064,6 +1071,13 @@ export class LinuxLocalRuntime implements RuntimeHost {
       })
     }
     this.leaseWaiters.clear()
+  }
+
+  private async assertCanonicalWorkspace(): Promise<void> {
+    const canonicalCwd = await validateProjectDirectory(this.options.cwd)
+    if (canonicalCwd !== this.options.cwd) {
+      throw new Error(`Runtime workspace path no longer resolves canonically: ${this.options.cwd}`)
+    }
   }
 
   private assertStartNotCancelled(): void {

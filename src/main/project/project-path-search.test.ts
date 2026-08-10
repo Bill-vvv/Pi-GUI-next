@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import test from 'node:test'
 
-import { searchProjectPaths } from './project-path-search.ts'
+import {
+  PROJECT_PATH_SEARCH_UNAVAILABLE_CODE,
+  searchProjectPaths
+} from './project-path-search.ts'
+
+const linuxTest = process.platform === 'linux' ? test : test.skip
 
 async function makeProject(t: test.TestContext, prefix: string): Promise<string> {
   const projectPath = await mkdtemp(join(tmpdir(), prefix))
@@ -12,7 +17,24 @@ async function makeProject(t: test.TestContext, prefix: string): Promise<string>
   return projectPath
 }
 
-test('fuzzy matching is case-insensitive, ordered, deterministic, and capped at 100', async (t) => {
+test('fails fast on platforms without descriptor-pinned no-follow traversal', async () => {
+  for (const [platform, projectPath] of [
+    ['win32', 'C:\\Projects\\pi-gui-next'],
+    ['darwin', '/Users/tester/Projects/pi-gui-next']
+  ] as const) {
+    await assert.rejects(
+      searchProjectPaths({ projectPath, query: '', platform }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error)
+        assert.equal((error as NodeJS.ErrnoException).code, PROJECT_PATH_SEARCH_UNAVAILABLE_CODE)
+        assert.match(error.message, new RegExp(`unavailable on ${platform}`, 'u'))
+        return true
+      }
+    )
+  }
+})
+
+linuxTest('fuzzy matching is case-insensitive, ordered, deterministic, and capped at 100', async (t) => {
   const projectPath = await makeProject(t, 'pi-gui-path-search-fuzzy-')
   await Promise.all([
     writeFile(join(projectPath, 'AlphaBeta.txt'), ''),
@@ -41,7 +63,7 @@ test('fuzzy matching is case-insensitive, ordered, deterministic, and capped at 
   ])
 })
 
-test('root and nested ignore files apply in order with negation', async (t) => {
+linuxTest('root and nested ignore files apply in order with negation', async (t) => {
   const projectPath = await makeProject(t, 'pi-gui-path-search-ignore-')
   await mkdir(join(projectPath, 'nested', 'ignored-dir'), { recursive: true })
   await Promise.all([
@@ -70,7 +92,7 @@ test('root and nested ignore files apply in order with negation', async (t) => {
   assert.equal(paths.some((path) => path.startsWith('nested/ignored-dir')), false)
 })
 
-test('.git is excluded, hidden files remain searchable, symlinks are skipped, and kinds are accurate', async (t) => {
+linuxTest('.git is excluded, hidden files remain searchable, symlinks are skipped, and kinds are accurate', async (t) => {
   const projectPath = await makeProject(t, 'pi-gui-path-search-safety-')
   const externalPath = await mkdtemp(join(tmpdir(), 'pi-gui-path-search-external-'))
   t.after(() => rm(externalPath, { recursive: true, force: true }))
@@ -92,7 +114,7 @@ test('.git is excluded, hidden files remain searchable, symlinks are skipped, an
   ])
 })
 
-test('query and limit validation fail fast and a canonical absolute root is required', async (t) => {
+linuxTest('query and limit validation fail fast and a canonical absolute root is required', async (t) => {
   const projectPath = await makeProject(t, 'pi-gui-path-search-validation-')
   const aliasPath = `${projectPath}-alias`
   await symlink(projectPath, aliasPath)
@@ -111,7 +133,7 @@ test('query and limit validation fail fast and a canonical absolute root is requ
   await assert.rejects(searchProjectPaths({ projectPath, query: '', limit: 1.5 }), /integer/)
 })
 
-test('ordinary file contents are never surfaced and malformed ignore files fail fast', async (t) => {
+linuxTest('ordinary file contents are never surfaced and malformed ignore files fail fast', async (t) => {
   const projectPath = await makeProject(t, 'pi-gui-path-search-content-')
   await writeFile(join(projectPath, 'innocent-name.txt'), 'DO_NOT_SURFACE_THIS_SECRET')
   assert.deepEqual(

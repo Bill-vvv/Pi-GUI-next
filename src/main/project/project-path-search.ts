@@ -15,10 +15,13 @@ const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/u
 const UTF8_DECODER = new TextDecoder('utf-8', { fatal: true })
 const DIRECTORY_OPEN_FLAGS = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW
 
+export const PROJECT_PATH_SEARCH_UNAVAILABLE_CODE = 'E_PROJECT_PATH_SEARCH_UNAVAILABLE'
+
 type SearchOptions = {
   projectPath: string
   query: string
   limit?: number
+  platform?: NodeJS.Platform
 }
 
 type ScoredMatch = KernelProjectPathMatch & {
@@ -28,8 +31,10 @@ type ScoredMatch = KernelProjectPathMatch & {
 export async function searchProjectPaths({
   projectPath,
   query,
-  limit = DEFAULT_LIMIT
+  limit = DEFAULT_LIMIT,
+  platform = process.platform
 }: SearchOptions): Promise<KernelProjectPathMatch[]> {
+  assertProjectPathSearchAvailable(platform)
   validateArguments(projectPath, query, limit)
 
   const expectedRoot = resolve(projectPath)
@@ -244,6 +249,24 @@ function isWithinRoot(canonicalRoot: string, candidate: string): boolean {
     && !relativePath.startsWith(`..${sep}`)
     && !isAbsolute(relativePath)
   )
+}
+
+export function assertProjectPathSearchAvailable(
+  platform: NodeJS.Platform = process.platform
+): void {
+  if (
+    platform === 'linux' &&
+    Number.isSafeInteger(constants.O_DIRECTORY) &&
+    constants.O_DIRECTORY !== 0 &&
+    Number.isSafeInteger(constants.O_NOFOLLOW) &&
+    constants.O_NOFOLLOW !== 0
+  ) return
+
+  const error: NodeJS.ErrnoException = new Error(
+    `Project path search is unavailable on ${platform} until a descriptor-pinned, no-follow directory traversal is implemented.`
+  )
+  error.code = PROJECT_PATH_SEARCH_UNAVAILABLE_CODE
+  throw error
 }
 
 function validateArguments(projectPath: string, query: string, limit: number): void {
