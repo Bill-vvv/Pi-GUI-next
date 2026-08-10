@@ -1069,6 +1069,59 @@ process.stdin.on('data', (chunk) => {
   assert.equal(runtime.getRpcPid(), null)
 })
 
+test('Runtime starts and gracefully stops a Windows Pi command shim', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-runtime-windows-shim-'))
+  t.after(async () => rm(directory, { recursive: true, force: true }))
+  const cli = join(directory, 'cli.js')
+  const executable = join(directory, 'pi.cmd')
+  await writeFile(
+    cli,
+    `if (process.argv[2] === '--version') {
+  process.stdout.write('0.83.0\\n')
+  process.exit(0)
+}
+let input = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  input += chunk
+  let newline
+  while ((newline = input.indexOf('\\n')) >= 0) {
+    const request = JSON.parse(input.slice(0, newline))
+    input = input.slice(newline + 1)
+    process.stdout.write(JSON.stringify({
+      type: 'response',
+      id: request.id,
+      success: true,
+      ...(request.type === 'get_state' ? { data: {} } : {})
+    }) + '\\n')
+  }
+})
+`
+  )
+  await writeFile(
+    executable,
+    `#!/bin/sh\nexec "${process.execPath}" "${cli}" "$@"\n`,
+    { mode: 0o755 }
+  )
+  const runtime = new LinuxLocalRuntime({
+    cwd: directory,
+    explicitExecutable: executable,
+    platform: 'win32'
+  })
+  t.after(() => runtime.stop())
+
+  await runtime.start()
+  assert.ok((runtime.getRpcPid() ?? 0) > 0)
+  assert.deepEqual(await runtime.send({ type: 'get_state' }), {
+    type: 'state',
+    state: {}
+  })
+  await runtime.stop()
+
+  assert.equal(runtime.getRpcPid(), null)
+  assert.equal(runtime.getState().exitCode, 0)
+})
+
 test('stop during the version check cancels start before spawning RPC', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'pi-runtime-stop-'))
   t.after(async () => rm(directory, { recursive: true, force: true }))

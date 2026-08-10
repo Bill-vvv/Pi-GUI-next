@@ -23,6 +23,11 @@ import {
   type ResolvePiExecutableOptions
 } from './pi-executable.ts'
 import { spawnPiCommand } from './pi-spawn.ts'
+import {
+  hasRuntimeProcessExited as hasExited,
+  runtimeProcessSpawnOptions,
+  stopRuntimeProcess
+} from './runtime-process-lifecycle.ts'
 import { errorMessage } from '../utils/errors.ts'
 import type { SubagentSettings } from '../../shared/kernel-contract.ts'
 import {
@@ -51,7 +56,6 @@ import {
 } from './runtime-quiescence.ts'
 
 const DEFAULT_RPC_TIMEOUT_MS = 10_000
-const STOP_GRACE_MS = 1_000
 const PROBE_SESSION_NAME = 'Pi GUI S11 probe'
 const MAX_EXTENSION_COMMAND_NAME_LENGTH = 256
 const MAX_EXTENSION_COMMAND_ARGS_LENGTH = 64 * 1024
@@ -118,6 +122,8 @@ export type LinuxLocalRuntimeOptions = {
   cwd: string
   explicitExecutable?: string
   path?: string
+  pathExt?: string
+  platform?: NodeJS.Platform
   versionTimeoutMs?: number
   rpcTimeoutMs?: number
   sessionFile?: string
@@ -290,7 +296,9 @@ export class LinuxLocalRuntime implements RuntimeHost {
   private async startRuntime(): Promise<void> {
     const resolveOptions: ResolvePiExecutableOptions = {
       explicitPath: this.options.explicitExecutable,
-      path: this.options.path
+      path: this.options.path,
+      pathExt: this.options.pathExt,
+      platform: this.options.platform
     }
     const executable = resolvePiExecutable(resolveOptions)
     let version: string
@@ -345,6 +353,7 @@ export class LinuxLocalRuntime implements RuntimeHost {
         extensionPaths
       ),
       {
+        ...runtimeProcessSpawnOptions(this.options.platform),
         cwd: this.options.cwd,
         shell: false,
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -382,7 +391,7 @@ export class LinuxLocalRuntime implements RuntimeHost {
       const cancelled = this.stopRequested
       let cleanupError: unknown = null
       try {
-        await stopProcess(child)
+        await stopRuntimeProcess(child, { platform: this.options.platform })
       } catch (stopError) {
         cleanupError = stopError
       }
@@ -996,7 +1005,7 @@ export class LinuxLocalRuntime implements RuntimeHost {
     let stopError: unknown = null
     if (initialChild !== null) {
       try {
-        await stopProcess(initialChild)
+        await stopRuntimeProcess(initialChild, { platform: this.options.platform })
       } catch (error) {
         stopError = error
       }
@@ -1014,7 +1023,7 @@ export class LinuxLocalRuntime implements RuntimeHost {
     const currentChild = this.child
     if (currentChild !== null && currentChild !== initialChild) {
       try {
-        await stopProcess(currentChild)
+        await stopRuntimeProcess(currentChild, { platform: this.options.platform })
       } catch (error) {
         stopError ??= error
       }
@@ -1312,53 +1321,6 @@ export async function probePiRpc(options: LinuxLocalRuntimeOptions): Promise<PiR
     sessionNameEventObserved,
     stderrChars: runtimeState.stderrChars
   }
-}
-
-async function stopProcess(
-  child: ChildProcessWithoutNullStreams
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  if (hasExited(child)) {
-    return { code: child.exitCode, signal: child.signalCode }
-  }
-
-  child.stdin.end()
-  if (await waitForExit(child, STOP_GRACE_MS)) {
-    return { code: child.exitCode, signal: child.signalCode }
-  }
-
-  child.kill('SIGTERM')
-  if (await waitForExit(child, STOP_GRACE_MS)) {
-    return { code: child.exitCode, signal: child.signalCode }
-  }
-
-  child.kill('SIGKILL')
-  if (await waitForExit(child, STOP_GRACE_MS)) {
-    return { code: child.exitCode, signal: child.signalCode }
-  }
-
-  throw new Error('Pi RPC process did not exit after stdin close, SIGTERM, and SIGKILL.')
-}
-
-function waitForExit(child: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<boolean> {
-  if (hasExited(child)) {
-    return Promise.resolve(true)
-  }
-
-  return new Promise((resolveWait) => {
-    const onClose = (): void => {
-      clearTimeout(timer)
-      resolveWait(true)
-    }
-    const timer = setTimeout(() => {
-      child.off('close', onClose)
-      resolveWait(false)
-    }, timeoutMs)
-    child.once('close', onClose)
-  })
-}
-
-function hasExited(child: ChildProcessWithoutNullStreams): boolean {
-  return child.exitCode !== null || child.signalCode !== null
 }
 
 function enrichRuntimeError(error: unknown, stderrChars: number): Error {

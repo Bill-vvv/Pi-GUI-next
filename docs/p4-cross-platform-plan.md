@@ -92,6 +92,18 @@ Dependency discovery is fail-fast:
 
 Executable paths, Project absolute paths, application directories, process identities, notification endpoints and credentials are device-local data.
 
+### Windows Runtime process ownership
+
+The first Windows Runtime path uses this fail-fast lifecycle contract:
+
+1. Spawn the Pi RPC process with `detached: false` and `windowsHide: true`.
+2. Close RPC stdin first and allow a bounded grace period for Pi to exit normally.
+3. If the process remains alive, report `E_WINDOWS_RUNTIME_TREE_OWNER_REQUIRED` and retain the Runtime identity instead of claiming that killing a command shim cleaned its descendants.
+4. Do not use `taskkill`, PID-tree enumeration or repeated direct-process signals as the release solution.
+5. Before Windows public release, introduce a Windows Job Object-backed launcher/owner that owns the Pi process before it can create descendants and terminates the complete owned job on forced shutdown.
+
+The internal Windows bootstrap may validate the normal stdin-close path, but P4-W1 cannot be accepted until forced cleanup and the no-residual-process gate are proven on Windows.
+
 ## 5. Data scope
 
 P4 provides independent local operation on each device. It does not provide cross-device Session or application-state synchronization.
@@ -181,7 +193,7 @@ Status values:
 | Pi package-root discovery | Main Runtime and Package consumers | `verified_current`: canonical executable resolves to the Pi package `dist/cli.js` path | `local_source_snapshot`: a bounded `--version` probe observes the actual Node entry used by `.cmd`/`.bat`, then verifies the same package manifest, declared `bin.pi`, exact version and root export; not yet run on Windows | `planned` | Pi installation method, package layout or SDK import changes | Resolve and validate the exact package manifest, version, declared command entry and root export without scanning or trusting another global installation |
 | Exact Pi version | Main Runtime | `verified_current`: `0.83.0` | `local_source_snapshot`: command-shim entry probing and all direct Pi commands still require exactly `0.83.0`; not yet run on Windows | `planned` | Pi dependency upgrade | Exact version succeeds; every other or malformed version fails clearly |
 | Application data directories | Main stores | XDG config/state | `identified`: Windows application-data directories | `identified`: Application Support and platform state directory | Store schema or file-location change | Persist, restart, upgrade and preserve user data |
-| Runtime process lifecycle | Main Runtime and Kernel | POSIX signals and Linux process inspection | `identified`: Windows process-tree termination and ownership | `identified`: POSIX behavior still requires native verification | Runtime start, abort, crash, hibernation or shutdown changes | Start, abort, crash, restart, close and no residual owned process |
+| Runtime process lifecycle | Main Runtime and Kernel | `verified_current`: stdin close followed by bounded SIGTERM/SIGKILL; `local_source_snapshot`: extracted platform lifecycle boundary preserves this behavior | `local_source_snapshot`: non-detached hidden process, bounded stdin-close shutdown, and explicit `E_WINDOWS_RUNTIME_TREE_OWNER_REQUIRED` when safe forced tree ownership is unavailable; Job Object owner remains required and behavior is not yet run on Windows | `identified`: POSIX behavior still requires native verification | Runtime start, abort, crash, hibernation or shutdown changes | Start, normal close, forced close, crash, restart and app exit with no residual owned process; Windows forced path must prove Job Object ownership |
 | Project path safety | Main Project services | `/proc`, symlink and Linux descriptor rules | `identified`: drive, UNC, junction and reparse-point rules | `identified`: symlink and descriptor strategy | Search, trust or filesystem boundary changes | Native race/link/path security probes |
 | Git file safety | Main Git service | Linux `O_NOFOLLOW` contract | `identified` | `identified` | Git diff/read/mutation contract changes | Native path and link safety plus real Git workflow |
 | Task notification | Extension + Main Broker + Session activation | Unix socket and Linux presenter | `identified`: transport and Windows notification presenter | `identified`: transport and macOS notification presenter | Notification payload, token, identity or click behavior changes | Deliver, click and activate the exact Project/Task/Session |
