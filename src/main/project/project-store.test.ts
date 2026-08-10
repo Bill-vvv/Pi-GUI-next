@@ -4,9 +4,94 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { ProjectStore } from './project-store.ts'
+import { ProjectStore, resolveProjectStoreHomes } from './project-store.ts'
 import { DEFAULT_SUBAGENT_SETTINGS } from '../../shared/kernel-contract.ts'
 import { DEFAULT_SHORTCUT_SETTINGS } from '../../shared/shortcut-settings.ts'
+
+test('resolves Linux ProjectStore homes from XDG without changing existing defaults', () => {
+  assert.deepEqual(
+    resolveProjectStoreHomes({
+      platform: 'linux',
+      env: {
+        XDG_CONFIG_HOME: '/tmp/pi-gui-config',
+        XDG_STATE_HOME: '/tmp/pi-gui-state'
+      },
+      homeDir: '/home/tester'
+    }),
+    {
+      configHome: '/tmp/pi-gui-config',
+      stateHome: '/tmp/pi-gui-state'
+    }
+  )
+  assert.deepEqual(
+    resolveProjectStoreHomes({ platform: 'linux', env: {}, homeDir: '/home/tester' }),
+    {
+      configHome: '/home/tester/.config',
+      stateHome: '/home/tester/.local/state'
+    }
+  )
+  assert.throws(
+    () => resolveProjectStoreHomes({
+      platform: 'linux',
+      env: { XDG_CONFIG_HOME: 'relative' },
+      homeDir: '/home/tester'
+    }),
+    /XDG config home must be an absolute path/u
+  )
+  assert.throws(
+    () => new ProjectStore({ configHome: 'relative', stateHome: '/tmp/pi-gui-state' }),
+    /ProjectStore config home must be an absolute path/u
+  )
+  assert.throws(
+    () => new ProjectStore({ configHome: '/tmp/pi-gui-config', stateHome: 'relative' }),
+    /ProjectStore state home must be an absolute path/u
+  )
+})
+
+test('resolves Windows ProjectStore homes only from machine-local LOCALAPPDATA', () => {
+  const localAppData = 'C:\\Users\\Tester\\AppData\\Local'
+  assert.deepEqual(
+    resolveProjectStoreHomes({
+      platform: 'win32',
+      env: {
+        APPDATA: 'C:\\Users\\Tester\\AppData\\Roaming',
+        LOCALAPPDATA: localAppData
+      }
+    }),
+    {
+      configHome: localAppData,
+      stateHome: localAppData
+    }
+  )
+  assert.throws(
+    () => resolveProjectStoreHomes({
+      platform: 'win32',
+      env: { APPDATA: 'C:\\Users\\Tester\\AppData\\Roaming' }
+    }),
+    /LOCALAPPDATA must be an exact absolute local-drive Windows path/u
+  )
+  assert.throws(
+    () => resolveProjectStoreHomes({
+      platform: 'win32',
+      env: { LOCALAPPDATA: 'AppData\\Local' }
+    }),
+    /LOCALAPPDATA must be an exact absolute local-drive Windows path/u
+  )
+  assert.throws(
+    () => resolveProjectStoreHomes({
+      platform: 'win32',
+      env: { LOCALAPPDATA: '\\\\nas\\profile\\AppData\\Local' }
+    }),
+    /LOCALAPPDATA must be an exact absolute local-drive Windows path/u
+  )
+})
+
+test('fails fast before macOS ProjectStore paths are implemented', () => {
+  assert.throws(
+    () => resolveProjectStoreHomes({ platform: 'darwin', env: {}, homeDir: '/Users/tester' }),
+    /ProjectStore paths are not implemented for platform: darwin/u
+  )
+})
 
 test('project registrations persist in XDG config and initialize non-sensitive XDG state', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-gui-project-store-'))

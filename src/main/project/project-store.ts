@@ -2,7 +2,7 @@ import { access, chmod, mkdir, open, readFile, realpath, rename, rm, stat, unlin
 import { constants } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join } from 'node:path'
+import { dirname, isAbsolute, join, posix, win32 } from 'node:path'
 
 import {
   DEFAULT_APPEARANCE_SETTINGS,
@@ -265,6 +265,53 @@ export type ProjectStoreOptions = {
   stateHome?: string
 }
 
+export type ProjectStoreHomes = {
+  configHome: string
+  stateHome: string
+}
+
+export function resolveProjectStoreHomes(options: {
+  platform?: NodeJS.Platform
+  env?: NodeJS.ProcessEnv
+  homeDir?: string
+} = {}): ProjectStoreHomes {
+  const platform = options.platform ?? process.platform
+  const env = options.env ?? process.env
+
+  if (platform === 'linux') {
+    const homeDir = options.homeDir ?? homedir()
+    const configHome = env.XDG_CONFIG_HOME || posix.join(homeDir, '.config')
+    const stateHome = env.XDG_STATE_HOME || posix.join(homeDir, '.local', 'state')
+    if (!posix.isAbsolute(configHome)) {
+      throw new Error(`XDG config home must be an absolute path: ${configHome}`)
+    }
+    if (!posix.isAbsolute(stateHome)) {
+      throw new Error(`XDG state home must be an absolute path: ${stateHome}`)
+    }
+    return { configHome, stateHome }
+  }
+
+  if (platform === 'win32') {
+    const localAppData = env.LOCALAPPDATA
+    if (
+      typeof localAppData !== 'string' ||
+      localAppData.length === 0 ||
+      localAppData.trim() !== localAppData ||
+      /[\0\r\n]/u.test(localAppData) ||
+      !win32.isAbsolute(localAppData) ||
+      !/^[A-Za-z]:\\$/u.test(win32.parse(localAppData).root)
+    ) {
+      throw new Error('LOCALAPPDATA must be an exact absolute local-drive Windows path.')
+    }
+    return {
+      configHome: localAppData,
+      stateHome: localAppData
+    }
+  }
+
+  throw new Error(`ProjectStore paths are not implemented for platform: ${platform}`)
+}
+
 export class ProjectStore {
   private readonly configFile: string
   private readonly stateFile: string
@@ -275,20 +322,25 @@ export class ProjectStore {
   private saveQueue: Promise<void> = Promise.resolve()
 
   constructor(options: ProjectStoreOptions = {}) {
-    const configHome = options.configHome ?? xdgHome('XDG_CONFIG_HOME', join(homedir(), '.config'))
-    const stateHome = assertAbsolute(
-      options.stateHome ?? xdgHome('XDG_STATE_HOME', join(homedir(), '.local', 'state')),
-      'XDG state home'
-    )
-    this.configFile = join(assertAbsolute(configHome, 'XDG config home'), 'pi-gui-next', 'config.json')
-    this.stateFile = join(stateHome, 'pi-gui-next', 'state.json')
-    this.taskStateFile = join(stateHome, 'pi-gui-next', 'tasks.json')
+    const homes = options.configHome === undefined || options.stateHome === undefined
+      ? resolveProjectStoreHomes()
+      : null
+    const configHome = options.configHome ?? homes?.configHome
+    const stateHome = options.stateHome ?? homes?.stateHome
+    if (configHome === undefined || stateHome === undefined) {
+      throw new Error('ProjectStore config and state homes could not be resolved.')
+    }
+    const absoluteConfigHome = assertAbsolute(configHome, 'ProjectStore config home')
+    const absoluteStateHome = assertAbsolute(stateHome, 'ProjectStore state home')
+    this.configFile = join(absoluteConfigHome, 'pi-gui-next', 'config.json')
+    this.stateFile = join(absoluteStateHome, 'pi-gui-next', 'state.json')
+    this.taskStateFile = join(absoluteStateHome, 'pi-gui-next', 'tasks.json')
     this.restartContinuationFile = join(
-      stateHome,
+      absoluteStateHome,
       'pi-gui-next',
       'restart-continuations.json'
     )
-    this.taskRoot = join(stateHome, 'pi-gui-next', 'tasks')
+    this.taskRoot = join(absoluteStateHome, 'pi-gui-next', 'tasks')
   }
 
   async loadProjects(): Promise<ProjectRegistry> {
@@ -1055,10 +1107,6 @@ export class ProjectStore {
     this.saveQueue = save.then(() => {}, () => {})
     return save
   }
-}
-
-function xdgHome(name: 'XDG_CONFIG_HOME' | 'XDG_STATE_HOME', fallback: string): string {
-  return process.env[name] || fallback
 }
 
 function assertAbsolute(path: string, label: string): string {

@@ -104,6 +104,27 @@ The first Windows Runtime path uses this fail-fast lifecycle contract:
 
 The internal Windows bootstrap may validate the normal stdin-close path, but P4-W1 cannot be accepted until forced cleanup and the no-residual-process gate are proven on Windows.
 
+### Windows ProjectStore directories
+
+The GUI-owned ProjectStore uses this Windows layout:
+
+```text
+%LOCALAPPDATA%\pi-gui-next\config.json
+%LOCALAPPDATA%\pi-gui-next\state.json
+%LOCALAPPDATA%\pi-gui-next\tasks.json
+%LOCALAPPDATA%\pi-gui-next\restart-continuations.json
+%LOCALAPPDATA%\pi-gui-next\tasks\...
+```
+
+Rules:
+
+- `LOCALAPPDATA` must be present as an exact absolute local-drive Windows path; missing, relative, UNC or malformed values fail startup clearly.
+- Roaming `%APPDATA%` is intentionally not used because Project paths, active Session identity, Task workspaces and GUI settings are device-local under the current product boundary.
+- Linux retains the existing XDG config/state locations with no migration or path change.
+- Pi-owned authentication, Package, Extension, Skill, Prompt Template and Session data remain under Pi's own user directory; they are not moved into the GUI ProjectStore.
+- Remote access token/device storage remains a separate POSIX-bound capability and is not made Windows-compatible by this change.
+- There is no Windows migration path in this batch because no prior Windows release exists.
+
 ## 5. Data scope
 
 P4 provides independent local operation on each device. It does not provide cross-device Session or application-state synchronization.
@@ -192,7 +213,7 @@ Status values:
 | Pi command invocation | Main Runtime and command callers | `verified_current`: canonical direct spawn; `local_source_snapshot`: four Pi child-process entry points use pinned `cross-spawn@7.0.6` and pass Linux tests | `local_source_snapshot`: `.cmd`/`.bat` command-shim execution is delegated to cross-spawn; not yet run on Windows | `planned`: direct executable behavior must be verified | Any Pi command caller, process-launch contract or cross-spawn version changes | Version probe, Runtime RPC, Package commands and provider probe; preserve argument boundaries and `shell: false` at call sites |
 | Pi package-root discovery | Main Runtime and Package consumers | `verified_current`: canonical executable resolves to the Pi package `dist/cli.js` path | `local_source_snapshot`: a bounded `--version` probe observes the actual Node entry used by `.cmd`/`.bat`, then verifies the same package manifest, declared `bin.pi`, exact version and root export; not yet run on Windows | `planned` | Pi installation method, package layout or SDK import changes | Resolve and validate the exact package manifest, version, declared command entry and root export without scanning or trusting another global installation |
 | Exact Pi version | Main Runtime | `verified_current`: `0.83.0` | `local_source_snapshot`: command-shim entry probing and all direct Pi commands still require exactly `0.83.0`; not yet run on Windows | `planned` | Pi dependency upgrade | Exact version succeeds; every other or malformed version fails clearly |
-| Application data directories | Main stores | XDG config/state | `identified`: Windows application-data directories | `identified`: Application Support and platform state directory | Store schema or file-location change | Persist, restart, upgrade and preserve user data |
+| Application data directories | Main ProjectStore | `verified_current`: existing XDG config/state locations unchanged | `local_source_snapshot`: config and state use `%LOCALAPPDATA%\pi-gui-next`; an exact absolute local-drive path is required; not yet run on Windows | `identified`: Application Support and platform state directory | Store schema or file-location change | Persist Project/settings/Session/Task state, restart, upgrade and preserve data; Windows must prove no use of roaming `%APPDATA%` |
 | Runtime process lifecycle | Main Runtime and Kernel | `verified_current`: stdin close followed by bounded SIGTERM/SIGKILL; `local_source_snapshot`: extracted platform lifecycle boundary preserves this behavior | `local_source_snapshot`: non-detached hidden process, bounded stdin-close shutdown, and explicit `E_WINDOWS_RUNTIME_TREE_OWNER_REQUIRED` when safe forced tree ownership is unavailable; Job Object owner remains required and behavior is not yet run on Windows | `identified`: POSIX behavior still requires native verification | Runtime start, abort, crash, hibernation or shutdown changes | Start, normal close, forced close, crash, restart and app exit with no residual owned process; Windows forced path must prove Job Object ownership |
 | Project path safety | Main Project services | `/proc`, symlink and Linux descriptor rules | `identified`: drive, UNC, junction and reparse-point rules | `identified`: symlink and descriptor strategy | Search, trust or filesystem boundary changes | Native race/link/path security probes |
 | Git file safety | Main Git service | Linux `O_NOFOLLOW` contract | `identified` | `identified` | Git diff/read/mutation contract changes | Native path and link safety plus real Git workflow |
