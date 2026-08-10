@@ -23,6 +23,7 @@ export interface CheckPiVersionOptions {
   executable: string
   cwd: string
   timeoutMs?: number
+  env?: NodeJS.ProcessEnv
 }
 
 export function resolvePiExecutable(options: ResolvePiExecutableOptions = {}): string {
@@ -81,7 +82,8 @@ export async function checkPiVersion(options: CheckPiVersionOptions): Promise<st
       child = spawnPiCommand(options.executable, ['--version'], {
         cwd: options.cwd,
         shell: false,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: options.env
       })
     } catch (error) {
       rejectVersion(new Error(`Unable to start Pi for version check: ${errorMessage(error)}`))
