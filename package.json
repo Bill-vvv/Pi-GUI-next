@@ -107,6 +107,8 @@
     "yaml": "2.8.1"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "0.83.0",
+    "@earendil-works/pi-coding-agent": "0.83.0",
     "@types/node": "26.1.1",
     "@types/proper-lockfile": "4.1.4",
     "@types/react": "19.2.17",
@@ -115,6 +117,7 @@
     "electron": "43.1.1",
     "electron-builder": "26.15.3",
     "electron-vite": "5.0.0",
+    "typebox": "1.1.38",
     "typescript": "7.0.2",
     "vite": "7.3.6"
   }
