@@ -81,7 +81,8 @@ import { searchProjectPaths } from './project/project-path-search.ts'
 import { readSessionMetadata, readSessionStatistics } from './project/session-statistics.ts'
 import { readSessionMessagesTailFirst } from './project/session-transcript-tail.ts'
 import { readSessionActivityAt, readSessionMessages } from './project/session-transcript.ts'
-import { LinuxLocalRuntime, probePiRpc } from './runtime/linux-local-runtime.ts'
+import { probePiRpc } from './runtime/linux-local-runtime.ts'
+import { SharedPiHost } from './runtime/shared-pi-host.ts'
 import { generateSessionNameWithPi } from './runtime/session-name-generator.ts'
 import { errorMessage } from './utils/errors.ts'
 import { PiProjectTrust } from './security/pi-project-trust.ts'
@@ -99,6 +100,7 @@ let kernel: WorkbenchKernel | null = null
 let projectStoreForShutdown: ProjectStore | null = null
 let providerAuth: PiProviderAuth | null = null
 let desktopNotificationBroker: DesktopNotificationBroker | null = null
+let sharedPiHost: SharedPiHost | null = null
 let remoteGateway: RemoteGateway | null = null
 let remoteDeviceStore: RemoteDeviceStore | null = null
 let shutdownPromise: Promise<void> | null = null
@@ -316,11 +318,12 @@ async function startApplication(): Promise<void> {
     resourcesPath: process.resourcesPath
   })
   const quiescenceExtensionPath = runtimeExtensionPaths[0]!
+  const runtimeHost = new SharedPiHost()
+  sharedPiHost = runtimeHost
   kernel = new WorkbenchKernel(
     (project, launchOptions) =>
-      new LinuxLocalRuntime({
+      runtimeHost.createRuntime({
         cwd: project.path,
-        explicitExecutable: process.env.PI_GUI_PI_EXECUTABLE,
         sessionFile: launchOptions.sessionFile,
         projectTrust: launchOptions.projectTrust,
         fastExtensionLoading: launchOptions.fastExtensionLoading,
@@ -1110,6 +1113,7 @@ async function stopKernel(): Promise<void> {
     await gateway.stop()
   }
   const activeKernel = kernel
+  const activeSharedPiHost = sharedPiHost
   const projectStore = projectStoreForShutdown
   const restartContinuations = activeKernel?.prepareRestartContinuationShutdown() ?? []
   const kernelStopResult = activeKernel?.stop().then(
@@ -1127,6 +1131,11 @@ async function stopKernel(): Promise<void> {
   await providerAuth?.shutdown()
   const kernelStopError = await kernelStopResult
   if (kernelStopError !== null) throw kernelStopError
+  const sharedPiHostStopError = await activeSharedPiHost?.dispose().then(
+    () => null,
+    (error: unknown) => error
+  ) ?? null
+  if (sharedPiHostStopError !== null) throw sharedPiHostStopError
   if (projectStore !== null) {
     try {
       await projectStore.replaceRestartContinuations(restartContinuations)
@@ -1137,6 +1146,7 @@ async function stopKernel(): Promise<void> {
     }
   }
   kernel = null
+  sharedPiHost = null
   projectStoreForShutdown = null
 }
 

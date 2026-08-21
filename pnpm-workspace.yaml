@@ -3,6 +3,8 @@ engineStrict: true
 saveExact: true
 strictPeerDependencies: true
 allowBuilds:
+  '@google/genai': false
   electron: true
   electron-winstaller: false
   esbuild: true
+  protobufjs: false

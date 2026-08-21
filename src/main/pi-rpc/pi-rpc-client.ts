@@ -784,7 +784,7 @@ export class PiRpcClient {
   }
 }
 
-function normalizePiRpcTreeResult(value: unknown): PiRpcTreeResult {
+export function normalizePiRpcTreeResult(value: unknown): PiRpcTreeResult {
   try {
     if (
       !hasExactKeys(value, ['tree', 'leafId']) ||
@@ -1118,7 +1118,7 @@ function isPiRpcModel(value: unknown): value is PiRpcModel {
   )
 }
 
-function normalizePiRpcSessionEntry(value: unknown): PiRpcSessionEntry {
+export function normalizePiRpcSessionEntry(value: unknown): PiRpcSessionEntry {
   if (
     !isRecord(value) ||
     !isNonEmptyString(value.id) ||
