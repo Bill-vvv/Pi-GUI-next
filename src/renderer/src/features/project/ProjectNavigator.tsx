@@ -241,7 +241,8 @@ export function ProjectNavigator({
         observationsByKey.set(summary.key, {
           identity: sessionActivityIdentity(project.path, summary.id),
           sessionKey: summary.key,
-          lastActivityAt: summary.lastActivityAt
+          lastActivityAt: summary.lastActivityAt,
+          runtimeStatus: summary.runtimeStatus
         })
       }
     }
@@ -250,7 +251,8 @@ export function ProjectNavigator({
         observationsByKey.set(summary.key, {
           identity: sessionActivityIdentity(activeProjectKey, summary.id),
           sessionKey: summary.key,
-          lastActivityAt: summary.lastActivityAt
+          lastActivityAt: summary.lastActivityAt,
+          runtimeStatus: summary.runtimeStatus
         })
       }
     }

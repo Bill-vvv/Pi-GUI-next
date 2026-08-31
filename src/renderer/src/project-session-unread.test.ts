@@ -10,8 +10,9 @@ import {
 const session = (
   identity: string,
   sessionKey: string,
-  lastActivityAt: number | null
-): SessionActivityObservation => ({ identity, sessionKey, lastActivityAt })
+  lastActivityAt: number | null,
+  runtimeStatus: SessionActivityObservation['runtimeStatus'] = 'ready'
+): SessionActivityObservation => ({ identity, sessionKey, lastActivityAt, runtimeStatus })
 
 test('initial session activity establishes a baseline without marking history unread', () => {
   const observations = [
@@ -28,6 +29,36 @@ test('initial session activity establishes a baseline without marking history un
 test('a newer message marks an undisplayed session unread without observing a running frame', () => {
   const before = [session('project-a\u0000one', '/sessions/one.jsonl', 100)]
   const after = [session('project-a\u0000one', '/sessions/one.jsonl', 200)]
+
+  assert.deepEqual(
+    [...reconcileUnreadSessionKeys(
+      new Set(),
+      '/sessions/two.jsonl',
+      indexSessionActivity(before),
+      after
+    )],
+    ['/sessions/one.jsonl']
+  )
+})
+
+test('a completed background run marks the session unread without a timestamp advance', () => {
+  const before = [session('project-a\u0000one', '/sessions/one.jsonl', 100, 'running')]
+  const after = [session('project-a\u0000one', '/sessions/one.jsonl', 100, 'ready')]
+
+  assert.deepEqual(
+    [...reconcileUnreadSessionKeys(
+      new Set(),
+      '/sessions/two.jsonl',
+      indexSessionActivity(before),
+      after
+    )],
+    ['/sessions/one.jsonl']
+  )
+})
+
+test('a crashed background run marks the session unread without a timestamp advance', () => {
+  const before = [session('project-a\u0000one', '/sessions/one.jsonl', 100, 'running')]
+  const after = [session('project-a\u0000one', '/sessions/one.jsonl', 100, 'crashed')]
 
   assert.deepEqual(
     [...reconcileUnreadSessionKeys(

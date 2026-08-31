@@ -86,7 +86,8 @@ export function TaskNavigator({
     const observations: SessionActivityObservation[] = tasks.map(({ taskKey, session }) => ({
       identity: `${taskKey}\u0000${session.id}`,
       sessionKey: session.key,
-      lastActivityAt: session.lastActivityAt
+      lastActivityAt: session.lastActivityAt,
+      runtimeStatus: session.runtimeStatus
     }))
     setUnreadSessionKeys((current) => reconcileUnreadSessionKeys(
       current,

@@ -1,6 +1,7 @@
 export type SessionActivitySnapshot = {
   sessionKey: string
   lastActivityAt: number | null
+  runtimeStatus: 'starting' | 'ready' | 'running' | 'stopping' | 'stopped' | 'crashed'
 }
 
 export type SessionActivityObservation = SessionActivitySnapshot & {
@@ -10,9 +11,9 @@ export type SessionActivityObservation = SessionActivitySnapshot & {
 export function indexSessionActivity(
   observations: readonly SessionActivityObservation[]
 ): Map<string, SessionActivitySnapshot> {
-  return new Map(observations.map(({ identity, sessionKey, lastActivityAt }) => [
+  return new Map(observations.map(({ identity, sessionKey, lastActivityAt, runtimeStatus }) => [
     identity,
-    { sessionKey, lastActivityAt }
+    { sessionKey, lastActivityAt, runtimeStatus }
   ]))
 }
 
@@ -52,7 +53,12 @@ export function reconcileUnreadSessionKeys(
     const receivedNewMessage = previous !== undefined &&
       observation.lastActivityAt !== null &&
       (previous.lastActivityAt === null || observation.lastActivityAt > previous.lastActivityAt)
-    if ((inheritedUnread || receivedNewMessage) && !next.has(observation.sessionKey)) {
+    const completedBackgroundRun = previous?.runtimeStatus === 'running' &&
+      (observation.runtimeStatus === 'ready' || observation.runtimeStatus === 'crashed')
+    if (
+      (inheritedUnread || receivedNewMessage || completedBackgroundRun) &&
+      !next.has(observation.sessionKey)
+    ) {
       mutableNext().add(observation.sessionKey)
     }
   }
