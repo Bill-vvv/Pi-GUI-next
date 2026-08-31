@@ -91,6 +91,7 @@
     }
   },
   "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.83.0",
     "@tanstack/react-virtual": "3.14.9",
     "ignore": "7.0.5",
     "katex": "0.16.47",
@@ -108,7 +109,6 @@
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.83.0",
-    "@earendil-works/pi-coding-agent": "0.83.0",
     "@types/node": "26.1.1",
     "@types/proper-lockfile": "4.1.4",
     "@types/react": "19.2.17",

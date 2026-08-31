@@ -1,5 +1,5 @@
 import { readFile, realpath } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import {
@@ -20,6 +20,8 @@ export type VerifiedPiPackageRoot = Readonly<{
   sdkEntryPath: string
 }>
 
+const PNPM_SHIM_TARGET_PREFIX = '# cmd-shim-target='
+
 export async function resolvePiPackageRootLayout(
   options: PiPackageRootOptions = {}
 ): Promise<VerifiedPiPackageRoot> {
@@ -27,7 +29,7 @@ export async function resolvePiPackageRootLayout(
     explicitPath: options.explicitExecutable,
     path: options.path
   })
-  const resolvedExecutable = await realpath(executable)
+  const resolvedExecutable = await resolvePiPackageExecutable(executable)
   const packageRoot = dirname(dirname(resolvedExecutable))
   const packageJsonPath = resolve(packageRoot, 'package.json')
   const manifest = parseManifest(await readFile(packageJsonPath, 'utf8'))
@@ -47,6 +49,23 @@ export async function resolvePiPackageRootLayout(
     packageRoot,
     sdkEntryPath: canonicalEntryPath
   })
+}
+
+async function resolvePiPackageExecutable(executable: string): Promise<string> {
+  const resolvedExecutable = await realpath(executable)
+  if (basename(dirname(resolvedExecutable)) !== '.bin') return resolvedExecutable
+
+  const shim = await readFile(resolvedExecutable, 'utf8')
+  const targetLine = shim
+    .split(/\r?\n/u)
+    .find((line) => line.startsWith(PNPM_SHIM_TARGET_PREFIX))
+  if (targetLine === undefined) return resolvedExecutable
+
+  const target = targetLine.slice(PNPM_SHIM_TARGET_PREFIX.length)
+  if (!isAbsolute(target)) {
+    throw new Error('Pi pnpm shim target must be an absolute path.')
+  }
+  return realpath(target)
 }
 
 export async function resolveVerifiedPiPackageRoot(

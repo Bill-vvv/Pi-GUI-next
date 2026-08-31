@@ -7,6 +7,7 @@ import {
   createAgentSessionServices,
   createEventBus,
   getAgentDir,
+  initTheme,
   SessionManager,
   SettingsManager,
   type AgentSession,
@@ -297,6 +298,9 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
         const settingsManager = SettingsManager.create(input.cwd, input.agentDir, {
           projectTrusted: this.options.projectTrust ?? true
         })
+        // RPC-mode extensions such as pi-mcp-adapter color status text with ui.theme.
+        // The CLI initializes this global theme before bindExtensions; the in-process SDK host must too.
+        initTheme(settingsManager.getTheme())
         const services = await createAgentSessionServices({
           cwd: input.cwd,
           agentDir: input.agentDir,
@@ -307,6 +311,14 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
             additionalExtensionPaths: this.options.extensionPaths
           }
         })
+        const extensionErrors = services.resourceLoader.getExtensions().errors
+        if (extensionErrors.length > 0) {
+          eventBus.clear()
+          const first = extensionErrors[0]!
+          throw new Error(
+            `Pi SDK runtime initialization failed with ${extensionErrors.length} extension load error(s): ${first.path}: ${first.error}`
+          )
+        }
         const errorCount = services.diagnostics.filter(({ type }) => type === 'error').length
         if (errorCount > 0) {
           eventBus.clear()
@@ -632,7 +644,24 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
         return { type: 'accepted' }
       }
       if (command.type === 'invoke_extension_command') {
-        await this.acceptPrompt(buildExtensionCommandPrompt(command.name, command.args))
+        buildExtensionCommandPrompt(command.name, command.args)
+        const extensionCommand = session.extensionRunner.getCommand(command.name)
+        if (extensionCommand === undefined) {
+          throw new Error(`Extension command not found: /${command.name}`)
+        }
+        try {
+          await extensionCommand.handler(
+            command.args ?? '',
+            session.extensionRunner.createCommandContext()
+          )
+        } catch (error) {
+          session.extensionRunner.emitError({
+            extensionPath: `command:${command.name}`,
+            event: 'command',
+            error: errorMessage(error)
+          })
+          throw error
+        }
         return { type: 'accepted' }
       }
       if (command.type === 'subscribe_extension_events') {

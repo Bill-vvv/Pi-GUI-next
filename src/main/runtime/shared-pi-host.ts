@@ -6,8 +6,9 @@ import type { SubagentSettings } from '../../shared/kernel-contract.ts'
 import type { PiRpcEvent, PiRpcExtensionEvent, PiRpcExtensionInventory } from '../pi-rpc/pi-rpc-client.ts'
 import { errorMessage } from '../utils/errors.ts'
 import {
-  buildHibernateLeasePrompt,
-  buildQuiescencePrompt,
+  LEASE_COMMAND_NAME,
+  QUIESCENCE_COMMAND_NAME,
+  buildLeaseCommandArgs,
   interpretHibernateLeaseStatusText,
   interpretQuiescenceStatusText,
   isHibernateLeaseStatusEvent,
@@ -481,7 +482,6 @@ export class SharedPiRuntime implements RuntimeHost {
       return { ok: false, reason: 'malformed', message: `Quiescence query timeout rejected: ${timeout.reason}.` }
     }
     const nonce = randomUUID()
-    const prompt = buildQuiescencePrompt(nonce)
     return await new Promise<RuntimeQuiescenceQueryResult>((resolve) => {
       const timer = setTimeout(() => {
         this.quiescenceWaiters.delete(nonce)
@@ -493,7 +493,11 @@ export class SharedPiRuntime implements RuntimeHost {
         })
       }, timeout.timeoutMs)
       this.quiescenceWaiters.set(nonce, { nonce, resolve, timer })
-      void driver.send({ type: 'prompt', message: prompt }).catch((error: unknown) => {
+      void driver.send({
+        type: 'invoke_extension_command',
+        name: QUIESCENCE_COMMAND_NAME,
+        args: nonce
+      }).catch((error: unknown) => {
         const waiter = this.quiescenceWaiters.get(nonce)
         if (waiter === undefined) return
         clearTimeout(waiter.timer)
@@ -620,9 +624,9 @@ export class SharedPiRuntime implements RuntimeHost {
       return { ok: false, reason: 'malformed', message: `Hibernate lease timeout rejected: ${timeout.reason}.`, action: input.action }
     }
     const nonce = randomUUID()
-    let prompt: string
+    let args: string
     try {
-      prompt = buildHibernateLeasePrompt({
+      args = buildLeaseCommandArgs({
         action: input.action,
         nonce,
         sessionId: input.sessionId,
@@ -645,7 +649,11 @@ export class SharedPiRuntime implements RuntimeHost {
         })
       }, timeout.timeoutMs)
       this.leaseWaiters.set(nonce, { nonce, action: input.action, resolve, timer })
-      void driver.send({ type: 'prompt', message: prompt }).catch((error: unknown) => {
+      void driver.send({
+        type: 'invoke_extension_command',
+        name: LEASE_COMMAND_NAME,
+        args
+      }).catch((error: unknown) => {
         const waiter = this.leaseWaiters.get(nonce)
         if (waiter === undefined) return
         clearTimeout(waiter.timer)

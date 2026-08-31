@@ -142,3 +142,127 @@ test('SharedPiHost runs two real Pi SDK Sessions in one process and drains both'
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('SharedPiHost activates extension tools and fails when an extension cannot load', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-shared-sdk-tools-'))
+  const agentDir = join(root, 'agent')
+  const project = join(root, 'project')
+  const toolExtensionPath = join(root, 'tool-extension.ts')
+  const brokenExtensionPath = join(root, 'broken-extension.ts')
+  await Promise.all([
+    mkdir(agentDir, { recursive: true }),
+    mkdir(project, { recursive: true }),
+    writeFile(
+      toolExtensionPath,
+      `import { Type } from 'typebox'
+export default function extension(pi) {
+  pi.registerTool({
+    name: 'diag-tool',
+    label: 'Diag',
+    description: 'Diagnostic extension tool',
+    parameters: Type.Object({}),
+    execute: async () => ({ content: [{ type: 'text', text: 'ok' }] })
+  })
+  pi.on('session_start', (_event, ctx) => {
+    ctx.ui.setStatus('diag-tools', JSON.stringify(pi.getActiveTools()))
+  })
+}\n`,
+      'utf8'
+    ),
+    writeFile(brokenExtensionPath, 'export default 1\n', 'utf8')
+  ])
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR
+  process.env.PI_CODING_AGENT_DIR = agentDir
+
+  try {
+    const host = new SharedPiHost()
+    const runtime = host.createRuntime({
+      cwd: project,
+      projectTrust: true,
+      extensionPaths: [toolExtensionPath]
+    })
+    const started = new Promise<string | undefined>((resolve) => {
+      const unsubscribe = runtime.subscribe((event) => {
+        if (
+          event.type !== 'pi-event' || event.event.type !== 'extension_ui_request' ||
+          event.event.method !== 'setStatus' ||
+          event.event.statusKey !== 'diag-tools'
+        ) return
+        unsubscribe()
+        resolve(typeof event.event.statusText === 'string' ? event.event.statusText : undefined)
+      })
+    })
+    await runtime.start()
+    const activeTools = JSON.parse(await started ?? '[]') as string[]
+    assert.equal(activeTools.includes('diag-tool'), true)
+    await host.dispose()
+
+    const failingHost = new SharedPiHost()
+    const failingRuntime = failingHost.createRuntime({
+      cwd: project,
+      projectTrust: true,
+      extensionPaths: [brokenExtensionPath]
+    })
+    await assert.rejects(failingRuntime.start(), /extension load error/u)
+    await failingHost.dispose()
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('SharedPiHost initializes the Pi theme before session_start uses ui.theme', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-shared-sdk-theme-'))
+  const agentDir = join(root, 'agent')
+  const project = join(root, 'project')
+  const extensionPath = join(root, 'theme-extension.ts')
+  await Promise.all([
+    mkdir(agentDir, { recursive: true }),
+    mkdir(project, { recursive: true }),
+    writeFile(
+      extensionPath,
+      `export default function extension(pi) {
+  pi.on('session_start', (_event, ctx) => {
+    const styled = ctx.ui.theme.fg('accent', 'theme-ok')
+    ctx.ui.setStatus('theme-init', styled.includes('theme-ok') ? 'ok' : 'bad')
+  })
+}\n`,
+      'utf8'
+    )
+  ])
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR
+  process.env.PI_CODING_AGENT_DIR = agentDir
+  const host = new SharedPiHost()
+  const runtime = host.createRuntime({
+    cwd: project,
+    projectTrust: true,
+    extensionPaths: [extensionPath]
+  })
+
+  try {
+    const started = new Promise<string | undefined>((resolve, reject) => {
+      const unsubscribe = runtime.subscribe((event) => {
+        if (event.type === 'pi-event' && event.event.type === 'extension_error') {
+          unsubscribe()
+          reject(new Error(typeof event.event.error === 'string' ? event.event.error : 'extension_error'))
+          return
+        }
+        if (
+          event.type !== 'pi-event' || event.event.type !== 'extension_ui_request' ||
+          event.event.method !== 'setStatus' ||
+          event.event.statusKey !== 'theme-init'
+        ) return
+        unsubscribe()
+        resolve(typeof event.event.statusText === 'string' ? event.event.statusText : undefined)
+      })
+    })
+    await runtime.start()
+    assert.equal(await started, 'ok')
+  } finally {
+    await host.dispose()
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir
+    await rm(root, { recursive: true, force: true })
+  }
+})
