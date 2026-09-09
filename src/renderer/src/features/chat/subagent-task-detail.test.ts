@@ -494,7 +494,7 @@ test('SubagentTaskDetail SSR uses the safe Markdown pipeline for final output', 
 test('Workbench migrates Subagent detail into the generic right sidebar without moving domain content', () => {
   assert.match(
     workbenchSource,
-    /if \(settingsOpen && event\.key === 'Escape'\)[\s\S]*?if \(subagentTaskSelection !== null && !rightSidebarCollapsed && event\.key === 'Escape'\)/
+    /if \(settingsOpen && event\.key === 'Escape'\)[\s\S]*?if \(rightSidebarOpen && event\.key === 'Escape'\)/
   )
   assert.match(workbenchSource, /addEventListener\('keydown', handleShortcut, \{ capture: true \}\)/)
   assert.match(workbenchSource, /findSubagentTaskTrigger\(mainChat, selection\)/)

@@ -3,7 +3,9 @@ import { createPortal } from 'react-dom'
 
 import type {
   RemoteAccessStatus,
-  RemotePairingCode
+  RemotePairingCode,
+  TailscaleRemoteMode,
+  TailscaleRemoteStatus
 } from '../../../../shared/remote-admin-contract'
 import { REMOTE_PAIRING_CODE_LENGTH } from '../../../../shared/remote-contract'
 import { useModalDialog } from '../../components/useModalDialog'
@@ -15,7 +17,19 @@ type RemoteAccessPanelProps = {
   onGetStatus: () => Promise<RemoteAccessStatus>
   onCreatePairingCode: () => Promise<RemotePairingCode>
   onRevokeDevice: () => Promise<RemoteAccessStatus>
+  onGetTailscaleStatus: () => Promise<TailscaleRemoteStatus>
+  onEnableTailscaleFunnel: () => Promise<TailscaleRemoteStatus>
+  onEnableTailscaleServe: () => Promise<TailscaleRemoteStatus>
+  onDisableTailscale: () => Promise<TailscaleRemoteStatus>
+  onOpenExternal: (url: string) => Promise<void>
 }
+
+type RemoteAccessAction =
+  | 'create'
+  | 'revoke'
+  | 'enable-funnel'
+  | 'enable-serve'
+  | 'disable-tailscale'
 
 function formatTimestamp(value: number): string {
   return new Intl.DateTimeFormat('zh-CN', {
@@ -31,22 +45,32 @@ export function RemoteAccessPanel({
   busy,
   onGetStatus,
   onCreatePairingCode,
-  onRevokeDevice
+  onRevokeDevice,
+  onGetTailscaleStatus,
+  onEnableTailscaleFunnel,
+  onEnableTailscaleServe,
+  onDisableTailscale,
+  onOpenExternal
 }: RemoteAccessPanelProps): React.JSX.Element {
   const [status, setStatus] = useState<RemoteAccessStatus | null>(null)
+  const [tailscaleStatus, setTailscaleStatus] = useState<TailscaleRemoteStatus | null>(null)
   const [loading, setLoading] = useState(true)
-  const [action, setAction] = useState<'create' | 'revoke' | null>(null)
+  const [action, setAction] = useState<RemoteAccessAction | null>(null)
   const [pairingCode, setPairingCode] = useState<RemotePairingCode | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [revokeOpen, setRevokeOpen] = useState(false)
   const mountedRef = useRef(true)
-  const actionRef = useRef<'create' | 'revoke' | null>(null)
+  const actionRef = useRef<RemoteAccessAction | null>(null)
 
   const refreshStatus = useCallback(async (): Promise<void> => {
-    const next = await onGetStatus()
+    const [next, nextTailscale] = await Promise.all([
+      onGetStatus(),
+      onGetTailscaleStatus()
+    ])
     if (!mountedRef.current) return
     setStatus(next)
-  }, [onGetStatus])
+    setTailscaleStatus(nextTailscale)
+  }, [onGetStatus, onGetTailscaleStatus])
 
   useEffect(() => {
     mountedRef.current = true
@@ -108,6 +132,35 @@ export function RemoteAccessPanel({
     }
   }
 
+  async function changeTailscale(mode: Exclude<TailscaleRemoteMode, 'off'> | 'off'): Promise<void> {
+    if (busy || actionRef.current !== null) return
+    const nextAction: RemoteAccessAction = mode === 'off'
+      ? 'disable-tailscale'
+      : mode === 'funnel'
+        ? 'enable-funnel'
+        : 'enable-serve'
+    actionRef.current = nextAction
+    setAction(nextAction)
+    setError(null)
+    try {
+      const next = mode === 'off'
+        ? await onDisableTailscale()
+        : mode === 'funnel'
+          ? await onEnableTailscaleFunnel()
+          : await onEnableTailscaleServe()
+      if (!mountedRef.current) return
+      setTailscaleStatus(next)
+      if (mode === 'off') setPairingCode(null)
+      await refreshStatus()
+    } catch (reason) {
+      if (!mountedRef.current) return
+      setError(unknownErrorMessage(reason))
+    } finally {
+      actionRef.current = null
+      if (mountedRef.current) setAction(null)
+    }
+  }
+
   async function confirmRevoke(): Promise<void> {
     if (busy || actionRef.current !== null) return
     actionRef.current = 'revoke'
@@ -130,6 +183,11 @@ export function RemoteAccessPanel({
 
   const controlsDisabled = busy || loading || action !== null
   const hasPairedDevice = status?.enabled === true && status.device !== null
+  const tailscaleMode = tailscaleStatus?.managedMode ?? 'off'
+  const tailscaleReady = tailscaleStatus?.installed === true &&
+    tailscaleStatus.backendState === 'Running' &&
+    tailscaleStatus.routeState !== 'conflict'
+  const manualRemoteActive = status?.enabled === true && tailscaleMode === 'off'
 
   return (
     <div className="remote-access-panel">
@@ -138,7 +196,99 @@ export function RemoteAccessPanel({
       )}
 
       <section
-        className="settings-group settings-group-inline"
+        className="settings-group settings-group-inline settings-prefs"
+        aria-labelledby="settings-tailscale-remote"
+      >
+        <h3 id="settings-tailscale-remote" className="settings-group-heading">一键联网</h3>
+        <div className="settings-group-card">
+          <div className="settings-row">
+            <div className="settings-row-copy">
+              <h4>任意浏览器 <span className="remote-access-default-label">默认</span></h4>
+              <p>使用 Tailscale Funnel 创建公网 HTTPS 地址，不需要公网 IP、路由器映射或 Lucky。</p>
+            </div>
+            <div className="settings-row-control remote-access-actions">
+              <button
+                type="button"
+                className="remote-access-action remote-access-action-primary"
+                disabled={controlsDisabled || !tailscaleReady || manualRemoteActive || tailscaleMode === 'funnel'}
+                onClick={() => {
+                  void changeTailscale('funnel')
+                }}
+              >
+                {action === 'enable-funnel'
+                  ? '开启中…'
+                  : tailscaleMode === 'funnel'
+                    ? '公网已开启'
+                    : '一键开启'}
+              </button>
+            </div>
+          </div>
+
+          <div className="settings-row">
+            <div className="settings-row-copy">
+              <h4>仅我的设备</h4>
+              <p>使用 Tailscale Serve，仅允许同一 Tailnet 中获准的设备访问。</p>
+            </div>
+            <div className="settings-row-control remote-access-actions">
+              <button
+                type="button"
+                className="remote-access-action"
+                disabled={controlsDisabled || !tailscaleReady || manualRemoteActive || tailscaleMode === 'serve'}
+                onClick={() => {
+                  void changeTailscale('serve')
+                }}
+              >
+                {action === 'enable-serve'
+                  ? '开启中…'
+                  : tailscaleMode === 'serve'
+                    ? '私有访问已开启'
+                    : '仅我的设备'}
+              </button>
+            </div>
+          </div>
+
+          <div className="settings-row">
+            <div className="settings-row-copy">
+              <h4>Tailscale 状态</h4>
+              <p>{tailscaleStatusDescription(tailscaleStatus, manualRemoteActive)}</p>
+              {tailscaleStatus?.publicOrigin ? (
+                <code className="remote-access-origin">{tailscaleStatus.publicOrigin}</code>
+              ) : null}
+            </div>
+            <div className="settings-row-control remote-access-actions">
+              {tailscaleStatus?.authUrl ? (
+                <button
+                  type="button"
+                  className="remote-access-action"
+                  disabled={controlsDisabled}
+                  onClick={() => {
+                    void onOpenExternal(tailscaleStatus.authUrl!).catch((reason) => {
+                      setError(unknownErrorMessage(reason))
+                    })
+                  }}
+                >
+                  登录 Tailscale
+                </button>
+              ) : null}
+              {tailscaleMode !== 'off' ? (
+                <button
+                  type="button"
+                  className="remote-access-action remote-access-action-danger"
+                  disabled={controlsDisabled}
+                  onClick={() => {
+                    void changeTailscale('off')
+                  }}
+                >
+                  {action === 'disable-tailscale' ? '停用中…' : '停用一键访问'}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section
+        className="settings-group settings-group-inline settings-prefs"
         aria-labelledby="settings-remote-status"
       >
         <h3 id="settings-remote-status" className="settings-group-heading">状态</h3>
@@ -175,7 +325,7 @@ export function RemoteAccessPanel({
       </section>
 
       <section
-        className="settings-group settings-group-inline"
+        className="settings-group settings-group-inline settings-prefs"
         aria-labelledby="settings-remote-pairing"
       >
         <h3 id="settings-remote-pairing" className="settings-group-heading">配对</h3>
@@ -255,6 +405,31 @@ export function RemoteAccessPanel({
       ) : null}
     </div>
   )
+}
+
+function tailscaleStatusDescription(
+  status: TailscaleRemoteStatus | null,
+  manualRemoteActive: boolean
+): string {
+  if (manualRemoteActive) return '当前 Remote 由手动反向代理配置启用；一键模式不会接管。'
+  if (status === null) return '正在检查 Tailscale…'
+  if (!status.installed) return '未检测到 Tailscale，请先安装并登录。'
+  if (status.backendState !== 'Running') {
+    return `Tailscale 尚未就绪（${status.backendState ?? 'Unknown'}）。`
+  }
+  if (status.routeState === 'conflict') {
+    return 'HTTPS 443 已有其他 Serve/Funnel 配置，Pi GUI 不会覆盖。'
+  }
+  if (status.managedMode === 'funnel' && status.routeState === 'active') {
+    return '任意浏览器公网入口已开启。'
+  }
+  if (status.managedMode === 'serve' && status.routeState === 'active') {
+    return '仅 Tailnet 设备可访问。'
+  }
+  if (status.managedMode !== 'off' && status.routeState === 'unavailable') {
+    return '本机 Remote 已配置，但 Tailscale 路由需要重新启用。'
+  }
+  return 'Tailscale 已就绪，可以一键开启远程访问。'
 }
 
 function RevokeDeviceDialog({

@@ -141,6 +141,46 @@ test('createRequestId returns UUID-shaped ids', () => {
   assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
 })
 
+test('RemoteClient preserves EventSource native reconnect after a transient error', () => {
+  let closeCount = 0
+  const source = {
+    onopen: null,
+    onmessage: null,
+    onerror: null,
+    close() {
+      closeCount += 1
+    }
+  } as unknown as EventSource
+  const client = new RemoteClient({
+    eventSourceFactory: () => source
+  })
+  let openCount = 0
+  let errorCount = 0
+  const unsubscribe = client.subscribe(
+    () => undefined,
+    () => {
+      errorCount += 1
+    },
+    () => {
+      openCount += 1
+    }
+  )
+
+  source.onopen?.call(source, new Event('open'))
+  source.onerror?.call(source, new Event('error'))
+  assert.equal(openCount, 1)
+  assert.equal(errorCount, 1)
+  assert.equal(closeCount, 0)
+
+  source.onopen?.call(source, new Event('open'))
+  assert.equal(openCount, 2)
+
+  unsubscribe()
+  assert.equal(closeCount, 1)
+  source.onerror?.call(source, new Event('error'))
+  assert.equal(errorCount, 1)
+})
+
 test('RemoteClient uses the shared session/pair/state paths', async () => {
   const requests: Array<{ path: string, method: string, body: string | null }> = []
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {

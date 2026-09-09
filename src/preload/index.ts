@@ -39,22 +39,32 @@ import {
   type KernelProviderTestResult,
   type KernelSessionExportResult,
   type KernelSessionPreview,
+  type KernelSessionPreviewPageRequest,
   type KernelSubagentDefinition
 } from '../shared/kernel-contract'
 import {
   GIT_COMMAND_CHANNEL,
   type GitApi,
+  type GitBranchSyncExecutionResponse,
+  type GitBranchSyncPrepareResponse,
   type GitCommand,
+  type GitCommitExecutionResponse,
+  type GitCommitPreviewResponse,
   type GitDiffResponse,
+  type GitHistoryDetailResponse,
+  type GitHistoryFileDiffResponse,
+  type GitHistoryListResponse,
   type GitMutationResponse,
   type GitRefreshResponse
 } from '../shared/git-contract'
 import {
   REMOTE_ADMIN_COMMAND_CHANNEL,
+  type DesktopHostAccessStatus,
   type RemoteAccessStatus,
   type RemoteAdminApi,
   type RemoteAdminCommand,
-  type RemotePairingCode
+  type RemotePairingCode,
+  type TailscaleRemoteStatus
 } from '../shared/remote-admin-contract'
 
 const remoteAdminApi: RemoteAdminApi = {
@@ -69,6 +79,34 @@ const remoteAdminApi: RemoteAdminApi = {
   revokeDevice: () => {
     const command: RemoteAdminCommand = { type: 'remote-admin.revoke-device' }
     return ipcRenderer.invoke(REMOTE_ADMIN_COMMAND_CHANNEL, command) as Promise<RemoteAccessStatus>
+  },
+  getTailscaleStatus: () => {
+    const command: RemoteAdminCommand = { type: 'remote-admin.get-tailscale-status' }
+    return ipcRenderer.invoke(REMOTE_ADMIN_COMMAND_CHANNEL, command) as Promise<TailscaleRemoteStatus>
+  },
+  enableTailscaleFunnel: () => {
+    const command: RemoteAdminCommand = { type: 'remote-admin.enable-tailscale-funnel' }
+    return ipcRenderer.invoke(REMOTE_ADMIN_COMMAND_CHANNEL, command) as Promise<TailscaleRemoteStatus>
+  },
+  enableTailscaleServe: () => {
+    const command: RemoteAdminCommand = { type: 'remote-admin.enable-tailscale-serve' }
+    return ipcRenderer.invoke(REMOTE_ADMIN_COMMAND_CHANNEL, command) as Promise<TailscaleRemoteStatus>
+  },
+  disableTailscale: () => {
+    const command: RemoteAdminCommand = { type: 'remote-admin.disable-tailscale' }
+    return ipcRenderer.invoke(REMOTE_ADMIN_COMMAND_CHANNEL, command) as Promise<TailscaleRemoteStatus>
+  },
+  getDesktopHostStatus: () => {
+    const command: RemoteAdminCommand = { type: 'remote-admin.get-desktop-host-status' }
+    return ipcRenderer.invoke(REMOTE_ADMIN_COMMAND_CHANNEL, command) as Promise<DesktopHostAccessStatus>
+  },
+  createDesktopHostPairingCode: () => {
+    const command: RemoteAdminCommand = { type: 'remote-admin.create-desktop-host-pairing-code' }
+    return ipcRenderer.invoke(REMOTE_ADMIN_COMMAND_CHANNEL, command) as Promise<RemotePairingCode>
+  },
+  revokeDesktopHostDevice: () => {
+    const command: RemoteAdminCommand = { type: 'remote-admin.revoke-desktop-host-device' }
+    return ipcRenderer.invoke(REMOTE_ADMIN_COMMAND_CHANNEL, command) as Promise<DesktopHostAccessStatus>
   }
 }
 
@@ -105,6 +143,34 @@ const gitApi: GitApi = {
       request: { ...request, action: 'unstage' }
     }
     return ipcRenderer.invoke(GIT_COMMAND_CHANNEL, command) as Promise<GitMutationResponse>
+  },
+  prepareCommit: (projectKey) => {
+    const command: GitCommand = { type: 'git.prepare-commit', projectKey }
+    return ipcRenderer.invoke(GIT_COMMAND_CHANNEL, command) as Promise<GitCommitPreviewResponse>
+  },
+  executeCommit: (projectKey, request) => {
+    const command: GitCommand = { type: 'git.execute-commit', projectKey, request }
+    return ipcRenderer.invoke(GIT_COMMAND_CHANNEL, command) as Promise<GitCommitExecutionResponse>
+  },
+  listHistory: (projectKey, request) => {
+    const command: GitCommand = { type: 'git.list-history', projectKey, request }
+    return ipcRenderer.invoke(GIT_COMMAND_CHANNEL, command) as Promise<GitHistoryListResponse>
+  },
+  getHistoryDetail: (projectKey, request) => {
+    const command: GitCommand = { type: 'git.get-history-detail', projectKey, request }
+    return ipcRenderer.invoke(GIT_COMMAND_CHANNEL, command) as Promise<GitHistoryDetailResponse>
+  },
+  getHistoryFileDiff: (projectKey, request) => {
+    const command: GitCommand = { type: 'git.get-history-file-diff', projectKey, request }
+    return ipcRenderer.invoke(GIT_COMMAND_CHANNEL, command) as Promise<GitHistoryFileDiffResponse>
+  },
+  prepareBranchSync: (projectKey) => {
+    const command: GitCommand = { type: 'git.prepare-branch-sync', projectKey }
+    return ipcRenderer.invoke(GIT_COMMAND_CHANNEL, command) as Promise<GitBranchSyncPrepareResponse>
+  },
+  executeBranchSync: (projectKey, request) => {
+    const command: GitCommand = { type: 'git.execute-branch-sync', projectKey, request }
+    return ipcRenderer.invoke(GIT_COMMAND_CHANNEL, command) as Promise<GitBranchSyncExecutionResponse>
   }
 }
 
@@ -212,6 +278,11 @@ const kernelApi: KernelApi = {
     const command: KernelCommand = { type: 'kernel.cancel-session-preview', requestId }
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<void>
+  },
+  loadEarlierSessionPreview: (request: KernelSessionPreviewPageRequest) => {
+    const command: KernelCommand = { type: 'kernel.load-earlier-session-preview', request }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelConversationPage>
   },
   previewArchivedSession: (token) => {
     const command: KernelCommand = { type: 'kernel.preview-archived-session', token }
@@ -473,6 +544,44 @@ const kernelApi: KernelApi = {
   },
   cancelAsk: (sessionKey, toolCallId) => {
     const command: KernelCommand = { type: 'kernel.cancel-ask', sessionKey, toolCallId }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
+  },
+  respondExtensionDialog: (
+    projectKey,
+    sessionKey,
+    sessionId,
+    requestId,
+    commandInvocationId,
+    value
+  ) => {
+    const command: KernelCommand = {
+      type: 'kernel.respond-extension-dialog',
+      projectKey,
+      sessionKey,
+      sessionId,
+      requestId,
+      commandInvocationId,
+      value
+    }
+
+    return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
+  },
+  cancelExtensionDialog: (
+    projectKey,
+    sessionKey,
+    sessionId,
+    requestId,
+    commandInvocationId
+  ) => {
+    const command: KernelCommand = {
+      type: 'kernel.cancel-extension-dialog',
+      projectKey,
+      sessionKey,
+      sessionId,
+      requestId,
+      commandInvocationId
+    }
 
     return ipcRenderer.invoke(KERNEL_COMMAND_CHANNEL, command) as Promise<KernelMutationAck>
   },

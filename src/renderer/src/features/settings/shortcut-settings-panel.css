@@ -13,67 +13,27 @@
   padding: 8px 12px;
 }
 
-.shortcut-settings-list {
-  overflow: hidden;
-  border-radius: var(--radius-panel);
-  padding: 6px;
-  background: var(--color-surface-subtle);
-}
-
-.shortcut-settings-row {
-  min-height: 76px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  margin: 0;
-  border-radius: var(--radius-control);
-  padding: 14px 12px;
-  transition: background var(--motion-duration-control) var(--motion-easing-standard);
-}
-
-.shortcut-settings-row + .shortcut-settings-row {
-  border-top: 0;
-}
-
-.shortcut-settings-row:hover,
-.shortcut-settings-row:focus-within {
-  background: var(--color-surface-subtle-strong);
-}
-
-.shortcut-settings-copy {
-  min-width: 0;
-}
-
-.shortcut-settings-copy h4 {
-  margin: 0;
-  color: var(--color-text-primary);
-  font-size: var(--text-body);
-  font-weight: var(--weight-medium);
-}
-
-.shortcut-settings-copy span {
-  display: block;
-  margin-top: 4px;
-  color: var(--color-text-muted);
+.shortcut-binding {
   font-family: var(--font-code);
-  font-size: var(--text-caption);
-  line-height: var(--line-caption);
 }
 
 .shortcut-settings-actions {
   display: flex;
+  width: auto;
+  max-width: none;
   flex: 0 0 auto;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
 }
 
 .shortcut-settings-actions button {
-  min-width: 112px;
+  min-width: 72px;
   padding: 7px 10px;
 }
 
 .shortcut-settings-actions .recording {
+  min-width: 10.5rem;
   border-color: var(--color-border-focus);
   box-shadow: 0 0 0 3px var(--color-focus-ring);
 }
@@ -116,12 +76,6 @@
 }
 
 @media (max-width: 620px) {
-  .shortcut-settings-row {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 10px;
-  }
-
   .shortcut-settings-actions {
     width: 100%;
   }

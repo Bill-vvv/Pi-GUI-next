@@ -16,6 +16,7 @@ import type {
   KernelCompactionReason,
   KernelEvent,
   KernelExtensionDescriptor,
+  KernelExtensionDialogRequest,
   KernelForkCandidate,
   KernelMessageAttachment,
   KernelMessageImage,
@@ -30,6 +31,7 @@ import type {
   KernelRuntimeMemoryUnavailableReason,
   KernelSessionSummary,
   KernelSessionPreview,
+  KernelSessionPreviewPageRequest,
   KernelSessionState,
   KernelSessionStatistics,
   KernelSessionUsage,
@@ -76,8 +78,13 @@ import {
 import { isAbsolute } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { RestartContinuationCandidate } from '../project/restart-continuation.ts'
+import {
+  SessionTranscriptPreparationCache,
+  type SessionTranscriptPreparationHandle
+} from '../project/session-transcript-preparation-cache.ts'
 import type {
   ReadSessionMessagesTailFirstOptions,
+  SessionTranscriptGeneration,
   SessionTranscriptMessagePhase
 } from '../project/session-transcript-tail.ts'
 import {
@@ -98,6 +105,8 @@ import {
 import type { SessionNameGenerator } from '../runtime/session-name-generator.ts'
 import { errorMessage } from '../utils/errors.ts'
 import {
+  adaptedExtensionCommandAllowsBlockingUi,
+  assertAdaptedExtensionCommandArgument,
   COMPACT_COMMAND_ID,
   createCommandCatalog,
   NEW_SESSION_COMMAND_ID,
@@ -122,6 +131,10 @@ import {
   type AskResponseStep,
   type AskUiRequest
 } from './ask-tool.ts'
+import {
+  assertExtensionDialogResponse,
+  normalizeExtensionDialogRequest
+} from './extension-dialog.ts'
 import {
   collectValidatedToolImages,
   copyToolImageAttachments,
@@ -171,10 +184,9 @@ const INITIAL_SESSION_STATE: KernelSessionState = {
 }
 
 const AUTOMATIC_SESSION_NAME_MODEL_IDS = [
-  'gpt-5.4-nano',
+  'gpt-5.6-luna',
   'gpt-5.4-mini',
-  'gpt-5.3-codex-spark',
-  'gpt-5.6-luna'
+  'gpt-5.3-codex-spark'
 ] as const
 
 const ARCHIVE_UNDO_DURATION_MS = 5_000
@@ -237,6 +249,9 @@ export type WorkbenchKernelOptions = {
     pointer: SessionPointer,
     options: ReadSessionMessagesTailFirstOptions
   ) => Promise<SessionTranscriptMessagePhase>
+  readSessionTranscriptGeneration?: (
+    pointer: SessionPointer
+  ) => Promise<SessionTranscriptGeneration>
   persistProjectOrder?: (projectKeys: string[]) => Promise<void>
   sessionNaming?: SessionNamingSettings
   persistSessionNaming?: (settings: SessionNamingSettings) => Promise<void>
@@ -266,6 +281,7 @@ type ProvisionalSession = {
   runtime: RuntimeHost
   pointer: SessionPointer
   initialPrompt: string | null
+  sessionNameAttempted: boolean
   activityAt: number
 }
 
@@ -299,20 +315,38 @@ type PendingStaticSessionPreviewRequest = {
 
 type StaticSessionPreviewOperation = {
   requestId: string
+  previewId: string
   projectPath: string
   pointer: SessionPointer
   registrySource: SessionPreviewRegistrySource
   controller: AbortController
+  preparation: SessionTranscriptPreparationHandle
   tail: Promise<KernelSessionPreview>
   resolveTail: (preview: KernelSessionPreview) => void
   rejectTail: (error: unknown) => void
   completion: Promise<KernelSessionPreview>
 }
 
+type DetachedHistoryLease = {
+  previewId: string
+  pointer: SessionPointer
+  archivedExpiresAt: number | null
+}
+
 type ConversationIdentity = {
   projectKey: string
   sessionKey: string
   sessionId: string
+}
+
+type ExtensionCommandInvocation = {
+  id: string
+  name: string
+  active: boolean
+}
+
+type ExtensionDialogInteraction = {
+  request: KernelExtensionDialogRequest
 }
 
 type RuntimeContext = {
@@ -357,6 +391,8 @@ type RuntimeContext = {
   compactionRevision: number
   compactionLifecycle: CompactionLifecycle | null
   askInteraction: AskInteraction | null
+  extensionCommandInvocation: ExtensionCommandInvocation | null
+  extensionDialogInteraction: ExtensionDialogInteraction | null
   /** Runtime events buffered only across an atomic persisted identity commit (fork). */
   deferredEvents: RuntimeHostEvent[] | null
 }
@@ -422,6 +458,7 @@ export class WorkbenchKernel {
     new Map<string, Map<string, KernelSessionStatistics | null>>()
   private readonly workspaceMetadataRefreshGeneration = new Map<string, number>()
   private readonly archiveUndoByToken = new Map<string, ArchiveUndoRecord>()
+  private readonly detachedHistoryLeases = new Map<string, DetachedHistoryLease>()
   private readonly sessionReloadRequired = new Set<string>()
   private readonly restartContinuations = new Map<string, RestartContinuationCandidate>()
   /**
@@ -463,6 +500,7 @@ export class WorkbenchKernel {
   } | null = null
   private pendingStaticSessionPreview: PendingStaticSessionPreviewRequest | null = null
   private staticSessionPreview: StaticSessionPreviewOperation | null = null
+  private readonly sessionTranscriptPreparations: SessionTranscriptPreparationCache | null
 
   constructor(
     createRuntime: RuntimeFactory,
@@ -502,6 +540,15 @@ export class WorkbenchKernel {
     this.readSessionMetadata = options.readSessionMetadata
     this.readSessionMessages = options.readSessionMessages
     this.readSessionMessagesTailFirst = options.readSessionMessagesTailFirst
+    this.sessionTranscriptPreparations =
+      options.readSessionMessagesTailFirst === undefined ||
+      options.readSessionTranscriptGeneration === undefined
+        ? null
+        : new SessionTranscriptPreparationCache(
+            options.readSessionMessagesTailFirst,
+            options.readSessionTranscriptGeneration,
+            5
+          )
     this.persistProjectOrder = options.persistProjectOrder ?? (async () => {})
     this.persistSessionNaming = options.persistSessionNaming ?? (async () => {})
     this.persistAppearance = options.persistAppearance ?? (async () => {})
@@ -730,6 +777,7 @@ export class WorkbenchKernel {
         context.provisionalSession !== null ||
         context.provisionalCommit !== null ||
         context.askInteraction !== null ||
+        state.extensionDialog !== null && state.extensionDialog !== undefined ||
         state.runtime.status !== 'running' ||
         state.session.settled ||
         state.session.compaction !== null ||
@@ -1345,6 +1393,42 @@ export class WorkbenchKernel {
     }
   }
 
+  async respondExtensionDialog(
+    projectKey: string,
+    sessionKey: string,
+    sessionId: string,
+    requestId: string,
+    commandInvocationId: string,
+    value: string
+  ): Promise<void> {
+    const { context, interaction } = this.requireActiveExtensionDialog(
+      projectKey,
+      sessionKey,
+      sessionId,
+      requestId,
+      commandInvocationId
+    )
+    assertExtensionDialogResponse(interaction.request, value)
+    await this.deliverExtensionDialogResponse(context, interaction, { value })
+  }
+
+  async cancelExtensionDialog(
+    projectKey: string,
+    sessionKey: string,
+    sessionId: string,
+    requestId: string,
+    commandInvocationId: string
+  ): Promise<void> {
+    const { context, interaction } = this.requireActiveExtensionDialog(
+      projectKey,
+      sessionKey,
+      sessionId,
+      requestId,
+      commandInvocationId
+    )
+    await this.deliverExtensionDialogResponse(context, interaction, { cancelled: true })
+  }
+
   async activateSession(
     sessionKey: string,
     sessionRegistry?: ProjectSessionRegistry | (() => Promise<ProjectSessionRegistry>)
@@ -1505,7 +1589,11 @@ export class WorkbenchKernel {
   ): Promise<KernelSessionPreview> {
     if (!isAbsolute(sessionKey)) throw new Error(`Session key must be absolute: ${sessionKey}`)
     assertSessionPreviewRequestId(requestId)
-    this.cancelActiveStaticSessionPreview()
+    const pending = this.pendingStaticSessionPreview
+    if (pending !== null) {
+      this.pendingStaticSessionPreview = null
+      pending.controller.abort()
+    }
 
     const request: PendingStaticSessionPreviewRequest = {
       requestId,
@@ -1514,20 +1602,16 @@ export class WorkbenchKernel {
     this.pendingStaticSessionPreview = request
     let operation: StaticSessionPreviewOperation | null = null
     try {
-      operation = await this.prepareStaticSessionPreview(
-        sessionKey,
-        sessionRegistry,
-        request
-      )
+      operation = await this.prepareStaticSessionPreview(sessionKey, sessionRegistry, request)
       return await operation.tail
     } catch (error) {
-      if (this.pendingStaticSessionPreview === request) {
-        this.pendingStaticSessionPreview = null
-      }
+      const stillOwnsPendingRequest = this.pendingStaticSessionPreview === request
+      if (stillOwnsPendingRequest) this.pendingStaticSessionPreview = null
       if (operation !== null && this.staticSessionPreview === operation) {
         this.staticSessionPreview = null
       }
       request.controller.abort()
+      if (operation === null && stillOwnsPendingRequest) this.cancelActiveStaticSessionPreview()
       throw error
     }
   }
@@ -1561,13 +1645,14 @@ export class WorkbenchKernel {
     if (typeof this.validateSession !== 'function') {
       throw new Error('Session validation is unavailable.')
     }
-    if (typeof this.readSessionMessagesTailFirst !== 'function') {
-      throw new Error('Session preview is unavailable.')
-    }
+    const preparations = this.sessionTranscriptPreparations
+    if (preparations === null) throw new Error('Session preview is unavailable.')
 
     const pointer = await this.validateSession(storedPointer)
     this.assertPendingStaticSessionPreview(request)
     await this.assertStaticSessionPreviewIdentity(project.path, pointer, registrySource)
+    this.assertPendingStaticSessionPreview(request)
+    const preparation = await preparations.acquire(pointer)
     this.assertPendingStaticSessionPreview(request)
 
     let resolveTail!: (preview: KernelSessionPreview) => void
@@ -1578,27 +1663,29 @@ export class WorkbenchKernel {
     })
     const operation: StaticSessionPreviewOperation = {
       requestId: request.requestId,
+      previewId: randomUUID(),
       projectPath: project.path,
       pointer,
       registrySource,
       controller: request.controller,
+      preparation,
       tail,
       resolveTail,
       rejectTail,
       completion: Promise.resolve(null as unknown as KernelSessionPreview)
     }
+    const previous = this.staticSessionPreview
     this.pendingStaticSessionPreview = null
     this.staticSessionPreview = operation
+    this.rememberDetachedHistoryLease(operation.previewId, pointer, null)
+    if (previous !== null) this.cancelStaticSessionPreviewOperation(previous)
     operation.completion = this.runStaticSessionPreview(operation)
     void operation.completion.catch(() => undefined)
     return operation
   }
 
   private assertPendingStaticSessionPreview(request: PendingStaticSessionPreviewRequest): void {
-    if (
-      this.pendingStaticSessionPreview !== request ||
-      request.controller.signal.aborted
-    ) {
+    if (this.pendingStaticSessionPreview !== request || request.controller.signal.aborted) {
       throw sessionPreviewAbortError()
     }
   }
@@ -1627,29 +1714,78 @@ export class WorkbenchKernel {
     const operation = this.staticSessionPreview
     if (operation === null || operation.requestId !== requestId) return
     this.staticSessionPreview = null
-    operation.controller.abort()
+    this.cancelStaticSessionPreviewOperation(operation)
+  }
+
+  async loadEarlierSessionPreview(
+    request: KernelSessionPreviewPageRequest,
+    sessionRegistry?: SessionPreviewRegistrySource
+  ): Promise<KernelConversationPage> {
+    const lease = this.detachedHistoryLeases.get(request.previewId)
+    if (
+      lease === undefined ||
+      lease.pointer.projectPath !== request.projectKey ||
+      lease.pointer.sessionFile !== request.sessionKey ||
+      lease.pointer.sessionId !== request.sessionId
+    ) {
+      throw new Error('Session preview page identity is stale.')
+    }
+    if (lease.archivedExpiresAt !== null) {
+      if (this.now() >= lease.archivedExpiresAt) {
+        this.detachedHistoryLeases.delete(request.previewId)
+        throw new Error('Archived Session preview has expired.')
+      }
+    } else {
+      const registrySource = sessionRegistry ?? (async () => ({
+        sessions: this.sessionPointers,
+        activeSessionKey: this.state.activeSessionKey
+      }))
+      await this.assertStaticSessionPreviewIdentity(request.projectKey, lease.pointer, registrySource)
+    }
+    const preparations = this.sessionTranscriptPreparations
+    if (preparations === null) throw new Error('Session preview is unavailable.')
+    const handle = await preparations.acquire(lease.pointer)
+    try {
+      const phase = await handle.completion
+      const entries = projectTranscriptMessages(phase.messages)
+      assertConversationPageRequest(request, entries)
+      const startIndex = conversationTurnWindowStartIndex(
+        entries,
+        request.beforeIndex,
+        KERNEL_CONVERSATION_PAGE_TURN_COUNT
+      )
+      if (startIndex >= request.beforeIndex) {
+        throw new Error('Session preview has no earlier Conversation page.')
+      }
+      return {
+        projectKey: request.projectKey,
+        sessionKey: request.sessionKey,
+        sessionId: request.sessionId,
+        beforeIndex: request.beforeIndex,
+        beforeEntryId: request.beforeEntryId,
+        startIndex,
+        entries: entries.slice(startIndex, request.beforeIndex)
+      }
+    } finally {
+      handle.release()
+    }
   }
 
   private async runStaticSessionPreview(
     operation: StaticSessionPreviewOperation
   ): Promise<KernelSessionPreview> {
-    const readSessionMessagesTailFirst = this.readSessionMessagesTailFirst
-    if (readSessionMessagesTailFirst === undefined) {
-      throw new Error('Session preview is unavailable.')
-    }
     try {
-      const full = await readSessionMessagesTailFirst(operation.pointer, {
-        signal: operation.controller.signal,
-        onTail: async (phase) => {
-          await this.assertStaticSessionPreviewBoundary(operation)
-          operation.resolveTail(this.projectStaticSessionPreview(operation, phase, false))
-        }
-      })
+      const tail = await operation.preparation.tail
+      await this.assertStaticSessionPreviewBoundary(operation)
+      operation.resolveTail(this.projectStaticSessionPreview(operation, tail, false))
+      const full = await operation.preparation.completion
       await this.assertStaticSessionPreviewBoundary(operation)
       return this.projectStaticSessionPreview(operation, full, true)
     } catch (error) {
       operation.rejectTail(error)
       throw error
+    } finally {
+      operation.preparation.release()
     }
   }
 
@@ -1663,12 +1799,14 @@ export class WorkbenchKernel {
       ? conversationTurnWindowStartIndex(entries, entries.length, KERNEL_CONVERSATION_PAGE_TURN_COUNT)
       : 0
     return {
+      previewId: operation.previewId,
       projectKey: operation.projectPath,
       sessionKey: operation.pointer.sessionFile,
       sessionId: operation.pointer.sessionId,
       sessionName: operation.pointer.sessionName,
       conversation: {
         entries: entries.slice(startIndex),
+        startIndex,
         activeRunStartIndex: null
       }
     }
@@ -1732,7 +1870,26 @@ export class WorkbenchKernel {
     const operation = this.staticSessionPreview
     if (operation !== null) {
       this.staticSessionPreview = null
-      operation.controller.abort()
+      this.cancelStaticSessionPreviewOperation(operation)
+    }
+  }
+
+  private cancelStaticSessionPreviewOperation(operation: StaticSessionPreviewOperation): void {
+    operation.controller.abort()
+    operation.preparation.release()
+    operation.rejectTail(sessionPreviewAbortError())
+  }
+
+  private rememberDetachedHistoryLease(
+    previewId: string,
+    pointer: SessionPointer,
+    archivedExpiresAt: number | null
+  ): void {
+    this.detachedHistoryLeases.set(previewId, { previewId, pointer, archivedExpiresAt })
+    while (this.detachedHistoryLeases.size > 16) {
+      const oldest = this.detachedHistoryLeases.keys().next().value as string | undefined
+      if (oldest === undefined) break
+      this.detachedHistoryLeases.delete(oldest)
     }
   }
 
@@ -2477,24 +2634,38 @@ export class WorkbenchKernel {
     if (typeof this.validateSession !== 'function') {
       throw new Error('Session validation is unavailable.')
     }
-    if (typeof this.readSessionMessages !== 'function') {
-      throw new Error('Session preview is unavailable.')
-    }
+    const preparations = this.sessionTranscriptPreparations
+    if (preparations === null) throw new Error('Session preview is unavailable.')
     const pointer = await this.validateSession(record.pointer)
-    const messages = await this.readSessionMessages(pointer)
-    if (this.requireArchiveUndoRecord(token) !== record) {
-      throw new Error('Archive undo credential is stale.')
-    }
-    this.archiveUndoByToken.delete(token)
-    return {
-      projectKey: record.receipt.projectKey,
-      sessionKey: pointer.sessionFile,
-      sessionId: pointer.sessionId,
-      sessionName: pointer.sessionName,
-      conversation: {
-        entries: projectMessages(messages),
-        activeRunStartIndex: null
+    const handle = await preparations.acquire(pointer)
+    try {
+      const phase = await handle.completion
+      if (this.requireArchiveUndoRecord(token) !== record) {
+        throw new Error('Archive undo credential is stale.')
       }
+      this.archiveUndoByToken.delete(token)
+      const entries = projectTranscriptMessages(phase.messages)
+      const startIndex = conversationTurnWindowStartIndex(
+        entries,
+        entries.length,
+        KERNEL_CONVERSATION_PAGE_TURN_COUNT
+      )
+      const previewId = randomUUID()
+      this.rememberDetachedHistoryLease(previewId, pointer, record.expiresAt)
+      return {
+        previewId,
+        projectKey: record.receipt.projectKey,
+        sessionKey: pointer.sessionFile,
+        sessionId: pointer.sessionId,
+        sessionName: pointer.sessionName,
+        conversation: {
+          entries: entries.slice(startIndex),
+          startIndex,
+          activeRunStartIndex: null
+        }
+      }
+    } finally {
+      handle.release()
     }
   }
 
@@ -2659,7 +2830,10 @@ export class WorkbenchKernel {
     if (context.sessionUsageRefreshInFlight || context.sessionUsageRefreshRequested) {
       return 'Cannot hibernate a session while session usage refresh is in progress.'
     }
-    if (context.askInteraction !== null) {
+    if (
+      context.askInteraction !== null ||
+      (context.state.extensionDialog !== null && context.state.extensionDialog !== undefined)
+    ) {
       return 'Cannot hibernate a session while waiting for a user reply.'
     }
     const session = context.state.session
@@ -2834,6 +3008,8 @@ export class WorkbenchKernel {
       compactionRevision: 0,
       compactionLifecycle: null,
       askInteraction: null,
+      extensionCommandInvocation: null,
+      extensionDialogInteraction: null,
       deferredEvents: null
     }
     this.contexts.add(context)
@@ -2920,20 +3096,16 @@ export class WorkbenchKernel {
         entriesResult.entries,
         entriesResult.leafId
       )
+      const projectedSessionEntries = projectSessionEntries(activeSessionEntries)
+      const startupExtensionEntries = this.state.conversation.entries.filter(
+        (entry): entry is KernelExtensionStatusEntry =>
+          entry.kind === 'extension-status' &&
+          entry.id === 'extension-status:magic-context' &&
+          entry.timestamp >= startupBeganAt
+      )
       const openAiFastMode = openAiFastModeFromSessionEntries(activeSessionEntries)
-      projectedMessages = mergeConversationEntries(
-        projectedMessages,
-        projectSessionEntries(activeSessionEntries)
-      )
-      projectedMessages = mergeConversationEntries(
-        projectedMessages,
-        this.state.conversation.entries.filter(
-          (entry): entry is KernelExtensionStatusEntry =>
-            entry.kind === 'extension-status' &&
-            entry.id === 'extension-status:magic-context' &&
-            entry.timestamp >= startupBeganAt
-        )
-      )
+      projectedMessages = mergeConversationEntries(projectedMessages, projectedSessionEntries)
+      projectedMessages = mergeConversationEntries(projectedMessages, startupExtensionEntries)
       const advisor = projectAdvisorState(entriesResult.entries)
       const availableModelsResult = await runtime.send({ type: 'get_available_models' })
       this.assertStartActive(runtime)
@@ -2971,6 +3143,7 @@ export class WorkbenchKernel {
           runtime,
           pointer,
           initialPrompt: null,
+          sessionNameAttempted: false,
           activityAt: this.now()
         }
         context.provisionalSession = this.provisionalSession
@@ -2996,6 +3169,19 @@ export class WorkbenchKernel {
         return
       }
       this.assertStartActive(runtime)
+      if (this.readSessionMessagesTailFirst !== undefined) {
+        const transcript = await this.readSessionMessagesTailFirst(canonicalPointer, {
+          onTail: () => undefined
+        })
+        this.assertStartActive(runtime)
+        projectedMessages = mergeConversationEntries(
+          mergeConversationEntries(
+            projectTranscriptMessages(transcript.messages),
+            projectedSessionEntries
+          ),
+          startupExtensionEntries
+        )
+      }
       this.launchCommitting = true
       try {
         if (persistSessionActivation) await this.persistSession(canonicalPointer)
@@ -3193,6 +3379,16 @@ export class WorkbenchKernel {
         message: materialized.message,
         ...(materialized.images.length === 0 ? {} : { images: materialized.images })
       })
+      if (
+        provisional !== null &&
+        this.provisionalSession === provisional &&
+        provisional.initialPrompt !== null &&
+        !provisional.sessionNameAttempted
+      ) {
+        provisional.sessionNameAttempted = true
+        this.queueSessionNameGeneration(runtime, provisional.pointer, provisional.initialPrompt)
+      }
+      this.beginSessionNameGeneration()
     } catch (error) {
       if (provisional !== null && this.provisionalSession === provisional) {
         provisional.initialPrompt = null
@@ -3286,18 +3482,19 @@ export class WorkbenchKernel {
     ) {
       throw new Error('Advisor live toggle is unavailable.')
     }
-    const commands = this.state.commands.filter((command) =>
-      command.name === 'advisor' && command.source === 'extension'
-    )
-    if (commands.length !== 1) {
-      throw new Error('Advisor extension command must resolve uniquely.')
-    }
     const context = this.activeContext
     if (context === null || context.runtime !== runtime) {
       throw new Error('Active runtime context is unavailable.')
     }
 
-    await this.invokePiCommand(commands[0]!, enabled ? 'on' : 'off')
+    const toggleResult = await runtime.send({
+      type: 'invoke_extension_command',
+      name: 'advisor',
+      args: enabled ? 'on' : 'off'
+    })
+    if (toggleResult.type !== 'accepted') {
+      throw new Error('Runtime did not accept the Advisor toggle command.')
+    }
     if (this.activeContext !== context || this.runtime !== runtime) {
       throw new Error('Advisor toggle cancelled because the active session changed.')
     }
@@ -3455,11 +3652,11 @@ export class WorkbenchKernel {
       return
     }
 
-    if (command.source === 'extension') this.appendCommandEcho(command, argument)
-    await this.invokePiCommand(command, argument)
-    if (isMagicContextStatusCommand(command)) {
-      this.appendMagicContextStatusSnapshot()
+    if (command.source === 'extension') {
+      assertAdaptedExtensionCommandArgument(command, argument)
     }
+    await this.invokePiCommand(command, argument)
+    if (command.source === 'extension') this.appendCommandEcho(command, argument)
   }
 
   private appendCommandEcho(command: KernelCommandDescriptor, argument: string): void {
@@ -3510,23 +3707,6 @@ export class WorkbenchKernel {
     }
   }
 
-  private appendMagicContextStatusSnapshot(): void {
-    const current = this.state.conversation.entries.find(
-      (entry): entry is KernelExtensionStatusEntry =>
-        entry.kind === 'extension-status' && entry.id === 'extension-status:magic-context'
-    )
-    this.appendLocalConversationEntry({
-      id: `extension-status:magic-context:snapshot:${randomUUID()}`,
-      kind: 'extension-status',
-      source: 'magic-context',
-      title: current === undefined ? 'Magic Context 状态不可用' : 'Magic Context 状态',
-      text: current?.text ??
-        '当前 Pi RPC 不支持 Magic Context 的自定义状态对话框，且本任务尚未收到状态栏数据。请重载任务后再试。',
-      level: current?.level ?? 'warning',
-      timestamp: Date.now()
-    })
-  }
-
   private appendLocalConversationEntry(entry: KernelConversationEntry): void {
     const context = this.activeContext
     if (context === null) return
@@ -3547,6 +3727,34 @@ export class WorkbenchKernel {
       throw new Error(`Command has no execution path: ${command.id}`)
     }
     const runtime = this.requireRuntime('ready')
+    if (command.source === 'extension') {
+      const context = this.activeContext
+      if (context === null || context.runtime !== runtime) {
+        throw new Error('Active Runtime context is unavailable.')
+      }
+      if (context.extensionCommandInvocation !== null) {
+        throw new Error(`Extension command is already running: /${context.extensionCommandInvocation.name}`)
+      }
+      const invocation = { id: randomUUID(), name: command.name, active: true }
+      context.extensionCommandInvocation = invocation
+      try {
+        const result = await runtime.send({
+          type: 'invoke_extension_command',
+          name: command.name,
+          invocationId: invocation.id,
+          ...(argument.trim().length === 0 ? {} : { args: argument.trim() })
+        })
+        if (result.type !== 'accepted') {
+          throw new Error(`Runtime did not accept Extension command: /${command.name}`)
+        }
+      } finally {
+        invocation.active = false
+        if (context.extensionCommandInvocation === invocation) {
+          context.extensionCommandInvocation = null
+        }
+      }
+      return
+    }
     const commandText = argument.trim().length === 0
       ? `/${command.name}`
       : `/${command.name} ${argument.trim()}`
@@ -3579,6 +3787,8 @@ export class WorkbenchKernel {
 
   async stop(): Promise<void> {
     this.cancelActiveStaticSessionPreview()
+    this.sessionTranscriptPreparations?.clear()
+    this.detachedHistoryLeases.clear()
     if (this.pendingProjectTrust !== null) {
       this.stopRequested = true
       this.cancelPendingProjectTrust('Runtime start cancelled.')
@@ -3622,6 +3832,9 @@ export class WorkbenchKernel {
     if (!this.contexts.has(context)) return
     this.cancelContextCompaction(context)
     context.askInteraction = null
+    context.extensionCommandInvocation = null
+    context.extensionDialogInteraction = null
+    context.state = { ...context.state, extensionDialog: null }
     if (typeof context.state.activeSessionKey === 'string') {
       this.clearToolImageCacheForSession(context.state.activeSessionKey)
     }
@@ -3651,6 +3864,7 @@ export class WorkbenchKernel {
       context.stopRequested = false
       context.state = {
         ...context.state,
+        extensionDialog: null,
         runtime: toKernelRuntime('crashed', context.runtime.getState(), errorMessage(error))
       }
       if (wasActive) {
@@ -3953,6 +4167,169 @@ export class WorkbenchKernel {
     return context
   }
 
+  private requireActiveExtensionDialog(
+    projectKey: string,
+    sessionKey: string,
+    sessionId: string,
+    requestId: string,
+    commandInvocationId: string
+  ): { context: RuntimeContext, interaction: ExtensionDialogInteraction } {
+    const context = this.activeContext
+    if (
+      context === null ||
+      context.runtime !== this.runtime ||
+      context.projectPath !== projectKey ||
+      this.state.activeProjectKey !== projectKey ||
+      this.state.activeSessionKey !== sessionKey ||
+      this.state.session.id !== sessionId
+    ) {
+      throw new Error('Extension dialog is stale or belongs to another Session.')
+    }
+    const interaction = context.extensionDialogInteraction
+    if (
+      interaction?.request.requestId !== requestId ||
+      interaction.request.commandInvocationId !== commandInvocationId
+    ) {
+      throw new Error('Extension dialog is stale or mismatched.')
+    }
+    if (
+      context.extensionCommandInvocation?.id !== commandInvocationId ||
+      context.extensionCommandInvocation.name !== interaction.request.commandName
+    ) {
+      throw new Error('Extension dialog command invocation is no longer active.')
+    }
+    if (interaction.request.status !== 'waiting') {
+      throw new Error('Extension dialog response is already being submitted.')
+    }
+    return { context, interaction }
+  }
+
+  private handleExtensionDialogRequest(context: RuntimeContext, event: PiRpcEvent): boolean {
+    const normalized = normalizeExtensionDialogRequest(event)
+    if (normalized === null) return false
+    const invocation = context.extensionCommandInvocation
+    if (
+      invocation === null ||
+      !invocation.active ||
+      invocation.id !== normalized.commandInvocationId ||
+      invocation.name !== normalized.commandName
+    ) return false
+    const command = context.state.commands.find((candidate) =>
+      candidate.source === 'extension' && candidate.name === normalized.commandName
+    )
+    if (
+      command === undefined ||
+      !adaptedExtensionCommandAllowsBlockingUi(command, normalized.method)
+    ) return false
+
+    const sessionKey = context.state.activeSessionKey
+    const sessionId = context.state.session.id
+    if (sessionKey === null || sessionId === null) return false
+    const existing = context.extensionDialogInteraction
+    if (existing !== null) {
+      return existing.request.requestId === normalized.requestId &&
+        existing.request.commandInvocationId === normalized.commandInvocationId
+    }
+
+    const request: KernelExtensionDialogRequest = {
+      ...normalized,
+      projectKey: context.projectPath,
+      sessionKey,
+      sessionId,
+      status: 'waiting',
+      error: null
+    }
+    const interaction = { request }
+    context.extensionDialogInteraction = interaction
+    this.updateExtensionDialogState(context, interaction, 'waiting', null)
+    return true
+  }
+
+  private async deliverExtensionDialogResponse(
+    context: RuntimeContext,
+    interaction: ExtensionDialogInteraction,
+    response: { value: string } | { cancelled: true }
+  ): Promise<void> {
+    this.updateExtensionDialogState(context, interaction, 'submitting', null)
+    context.extensionDialogInteraction = null
+    try {
+      await context.runtime.send(
+        'value' in response
+          ? {
+              type: 'extension_ui_response',
+              id: interaction.request.requestId,
+              value: response.value
+            }
+          : {
+              type: 'extension_ui_response',
+              id: interaction.request.requestId,
+              cancelled: true
+            }
+      )
+    } catch (error) {
+      if (
+        context.extensionDialogInteraction === null &&
+        context.state.extensionDialog?.requestId === interaction.request.requestId
+      ) {
+        context.extensionDialogInteraction = interaction
+        this.updateExtensionDialogState(
+          context,
+          interaction,
+          'waiting',
+          `提交失败：${errorMessage(error)}`
+        )
+      }
+      throw error
+    }
+    if (
+      context.extensionDialogInteraction === null &&
+      context.state.extensionDialog?.requestId === interaction.request.requestId
+    ) {
+      this.clearExtensionDialogState(context)
+    }
+  }
+
+  private updateExtensionDialogState(
+    context: RuntimeContext,
+    interaction: ExtensionDialogInteraction,
+    status: KernelExtensionDialogRequest['status'],
+    error: string | null
+  ): void {
+    const navigationBefore = this.projectNavigationState(context.projectPath)
+    interaction.request = { ...interaction.request, status, error }
+    context.state = {
+      ...context.state,
+      extensionDialog: {
+        ...interaction.request,
+        options: [...interaction.request.options]
+      }
+    }
+    this.publishExtensionDialogState(context, navigationBefore)
+  }
+
+  private clearExtensionDialogState(context: RuntimeContext): void {
+    const navigationBefore = this.projectNavigationState(context.projectPath)
+    context.extensionDialogInteraction = null
+    context.state = { ...context.state, extensionDialog: null }
+    this.publishExtensionDialogState(context, navigationBefore)
+  }
+
+  private publishExtensionDialogState(
+    context: RuntimeContext,
+    navigationBefore: ProjectNavigationState
+  ): void {
+    if (this.activeContext === context) {
+      this.state = {
+        ...context.state,
+        sessions: this.toSessionSummariesForProject(context.projectPath)
+      }
+      context.state = this.state
+      this.emitState()
+      return
+    }
+    this.publishProjectNavigationChange(context.projectPath, navigationBefore)
+  }
+
   private handleAskUiRequest(context: RuntimeContext, event: PiRpcEvent): boolean {
     const request = normalizeAskUiRequest(event)
     if (request === null) return false
@@ -3995,6 +4372,34 @@ export class WorkbenchKernel {
     interaction.pendingRequest = request
     void this.deliverPendingAskResponse(context, interaction).catch(() => undefined)
     return true
+  }
+
+  private cancelUnsupportedExtensionUiRequest(context: RuntimeContext, event: PiRpcEvent): void {
+    const request = unsupportedBlockingExtensionUiRequest(event)
+    if (request === null) return
+    void context.runtime.send({
+      type: 'extension_ui_response',
+      id: request.id,
+      cancelled: true
+    }).catch((error: unknown) => {
+      const message = `Could not cancel unsupported Extension ${request.method} UI: ${errorMessage(error)}`
+      const entries = projectPiEvent(context.state.conversation.entries, {
+        type: 'extension_error',
+        error: message
+      })
+      if (entries === context.state.conversation.entries) return
+      const navigationBefore = this.projectNavigationState(context.projectPath)
+      context.state = {
+        ...context.state,
+        conversation: { ...context.state.conversation, entries }
+      }
+      if (this.activeContext === context) {
+        this.state = context.state
+        this.emitState()
+      } else {
+        this.publishProjectNavigationChange(context.projectPath, navigationBefore)
+      }
+    })
   }
 
   private async deliverPendingAskResponse(
@@ -4207,7 +4612,11 @@ export class WorkbenchKernel {
 
     const context = this.contextByRuntime.get(this.runtime)
     if (context === undefined) return
-    if (event.type === 'extension_ui_request' && this.handleAskUiRequest(context, event)) return
+    if (event.type === 'extension_ui_request') {
+      if (this.handleAskUiRequest(context, event)) return
+      if (this.handleExtensionDialogRequest(context, event)) return
+      this.cancelUnsupportedExtensionUiRequest(context, event)
+    }
     const askNavigationBefore = this.clearAskInteractionForEvent(context, event)
     if (event.type === 'compaction_start') {
       this.handleCompactionStarted(context, event)
@@ -4503,15 +4912,10 @@ export class WorkbenchKernel {
         stateResult.state.model?.contextWindow
       )
       const statistics = toKernelSessionStatistics(statisticsResult.statistics)
-      const entries = mergeConversationEntries(
-        mergeConversationEntries(
-          projectMessages(messagesResult.messages),
-          context.state.conversation.entries.filter(
-            (entry): entry is KernelExtensionStatusEntry => entry.kind === 'extension-status'
-          )
-        ),
-        context.commandEntries
-      )
+      // Compaction changes the model context, not the visible active-branch transcript.
+      // Rebuilding from get_messages would discard pre-compaction history, so retain the
+      // complete canonical Conversation already owned by this RuntimeContext.
+      const entries = context.state.conversation.entries
       const nextContextState: KernelState = {
         ...context.state,
         session: {
@@ -4817,16 +5221,30 @@ export class WorkbenchKernel {
           this.state = nextState
         }
         if (pointer.sessionName === null && provisional.initialPrompt !== null) {
-          const pending = {
-            runtime: context.runtime,
-            sessionFile: pointer.sessionFile,
-            sessionId: pointer.sessionId,
-            userMessage: provisional.initialPrompt
-          }
-          context.pendingSessionName = pending
-          if (active) this.pendingSessionName = pending
-          if (context.state.runtime.status === 'ready') {
-            this.beginBackgroundSessionNameGeneration(context, pending)
+          const existingPending = context.pendingSessionName
+          if (
+            existingPending !== null &&
+            existingPending.runtime === context.runtime &&
+            existingPending.sessionId === pointer.sessionId
+          ) {
+            existingPending.sessionFile = pointer.sessionFile
+            if (active) this.pendingSessionName = existingPending
+          } else if (!provisional.sessionNameAttempted) {
+            provisional.sessionNameAttempted = true
+            const pending = {
+              runtime: context.runtime,
+              sessionFile: pointer.sessionFile,
+              sessionId: pointer.sessionId,
+              userMessage: provisional.initialPrompt
+            }
+            context.pendingSessionName = pending
+            if (active) this.pendingSessionName = pending
+            if (
+              context.state.runtime.status === 'ready' ||
+              context.state.runtime.status === 'running'
+            ) {
+              this.beginBackgroundSessionNameGeneration(context, pending)
+            }
           }
         }
       }
@@ -4928,7 +5346,10 @@ export class WorkbenchKernel {
       this.clearSessionNamePending(context, pending)
       return
     }
-    if (context.state.runtime.status !== 'ready') return
+    if (
+      context.state.runtime.status !== 'ready' &&
+      context.state.runtime.status !== 'running'
+    ) return
     if (context.state.session.name !== null) {
       this.clearSessionNamePending(context, pending)
       return
@@ -4970,7 +5391,10 @@ export class WorkbenchKernel {
         context.sessionNameOperation !== operation ||
         context.pendingSessionName !== pending ||
         !this.contexts.has(context) ||
-        context.state.runtime.status !== 'ready' ||
+        (
+          context.state.runtime.status !== 'ready' &&
+          context.state.runtime.status !== 'running'
+        ) ||
         context.state.session.name !== null
       ) return
 
@@ -5418,7 +5842,10 @@ export class WorkbenchKernel {
       (sessionKey) => this.sessionReloadRequired.has(contextKey(projectPath, sessionKey)),
       (sessionKey) => {
         const managed = this.contextBySessionKey.get(contextKey(projectPath, sessionKey))
-        return managed !== undefined && managed.askInteraction !== null
+        return managed !== undefined && (
+          managed.askInteraction !== null ||
+          (managed.state.extensionDialog !== null && managed.state.extensionDialog !== undefined)
+        )
       }
     )
     return mergeProvisionalSessionSummaries(
@@ -5454,7 +5881,8 @@ export class WorkbenchKernel {
         name: provisional.pointer.sessionName,
         lastActivityAt: provisional.activityAt,
         runtimeStatus,
-        awaitingUserInput: context.askInteraction !== null,
+        awaitingUserInput: context.askInteraction !== null ||
+          (context.state.extensionDialog !== null && context.state.extensionDialog !== undefined),
         provisional: true,
         statistics: null
       })
@@ -5774,7 +6202,11 @@ export class WorkbenchKernel {
       return
     }
 
-    if (event.type === 'extension_ui_request' && this.handleAskUiRequest(context, event)) return
+    if (event.type === 'extension_ui_request') {
+      if (this.handleAskUiRequest(context, event)) return
+      if (this.handleExtensionDialogRequest(context, event)) return
+      this.cancelUnsupportedExtensionUiRequest(context, event)
+    }
     const askNavigationBefore = this.clearAskInteractionForEvent(context, event)
     if (event.type === 'compaction_start') {
       this.handleCompactionStarted(context, event)
@@ -5970,9 +6402,12 @@ export class WorkbenchKernel {
   ): void {
     if (status === 'crashed') {
       this.cancelSessionNameGeneration(context.runtime)
+      context.extensionCommandInvocation = null
+      context.extensionDialogInteraction = null
     }
     context.state = {
       ...context.state,
+      ...(status === 'crashed' ? { extensionDialog: null } : {}),
       runtime: toKernelRuntime(status, context.runtime.getState(), lastError)
     }
   }
@@ -6114,10 +6549,21 @@ export class WorkbenchKernel {
   }
 
   private transition(status: RuntimeStatus, lastError?: string): void {
-    if (status === 'crashed') this.cancelSessionNameGeneration(this.runtime ?? undefined)
+    if (status === 'crashed') {
+      this.cancelSessionNameGeneration(this.runtime ?? undefined)
+      if (this.activeContext !== null) {
+        this.activeContext.extensionCommandInvocation = null
+        this.activeContext.extensionDialogInteraction = null
+      }
+    }
     this.state = {
       ...this.state,
+      ...(status === 'crashed' ? { extensionDialog: null } : {}),
       runtime: toKernelRuntime(status, this.runtime?.getState() ?? INITIAL_HOST_STATE, lastError)
+    }
+    if (status === 'crashed' && this.activeContext !== null) {
+      this.activeContext.state = this.state
+      this.state = { ...this.state, sessions: this.toSessionSummaries() }
     }
     this.emitState()
   }
@@ -6271,6 +6717,7 @@ function initialKernelState(
     ),
     activeSessionKey: matchingRegistry.activeSessionKey,
     projectTrustRequest: null,
+    extensionDialog: null,
     commands: createCommandCatalog(),
     extensions: extensions.map((extension) => ({ ...extension })),
     availableModels: [],
@@ -6528,6 +6975,12 @@ function copyState(
     projectTrustRequest: state.projectTrustRequest === null
       ? null
       : { ...state.projectTrustRequest },
+    extensionDialog: state.extensionDialog === null || state.extensionDialog === undefined
+      ? null
+      : {
+          ...state.extensionDialog,
+          options: [...state.extensionDialog.options]
+        },
     commands: state.commands.map((command) => ({
       ...command,
       sourceInfo: command.sourceInfo === null ? null : { ...command.sourceInfo }
@@ -7254,12 +7707,6 @@ function assertNoCommandArgument(command: KernelCommandDescriptor, argument: str
   if (argument.trim().length > 0) throw new Error(`/${command.name} does not accept arguments.`)
 }
 
-function isMagicContextStatusCommand(command: KernelCommandDescriptor): boolean {
-  return command.source === 'extension' &&
-    command.name === 'ctx-status' &&
-    command.sourceInfo?.source.includes('@cortexkit/pi-magic-context') === true
-}
-
 function parseModelArgument(argument: string): { provider: string, modelId: string } {
   const normalized = argument.trim()
   const separator = normalized.indexOf('/')
@@ -7276,6 +7723,17 @@ function stringValue(value: unknown): string | null {
   return typeof value === 'string' ? value : null
 }
 
+function unsupportedBlockingExtensionUiRequest(
+  event: PiRpcEvent
+): { id: string, method: 'select' | 'confirm' | 'input' | 'editor' } | null {
+  if (event.type !== 'extension_ui_request' || typeof event.id !== 'string') return null
+  const method = event.method
+  if (method !== 'select' && method !== 'confirm' && method !== 'input' && method !== 'editor') {
+    return null
+  }
+  return { id: event.id, method }
+}
+
 function assertSessionPreviewRequestId(requestId: string): void {
   if (
     requestId.length === 0 ||
@@ -7283,6 +7741,21 @@ function assertSessionPreviewRequestId(requestId: string): void {
     !/^[A-Za-z0-9._:-]+$/u.test(requestId)
   ) {
     throw new Error('Session preview request ID is invalid.')
+  }
+}
+
+function assertConversationPageRequest(
+  request: KernelConversationPageRequest,
+  entries: KernelConversationEntry[]
+): void {
+  const boundaryEntry = entries[request.beforeIndex]
+  if (
+    !Number.isSafeInteger(request.beforeIndex) ||
+    request.beforeIndex <= 0 ||
+    boundaryEntry === undefined ||
+    boundaryEntry.id !== request.beforeEntryId
+  ) {
+    throw new Error('Conversation page request is stale or does not match its boundary identity.')
   }
 }
 

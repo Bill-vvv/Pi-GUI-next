@@ -16,6 +16,10 @@ import {
   type ThinkingLevel
 } from '../../../shared/kernel-contract'
 import type { RemoteAdminApi } from '../../../shared/remote-admin-contract'
+import {
+  KERNEL_CONVERSATION_PAGE_TURN_COUNT,
+  conversationTurnWindowStartIndex
+} from '../../../shared/conversation-window'
 import { DEFAULT_SHORTCUT_SETTINGS } from '../../../shared/shortcut-settings'
 import { sessionSwitchConversation } from '../composition/session-runtime-controller'
 
@@ -553,6 +557,31 @@ export function createPreviewRemoteAdminApi(): RemoteAdminApi {
     },
     revokeDevice: async () => {
       throw new Error('Remote access is disabled in browser preview.')
+    },
+    getTailscaleStatus: async () => ({
+      installed: false,
+      backendState: null,
+      dnsName: null,
+      authUrl: null,
+      managedMode: 'off',
+      routeState: 'unavailable',
+      publicOrigin: null
+    }),
+    enableTailscaleFunnel: async () => {
+      throw new Error('Tailscale is unavailable in browser preview.')
+    },
+    enableTailscaleServe: async () => {
+      throw new Error('Tailscale is unavailable in browser preview.')
+    },
+    disableTailscale: async () => {
+      throw new Error('Tailscale is unavailable in browser preview.')
+    },
+    getDesktopHostStatus: async () => ({ enabled: false }),
+    createDesktopHostPairingCode: async () => {
+      throw new Error('Desktop Host is disabled in browser preview.')
+    },
+    revokeDesktopHostDevice: async () => {
+      throw new Error('Desktop Host is disabled in browser preview.')
     }
   }
 }
@@ -760,15 +789,16 @@ export function createPreviewKernelApi(): KernelApi {
   const archivedSessions = new Map<string, {
     summary: KernelState['sessions'][number]
     index: number
-    preview: {
-      projectKey: string
-      sessionKey: string
-      sessionId: string
-      sessionName: string | null
-      conversation: KernelSessionPreview['conversation']
-    }
+    preview: KernelSessionPreview
+    conversation: KernelState['conversation']
   }>()
   const staticSessionPreviews = new Map<string, KernelSessionPreview>()
+  const detachedSessionPreviewSources = new Map<string, {
+    projectKey: string
+    sessionKey: string
+    sessionId: string
+    conversation: KernelState['conversation']
+  }>()
   let previewOperationRevision = 0
 
   let stateRevision = 0
@@ -870,16 +900,18 @@ export function createPreviewKernelApi(): KernelApi {
         ? previewProjects[state.activeProjectKey as PreviewProjectKey]
         : null
       const fixture = project?.sessions.find(({ summary: candidate }) => candidate.key === sessionKey)
+      const conversation = structuredClone(
+        state.activeSessionKey === sessionKey
+          ? state.conversation
+          : fixture?.conversation ?? emptyConversation
+      )
       const preview: KernelSessionPreview = {
+        previewId: `browser-archive:${summary.id}`,
         projectKey: state.activeProjectKey,
         sessionKey,
         sessionId: summary.id,
         sessionName: summary.name,
-        conversation: sessionSwitchConversation(structuredClone(
-          state.activeSessionKey === sessionKey
-            ? state.conversation
-            : fixture?.conversation ?? emptyConversation
-        ))
+        conversation: sessionSwitchConversation(conversation)
       }
       const sessions = state.sessions.filter(({ key }) => key !== sessionKey)
       const projects = state.projects.map((candidate) => candidate.path === state.activeProjectKey
@@ -918,7 +950,8 @@ export function createPreviewKernelApi(): KernelApi {
       archivedSessions.set(token, {
         summary: structuredClone(summary),
         index: sessionIndex,
-        preview
+        preview,
+        conversation
       })
       return {
         ...ack,
@@ -950,6 +983,7 @@ export function createPreviewKernelApi(): KernelApi {
       )
       if (fixture === undefined) throw new Error('Preview session is unavailable.')
       const preview = structuredClone({
+        previewId: requestId,
         projectKey,
         sessionKey: fixture.summary.key,
         sessionId: fixture.summary.id,
@@ -958,6 +992,13 @@ export function createPreviewKernelApi(): KernelApi {
       })
       staticSessionPreviews.clear()
       staticSessionPreviews.set(requestId, preview)
+      detachedSessionPreviewSources.clear()
+      detachedSessionPreviewSources.set(requestId, {
+        projectKey,
+        sessionKey: fixture.summary.key,
+        sessionId: fixture.summary.id,
+        conversation: structuredClone(fixture.conversation)
+      })
       return structuredClone(preview)
     },
     completeSessionPreview: async (requestId) => {
@@ -968,11 +1009,53 @@ export function createPreviewKernelApi(): KernelApi {
     },
     cancelSessionPreview: async (requestId) => {
       staticSessionPreviews.delete(requestId)
+      detachedSessionPreviewSources.delete(requestId)
+    },
+    loadEarlierSessionPreview: async (request) => {
+      const source = detachedSessionPreviewSources.get(request.previewId)
+      if (
+        source === undefined ||
+        source.projectKey !== request.projectKey ||
+        source.sessionKey !== request.sessionKey ||
+        source.sessionId !== request.sessionId
+      ) {
+        throw new Error('Session preview page identity is stale.')
+      }
+      const localEnd = request.beforeIndex - source.conversation.startIndex
+      const boundaryEntry = source.conversation.entries[localEnd]
+      if (
+        !Number.isSafeInteger(localEnd) ||
+        localEnd <= 0 ||
+        boundaryEntry?.id !== request.beforeEntryId
+      ) {
+        throw new Error('Session preview page boundary identity is stale.')
+      }
+      const localStart = conversationTurnWindowStartIndex(
+        source.conversation.entries,
+        localEnd,
+        KERNEL_CONVERSATION_PAGE_TURN_COUNT
+      )
+      return {
+        projectKey: request.projectKey,
+        sessionKey: request.sessionKey,
+        sessionId: request.sessionId,
+        beforeIndex: request.beforeIndex,
+        beforeEntryId: request.beforeEntryId,
+        startIndex: source.conversation.startIndex + localStart,
+        entries: structuredClone(source.conversation.entries.slice(localStart, localEnd))
+      }
     },
     previewArchivedSession: async (token) => {
       const archived = archivedSessions.get(token)
       if (archived === undefined) throw new Error('Archive receipt is unavailable.')
       archivedSessions.delete(token)
+      detachedSessionPreviewSources.clear()
+      detachedSessionPreviewSources.set(archived.preview.previewId, {
+        projectKey: archived.preview.projectKey,
+        sessionKey: archived.preview.sessionKey,
+        sessionId: archived.preview.sessionId,
+        conversation: structuredClone(archived.conversation)
+      })
       return structuredClone(archived.preview)
     },
     listForkCandidates: async () => {
@@ -1316,6 +1399,8 @@ export function createPreviewKernelApi(): KernelApi {
     getPathForFile: (file) => `/preview/${file.name}`,
     submitAsk: currentAck,
     cancelAsk: currentAck,
+    respondExtensionDialog: currentAck,
+    cancelExtensionDialog: currentAck,
     navigateHistoryPrompt: currentAck,
     prompt: currentAck,
     steer: currentAck,

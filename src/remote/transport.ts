@@ -221,10 +221,16 @@ export class RemoteClient {
 
   subscribe(
     onEvent: (event: KernelEvent) => void,
-    onError: (error: Error) => void
+    onError: (error: Error) => void,
+    onOpen: () => void
   ): () => void {
     const source = this.eventSourceFactory(REMOTE_API_PATHS.events)
     let closed = false
+
+    source.onopen = () => {
+      if (closed) return
+      onOpen()
+    }
 
     source.onmessage = (message) => {
       if (closed) return

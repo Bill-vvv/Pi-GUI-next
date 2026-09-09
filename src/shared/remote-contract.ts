@@ -28,6 +28,8 @@ export const REMOTE_KERNEL_COMMAND_TYPES = [
   'kernel.get-tool-image',
   'kernel.submit-ask',
   'kernel.cancel-ask',
+  'kernel.respond-extension-dialog',
+  'kernel.cancel-extension-dialog',
   'kernel.prompt',
   'kernel.steer',
   'kernel.follow-up',

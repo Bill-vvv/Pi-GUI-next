@@ -26,12 +26,10 @@ import {
   type SessionActivityObservation,
   type SessionActivitySnapshot
 } from './session-unread-state'
-import {
-  COLLAPSED_SESSION_LIMIT,
-  nextVisibleSessionCountWithRetained,
-  resolveVisibleSessionCount,
-  selectVisibleSessions
-} from './session-list-visibility'
+import { sessionPinIdentity } from './session-pinning'
+import { SessionHoverCard, useSessionHoverCard } from './SessionHoverCard'
+import { SessionListBrowser } from './SessionListBrowser'
+import type { SessionListQuery } from './session-list-query'
 
 /** Match TooltipProvider: only reveal after a deliberate hover dwell. */
 const HOVER_CARD_SHOW_DELAY_MS = 600
@@ -63,13 +61,10 @@ type ProjectHoverCardState = {
   projectKey: string
 }
 
-type SessionHoverCardState = {
-  sessionKey: string
-}
-
 type ProjectNavigatorProps = {
   hidden: boolean
   projects: KernelState['projects']
+  listQuery: SessionListQuery
   activeProjectKey: string | null
   activeSessionKey: string | null
   sessions: KernelState['sessions']
@@ -84,7 +79,9 @@ type ProjectNavigatorProps = {
   contextActionStatus: string | null
   tokenCountFormat: KernelState['appearance']['tokenCountFormat']
   pinnedProjectKeys: Set<string>
+  pinnedSessionIdentities: ReadonlySet<string>
   onTogglePinnedProject: (projectKey: string) => void
+  onTogglePinnedSession: (identity: string) => void
   onExpandSidebar: () => void
   onClearArchivedSessionPreview: () => void
   onActivateProject: (projectKey: string) => Promise<void>
@@ -100,6 +97,7 @@ type ProjectNavigatorProps = {
 export function ProjectNavigator({
   hidden,
   projects,
+  listQuery,
   activeProjectKey,
   activeSessionKey,
   sessions,
@@ -114,7 +112,9 @@ export function ProjectNavigator({
   contextActionStatus,
   tokenCountFormat,
   pinnedProjectKeys,
+  pinnedSessionIdentities,
   onTogglePinnedProject,
+  onTogglePinnedSession,
   onExpandSidebar,
   onClearArchivedSessionPreview,
   onActivateProject,
@@ -131,13 +131,9 @@ export function ProjectNavigator({
   const [expandedProjectKeys, setExpandedProjectKeys] = useState<Set<string>>(() =>
     activeProjectKey === null ? new Set() : new Set([activeProjectKey])
   )
-  const [visibleSessionCountsByProject, setVisibleSessionCountsByProject] = useState<Map<string, number>>(
-    () => new Map()
-  )
   const [projectHoverCard, setProjectHoverCard] = useState<ProjectHoverCardState | null>(null)
-  const [sessionHoverCard, setSessionHoverCard] = useState<SessionHoverCardState | null>(null)
+  const sessionHoverCard = useSessionHoverCard(hidden)
   const projectHoverCardId = `${useId()}-project-information`
-  const sessionHoverCardId = `${useId()}-session-information`
   const previousActiveProjectKeyRef = useRef(activeProjectKey)
   const sessionActivityByIdentityRef = useRef(new Map<string, SessionActivitySnapshot>())
   const projectListRef = useRef<HTMLElement>(null)
@@ -146,13 +142,9 @@ export function ProjectNavigator({
   const projectOrderOverrideRef = useRef<string[] | null>(null)
   const suppressedProjectClickRef = useRef<string | null>(null)
   const projectCardAnchorRef = useRef<HTMLElement>(null)
-  const sessionCardAnchorRef = useRef<HTMLElement>(null)
   const projectCardCloseTimerRef = useRef<number | null>(null)
-  const sessionCardCloseTimerRef = useRef<number | null>(null)
   const projectCardShowTimerRef = useRef<number | null>(null)
-  const sessionCardShowTimerRef = useRef<number | null>(null)
   const pendingProjectKeyRef = useRef<string | null>(null)
-  const pendingSessionKeyRef = useRef<string | null>(null)
   const sessionCountsByProjectRef = useRef(
     new Map(projects.map((project) => [project.path, project.sessionCount ?? 0]))
   )
@@ -163,14 +155,6 @@ export function ProjectNavigator({
       224,
       { preferredWidth: 292, axis: 'horizontal' }
     )
-  const { popoverRef: sessionCardPopoverRef, position: sessionCardPosition } =
-    useViewportPopoverPosition<HTMLElement>(
-      sessionHoverCard !== null && !hidden,
-      sessionCardAnchorRef,
-      360,
-      { preferredWidth: 300, axis: 'horizontal' }
-    )
-
   useEffect(() => {
     const interval = window.setInterval(() => setActivityClock(Date.now()), 60_000)
     return () => window.clearInterval(interval)
@@ -213,7 +197,6 @@ export function ProjectNavigator({
     setProjectDragPreview(null)
     setProjectOrderOverride(null)
     setProjectHoverCard(null)
-    setSessionHoverCard(null)
   }, [hidden])
 
   useEffect(() => {
@@ -300,7 +283,7 @@ export function ProjectNavigator({
     unreadSessionKeys
   )
 
-  const hoveredSession = sessionHoverCard === null
+  const hoveredSession = sessionHoverCard.sessionKey === null
     ? null
     : findSessionSummary(sessionHoverCard.sessionKey, projects, sessions, activeProjectKey)
 
@@ -308,12 +291,6 @@ export function ProjectNavigator({
     if (projectCardCloseTimerRef.current === null) return
     window.clearTimeout(projectCardCloseTimerRef.current)
     projectCardCloseTimerRef.current = null
-  }
-
-  const cancelSessionCardClose = (): void => {
-    if (sessionCardCloseTimerRef.current === null) return
-    window.clearTimeout(sessionCardCloseTimerRef.current)
-    sessionCardCloseTimerRef.current = null
   }
 
   const cancelProjectCardShow = (): void => {
@@ -324,25 +301,19 @@ export function ProjectNavigator({
     pendingProjectKeyRef.current = null
   }
 
-  const cancelSessionCardShow = (): void => {
-    if (sessionCardShowTimerRef.current !== null) {
-      window.clearTimeout(sessionCardShowTimerRef.current)
-      sessionCardShowTimerRef.current = null
-    }
-    pendingSessionKeyRef.current = null
-  }
-
   const clearHoverCardTimers = (): void => {
     cancelProjectCardClose()
-    cancelSessionCardClose()
     cancelProjectCardShow()
-    cancelSessionCardShow()
+  }
+
+  const dismissProjectHoverCard = (): void => {
+    clearHoverCardTimers()
+    setProjectHoverCard(null)
   }
 
   const dismissHoverCards = (): void => {
-    clearHoverCardTimers()
-    setProjectHoverCard(null)
-    setSessionHoverCard(null)
+    dismissProjectHoverCard()
+    sessionHoverCard.dismiss()
   }
 
   const updateProjectOrderOverride = (order: string[]): void => {
@@ -499,22 +470,11 @@ export function ProjectNavigator({
     }, HOVER_CARD_CLOSE_DELAY_MS)
   }
 
-  const scheduleSessionCardClose = (): void => {
-    cancelSessionCardShow()
-    cancelSessionCardClose()
-    sessionCardCloseTimerRef.current = window.setTimeout(() => {
-      sessionCardCloseTimerRef.current = null
-      setSessionHoverCard(null)
-    }, HOVER_CARD_CLOSE_DELAY_MS)
-  }
-
   const openProjectCard = (projectKey: string, anchor: HTMLElement): void => {
     projectCardAnchorRef.current = anchor
     cancelProjectCardShow()
     cancelProjectCardClose()
-    cancelSessionCardShow()
-    cancelSessionCardClose()
-    setSessionHoverCard(null)
+    sessionHoverCard.dismiss()
     if (projectHoverCard !== null && projectHoverCard.projectKey !== projectKey) {
       setProjectHoverCard(null)
       pendingProjectKeyRef.current = projectKey
@@ -532,9 +492,7 @@ export function ProjectNavigator({
   const requestProjectCard = (projectKey: string, anchor: HTMLElement): void => {
     projectCardAnchorRef.current = anchor
     cancelProjectCardClose()
-    cancelSessionCardShow()
-    cancelSessionCardClose()
-    setSessionHoverCard(null)
+    sessionHoverCard.dismiss()
 
     if (projectHoverCard !== null && projectHoverCard.projectKey === projectKey) {
       cancelProjectCardShow()
@@ -560,60 +518,6 @@ export function ProjectNavigator({
     cancelProjectCardShow()
     pendingProjectKeyRef.current = projectKey
     projectCardShowTimerRef.current = window.setTimeout(activate, HOVER_CARD_SHOW_DELAY_MS)
-  }
-
-  const openSessionCard = (sessionKey: string, anchor: HTMLElement): void => {
-    sessionCardAnchorRef.current = anchor
-    cancelSessionCardShow()
-    cancelSessionCardClose()
-    cancelProjectCardShow()
-    cancelProjectCardClose()
-    setProjectHoverCard(null)
-    if (sessionHoverCard !== null && sessionHoverCard.sessionKey !== sessionKey) {
-      setSessionHoverCard(null)
-      pendingSessionKeyRef.current = sessionKey
-      sessionCardShowTimerRef.current = window.setTimeout(() => {
-        if (pendingSessionKeyRef.current !== sessionKey) return
-        pendingSessionKeyRef.current = null
-        sessionCardShowTimerRef.current = null
-        if (anchor.isConnected) setSessionHoverCard({ sessionKey })
-      }, 0)
-      return
-    }
-    setSessionHoverCard({ sessionKey })
-  }
-
-  const requestSessionCard = (sessionKey: string, anchor: HTMLElement): void => {
-    sessionCardAnchorRef.current = anchor
-    cancelSessionCardClose()
-    cancelProjectCardShow()
-    cancelProjectCardClose()
-    setProjectHoverCard(null)
-
-    if (sessionHoverCard !== null && sessionHoverCard.sessionKey === sessionKey) {
-      cancelSessionCardShow()
-      return
-    }
-    if (
-      pendingSessionKeyRef.current === sessionKey &&
-      sessionCardShowTimerRef.current !== null
-    ) return
-
-    if (sessionHoverCard !== null) {
-      setSessionHoverCard(null)
-    }
-
-    const activate = (): void => {
-      if (pendingSessionKeyRef.current !== sessionKey) return
-      pendingSessionKeyRef.current = null
-      sessionCardShowTimerRef.current = null
-      if (!anchor.isConnected) return
-      openSessionCard(sessionKey, anchor)
-    }
-
-    cancelSessionCardShow()
-    pendingSessionKeyRef.current = sessionKey
-    sessionCardShowTimerRef.current = window.setTimeout(activate, HOVER_CARD_SHOW_DELAY_MS)
   }
 
   useEffect(() => {
@@ -660,20 +564,17 @@ export function ProjectNavigator({
             const pinned = pinnedProjectKeys.has(project.path)
             const projectLabel = basename(project.path) ?? project.path
             const projectSessions = project.sessions ?? (selected ? sessions : [])
+            const unpinnedProjectSessions = projectSessions.filter((summary) =>
+              !pinnedSessionIdentities.has(sessionPinIdentity('project', project.path, summary.id))
+            )
             const busySessionCount = project.busySessionCount ?? projectSessions.filter((summary) => {
               const status = summary.runtimeStatus
               return status === 'running' || status === 'stopping'
             }).length
             const awaitingUserInputCount = countAwaitingUserInput(projectSessions)
             const unreadSessionCount = countUnreadSessions(projectSessions, unreadSessionKeys)
-            const requestedVisibleSessionCount = visibleSessionCountsByProject.get(project.path)
-            const visibleSessionCount = resolveVisibleSessionCount(
-              projectSessions.length,
-              requestedVisibleSessionCount
-            )
-            const sessionListExpanded = visibleSessionCount > COLLAPSED_SESSION_LIMIT
             const retainedSessionKeys = new Set(
-              projectSessions
+              unpinnedProjectSessions
                 .filter((summary) =>
                   summary.key === displayedSessionKey ||
                   summary.key === viewedSessionKey ||
@@ -684,23 +585,10 @@ export function ProjectNavigator({
                 )
                 .map(({ key }) => key)
             )
-            const visibleSessions = selectVisibleSessions(
-              projectSessions,
-              visibleSessionCount,
-              retainedSessionKeys
-            )
-            const nextVisibleSessionCountValue = nextVisibleSessionCountWithRetained(
-              projectSessions,
-              requestedVisibleSessionCount,
-              retainedSessionKeys
-            )
-            const nextVisibleSessions = selectVisibleSessions(
-              projectSessions,
-              nextVisibleSessionCountValue,
-              retainedSessionKeys
-            )
-            const remainingSessionCount = projectSessions.length - visibleSessions.length
-            const nextSessionRevealCount = nextVisibleSessions.length - visibleSessions.length
+            const sessionListItems = unpinnedProjectSessions.map((summary) => ({
+              ...summary,
+              title: sessionTitle(summary)
+            }))
             const sessionListId = `project-sessions-${encodeURIComponent(project.path)}`
             return (
               <article
@@ -862,12 +750,19 @@ export function ProjectNavigator({
                 </div>
 
                 {expanded ? (
-                  <div className="session-list" id={sessionListId}>
-                    {projectSessions.length === 0 ? (
-                      <p className="empty-session-state muted">暂无对话。</p>
-                    ) : visibleSessions.map((summary) => {
+                  <SessionListBrowser
+                    listId={sessionListId}
+                    items={sessionListItems}
+                    query={listQuery}
+                    now={activityClock}
+                    retainedKeys={retainedSessionKeys}
+                    resultNoun="对话"
+                    emptyLabel={projectSessions.length === 0 ? '暂无对话。' : '对话已显示在置顶区域。'}
+                    noMatchLabel="没有匹配的对话。"
+                    renderItem={(summary) => {
                       const sessionSelected = summary.key === displayedSessionKey
                       const previewSelected = viewedSessionKey === summary.key
+                      const pinIdentity = sessionPinIdentity('project', project.path, summary.id)
                       const sessionRuntimeStatus = summary.runtimeStatus
                       const lifecycleLabel = sessionLifecycleLabel(sessionRuntimeStatus)
                       const unread = unreadSessionKeys.has(summary.key)
@@ -886,11 +781,7 @@ export function ProjectNavigator({
                             aria-label={sessionAriaLabel(summary, tokenCountFormat)}
                             aria-current={sessionSelected ? 'true' : undefined}
                             data-session-key={summary.key}
-                            aria-describedby={
-                              sessionHoverCard?.sessionKey === summary.key && sessionCardPosition !== null
-                                ? sessionHoverCardId
-                                : undefined
-                            }
+                            aria-describedby={sessionHoverCard.describedBy(summary.key)}
                             aria-busy={
                               (previewSelected && sessionPreviewPending) ||
                               (sessionSelected && sessionRuntimeStatus === 'starting')
@@ -898,10 +789,16 @@ export function ProjectNavigator({
                                 : undefined
                             }
                             disabled={busy || (!selected && !canChangeProjectOrSession)}
-                            onFocus={(event) => openSessionCard(summary.key, event.currentTarget)}
-                            onBlur={scheduleSessionCardClose}
-                            onPointerMove={(event) => requestSessionCard(summary.key, event.currentTarget)}
-                            onPointerLeave={scheduleSessionCardClose}
+                            onFocus={(event) => {
+                              dismissProjectHoverCard()
+                              sessionHoverCard.open(summary.key, event.currentTarget)
+                            }}
+                            onBlur={sessionHoverCard.scheduleClose}
+                            onPointerMove={(event) => {
+                              dismissProjectHoverCard()
+                              sessionHoverCard.request(summary.key, event.currentTarget)
+                            }}
+                            onPointerLeave={sessionHoverCard.scheduleClose}
                             onClick={() => {
                               if (busy) return
                               dismissHoverCards()
@@ -921,7 +818,7 @@ export function ProjectNavigator({
                               })().catch(() => undefined)
                             }}
                           >
-                            <span className="session-title">{sessionTitle(summary)}</span>
+                            <span className="session-title">{summary.title}</span>
                             {summary.requiresReload === true ? (
                               <span
                                 className="session-reload-required"
@@ -969,6 +866,18 @@ export function ProjectNavigator({
                             )}
                             <div className="session-row-actions">
                               <IconButton
+                                className="session-pin"
+                                icon="pin"
+                                label="置顶对话"
+                                aria-pressed="false"
+                                draggable={false}
+                                onPointerDown={(event) => event.stopPropagation()}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  onTogglePinnedSession(pinIdentity)
+                                }}
+                              />
+                              <IconButton
                                 className="session-archive"
                                 icon="archive"
                                 label="归档对话"
@@ -997,49 +906,8 @@ export function ProjectNavigator({
                           </div>
                         </div>
                       )
-                    })}
-                    {projectSessions.length > COLLAPSED_SESSION_LIMIT ? (
-                      <div className="session-list-actions" role="group" aria-label="对话列表显示数量">
-                        {sessionListExpanded ? (
-                          <button
-                            className="session-list-toggle"
-                            type="button"
-                            aria-expanded="true"
-                            aria-controls={sessionListId}
-                            onClick={() => setVisibleSessionCountsByProject((current) => {
-                              const next = new Map(current)
-                              next.delete(project.path)
-                              return next
-                            })}
-                          >
-                            收起至 {COLLAPSED_SESSION_LIMIT} 个对话
-                          </button>
-                        ) : null}
-                        {remainingSessionCount > 0 ? (
-                          <button
-                            className="session-list-toggle"
-                            type="button"
-                            aria-expanded={sessionListExpanded}
-                            aria-controls={sessionListId}
-                            onClick={() => setVisibleSessionCountsByProject((current) => {
-                              const next = new Map(current)
-                              next.set(
-                                project.path,
-                                nextVisibleSessionCountWithRetained(
-                                  projectSessions,
-                                  current.get(project.path),
-                                  retainedSessionKeys
-                                )
-                              )
-                              return next
-                            })}
-                          >
-                            {sessionListExpanded ? '继续展开' : '展开更多'} {nextSessionRevealCount} 个对话
-                          </button>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
+                    }}
+                  />
                 ) : null}
               </article>
             )
@@ -1144,84 +1012,13 @@ export function ProjectNavigator({
         document.body
       )}
 
-      {hidden || hoveredSession === null || sessionHoverCard === null || sessionCardPosition === null
-        ? null
-        : createPortal(
-        <aside
-          ref={sessionCardPopoverRef}
-          id={sessionHoverCardId}
-          className="session-hover-card"
-          data-placement={sessionCardPosition.placement}
-          style={sessionCardPosition.style}
-          onPointerEnter={cancelSessionCardClose}
-          onPointerLeave={scheduleSessionCardClose}
-          onFocus={cancelSessionCardClose}
-          onBlur={scheduleSessionCardClose}
-        >
-          <div className="session-hover-card-main">
-            <div className="session-hover-card-heading">
-              <span className="session-hover-card-icon" aria-hidden="true">
-                <Icon name="messages" size="lg" />
-              </span>
-              <div className="session-hover-card-title-block">
-                <strong>{sessionTitle(hoveredSession)}</strong>
-                <code>{hoveredSession.id}</code>
-              </div>
-            </div>
-            {hoveredSession.provisional === true ? (
-              <p className="session-hover-card-status">创建中（尚未落盘，不可恢复）</p>
-            ) : hoveredSession.statistics === null ? (
-              <p className="session-hover-card-status">统计暂不可用</p>
-            ) : (
-              <dl className="session-hover-card-stats">
-                <div className="session-hover-stat-row">
-                  <dt>消息总计</dt>
-                  <dd>{hoveredSession.statistics.totalMessages.toLocaleString()}</dd>
-                </div>
-                <div className="session-hover-stat-row">
-                  <dt>用户 / 助手</dt>
-                  <dd>
-                    {hoveredSession.statistics.userMessages.toLocaleString()}
-                    {' / '}
-                    {hoveredSession.statistics.assistantMessages.toLocaleString()}
-                  </dd>
-                </div>
-                <div className="session-hover-stat-row session-hover-stat-row-divider">
-                  <dt>Token 总量</dt>
-                  <dd>{formatTokenCount(hoveredSession.statistics.totalTokens, tokenCountFormat)}</dd>
-                </div>
-                <div className="session-hover-stat-row">
-                  <dt>输入</dt>
-                  <dd>{formatTokenCount(hoveredSession.statistics.inputTokens, tokenCountFormat)}</dd>
-                </div>
-                <div className="session-hover-stat-row">
-                  <dt>输出</dt>
-                  <dd>{formatTokenCount(hoveredSession.statistics.outputTokens, tokenCountFormat)}</dd>
-                </div>
-                <div className="session-hover-stat-row">
-                  <dt>缓存读取</dt>
-                  <dd>{formatTokenCount(hoveredSession.statistics.cacheReadTokens, tokenCountFormat)}</dd>
-                </div>
-                <div className="session-hover-stat-row">
-                  <dt>缓存写入</dt>
-                  <dd>{formatTokenCount(hoveredSession.statistics.cacheWriteTokens, tokenCountFormat)}</dd>
-                </div>
-                <div className="session-hover-stat-row session-hover-stat-row-divider">
-                  <dt>费用（USD）</dt>
-                  <dd>{formatUsd(hoveredSession.statistics.cost)}</dd>
-                </div>
-              </dl>
-            )}
-          </div>
-          <div className="session-hover-card-path">
-            <span>会话文件</span>
-            <code data-tooltip={hoveredSession.key} data-tooltip-variant="mono">
-              {hoveredSession.key}
-            </code>
-          </div>
-        </aside>,
-        document.body
-      )}
+      <SessionHoverCard
+        hidden={hidden}
+        controller={sessionHoverCard}
+        session={hoveredSession}
+        title={hoveredSession === null ? null : sessionTitle(hoveredSession)}
+        tokenCountFormat={tokenCountFormat}
+      />
     </>
   )
 }

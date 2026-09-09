@@ -1,3 +1,48 @@
+.select-control-value {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+}
+
+.select-control-value-label,
+.select-control-option-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select-control-value-detail,
+.select-control-option-detail {
+  flex: none;
+  color: var(--color-text-muted);
+  font-size: var(--text-meta);
+  line-height: var(--line-meta);
+  white-space: nowrap;
+}
+
+:is(.select-control-value-detail, .select-control-option-detail)[data-tone='active'] {
+  color: var(--color-accent-primary);
+}
+
+:is(.select-control-value-detail, .select-control-option-detail)[data-tone='attention'] {
+  color: var(--color-warning-text);
+}
+
+:is(.select-control-value-detail, .select-control-option-detail)[data-tone='error'] {
+  color: var(--color-status-error);
+}
+
+.select-control-option-content {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
 .select-control-popover {
   overflow: auto;
 }

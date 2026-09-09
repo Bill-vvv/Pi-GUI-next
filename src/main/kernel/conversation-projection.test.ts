@@ -1193,6 +1193,66 @@ test('projects Magic Context status entries and public RPC status updates', () =
   assert.deepEqual(cleared, [withStatus[0]])
 })
 
+test('projects bounded Extension notifications and unsupported dialog requests', () => {
+  const info = projectPiEvent([], {
+    type: 'extension_ui_request',
+    id: 'notify-info',
+    method: 'notify',
+    message: 'No todos yet.'
+  }, 10)
+  const warning = projectPiEvent(info, {
+    type: 'extension_ui_request',
+    id: 'notify-warning',
+    method: 'notify',
+    message: 'Profile is stale.',
+    notifyType: 'warning'
+  }, 20)
+  const unsupported = projectPiEvent(warning, {
+    type: 'extension_ui_request',
+    id: 'dialog-confirm',
+    method: 'confirm',
+    title: 'Continue?',
+    message: 'This requires a dialog.'
+  }, 30)
+
+  assert.deepEqual(unsupported, [
+    {
+      id: 'extension-notify:notify-info',
+      kind: 'extension-status',
+      source: 'extension',
+      title: 'Extension 通知',
+      text: 'No todos yet.',
+      level: 'info',
+      timestamp: 10
+    },
+    {
+      id: 'extension-notify:notify-warning',
+      kind: 'extension-status',
+      source: 'extension',
+      title: 'Extension 警告',
+      text: 'Profile is stale.',
+      level: 'warning',
+      timestamp: 20
+    },
+    {
+      id: 'error:extension-ui:dialog-confirm',
+      kind: 'error',
+      title: 'Extension UI 不受支持',
+      message: 'Pi GUI 不支持 Extension 的 confirm 交互；请求已取消。',
+      source: 'extension',
+      timestamp: 30
+    }
+  ])
+
+  assert.strictEqual(projectPiEvent(unsupported, {
+    type: 'extension_ui_request',
+    id: 'invalid-notify',
+    method: 'notify',
+    message: 'Hidden',
+    notifyType: 'success'
+  }, 40), unsupported)
+})
+
 test('projects only strict Magic Context custom entries from the active session path', () => {
   const projected = projectSessionEntries([
     {

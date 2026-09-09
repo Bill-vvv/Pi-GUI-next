@@ -1,64 +1,64 @@
 ---
 name: pi-gui-frontend
-description: Apply the Pi GUI frontend guidelines when implementing or reviewing any task that touches src/renderer in /home/vvv/Projects/pi-gui-next, including React/TSX/CSS, tokens, icons, typography, components, layout, responsive behavior, interaction, or accessibility. Do not use for backend-only work.
+description: Apply and maintain the Pi GUI frontend guidelines when implementing or reviewing changes to src/renderer, frontend documentation, Renderer dependencies or validation scripts, or this skill in /home/vvv/Projects/pi-gui-next. Do not use for backend-only work.
 ---
 
 # Pi GUI Frontend
 
-Apply the project's established frontend language and library boundaries without creating a second design system.
+Apply the project's current frontend language and ownership boundaries without creating a second design system or a second frontend specification.
 
 ## Establish the current boundary
 
 1. Confirm the repository root is `/home/vvv/Projects/pi-gui-next`.
-2. Inspect `git status --short` before editing. Preserve unrelated dirty work.
-3. Read `docs/frontend-guidelines.md` completely. Treat it as the frontend specification and library fact source.
+2. Inspect `git status --short` before editing and preserve unrelated dirty work.
+3. Read `docs/frontend-guidelines.md` completely.
 4. Read only the additional source needed for the task:
-   - `docs/p2-workbench-structure.md` for Navigator, Header, Timeline, Composer, navigation, or layout work.
-   - `docs/architecture.md` and `docs/decisions.md` when Renderer ownership, state facts, security, attachments, Markdown, or performance is involved.
-   - `docs/development-plan.md` when scope or current Slice status affects the requested change.
-5. Inspect the exact components and styles to be changed. Prefer current observed code over assumptions from older screenshots or repositories.
+   - `docs/p2-workbench-structure.md` for Workbench structure, navigation, or layout.
+   - `docs/architecture.md` and `docs/decisions.md` for Renderer ownership, state, security, content, or performance contracts.
+   - `docs/development-plan.md` when the current scope or Slice affects the request.
+5. Inspect the current owner code, styles, tests, and relevant task-owned diff instead of relying on remembered component inventories or older screenshots.
 
-If the documents conflict, follow the current non-superseded architecture decision and the current implementation boundary, then update `docs/frontend-guidelines.md` in the same change when the frontend rule genuinely changes.
+Treat dirty documentation and source as a local source snapshot, not committed fact. If an accepted decision conflicts with current documentation or implementation and no explicit supersession resolves it, report the conflict instead of silently choosing one side.
+
+When a frontend rule genuinely changes, update `docs/frontend-guidelines.md`. Keep feature-specific product behavior in its owner documentation rather than copying it into this skill.
 
 ## Decide the owner before editing
 
 - Keep domain UI and single-use behavior in `src/renderer/src/features/<domain>/`.
-- Put an element in `src/renderer/src/components/` only when it has at least two independent real call sites with matching interaction semantics, or when a clear cross-feature owner prevents duplication or dependency inversion.
-- Use `src/renderer/src/tokens.css` only for stable cross-feature visual semantics. Do not create a feature-local palette, icon scale, typography scale, or near-duplicate token; keep one-off grid/spacing geometry with its feature owner.
-- Keep `src/renderer/src/styles.css` limited to HTML/application baseline, native-control minimum states, focus-visible, disabled, and global reduced-motion. Product variants and domain layout stay in feature CSS.
+- Put behavior in `src/renderer/src/components/` only when at least two independent real call sites share the same interaction semantics, or when a clear cross-feature owner prevents duplication or dependency inversion.
+- Do not style a shared component's internal DOM from feature CSS. Extend it through its current props or `className` boundary, and keep caller layout outside the component.
+- Use `src/renderer/src/tokens.css` only for stable cross-feature visual semantics. Keep feature-local geometry with its feature owner.
+- Keep `src/renderer/src/styles.css` limited to application baseline and genuinely global native-control, focus, disabled, and reduced-motion behavior.
 - Keep the dependency direction `App/composition → features → components + renderer shared utilities`.
-- Do not add a package, barrel export, registry, base class, compatibility path, or speculative component API for possible future use.
-- Do not expose fake controls or infer backend state. Renderer consumes normalized state and sends narrow typed commands through preload.
+- Renderer consumes normalized state and sends narrow typed commands through preload; it does not infer backend truth or expose fake controls.
 
-## Implement the smallest complete change
+## Implement and review the change
 
-- Reuse `Icon`, `IconButton`, `Select`, `FontSelect`, `TooltipProvider`, `useViewportPopoverPosition`, and `useModalDialog` only within their documented semantics.
-- Use `Icon` sizes `sm`, `control`, or `lg`; do not resize SVGs from feature CSS.
-- Use semantic typography, color, radius, and motion tokens. Keep feature-local spacing/layout values local unless a stable cross-feature semantic is proven; do not manufacture a generic spacing scale from repeated numbers.
-- Preserve the Workbench's Navigator, Header, Timeline, and Composer responsibilities. Any floating Header or Composer surface must reserve real Timeline clearance.
-- Keep narrow-window behavior usable without horizontal overflow. Reuse the owner's current structural breakpoint before introducing a nearby one; constrain and flip portal surfaces against the viewport.
-- Give every interactive control distinguishable hover, `focus-visible`, selected/expanded, and disabled states.
-- For custom listbox, combobox, menu, tooltip, disclosure, modal, or drag behavior, preserve the matching ARIA, keyboard, focus restoration, outside-click, portal, hit-testing, and Escape semantics. Renderer modals reuse `useModalDialog` for top-layer focus/Escape behavior while the feature retains portal, label, backdrop, busy, and visual ownership. Escape is handled by the innermost active surface before Workbench-level settings/detail/abort behavior.
-- Keep ordinary text buttons native and feature-owned unless a shared behavior contract—not only a visual variant—proves a common component. Do not create generic Button, Dialog, HoverCard, Status, or Popover wrappers from appearance alone.
-- Respect `prefers-reduced-motion`; do not make animation the only carrier of state.
-- Keep CommonMark/GFM, external-link, attachment, incremental patch, and 60-turn mounting boundaries unchanged unless the user explicitly requests that contract to change.
-- Fail fast on unsupported states. Do not add silent fallback or compatibility behavior unless required by an active project boundary.
+- Inspect `src/renderer/src/components/` and reuse the current shared primitives only within their documented semantics.
+- Use semantic typography, color, radius, and motion tokens. Do not duplicate an existing semantic token for a feature-local variant.
+- Preserve current ownership and real layout clearance for floating Header, Composer, panel, and portal surfaces.
+- Keep narrow-window behavior usable without horizontal overflow. Reuse the owner's current structural breakpoint before introducing a nearby one.
+- Disabled controls must block the action, not only look disabled. Hover-revealed actions must also be discoverable and usable from keyboard focus.
+- Preserve the applicable ARIA, keyboard, focus restoration, outside-click, hit-testing, nesting, and Escape behavior for custom interactive surfaces.
+- Reuse the current shared modal and viewport-popover behavior instead of duplicating focus or positioning logic locally. Do not use an arbitrary larger `z-index` to hide a portal or interaction defect.
+- Respect `prefers-reduced-motion`; animation must not be the only carrier of state.
+- Use the current measurement owner for dynamic layout and scroll geometry. Do not use fixed timeouts to guess when layout has stabilized.
+- Virtualize only when the current data boundary justifies it. Keep small collections on a simple rendering path, use stable item identity and bounded overscan, and preserve complete reading or copying when the surface requires it.
+- For Markdown, links, attachments, incremental patches, Conversation history, and other architecture-owned content contracts, read the current documentation, implementation, and tests. Do not restate or change those contracts from memory.
 
-## Review the result
+Review the final task-owned diff:
 
-Check the relevant diff, not only the rendered appearance:
-
-- No touched raw color/radius/motion value duplicates an existing semantic token; `0`, `inherit`, circles, masks, SVG geometry, and clearly local layout math remain valid exceptions.
-- Global styles did not gain feature-specific variants or selectors that can alter unrelated domains.
-- No shared component gained feature-specific state.
+- Global styles did not gain feature-specific variants.
+- Shared components did not gain feature-specific state or feature CSS dependencies.
 - No feature imports another feature's internals to bypass ownership.
-- Icon size, text hierarchy, spacing, alignment, and truncation match the surrounding surface.
 - Pointer, keyboard, focus, disabled, portal, narrow-window, and reduced-motion paths remain coherent.
 - Existing local changes outside the task remain intact.
 
+After reviewing the final diff, check whether it makes any factual statement in this skill outdated. If not, finish. If it might, read the affected section and compare it with the current source and documentation. Only when the skill needs modification, read the complete current skill before updating it.
+
 ## Validate
 
-Run the smallest relevant checks. For normal frontend source changes, use:
+For normal frontend source changes, run:
 
 ```bash
 pnpm typecheck
@@ -66,14 +66,8 @@ pnpm build
 git diff --check
 ```
 
-If the shell-provided `pnpm` uses the wrong Node runtime, use the project's current local binaries rather than modifying `package.json` or the lockfile:
+Add relevant existing tests when the change affects an established interaction, accessibility, layout, motion, virtualization, or content contract.
 
-```bash
-node_modules/.bin/tsc --noEmit --pretty false
-node_modules/.bin/electron-vite build
-git diff --check
-```
+Do not start the application or take screenshots unless the task requires real visual evidence or the user asks for it.
 
-Add targeted existing tests only when the changed behavior has a relevant test surface. Do not start the application or take screenshots unless the task requires real visual evidence or the user asks for it.
-
-Report the changed frontend boundary, the reusable library effect, validation results, and any unrelated blocker separately.
+Report the changed frontend boundary, validation results, any skill synchronization needed, and unrelated blockers separately.

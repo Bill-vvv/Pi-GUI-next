@@ -29,10 +29,72 @@ const {
   LiveTurn,
   ToolGroupExpandedContent
 } = timelineModule
+const timelineViewModule = await vite.ssrLoadModule(
+  '/src/renderer/src/features/chat/Timeline.tsx'
+) as typeof import('./Timeline.tsx')
+const { Timeline } = timelineViewModule
 const detailModule = await vite.ssrLoadModule(
   '/src/renderer/src/features/chat/SubagentTaskDetail.tsx'
 ) as typeof import('./SubagentTaskDetail.tsx')
 const { SubagentTaskInteractionContext } = detailModule
+
+test('a superseded active turn collapses while only the latest turn remains animated', () => {
+  const html = renderToStaticMarkup(createElement(Timeline, {
+    entries: [
+      userMessage('interrupted-user', 'Ask several questions together.', 1_000),
+      thinking('interrupted-thinking', '**Batching quota and key lifecycle questions**'),
+      tool('interrupted-read', 'read', 'success', { path: '/tmp/config.ts' }),
+      {
+        id: 'interrupted-answer',
+        kind: 'message',
+        role: 'assistant',
+        phase: null,
+        text: '',
+        timestamp: 2_000,
+        streaming: false,
+        stopReason: 'aborted',
+        error: 'Request was aborted'
+      },
+      userMessage('current-user', 'Simplify the approach.', 3_000),
+      thinking('current-thinking', '**Simplifying multi-question approach**', true)
+    ],
+    activeRunStartIndex: 0,
+    runtimeStatus: 'running',
+    loading: false,
+    compactionActive: false,
+    navigateToLatestPromptOnMount: true,
+    showPromptNavigation: false,
+    toolDisplayDensity: 'standard',
+    sessionKey: 'session-key',
+    askSessionKey: null,
+    canCopyAnswers: false,
+    canExportSession: false,
+    canForkSession: false,
+    canEditHistoryPrompt: false,
+    hasEarlierConversation: false,
+    conversationActionBusy: false,
+    conversationActionStatus: null,
+    conversationActionError: null,
+    onCopyAnswer: async () => undefined,
+    onExportSession: async () => undefined,
+    onLoadEarlierConversation: async () => undefined,
+    onForkTurn: async () => undefined,
+    onNavigateHistoryPrompt: async () => undefined,
+    onSendHistoryPrompt: async () => undefined,
+    onHistoryPromptEditingChange: () => undefined,
+    subagentTaskSelection: null,
+    onOpenSubagentTask: () => undefined,
+    onSubmitAsk: async () => undefined,
+    onCancelAsk: async () => undefined,
+    onLayoutStabilizeReady: () => undefined,
+    warning: null
+  }))
+
+  assert.equal(html.match(/class="completed-process"/g)?.length, 1)
+  assert.match(html, /completed-process-title">已处理</)
+  assert.match(html, /Simplifying multi-question approach/)
+  assert.equal(html.match(/activity-text-shimmer/g)?.length, 1)
+})
 
 test('latest thinking summary status uses the newest semantic line without markdown wrappers', () => {
   const entries: KernelConversationEntry[] = [

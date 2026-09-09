@@ -12,9 +12,26 @@ Remote v2 在**同一 Electron Main / 同一 WorkbenchKernel** 上增加手机�
 - 静态前端是独立 remote Vite 产物 `out/remote`，由 Electron Main 托管。**禁止**把 electron-vite 开发服务器暴露到 LAN 或 WAN。
 - 远程命令 allowlist 以 [`src/shared/remote-contract.ts`](../src/shared/remote-contract.ts) 为准；附件、任务工作区、Git、设置、Provider、Package、原生路径和 shell 不在远程面暴露。
 
-这是家庭网络出口上的私有控制面，不是 SaaS、账户系统或多租户运维入口。
+这是个人设备使用的受控远程入口，不是 SaaS、账户系统或多租户运维入口。
 
-## 默认关闭与启用条件
+## 一键联网（默认入口）
+
+设置页 **远程访问 → 一键联网** 默认把“任意浏览器”作为主操作：
+
+- **任意浏览器**使用 Tailscale Funnel，在 Tailscale HTTPS 443 上公开当前节点的 `https://<node>.<tailnet>.ts.net` 地址；手机只需要普通浏览器，仍必须通过 Pi GUI 的 6 位配对码和设备 Cookie。
+- **仅我的设备**使用 Tailscale Serve，入口只允许同一 Tailnet 中获准的设备访问。
+- 两种模式都让 Electron Main 的 Remote Gateway 只监听动态选择并持久化的 `127.0.0.1:<port>`；Tailscale 是唯一受信 loopback 代理，不需要固定 LAN IP、Lucky、路由器端口映射或 PC 入站防火墙规则。
+- Main 通过固定 argv 调用 `tailscale status --json`、`tailscale serve/funnel ...` 和 `tailscale serve status --json`，不暴露通用命令执行接口。
+- 一键配置、内部机器密钥与设备记录写入 Electron `userData` 目录中的 `tailscale-remote.json`、`tailscale-remote.token` 和相邻 `.device` 文件；配置与密钥严格为本人所有、常规非 symlink、模式 `0600`。
+- Pi GUI 只占用当前 Tailscale 节点 HTTPS 443 的根 handler。若该槽位已有非本应用管理的 Serve/Funnel 配置，必须 Fail Fast，不覆盖、不执行 `reset`。
+- Funnel 与 Serve 可以显式切换；切换时只移除 Pi GUI 精确拥有的旧 443 根 handler，再写入新模式。显式“停用一键访问”先撤销手机设备，再移除精确 Tailscale handler、停止本地 Gateway 并删除 managed config/token。
+- `--bg` 配置由 Tailscale daemon 持久化。普通退出 Pi GUI 只停止本地 Gateway，不删除用户明确启用的一键模式；下次启动使用持久化的 exact port/origin/token 恢复 Gateway。应用未运行期间，Tailscale 入口没有可连接的本地后端。
+
+启用前提是系统已经安装 Tailscale，并且 `BackendState` 为 `Running`、`Self.DNSName` 非空。设置页会显示未安装、未登录、现有路由冲突或 managed route 缺失；`AuthURL` 存在时可打开官方登录页面。Pi GUI 不安装 Tailscale、不保存 Tailscale 账户凭据，也不绕过 Tailnet 的 HTTPS/Funnel 授权。
+
+一键模式与下面的手动环境变量模式互斥；检测到双方同时启用时 Main 必须拒绝启动，不能猜测应由哪一方接管 public origin。
+
+## 手动 Lucky / 受信反代模式
 
 只有显式设置：
 
@@ -109,9 +126,11 @@ Phone / browser
 
 **不要执行 `cat "$PI_GUI_REMOTE_TOKEN_FILE"` 给手机登录。** 手机只使用桌面设置页生成的 6 位配对码。
 
-## 前台启动与 Main 重启
+## 启动与 Main 生命周期
 
-Remote 监听、配对、设备存储和静态托管属于 Electron Main。环境或 Main/shared/remote 代码变化后：
+一键 Tailscale 模式可在设置页运行时启用、切换和停用，不需要手工编写 env；启用后的 exact loopback port、public origin 和内部密钥会在下次 Main 启动时恢复。Tailscale 未安装、未运行、DNS identity 变化、443 handler 冲突或持久化文件不安全时，操作必须显示原始错误，不切换到 LAN 监听。
+
+手动 Lucky 模式的监听、配对、设备存储和静态托管属于 Electron Main。环境或 Main/shared/remote 代码变化后：
 
 1. 完整退出 Pi GUI；不能依赖 HMR 或只刷新 Renderer。
 2. 构建：生产路径运行 `pnpm build`；开发路径至少先运行 `pnpm build:remote`。
@@ -129,7 +148,7 @@ pnpm dev
 
 ## curl 定向验证
 
-生产验证优先通过 Lucky 的 public origin。若 Lucky 启用了 Basic Auth，给下列 curl 额外添加对应 `-u`，但不要把凭据粘贴到共享日志。
+生产验证使用当前设置页显示的 public origin：一键模式使用 Tailscale `ts.net` origin，手动模式使用 Lucky origin。若 Lucky 启用了 Basic Auth，给下列 curl 额外添加对应 `-u`，但不要把凭据粘贴到共享日志。
 
 ```bash
 ORIGIN='https://pi-gui.example.com'
@@ -184,6 +203,8 @@ curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
 - WAN 映射 `18787`、关闭认证的调试模式、短固定密码、长期机器密钥人工登录。
 - 远程 Git/设置/Provider/Package/原生对话框/任意路径搜索/host shell。
 - setup 脚本修改 firewall、Lucky、systemd 或自动重启 GUI。
+- 自动安装 Tailscale、保存 Tailscale 账户凭据、覆盖已有 Serve/Funnel handler、调用 `serve reset` / `funnel reset`，或在 Funnel 不可用时静默降级为 LAN/WAN 监听。
+- Pi GUI 自建 NAT rendezvous、云端 relay 或账户服务；一键模式显式复用系统 Tailscale daemon。
 
 ## 相关文档
 
@@ -191,3 +212,4 @@ curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
 - 产品边界：[`product-boundary.md`](product-boundary.md)
 - 决策记录：[`decisions.md`](decisions.md)（D-065、D-066）
 - 传输 allowlist：[`../src/shared/remote-contract.ts`](../src/shared/remote-contract.ts)
+- 独立的 Desktop Host over SSH：[`desktop-host.md`](desktop-host.md)

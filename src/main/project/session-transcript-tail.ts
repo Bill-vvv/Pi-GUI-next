@@ -1,4 +1,4 @@
-import { open, type FileHandle } from 'node:fs/promises'
+import { open, stat, type FileHandle } from 'node:fs/promises'
 import { TextDecoder } from 'node:util'
 
 import type { SessionPointer } from './session-pointer.ts'
@@ -12,7 +12,16 @@ export type SessionTranscriptMessageRecord = {
   message: Record<string, unknown>
 }
 
+export type SessionTranscriptGeneration = {
+  device: number
+  inode: number
+  size: number
+  modifiedAtMs: number
+  changedAtMs: number
+}
+
 export type SessionTranscriptMessagePhase = {
+  generation: SessionTranscriptGeneration
   capturedEof: number
   messages: SessionTranscriptMessageRecord[]
 }
@@ -28,6 +37,12 @@ export type ReadSessionMessagesTailFirstOptions = {
   onTail: (phase: SessionTranscriptMessagePhase) => void | Promise<void>
   chunkSizeBytes?: number
   onRead?: (range: SessionTranscriptReadRange) => void
+}
+
+export async function readSessionTranscriptGeneration(
+  pointer: SessionPointer
+): Promise<SessionTranscriptGeneration> {
+  return transcriptGeneration(await stat(pointer.sessionFile))
 }
 
 /**
@@ -47,11 +62,9 @@ export async function readSessionMessagesTailFirst(
   const file = await open(pointer.sessionFile, 'r')
   try {
     throwIfAborted(options.signal)
-    const stat = await file.stat()
-    if (!Number.isSafeInteger(stat.size) || stat.size < 0) {
-      throw new Error('Invalid Pi session transcript size.')
-    }
-    const capturedEof = stat.size
+    const fileStat = await file.stat()
+    const generation = transcriptGeneration(fileStat)
+    const capturedEof = generation.size
     const headerPrefix = await readAndValidateHeader(
       file,
       capturedEof,
@@ -80,7 +93,7 @@ export async function readSessionMessagesTailFirst(
       if (tailPublished) return
       tailPublished = true
       throwIfAborted(options.signal)
-      await options.onTail({ capturedEof, messages: activeMessages(entries) })
+      await options.onTail({ generation, capturedEof, messages: activeMessages(entries) })
       throwIfAborted(options.signal)
     }
 
@@ -191,7 +204,11 @@ export async function readSessionMessagesTailFirst(
     const entries = [...entriesReverse].reverse()
     validateParentGraph(entries, entriesById, options.signal)
     throwIfAborted(options.signal)
-    return { capturedEof, messages: activeMessages([...activeReverse].reverse()) }
+    return {
+      generation,
+      capturedEof,
+      messages: activeMessages([...activeReverse].reverse())
+    }
   } finally {
     await file.close()
   }
@@ -308,6 +325,43 @@ function isMessageEntry(
 
 function isUserMessageEntry(entry: SessionTranscriptEntry): boolean {
   return isMessageEntry(entry) && entry.message.role === 'user'
+}
+
+function transcriptGeneration(value: {
+  dev: number
+  ino: number
+  size: number
+  mtimeMs: number
+  ctimeMs: number
+}): SessionTranscriptGeneration {
+  const generation: SessionTranscriptGeneration = {
+    device: value.dev,
+    inode: value.ino,
+    size: value.size,
+    modifiedAtMs: value.mtimeMs,
+    changedAtMs: value.ctimeMs
+  }
+  if (
+    !Number.isSafeInteger(generation.device) || generation.device < 0 ||
+    !Number.isSafeInteger(generation.inode) || generation.inode < 0 ||
+    !Number.isSafeInteger(generation.size) || generation.size < 0 ||
+    !Number.isFinite(generation.modifiedAtMs) || generation.modifiedAtMs < 0 ||
+    !Number.isFinite(generation.changedAtMs) || generation.changedAtMs < 0
+  ) {
+    throw new Error('Invalid Pi session transcript generation.')
+  }
+  return generation
+}
+
+export function sessionTranscriptGenerationsEqual(
+  left: SessionTranscriptGeneration,
+  right: SessionTranscriptGeneration
+): boolean {
+  return left.device === right.device &&
+    left.inode === right.inode &&
+    left.size === right.size &&
+    left.modifiedAtMs === right.modifiedAtMs &&
+    left.changedAtMs === right.changedAtMs
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {

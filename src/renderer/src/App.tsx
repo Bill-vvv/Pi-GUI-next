@@ -14,6 +14,7 @@ import {
   type KernelProjectTrustChoice,
   type KernelPromptAttachment,
   type KernelSessionPreview,
+  type KernelSessionPreviewPageRequest,
   type KernelState,
   type SessionNamingSettings,
   type SubagentSettings,
@@ -31,15 +32,23 @@ import {
 import { IconButton } from './components/IconButton'
 import { useSessionRuntimeController } from './composition/useSessionRuntimeController'
 import type { ComposerDraftRequest } from './features/composer/Composer'
+import {
+  collectSessionLifecycleObservations,
+  indexSessionLifecycles,
+  reconcileBackgroundSessionNotifications,
+  type BackgroundSessionNotification,
+  type SessionLifecycleObservation
+} from './features/session/background-session-completion'
 import { awaitMutationAck as awaitKernelMutationAck } from './kernel/await-mutation-ack'
 import { applyStatePatches } from './kernel/kernel-state-patches'
+import { mergeEarlierSessionPreviewPage } from './kernel/conversation-page-merge'
 import {
   DEFAULT_RESYNC_TIMEOUT_MS,
   KernelRevisionBarrier
 } from './kernel/kernel-revision-barrier'
 import { unknownErrorMessage as errorMessage } from './unknown-error-message'
 
-/** Dwell before starting a stopped historical Session after the last click. */
+/** Dwell before reading the last selected stopped historical Session. */
 const SESSION_RUNTIME_SETTLE_MS = 120
 
 type ArchiveNotification = {
@@ -60,8 +69,13 @@ export function App(): React.JSX.Element {
   const [pendingAction, setPendingAction] = useState<WorkbenchOperation | null>(null)
   const [archivedSessionPreview, setArchivedSessionPreview] =
     useState<ArchivedSessionPreview | null>(null)
+  const archivedSessionPreviewRef = useRef<ArchivedSessionPreview | null>(null)
   const [archiveNotifications, setArchiveNotifications] =
     useState<ArchiveNotification[]>([])
+  const [backgroundSessionNotifications, setBackgroundSessionNotifications] =
+    useState<readonly BackgroundSessionNotification[]>([])
+  const [openingBackgroundSessionIdentity, setOpeningBackgroundSessionIdentity] =
+    useState<string | null>(null)
   const [forkDialogOpen, setForkDialogOpen] = useState(false)
   const [forkCandidates, setForkCandidates] = useState<KernelForkCandidate[]>([])
   const [forkCandidatesLoading, setForkCandidatesLoading] = useState(false)
@@ -79,10 +93,18 @@ export function App(): React.JSX.Element {
   const kernelStateRef = useRef<KernelState | null>(null)
   const revisionBarrierRef = useRef<KernelRevisionBarrier | null>(null)
   const pendingActionRef = useRef<WorkbenchOperation | null>(null)
+  const sessionLifecycleByIdentityRef = useRef(
+    new Map<string, SessionLifecycleObservation>()
+  )
   const coldStartHandledRef = useRef(false)
   const actionPresentationRevision = useRef(0)
   const forkRequestRevision = useRef(0)
   const composerDraftRevision = useRef(0)
+
+  function updateArchivedSessionPreview(preview: ArchivedSessionPreview | null): void {
+    archivedSessionPreviewRef.current = preview
+    setArchivedSessionPreview(preview)
+  }
 
   async function awaitMutationAck<T extends KernelMutationAck>(
     operation: () => Promise<T>
@@ -130,6 +152,7 @@ export function App(): React.JSX.Element {
     startSession,
     waitForSessionStart,
     ensureInitialRuntime,
+    loadEarlierSessionPreview: loadEarlierStaticSessionPreview,
     ensureSessionRuntime,
     waitForRuntimeEnsureIdle
   } = useSessionRuntimeController({
@@ -142,6 +165,7 @@ export function App(): React.JSX.Element {
       window.piGui.previewSession(sessionKey, requestId),
     completeSessionPreview: (requestId) => window.piGui.completeSessionPreview(requestId),
     cancelSessionPreview: (requestId) => window.piGui.cancelSessionPreview(requestId),
+    loadEarlierSessionPreview: (request) => window.piGui.loadEarlierSessionPreview(request),
     beginActionPresentation: () => {
       actionPresentationRevision.current += 1
       return actionPresentationRevision.current
@@ -153,8 +177,40 @@ export function App(): React.JSX.Element {
       : { owner: 'header', message: errorMessage(error) }),
     onCompletedAction: (action, succeeded) =>
       setCompletedAction({ action: workbenchOp(action), succeeded }),
-    onClearArchivedPreview: () => setArchivedSessionPreview(null)
+    onClearArchivedPreview: () => updateArchivedSessionPreview(null)
   })
+  const displayedSessionKey = sessionViewTarget?.kind === 'new'
+    ? null
+    : sessionViewTarget?.kind === 'session'
+      ? sessionViewTarget.sessionKey
+      : kernelState?.activeSessionKey ?? null
+  const lifecycleProjects = kernelState?.projects ?? null
+  const lifecycleActiveProjectKey = kernelState?.activeProjectKey ?? null
+  const lifecycleSessions = kernelState?.sessions ?? null
+
+  useEffect(() => {
+    if (lifecycleProjects === null || lifecycleSessions === null) return
+    const observations = collectSessionLifecycleObservations({
+      projects: lifecycleProjects,
+      activeProjectKey: lifecycleActiveProjectKey,
+      sessions: lifecycleSessions
+    })
+    const previousByIdentity = sessionLifecycleByIdentityRef.current
+    setBackgroundSessionNotifications((current) =>
+      reconcileBackgroundSessionNotifications(
+        current,
+        displayedSessionKey,
+        previousByIdentity,
+        observations
+      )
+    )
+    sessionLifecycleByIdentityRef.current = indexSessionLifecycles(observations)
+  }, [
+    displayedSessionKey,
+    lifecycleActiveProjectKey,
+    lifecycleProjects,
+    lifecycleSessions
+  ])
 
   useEffect(() => {
     let active = true
@@ -204,7 +260,7 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     if (archivedSessionPreview === null) return
     const timeout = window.setTimeout(() => {
-      setArchivedSessionPreview(null)
+      updateArchivedSessionPreview(null)
     }, Math.max(0, archivedSessionPreview.expiresAt - Date.now()))
     return () => window.clearTimeout(timeout)
   }, [archivedSessionPreview])
@@ -462,7 +518,17 @@ export function App(): React.JSX.Element {
     }
   }
 
-  function openForkDialog(preferredUserText?: string): void {
+  async function openForkDialog(preferredUserText?: string): Promise<void> {
+    const viewTarget = getSessionViewTarget()
+    try {
+      if (viewTarget?.kind === 'session') {
+        await ensureSessionRuntime(viewTarget.sessionKey, 'immediate')
+      }
+    } catch (error) {
+      setActionFailure({ owner: 'header', message: errorMessage(error) })
+      throw error
+    }
+
     const state = kernelStateRef.current
     if (
       state === null ||
@@ -471,8 +537,9 @@ export function App(): React.JSX.Element {
       !state.session.settled ||
       getSessionViewTarget() !== null
     ) {
-      setActionFailure({ owner: 'header', message: '当前对话暂时不能分叉。' })
-      return
+      const error = new Error('当前对话暂时不能分叉。')
+      setActionFailure({ owner: 'header', message: error.message })
+      throw error
     }
     setActionFailure(null)
     setForkPreferredUserText(
@@ -524,11 +591,25 @@ export function App(): React.JSX.Element {
   async function exportSession(): Promise<void> {
     if (pendingActionRef.current !== null) throw new Error('Another action is already running.')
     const action = workbenchOp('export-session')
+    const viewTarget = getSessionViewTarget()
+    const targetSessionKey = viewTarget?.kind === 'session'
+      ? viewTarget.sessionKey
+      : kernelStateRef.current?.activeSessionKey ?? null
     setCompletedAction(null)
     pendingActionRef.current = action
     setPendingAction(action)
     setActionFailure(null)
     try {
+      if (viewTarget?.kind === 'session') {
+        await ensureSessionRuntime(viewTarget.sessionKey, 'immediate')
+      }
+      if (
+        targetSessionKey === null ||
+        kernelStateRef.current?.activeSessionKey !== targetSessionKey ||
+        getSessionViewTarget() !== null
+      ) {
+        throw new Error('导出目标在操作前发生了变化。')
+      }
       const result = await window.piGui.exportSession()
       if (result.saved) {
         setCompletedAction({ action, succeeded: true })
@@ -566,6 +647,40 @@ export function App(): React.JSX.Element {
   }
 
   async function loadEarlierConversation(): Promise<void> {
+    const archived = archivedSessionPreviewRef.current
+    if (archived !== null) {
+      const firstEntry = archived.preview.conversation.entries[0]
+      if (
+        archived.expiresAt <= Date.now() ||
+        archived.preview.conversation.startIndex <= 0 ||
+        firstEntry === undefined
+      ) {
+        throw new Error('当前归档预览没有可加载的更早内容。')
+      }
+      const request: KernelSessionPreviewPageRequest = {
+        previewId: archived.preview.previewId,
+        projectKey: archived.preview.projectKey,
+        sessionKey: archived.preview.sessionKey,
+        sessionId: archived.preview.sessionId,
+        beforeIndex: archived.preview.conversation.startIndex,
+        beforeEntryId: firstEntry.id
+      }
+      const page = await window.piGui.loadEarlierSessionPreview(request)
+      const current = archivedSessionPreviewRef.current
+      if (current === null || current.expiresAt <= Date.now()) {
+        throw new Error('Archived Session preview page response is stale.')
+      }
+      updateArchivedSessionPreview({
+        ...current,
+        preview: mergeEarlierSessionPreviewPage(current.preview, request, page)
+      })
+      return
+    }
+    if (getSessionViewTarget()?.kind === 'session') {
+      await loadEarlierStaticSessionPreview()
+      return
+    }
+
     const state = kernelStateRef.current
     const firstEntry = state?.conversation.entries[0]
     if (
@@ -657,7 +772,7 @@ export function App(): React.JSX.Element {
         throw new Error(`/${commandName} 不接受参数。`)
       }
       if (commandId === FORK_SESSION_COMMAND_ID) {
-        openForkDialog()
+        await openForkDialog()
         return
       }
       if (commandId === EXPORT_SESSION_COMMAND_ID) {
@@ -677,7 +792,7 @@ export function App(): React.JSX.Element {
     pendingActionRef.current = action
     setPendingAction(action)
     setActionFailure(null)
-    setArchivedSessionPreview(null)
+    updateArchivedSessionPreview(null)
     let succeeded = false
     try {
       await waitForRuntimeEnsureIdle()
@@ -719,6 +834,55 @@ export function App(): React.JSX.Element {
     )
   }
 
+  function removeBackgroundSessionNotification(identity: string): void {
+    setBackgroundSessionNotifications((current) =>
+      current.filter((notification) => notification.identity !== identity)
+    )
+  }
+
+  async function openBackgroundSessionNotification(
+    notification: BackgroundSessionNotification
+  ): Promise<void> {
+    if (pendingActionRef.current !== null || openingBackgroundSessionIdentity !== null) return
+    setOpeningBackgroundSessionIdentity(notification.identity)
+    setActionFailure(null)
+    updateArchivedSessionPreview(null)
+    try {
+      await waitForRuntimeEnsureIdle()
+      if (kernelStateRef.current?.activeProjectKey !== notification.projectKey) {
+        if (notification.workspaceKind === 'task') {
+          if (notification.taskKey === null) {
+            throw new Error('Background Task notification is missing its Task identity.')
+          }
+          await runAction(
+            workbenchOp('activate-task'),
+            () => window.piGui.activateTask(notification.taskKey!)
+          )
+        } else {
+          await runAction(
+            workbenchOp('activate-project'),
+            () => window.piGui.activateProject(notification.projectKey)
+          )
+        }
+        clearSessionView()
+        requestWorkspaceMetadataRefresh(notification.projectKey)
+      }
+      const targetState = kernelStateRef.current
+      if (
+        targetState?.activeProjectKey === notification.projectKey &&
+        targetState.activeSessionKey === notification.sessionKey
+      ) {
+        clearSessionView()
+      }
+      await ensureSessionRuntime(notification.sessionKey, 'immediate')
+      removeBackgroundSessionNotification(notification.identity)
+    } finally {
+      setOpeningBackgroundSessionIdentity((current) =>
+        current === notification.identity ? null : current
+      )
+    }
+  }
+
   async function undoArchive(notification: ArchiveNotification): Promise<void> {
     const { token } = notification.receipt
     if (notification.expiresAt <= Date.now() || notification.pending !== null) {
@@ -753,7 +917,7 @@ export function App(): React.JSX.Element {
       removeArchiveNotification(token)
       clearSessionView()
       if (notification.expiresAt > Date.now()) {
-        setArchivedSessionPreview({
+        updateArchivedSessionPreview({
           preview,
           expiresAt: notification.expiresAt
         })
@@ -809,6 +973,7 @@ export function App(): React.JSX.Element {
 
   const operationNotifications =
     archiveNotifications.length === 0 &&
+      backgroundSessionNotifications.length === 0 &&
       compactionNotice === null
       ? null
       : (
@@ -818,6 +983,46 @@ export function App(): React.JSX.Element {
         aria-live="polite"
         aria-relevant="additions removals"
       >
+        {backgroundSessionNotifications.map((notification) => {
+          const opening = openingBackgroundSessionIdentity === notification.identity
+          return (
+            <article
+              className="archive-notification"
+              key={`background-session:${notification.identity}`}
+              aria-busy={opening}
+            >
+              <div className="archive-notification-copy">
+                <strong>{notification.sessionName?.trim() || (
+                  notification.workspaceKind === 'task' ? '后台任务' : '后台对话'
+                )}</strong>
+                <span>
+                  {notification.outcome === 'completed'
+                    ? '后台工作已完成，结果保留在原对话中。'
+                    : '后台工作异常结束，请返回原对话查看。'}
+                </span>
+              </div>
+              <div className="archive-notification-actions">
+                <button
+                  type="button"
+                  disabled={pendingAction !== null || openingBackgroundSessionIdentity !== null}
+                  onClick={() => {
+                    void openBackgroundSessionNotification(notification).catch(() => undefined)
+                  }}
+                >
+                  {opening ? '正在打开…' : '查看'}
+                </button>
+                <IconButton
+                  className="archive-notification-dismiss"
+                  icon="close"
+                  iconSize="sm"
+                  label="关闭后台完成通知"
+                  disabled={opening}
+                  onClick={() => removeBackgroundSessionNotification(notification.identity)}
+                />
+              </div>
+            </article>
+          )
+        })}
         {archiveNotifications.map((notification) => (
           <article
             className="archive-notification"
@@ -906,12 +1111,12 @@ export function App(): React.JSX.Element {
       forkSubmitting={forkSubmitting}
       forkPreferredUserText={forkPreferredUserText}
       onAddProject={async () => {
-        setArchivedSessionPreview(null)
+        updateArchivedSessionPreview(null)
         await waitForRuntimeEnsureIdle()
         await runAction(workbenchOp('add-project'), () => window.piGui.addProject())
       }}
       onActivateProject={async (projectKey) => {
-        setArchivedSessionPreview(null)
+        updateArchivedSessionPreview(null)
         await waitForRuntimeEnsureIdle()
         await runAction(
           workbenchOp('activate-project'),
@@ -921,13 +1126,13 @@ export function App(): React.JSX.Element {
         requestWorkspaceMetadataRefresh(projectKey)
       }}
       onCreateTask={async () => {
-        setArchivedSessionPreview(null)
+        updateArchivedSessionPreview(null)
         await waitForRuntimeEnsureIdle()
         await runAction(workbenchOp('create-task'), () => window.piGui.createTask())
         await startSession()
       }}
       onActivateTask={async (taskKey, sessionKey) => {
-        setArchivedSessionPreview(null)
+        updateArchivedSessionPreview(null)
         await waitForRuntimeEnsureIdle()
         await runAction(
           workbenchOp('activate-task'),
@@ -947,7 +1152,7 @@ export function App(): React.JSX.Element {
       onEnsureSessionRuntime={ensureSessionRuntime}
       onSelectSession={selectSession}
       onClearSessionPreview={clearSessionView}
-      onClearArchivedSessionPreview={() => setArchivedSessionPreview(null)}
+      onClearArchivedSessionPreview={() => updateArchivedSessionPreview(null)}
       onOpenForkDialog={openForkDialog}
       onCloseForkDialog={closeForkDialog}
       onRetryForkCandidates={() => void loadForkCandidates()}
@@ -1007,6 +1212,13 @@ export function App(): React.JSX.Element {
       onGetRemoteAccessStatus={window.piRemote.getStatus}
       onCreateRemotePairingCode={window.piRemote.createPairingCode}
       onRevokeRemoteDevice={window.piRemote.revokeDevice}
+      onGetTailscaleStatus={window.piRemote.getTailscaleStatus}
+      onEnableTailscaleFunnel={window.piRemote.enableTailscaleFunnel}
+      onEnableTailscaleServe={window.piRemote.enableTailscaleServe}
+      onDisableTailscale={window.piRemote.disableTailscale}
+      onGetDesktopHostStatus={window.piRemote.getDesktopHostStatus}
+      onCreateDesktopHostPairingCode={window.piRemote.createDesktopHostPairingCode}
+      onRevokeDesktopHostDevice={window.piRemote.revokeDesktopHostDevice}
       onSelectPromptAttachments={() => window.piGui.selectPromptAttachments()}
       onSearchProjectPaths={(query) => window.piGui.searchProjectPaths(query)}
       onSubmitAsk={(sessionKey, toolCallId, answers) =>
@@ -1021,6 +1233,25 @@ export function App(): React.JSX.Element {
           () => window.piGui.cancelAsk(sessionKey, toolCallId),
           false
         )}
+      onRespondExtensionDialog={async (request, value) => {
+        await awaitMutationAck(() => window.piGui.respondExtensionDialog(
+          request.projectKey,
+          request.sessionKey,
+          request.sessionId,
+          request.requestId,
+          request.commandInvocationId,
+          value
+        ))
+      }}
+      onCancelExtensionDialog={async (request) => {
+        await awaitMutationAck(() => window.piGui.cancelExtensionDialog(
+          request.projectKey,
+          request.sessionKey,
+          request.sessionId,
+          request.requestId,
+          request.commandInvocationId
+        ))
+      }}
       onPrompt={(
         message,
         attachments?: KernelPromptAttachment[],

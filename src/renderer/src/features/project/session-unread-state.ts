@@ -51,8 +51,9 @@ export function reconcileUnreadSessionKeys(
     }
 
     const receivedNewMessage = previous !== undefined &&
+      previous.lastActivityAt !== null &&
       observation.lastActivityAt !== null &&
-      (previous.lastActivityAt === null || observation.lastActivityAt > previous.lastActivityAt)
+      observation.lastActivityAt > previous.lastActivityAt
     const completedBackgroundRun = previous?.runtimeStatus === 'running' &&
       (observation.runtimeStatus === 'ready' || observation.runtimeStatus === 'crashed')
     if (

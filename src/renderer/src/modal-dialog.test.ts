@@ -25,6 +25,14 @@ const tooltipProviderSource = await readFile(
   new URL('./components/TooltipProvider.tsx', import.meta.url),
   'utf8'
 )
+const workbenchSource = await readFile(
+  new URL('./composition/Workbench.tsx', import.meta.url),
+  'utf8'
+)
+const remoteShellSource = await readFile(
+  new URL('../../remote/RemoteShell.tsx', import.meta.url),
+  'utf8'
+)
 
 test('modal tab navigation wraps only at the focus boundary', () => {
   assert.equal(modalTabTargetIndex(0, -1, false), -1)
@@ -44,11 +52,23 @@ test('shared modal hook owns top-layer Escape, busy blocking and focus restorati
   assert.match(tooltipProviderSource, /event\.preventDefault\(\)[\s\S]*?event\.stopPropagation\(\)[\s\S]*?hideTooltip\(\)/)
 })
 
+test('Extension dialogs remount on the complete owner identity, not request ID alone', () => {
+  for (const source of [workbenchSource, remoteShellSource]) {
+    assert.match(source, /state\.extensionDialog\.projectKey/)
+    assert.match(source, /state\.extensionDialog\.sessionKey/)
+    assert.match(source, /state\.extensionDialog\.sessionId/)
+    assert.match(source, /state\.extensionDialog\.commandInvocationId/)
+    assert.match(source, /state\.extensionDialog\.requestId/)
+    assert.doesNotMatch(source, /key=\{state\.extensionDialog\.requestId\}/)
+  }
+})
+
 test('all current modal surfaces use the shared behavior hook without local key listeners', () => {
   assert.match(sessionForkSource, /useModalDialog\(\{/)
   assert.match(projectTrustSource, /useModalDialog\(\{/)
   assert.match(credentialsSource, /useModalDialog\(\{/)
-  assert.equal([...timelineTurnsSource.matchAll(/useModalDialog\(\{/g)].length, 2)
+  assert.equal([...timelineTurnsSource.matchAll(/useModalDialog\(\{/g)].length, 1)
+  assert.match(timelineTurnsSource, /function InlineImageAttachment\b/)
 
   for (const source of [
     sessionForkSource,

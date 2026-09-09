@@ -1,11 +1,14 @@
 import type {
+  KernelConversationPage,
   KernelConversationPreviewState,
   KernelConversationState,
   KernelMutationAck,
   KernelSessionPreview,
+  KernelSessionPreviewPageRequest,
   KernelState
 } from '../../../shared/kernel-contract'
 import { conversationTurnWindowStartIndex } from '../../../shared/conversation-window.ts'
+import { mergeEarlierSessionPreviewPage } from '../kernel/conversation-page-merge.ts'
 
 export type SessionViewTarget =
   | {
@@ -39,6 +42,7 @@ export type SessionRuntimeSnapshot = {
 
 type RuntimeEnsureWaiter = {
   target: RuntimeEnsureTarget
+  requiresRuntime: boolean
   resolve: () => void
   reject: (error: unknown) => void
 }
@@ -75,6 +79,9 @@ export type SessionRuntimeControllerDependencies = {
   previewSession: (sessionKey: string, requestId: string) => Promise<KernelSessionPreview>
   completeSessionPreview: (requestId: string) => Promise<KernelSessionPreview>
   cancelSessionPreview: (requestId: string) => Promise<void>
+  loadEarlierSessionPreview: (
+    request: KernelSessionPreviewPageRequest
+  ) => Promise<KernelConversationPage>
   beginActionPresentation: () => number
   isActionPresentationCurrent: (revision: number) => boolean
   onSnapshot: (snapshot: SessionRuntimeSnapshot) => void
@@ -104,7 +111,7 @@ export class SessionRuntimeController {
   private sessionSwitchCacheEstimatedBytes = 0
   private lastReconciledState: KernelState | null = null
   private desiredRuntimeEnsure: RuntimeEnsureTarget | null = null
-  private desiredRuntimeEnsurePreview = false
+  private desiredRuntimeEnsurePreviewOnly = false
   private executingRuntimeEnsure: RuntimeEnsureTarget | null = null
   private runtimeEnsureGeneration = 0
   private runtimeEnsureTimer: TimerHandle | null = null
@@ -214,7 +221,7 @@ export class SessionRuntimeController {
     if (this.runtimeEnsureTimer !== null) {
       this.cancelSettleTimer()
       this.desiredRuntimeEnsure = null
-      this.desiredRuntimeEnsurePreview = false
+      this.desiredRuntimeEnsurePreviewOnly = false
       this.runtimeEnsureGeneration += 1
       this.supersedeRuntimeEnsureWaiters(this.executingRuntimeEnsure)
     }
@@ -270,10 +277,53 @@ export class SessionRuntimeController {
       projectKey,
       sessionKey
     }
-    if (!sessionRuntimeAlreadyUsable(state, target)) {
+    if (sessionViewTargetsEqual(this.snapshot.sessionViewTarget, target)) {
+      this.cancelActiveStaticSessionPreview(true)
+    } else if (!sessionRuntimeAlreadyUsable(state, target)) {
       this.prepareSessionView(state, target)
     }
     return this.enqueueRuntimeEnsure(target, mode)
+  }
+
+  async loadEarlierPreview(): Promise<void> {
+    this.assertActive()
+    const preview = this.snapshot.sessionPreview
+    const viewTarget = this.snapshot.sessionViewTarget
+    const firstEntry = preview?.conversation.entries[0]
+    if (
+      preview === null ||
+      viewTarget?.kind !== 'session' ||
+      viewTarget.projectKey !== preview.projectKey ||
+      viewTarget.sessionKey !== preview.sessionKey ||
+      preview.conversation.startIndex <= 0 ||
+      firstEntry === undefined ||
+      this.snapshot.previewPendingKey !== null
+    ) {
+      throw new Error('当前历史预览没有可加载的更早内容。')
+    }
+    const request: KernelSessionPreviewPageRequest = {
+      previewId: preview.previewId,
+      projectKey: preview.projectKey,
+      sessionKey: preview.sessionKey,
+      sessionId: preview.sessionId,
+      beforeIndex: preview.conversation.startIndex,
+      beforeEntryId: firstEntry.id
+    }
+    const requestRevision = this.previewRequestRevision
+    const page = await this.dependencies.loadEarlierSessionPreview(request)
+    const current = this.snapshot.sessionPreview
+    if (
+      this.disposed ||
+      this.previewRequestRevision !== requestRevision ||
+      current === null ||
+      this.snapshot.previewPendingKey !== null
+    ) {
+      throw new Error('Session preview page response is stale.')
+    }
+    this.updateSnapshot({
+      ...this.snapshot,
+      sessionPreview: mergeEarlierSessionPreviewPage(current, request, page)
+    })
   }
 
   async waitForStart(): Promise<void> {
@@ -306,7 +356,7 @@ export class SessionRuntimeController {
     this.cancelActiveStaticSessionPreview(true)
     this.cancelSettleTimer()
     this.desiredRuntimeEnsure = null
-    this.desiredRuntimeEnsurePreview = false
+    this.desiredRuntimeEnsurePreviewOnly = false
     this.runtimeEnsureGeneration += 1
     this.supersedeRuntimeEnsureWaiters(this.executingRuntimeEnsure)
     if (this.runtimeEnsurePump !== null) {
@@ -321,7 +371,7 @@ export class SessionRuntimeController {
     this.cancelSettleTimer()
     this.cancelSessionSwitchCacheTasks()
     this.desiredRuntimeEnsure = null
-    this.desiredRuntimeEnsurePreview = false
+    this.desiredRuntimeEnsurePreviewOnly = false
     const error = new Error(SUPERSEDED_ERROR)
     for (const waiter of this.runtimeEnsureWaiters) waiter.reject(error)
     this.runtimeEnsureWaiters = []
@@ -338,15 +388,20 @@ export class SessionRuntimeController {
   private enqueueRuntimeEnsure(
     target: RuntimeEnsureTarget,
     mode: 'immediate' | 'settled',
-    preview = false
+    previewOnly = false
   ): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.runtimeEnsureWaiters.push({ target, resolve, reject })
-      const preservePendingPreview =
+      this.runtimeEnsureWaiters.push({
+        target,
+        requiresRuntime: !previewOnly,
+        resolve,
+        reject
+      })
+      const preservePendingRuntime =
         runtimeEnsureTargetsEqual(this.desiredRuntimeEnsure, target) &&
-        this.desiredRuntimeEnsurePreview
+        !this.desiredRuntimeEnsurePreviewOnly
       this.desiredRuntimeEnsure = target
-      this.desiredRuntimeEnsurePreview = preview || preservePendingPreview
+      this.desiredRuntimeEnsurePreviewOnly = preservePendingRuntime ? false : previewOnly
       this.supersedeRuntimeEnsureWaiters(target)
       this.runtimeEnsureGeneration += 1
       const generation = this.runtimeEnsureGeneration
@@ -389,26 +444,26 @@ export class SessionRuntimeController {
       this.desiredRuntimeEnsure !== null
     ) {
       const target = this.desiredRuntimeEnsure
-      const preview = this.desiredRuntimeEnsurePreview
+      const previewOnly = this.desiredRuntimeEnsurePreviewOnly
       const generation = this.runtimeEnsureGeneration
       this.executingRuntimeEnsure = target
+      const completedRequestMatches = (waiter: RuntimeEnsureWaiter) =>
+        runtimeEnsureTargetsEqual(waiter.target, target) &&
+        (!previewOnly || !waiter.requiresRuntime)
       try {
-        await this.performRuntimeEnsure(target, generation, preview)
-        this.settleRuntimeEnsureWaiters((waiterTarget) =>
-          runtimeEnsureTargetsEqual(waiterTarget, target)
-        )
+        await this.performRuntimeEnsure(target, generation, previewOnly)
+        this.settleRuntimeEnsureWaiters(completedRequestMatches)
       } catch (error) {
-        this.settleRuntimeEnsureWaiters(
-          (waiterTarget) => runtimeEnsureTargetsEqual(waiterTarget, target),
-          error
-        )
+        this.settleRuntimeEnsureWaiters(completedRequestMatches, error)
       } finally {
         const nextTarget = nextDesiredRuntimeEnsureAfterCompletion(
           this.desiredRuntimeEnsure,
-          target
+          target,
+          this.desiredRuntimeEnsurePreviewOnly,
+          previewOnly
         )
         this.desiredRuntimeEnsure = nextTarget
-        if (nextTarget === null) this.desiredRuntimeEnsurePreview = false
+        if (nextTarget === null) this.desiredRuntimeEnsurePreviewOnly = false
         this.executingRuntimeEnsure = null
       }
     }
@@ -417,7 +472,7 @@ export class SessionRuntimeController {
   private async performRuntimeEnsure(
     target: RuntimeEnsureTarget,
     generation: number,
-    preview: boolean
+    previewOnly: boolean
   ): Promise<void> {
     const state = this.dependencies.getKernelState()
     if (state?.activeProjectKey !== target.projectKey) {
@@ -428,8 +483,14 @@ export class SessionRuntimeController {
       return
     }
 
-    if (target.kind === 'session' && preview && sessionNeedsHistoricalPreview(state, target)) {
-      void this.loadSessionPreview(target, this.previewRequestRevision).catch(() => undefined)
+    if (previewOnly) {
+      if (target.kind !== 'session') {
+        throw new Error('Only a persisted Session can be previewed without a Runtime.')
+      }
+      if (sessionNeedsHistoricalPreview(state, target)) {
+        await this.loadSessionPreview(target, this.previewRequestRevision)
+      }
+      return
     }
 
     await this.ensureRuntimeTarget(target, generation, state)
@@ -626,6 +687,7 @@ export class SessionRuntimeController {
     const key = sessionSwitchCacheKey(identity)
     this.scheduleSessionSwitchCacheTask(`write\0${key}`, () => {
       this.writePreviewToCache({
+        previewId: 'renderer-cache',
         ...identity,
         sessionName,
         conversation: sessionSwitchConversation(conversation)
@@ -729,12 +791,12 @@ export class SessionRuntimeController {
   }
 
   private settleRuntimeEnsureWaiters(
-    predicate: (target: RuntimeEnsureTarget) => boolean,
+    predicate: (waiter: RuntimeEnsureWaiter) => boolean,
     error?: unknown
   ): void {
     const remaining: RuntimeEnsureWaiter[] = []
     for (const waiter of this.runtimeEnsureWaiters) {
-      if (!predicate(waiter.target)) {
+      if (!predicate(waiter)) {
         remaining.push(waiter)
         continue
       }
@@ -802,9 +864,13 @@ export function runtimeEnsureTargetsEqual(
 
 export function nextDesiredRuntimeEnsureAfterCompletion(
   desired: RuntimeEnsureTarget | null,
-  completed: RuntimeEnsureTarget
+  completed: RuntimeEnsureTarget,
+  desiredPreviewOnly = false,
+  completedPreviewOnly = false
 ): RuntimeEnsureTarget | null {
-  return runtimeEnsureTargetsEqual(desired, completed) ? null : desired
+  if (!runtimeEnsureTargetsEqual(desired, completed)) return desired
+  if (!completedPreviewOnly || desiredPreviewOnly) return null
+  return desired
 }
 
 /** Keep two settled turns, or the previous settled turn plus the complete active run. */
@@ -830,6 +896,7 @@ export function sessionSwitchConversation(
   )
   return {
     entries: entries.slice(localStartIndex),
+    startIndex: conversation.startIndex + localStartIndex,
     activeRunStartIndex: activeBoundary === null ? null : activeBoundary - localStartIndex
   }
 }

@@ -39,6 +39,11 @@ type RemoteAppProps = {
   client: RemoteClient
 }
 
+type RemoteVirtualKeyboard = EventTarget & {
+  overlaysContent: boolean
+  readonly boundingRect: DOMRectReadOnly
+}
+
 export function RemoteApp({ client }: RemoteAppProps): React.JSX.Element {
   const [sessionStatus, setSessionStatus] = useState<RemoteSessionStatus | null>(null)
   const [authChecking, setAuthChecking] = useState(true)
@@ -100,12 +105,15 @@ export function RemoteApp({ client }: RemoteAppProps): React.JSX.Element {
 
     let active = true
     let unsubscribe = (): void => undefined
+    let streamGeneration = 0
+    let authProbeInFlight = false
     setConnectionStatus('connecting')
     setConnectionError(null)
     setActionError(null)
 
     const failConnection = (error: unknown): void => {
       if (!active) return
+      streamGeneration += 1
       unsubscribe()
       const message = unknownErrorMessage(error)
       if (error instanceof RemoteTransportError && error.status === 401) {
@@ -135,6 +143,56 @@ export function RemoteApp({ client }: RemoteAppProps): React.JSX.Element {
     })
     revisionBarrierRef.current = barrier
 
+    const resyncSnapshot = async (generation: number): Promise<void> => {
+      let timeoutHandle: number | null = null
+      try {
+        const snapshot = await Promise.race([
+          client.getState(),
+          new Promise<never>((_, reject) => {
+            timeoutHandle = window.setTimeout(() => {
+              reject(new Error(`Kernel snapshot timed out after ${DEFAULT_RESYNC_TIMEOUT_MS}ms.`))
+            }, DEFAULT_RESYNC_TIMEOUT_MS)
+          })
+        ])
+        if (!active || generation !== streamGeneration) return
+        barrier.handleSnapshot(snapshot)
+        setConnectionStatus('connected')
+        setConnectionError(null)
+      } catch (error) {
+        if (!active || generation !== streamGeneration) return
+        failConnection(error)
+      } finally {
+        if (timeoutHandle !== null) window.clearTimeout(timeoutHandle)
+      }
+    }
+
+    const probeAuthentication = (): void => {
+      if (authProbeInFlight) return
+      authProbeInFlight = true
+      void client.getSession().then(
+        (status) => {
+          if (!active || status.authenticated) return
+          setLoginError('远程会话已失效，请重新配对。')
+          setSessionStatus(status)
+        },
+        () => undefined
+      ).finally(() => {
+        authProbeInFlight = false
+      })
+    }
+
+    const handleStreamError = (error: Error): void => {
+      if (!active) return
+      if (error instanceof RemoteTransportError && error.code !== 'network') {
+        failConnection(error)
+        return
+      }
+      streamGeneration += 1
+      setConnectionStatus('connecting')
+      setConnectionError(null)
+      probeAuthentication()
+    }
+
     unsubscribe = client.subscribe(
       (event) => {
         if (!active) return
@@ -146,30 +204,15 @@ export function RemoteApp({ client }: RemoteAppProps): React.JSX.Element {
           failConnection(error)
         }
       },
-      failConnection
-    )
-
-    void (async () => {
-      let timeoutHandle: number | null = null
-      try {
-        const snapshot = await Promise.race([
-          client.getState(),
-          new Promise<never>((_, reject) => {
-            timeoutHandle = window.setTimeout(() => {
-              reject(new Error(`Kernel snapshot timed out after ${DEFAULT_RESYNC_TIMEOUT_MS}ms.`))
-            }, DEFAULT_RESYNC_TIMEOUT_MS)
-          })
-        ])
+      handleStreamError,
+      () => {
         if (!active) return
-        barrier.handleSnapshot(snapshot)
-        setConnectionStatus('connected')
+        const generation = ++streamGeneration
+        setConnectionStatus('connecting')
         setConnectionError(null)
-      } catch (error) {
-        failConnection(error)
-      } finally {
-        if (timeoutHandle !== null) window.clearTimeout(timeoutHandle)
+        void resyncSnapshot(generation)
       }
-    })()
+    )
 
     return () => {
       active = false
@@ -213,20 +256,47 @@ export function RemoteApp({ client }: RemoteAppProps): React.JSX.Element {
 
   useEffect(() => {
     const viewport = window.visualViewport
-    if (viewport == null) return
-    const updateKeyboardInset = (): void => {
+    const virtualKeyboard = (
+      navigator as Navigator & { virtualKeyboard?: RemoteVirtualKeyboard }
+    ).virtualKeyboard ?? null
+    if (viewport == null && virtualKeyboard === null) return
+
+    const rootStyle = document.documentElement.style
+    const previousOverlaysContent = virtualKeyboard?.overlaysContent ?? false
+    let frame: number | null = null
+
+    if (virtualKeyboard !== null) virtualKeyboard.overlaysContent = true
+
+    const updateVisibleViewport = (): void => {
       const current = window.visualViewport
-      if (current == null) return
-      const inset = Math.max(0, window.innerHeight - current.height - current.offsetTop)
-      document.documentElement.style.setProperty('--remote-keyboard-inset', `${inset}px`)
+      const viewportHeight = Math.min(window.innerHeight, current?.height ?? window.innerHeight)
+      const keyboardHeight = virtualKeyboard?.boundingRect.height ?? 0
+      const visibleHeight = Math.max(0, viewportHeight - keyboardHeight)
+      rootStyle.setProperty('--remote-viewport-height', `${visibleHeight}px`)
+      rootStyle.setProperty('--remote-viewport-offset-top', `${current?.offsetTop ?? 0}px`)
     }
-    updateKeyboardInset()
-    viewport.addEventListener('resize', updateKeyboardInset)
-    viewport.addEventListener('scroll', updateKeyboardInset)
+    const scheduleVisibleViewportUpdate = (): void => {
+      if (frame !== null) cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        frame = null
+        updateVisibleViewport()
+      })
+    }
+
+    updateVisibleViewport()
+    viewport?.addEventListener('resize', scheduleVisibleViewportUpdate)
+    viewport?.addEventListener('scroll', scheduleVisibleViewportUpdate)
+    virtualKeyboard?.addEventListener('geometrychange', scheduleVisibleViewportUpdate)
+    window.addEventListener('resize', scheduleVisibleViewportUpdate)
     return () => {
-      viewport.removeEventListener('resize', updateKeyboardInset)
-      viewport.removeEventListener('scroll', updateKeyboardInset)
-      document.documentElement.style.removeProperty('--remote-keyboard-inset')
+      viewport?.removeEventListener('resize', scheduleVisibleViewportUpdate)
+      viewport?.removeEventListener('scroll', scheduleVisibleViewportUpdate)
+      virtualKeyboard?.removeEventListener('geometrychange', scheduleVisibleViewportUpdate)
+      window.removeEventListener('resize', scheduleVisibleViewportUpdate)
+      if (virtualKeyboard !== null) virtualKeyboard.overlaysContent = previousOverlaysContent
+      if (frame !== null) cancelAnimationFrame(frame)
+      rootStyle.removeProperty('--remote-viewport-height')
+      rootStyle.removeProperty('--remote-viewport-offset-top')
     }
   }, [])
 
@@ -277,22 +347,6 @@ export function RemoteApp({ client }: RemoteAppProps): React.JSX.Element {
     } finally {
       setLoginBusy(false)
     }
-  }
-
-  async function handleLogout(): Promise<void> {
-    setActionError(null)
-    try {
-      await client.logout()
-    } catch (error) {
-      setActionError(`退出失败，已配对手机可能仍然有效：${unknownErrorMessage(error)}`)
-      return
-    }
-    setSessionStatus({
-      protocolVersion: REMOTE_PROTOCOL_VERSION,
-      authenticated: false
-    })
-    setKernelState(null)
-    kernelStateRef.current = null
   }
 
   async function loadEarlierConversation(): Promise<void> {
@@ -460,6 +514,27 @@ export function RemoteApp({ client }: RemoteAppProps): React.JSX.Element {
             toolCallId
           }))
         }}
+        onRespondExtensionDialog={async (request, value) => {
+          await runMutation(() => mutate({
+            type: 'kernel.respond-extension-dialog',
+            projectKey: request.projectKey,
+            sessionKey: request.sessionKey,
+            sessionId: request.sessionId,
+            requestId: request.requestId,
+            commandInvocationId: request.commandInvocationId,
+            value
+          }))
+        }}
+        onCancelExtensionDialog={async (request) => {
+          await runMutation(() => mutate({
+            type: 'kernel.cancel-extension-dialog',
+            projectKey: request.projectKey,
+            sessionKey: request.sessionKey,
+            sessionId: request.sessionId,
+            requestId: request.requestId,
+            commandInvocationId: request.commandInvocationId
+          }))
+        }}
         onSetModel={async (provider, modelId) => {
           await runMutation(() => mutate({ type: 'kernel.set-model', provider, modelId }))
         }}
@@ -469,7 +544,6 @@ export function RemoteApp({ client }: RemoteAppProps): React.JSX.Element {
         onSetOpenAiFastMode={async (enabled) => {
           await runMutation(() => mutate({ type: 'kernel.set-openai-fast-mode', enabled }))
         }}
-        onLogout={handleLogout}
         onReconnect={() => setConnectionAttempt((value) => value + 1)}
     />
   )

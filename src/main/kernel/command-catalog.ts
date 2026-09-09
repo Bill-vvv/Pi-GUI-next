@@ -92,6 +92,106 @@ const RELOAD_SESSION_COMMAND: KernelCommandDescriptor = {
   sourceInfo: null
 }
 
+export type GuiExtensionDialogMethod = 'select' | 'confirm' | 'input' | 'editor'
+
+type GuiExtensionCommandAdapter = {
+  packageSource: string
+  argumentHint: string | null
+  blockingUiMethods?: readonly GuiExtensionDialogMethod[]
+  validateArgument?: (argument: string) => string | null
+}
+
+// Extension commands are executable code and may depend on TUI-only UI methods.
+// Only fixed, provenance-checked commands with a verified GUI-safe path enter the catalog.
+const GUI_EXTENSION_COMMAND_ADAPTERS: Readonly<Record<string, GuiExtensionCommandAdapter>> = {
+  'subagents-watchdog': {
+    packageSource: 'npm:pi-subagents',
+    argumentHint: '[status|on|off|session on|session off|recommend-model|check|model <provider/model[:thinking]|recommended|inherit>|thinking <level|inherit>|session model <provider/model[:thinking]|recommended|inherit>|test <concern|blocker> <text>]'
+  },
+  run: {
+    packageSource: 'npm:pi-subagents',
+    argumentHint: '<agent> [task] [--bg] [--fork]',
+    blockingUiMethods: ['select', 'confirm', 'input', 'editor']
+  },
+  chain: {
+    packageSource: 'npm:pi-subagents',
+    argumentHint: '<agent/task chain> [--bg] [--fork]'
+  },
+  'run-chain': {
+    packageSource: 'npm:pi-subagents',
+    argumentHint: '<chain> -- <task> [--bg] [--fork]'
+  },
+  parallel: {
+    packageSource: 'npm:pi-subagents',
+    argumentHint: '<agent/task entries> [--bg] [--fork]'
+  },
+  'subagent-cost': { packageSource: 'npm:pi-subagents', argumentHint: null },
+  'subagents-doctor': { packageSource: 'npm:pi-subagents', argumentHint: null },
+  'subagents-stop': {
+    packageSource: 'npm:pi-subagents',
+    argumentHint: '<run-id>',
+    validateArgument: validateSubagentStopArgument
+  },
+  'prompt-workflow': {
+    packageSource: 'npm:pi-subagents',
+    argumentHint: '[name] [arguments]'
+  },
+  'chain-prompts': {
+    packageSource: 'npm:pi-subagents',
+    argumentHint: '[prompt-chain] [-- arguments]'
+  },
+  'subagents-models': {
+    packageSource: 'npm:pi-subagents',
+    argumentHint: '[builtin-agent]'
+  },
+  'subagents-profiles': { packageSource: 'npm:pi-subagents', argumentHint: null },
+  'subagents-refresh-provider-models': {
+    packageSource: 'npm:pi-subagents',
+    argumentHint: '<provider> [--force]'
+  },
+  'subagents-generate-profiles': {
+    packageSource: 'npm:pi-subagents',
+    argumentHint: '<provider>'
+  },
+  'subagents-check-profile': {
+    packageSource: 'npm:pi-subagents',
+    argumentHint: '<profile>'
+  },
+  'ctx-aug': {
+    packageSource: 'npm:@cortexkit/pi-magic-context',
+    argumentHint: '<prompt>'
+  },
+  'ctx-flush': {
+    packageSource: 'npm:@cortexkit/pi-magic-context',
+    argumentHint: null
+  },
+  'ctx-recomp': {
+    packageSource: 'npm:@cortexkit/pi-magic-context',
+    argumentHint: '[<start>-<end>|--upgrade]'
+  },
+  'ctx-wrapup': {
+    packageSource: 'npm:@cortexkit/pi-magic-context',
+    argumentHint: '[messages-to-keep]'
+  },
+  'ctx-session-upgrade': {
+    packageSource: 'npm:@cortexkit/pi-magic-context',
+    argumentHint: null
+  },
+  'ctx-dream': {
+    packageSource: 'npm:@cortexkit/pi-magic-context',
+    argumentHint: '[task]'
+  },
+  'ctx-embed': {
+    packageSource: 'npm:@cortexkit/pi-magic-context',
+    argumentHint: '[start|pause]'
+  },
+  todos: {
+    packageSource: 'npm:@cortexkit/pi-magic-context',
+    argumentHint: null,
+    validateArgument: validateNoArgument
+  }
+}
+
 export function createCommandCatalog(
   piCommands: readonly PiRpcSlashCommand[] = [],
   reloadAvailable = false
@@ -108,6 +208,10 @@ export function createCommandCatalog(
       isInternalHistoryNavigationCommandName(command.name)
     ) continue
     const normalizedName = command.name.toLocaleLowerCase()
+    const extensionAdapter = command.source === 'extension'
+      ? guiExtensionCommandAdapter(normalizedName, command.sourceInfo.source)
+      : null
+    if (command.source === 'extension' && extensionAdapter === null) continue
     if (knownNames.has(normalizedName)) continue
     knownNames.add(normalizedName)
     catalog.push({
@@ -115,7 +219,9 @@ export function createCommandCatalog(
       name: command.name,
       description: command.description ?? fallbackDescription(command.source),
       source: command.source,
-      argumentHint: '[arguments]',
+      argumentHint: command.source === 'extension'
+        ? extensionAdapter!.argumentHint
+        : '[arguments]',
       sourceInfo: {
         source: command.sourceInfo.source,
         scope: command.sourceInfo.scope,
@@ -125,6 +231,53 @@ export function createCommandCatalog(
   }
 
   return catalog
+}
+
+export function adaptedExtensionCommandAllowsBlockingUi(
+  command: KernelCommandDescriptor,
+  method: GuiExtensionDialogMethod
+): boolean {
+  if (command.source !== 'extension' || command.sourceInfo === null) return false
+  const adapter = guiExtensionCommandAdapter(
+    command.name.toLocaleLowerCase(),
+    command.sourceInfo.source
+  )
+  return adapter?.blockingUiMethods?.includes(method) === true
+}
+
+export function assertAdaptedExtensionCommandArgument(
+  command: KernelCommandDescriptor,
+  argument: string
+): void {
+  if (command.source !== 'extension' || command.sourceInfo === null) return
+  const adapter = guiExtensionCommandAdapter(
+    command.name.toLocaleLowerCase(),
+    command.sourceInfo.source
+  )
+  if (adapter === null) throw new Error(`/${command.name} is not adapted for Pi GUI.`)
+  const validationError = adapter.validateArgument?.(argument.trim()) ?? null
+  if (validationError !== null) throw new Error(validationError)
+}
+
+function guiExtensionCommandAdapter(
+  normalizedName: string,
+  source: string
+): GuiExtensionCommandAdapter | null {
+  const adapter = GUI_EXTENSION_COMMAND_ADAPTERS[normalizedName]
+  if (adapter === undefined) return null
+  if (
+    source !== adapter.packageSource &&
+    !source.startsWith(`${adapter.packageSource}@`)
+  ) return null
+  return adapter
+}
+
+function validateSubagentStopArgument(argument: string): string | null {
+  return argument.length > 0 ? null : '/subagents-stop 需要参数：<run-id>'
+}
+
+function validateNoArgument(argument: string): string | null {
+  return argument.length === 0 ? null : '此命令不接受参数。'
 }
 
 function fallbackDescription(source: PiRpcSlashCommand['source']): string {

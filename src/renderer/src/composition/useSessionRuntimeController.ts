@@ -20,6 +20,7 @@ export type SessionRuntimeControllerApi = SessionRuntimeSnapshot & {
   startSession: () => Promise<void>
   waitForSessionStart: () => Promise<void>
   ensureInitialRuntime: () => Promise<void>
+  loadEarlierSessionPreview: () => Promise<void>
   ensureSessionRuntime: (
     sessionKey: string,
     mode?: 'immediate' | 'settled'
@@ -50,6 +51,8 @@ export function useSessionRuntimeController(
         optionsRef.current.completeSessionPreview(requestId),
       cancelSessionPreview: (requestId) =>
         optionsRef.current.cancelSessionPreview(requestId),
+      loadEarlierSessionPreview: (request) =>
+        optionsRef.current.loadEarlierSessionPreview(request),
       beginActionPresentation: () => optionsRef.current.beginActionPresentation(),
       isActionPresentationCurrent: (revision) =>
         optionsRef.current.isActionPresentationCurrent(revision),
@@ -93,6 +96,7 @@ export function useSessionRuntimeController(
     startSession: () => getController().start(),
     waitForSessionStart: () => getController().waitForStart(),
     ensureInitialRuntime: () => getController().ensureInitialRuntime(),
+    loadEarlierSessionPreview: () => getController().loadEarlierPreview(),
     ensureSessionRuntime: (sessionKey, mode) => getController().activate(sessionKey, mode),
     waitForRuntimeEnsureIdle: () => getController().waitForIdle()
   }

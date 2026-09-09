@@ -332,31 +332,24 @@ export function CredentialsPanel({
             <h3>暂无已配置的 Provider 凭证</h3>
           </div>
         ) : (
-          <div className="credentials-list">
+          <div className="settings-resource-list">
             {configuredCredentials.map((credential) => (
-              <article className="settings-card settings-card-stacked credential-card" key={credential.providerId}>
-                <div className="credential-card-heading">
-                  <div>
+              <article className="settings-resource-row" key={credential.providerId}>
+                <div className="settings-resource-copy">
+                  <div className="settings-resource-title">
                     <h3>{credential.providerName}</h3>
-                    <code>{credential.providerId}</code>
+                    <span className="settings-value-chip">
+                      {credential.configured ? '已配置' : '未配置'}
+                    </span>
                   </div>
-                  <span className="settings-value-chip">
-                    {credential.configured ? '已配置' : '未配置'}
-                  </span>
+                  <p>
+                    {credential.source === null ? '无凭证来源' : authSourceLabel(credential.source)}
+                    {credential.storedCredentialType === null
+                      ? ''
+                      : ` · ${authTypeLabel(credential.storedCredentialType)}`}
+                  </p>
                 </div>
-                <dl className="credential-details">
-                  <div>
-                    <dt>来源</dt>
-                    <dd>{credential.source === null ? '无' : authSourceLabel(credential.source)}</dd>
-                  </div>
-                  <div>
-                    <dt>已保存类型</dt>
-                    <dd>{credential.storedCredentialType === null
-                      ? '无'
-                      : authTypeLabel(credential.storedCredentialType)}</dd>
-                  </div>
-                </dl>
-                <div className="credential-actions">
+                <div className="settings-resource-actions credential-actions">
                   {credential.methods.map((method) => (
                     <button
                       type="button"

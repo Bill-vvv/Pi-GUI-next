@@ -27,14 +27,17 @@ import type {
   ShortcutSettings
 } from '../../../../shared/kernel-contract'
 import type {
+  DesktopHostAccessStatus,
   RemoteAccessStatus,
-  RemotePairingCode
+  RemotePairingCode,
+  TailscaleRemoteStatus
 } from '../../../../shared/remote-admin-contract'
 import { FontSelect } from '../../components/FontSelect'
 import { Select, type SelectOptionGroup } from '../../components/Select'
 import { InstalledPackages } from './InstalledPackages'
 import { PiDevCatalog } from './PiDevCatalog'
 import { CredentialsPanel } from './CredentialsPanel'
+import { DesktopHostAccessPanel } from './DesktopHostAccessPanel'
 import { ModelSettings } from './ModelSettings'
 import { RemoteAccessPanel } from './RemoteAccessPanel'
 import { ShortcutSettingsPanel } from './ShortcutSettingsPanel'
@@ -42,10 +45,7 @@ import { AdaptedExtensionPackageControl } from './AdaptedExtensionPackageControl
 import { SubagentSettings } from './SubagentSettings'
 import { SkillSettings } from './SkillSettings'
 import type { SettingsSection } from './SettingsNavigation'
-import {
-  TOOL_DISPLAY_DENSITIES,
-  type ToolDisplayDensity
-} from '../../tool-display-density'
+import { type ToolDisplayDensity } from '../../tool-display-density'
 import {
   isWorkbenchAction,
   type WorkbenchOperation
@@ -98,6 +98,13 @@ type SettingsPanelProps = {
   onGetRemoteAccessStatus: () => Promise<RemoteAccessStatus>
   onCreateRemotePairingCode: () => Promise<RemotePairingCode>
   onRevokeRemoteDevice: () => Promise<RemoteAccessStatus>
+  onGetTailscaleStatus: () => Promise<TailscaleRemoteStatus>
+  onEnableTailscaleFunnel: () => Promise<TailscaleRemoteStatus>
+  onEnableTailscaleServe: () => Promise<TailscaleRemoteStatus>
+  onDisableTailscale: () => Promise<TailscaleRemoteStatus>
+  onGetDesktopHostStatus: () => Promise<DesktopHostAccessStatus>
+  onCreateDesktopHostPairingCode: () => Promise<RemotePairingCode>
+  onRevokeDesktopHostDevice: () => Promise<DesktopHostAccessStatus>
   onSetModel: (provider: string, modelId: string) => Promise<void>
   onSetSessionNaming: (settings: SessionNamingSettings) => Promise<void>
   onSetGeneral: (settings: GeneralSettings) => Promise<void>
@@ -158,6 +165,13 @@ export function SettingsPanel({
   onGetRemoteAccessStatus,
   onCreateRemotePairingCode,
   onRevokeRemoteDevice,
+  onGetTailscaleStatus,
+  onEnableTailscaleFunnel,
+  onEnableTailscaleServe,
+  onDisableTailscale,
+  onGetDesktopHostStatus,
+  onCreateDesktopHostPairingCode,
+  onRevokeDesktopHostDevice,
   onSetModel,
   onSetSessionNaming,
   onSetGeneral,
@@ -220,13 +234,6 @@ export function SettingsPanel({
       ]
     }
   ]
-  const themeOptionGroups: SelectOptionGroup[] = [{
-    options: [
-      { value: 'system', label: '跟随系统' },
-      { value: 'dark', label: '深色' },
-      { value: 'light', label: '浅色' }
-    ]
-  }]
   const textSizeOptionGroups: SelectOptionGroup[] = [{
     options: [
       { value: 'small', label: '小' },
@@ -268,7 +275,7 @@ export function SettingsPanel({
             </div>
 
             <section
-              className="settings-group settings-group-inline"
+              className="settings-group settings-group-inline settings-prefs"
               aria-labelledby="settings-general-startup"
             >
               <h3 id="settings-general-startup" className="settings-group-heading">启动</h3>
@@ -328,7 +335,38 @@ export function SettingsPanel({
             </section>
 
             <section
-              className="settings-group settings-group-inline"
+              className="settings-group settings-group-inline settings-prefs"
+              aria-labelledby="settings-session-naming"
+            >
+              <h3 id="settings-session-naming" className="settings-group-heading">对话</h3>
+              <div className="settings-group-card">
+                <div className="settings-row">
+                  <div className="settings-row-copy">
+                    <label
+                      htmlFor="session-naming-mode"
+                      data-tooltip="认证由 Pi 管理；自动模式只使用当前已授权 Provider 中的低成本模型。"
+                    >
+                      自动对话命名
+                    </label>
+                  </div>
+                  <div className="settings-row-control">
+                    <Select
+                      id="session-naming-mode"
+                      value={namingValue}
+                      groups={namingOptionGroups}
+                      disabled={busy}
+                      onValueChange={(value) => {
+                        const settings = resolveSessionNaming(value, state)
+                        if (settings !== null) void onSetSessionNaming(settings).catch(() => undefined)
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section
+              className="settings-group settings-group-inline settings-prefs"
               aria-labelledby="settings-general-window"
             >
               <h3 id="settings-general-window" className="settings-group-heading">窗口</h3>
@@ -363,7 +401,7 @@ export function SettingsPanel({
             </section>
 
             <section
-              className="settings-group settings-group-inline"
+              className="settings-group settings-group-inline settings-prefs"
               aria-labelledby="settings-general-extensions"
             >
               <h3 id="settings-general-extensions" className="settings-group-heading">拓展</h3>
@@ -405,37 +443,37 @@ export function SettingsPanel({
             </div>
 
             <section
-              className="settings-group settings-group-inline"
+              className="settings-group settings-group-inline settings-prefs"
               aria-labelledby="appearance-theme-heading"
             >
               <h3 id="appearance-theme-heading" className="settings-group-heading">主题</h3>
               <div className="settings-group-card">
-                <div className="settings-row">
-                  <div className="settings-row-copy">
-                    <h4>界面主题</h4>
-                    <p>{appearanceThemeDescription(state.appearance.theme)}</p>
-                  </div>
-                  <div className="settings-row-control settings-theme-control">
-                    <Select
-                      id="appearance-theme"
-                      value={state.appearance.theme}
-                      groups={themeOptionGroups}
+                <div className="settings-theme-cubes" role="group" aria-label="界面主题">
+                  {THEME_CUBES.map((cube) => (
+                    <button
+                      key={cube.value}
+                      type="button"
+                      className="settings-theme-cube"
+                      aria-pressed={state.appearance.theme === cube.value}
                       disabled={busy}
-                      onValueChange={(value) => {
-                        if (!isAppearanceTheme(value)) return
+                      onClick={() => {
                         void onSetAppearance({
                           ...state.appearance,
-                          theme: value
+                          theme: cube.value
                         }).catch(() => undefined)
                       }}
-                    />
-                  </div>
+                    >
+                      <ThemeCubeIcon theme={cube.value} />
+                      {cube.label}
+                    </button>
+                  ))}
                 </div>
+                <p className="settings-theme-caption">{appearanceThemeDescription(state.appearance.theme)}</p>
               </div>
             </section>
 
             <section
-              className="settings-group settings-group-inline"
+              className="settings-group settings-group-inline settings-prefs"
               aria-labelledby="appearance-emphasis-heading"
             >
               <h3 id="appearance-emphasis-heading" className="settings-group-heading">界面强调</h3>
@@ -487,7 +525,7 @@ export function SettingsPanel({
             </section>
 
             <section
-              className="settings-group settings-group-inline"
+              className="settings-group settings-group-inline settings-prefs"
               aria-labelledby="appearance-conversation-heading"
             >
               <h3 id="appearance-conversation-heading" className="settings-group-heading">Agent 对话</h3>
@@ -513,57 +551,40 @@ export function SettingsPanel({
                     />
                   </div>
                 </div>
-                <div className="settings-row settings-tool-density">
+                <div className="settings-density-block">
                   <div className="settings-row-copy">
                     <h4>工作过程密度</h4>
                     <p>调整思考与操作在对话中的显示程度</p>
                   </div>
-                  <div className="settings-density-control">
-                    <input
-                      aria-label="工作过程详细程度"
-                      className="settings-density-slider"
-                      type="range"
-                      min="0"
-                      max={String(TOOL_DISPLAY_DENSITIES.length - 1)}
-                      step="1"
-                      value={String(TOOL_DISPLAY_DENSITIES.indexOf(toolDisplayDensity))}
-                      onChange={(event) => {
-                        const density = TOOL_DISPLAY_DENSITIES[Number(event.currentTarget.value)]
-                        if (density !== undefined) onSetToolDisplayDensity(density)
-                      }}
+                  <div className="settings-density-examples" role="group" aria-label="工作过程密度">
+                    <DensityExample
+                      density="compact"
+                      selected={toolDisplayDensity === 'compact'}
+                      title="紧凑"
+                      description="只显示一行状态"
+                      onSelect={onSetToolDisplayDensity}
                     />
-                    <div className="settings-density-labels" aria-hidden="true">
-                      <span>紧凑</span>
-                      <span>标准</span>
-                      <span>详细</span>
-                    </div>
+                    <DensityExample
+                      density="standard"
+                      selected={toolDisplayDensity === 'standard'}
+                      title="标准"
+                      description="过程正文与工具分组"
+                      onSelect={onSetToolDisplayDensity}
+                    />
+                    <DensityExample
+                      density="detailed"
+                      selected={toolDisplayDensity === 'detailed'}
+                      title="详细"
+                      description="显示完整工作过程"
+                      onSelect={onSetToolDisplayDensity}
+                    />
                   </div>
-                </div>
-                <div className="settings-density-examples" aria-label="工作过程三档显示差异">
-                  <DensityExample
-                    density="compact"
-                    selected={toolDisplayDensity === 'compact'}
-                    title="紧凑"
-                    description="只显示一行状态"
-                  />
-                  <DensityExample
-                    density="standard"
-                    selected={toolDisplayDensity === 'standard'}
-                    title="标准"
-                    description="过程正文与工具分组"
-                  />
-                  <DensityExample
-                    density="detailed"
-                    selected={toolDisplayDensity === 'detailed'}
-                    title="详细"
-                    description="显示完整工作过程"
-                  />
                 </div>
               </div>
             </section>
 
             <section
-              className="settings-group settings-group-inline"
+              className="settings-group settings-group-inline settings-prefs"
               aria-labelledby="appearance-typography-heading"
             >
               <h3 id="appearance-typography-heading" className="settings-group-heading">字体</h3>
@@ -758,27 +779,32 @@ export function SettingsPanel({
             />
             <section className="settings-group" aria-labelledby="settings-local-extensions-heading">
               <h3 id="settings-local-extensions-heading" className="settings-group-heading">本地路径</h3>
-              <article className="settings-card settings-extension-installer">
-                <h3 data-tooltip="第三方拓展拥有完整系统权限。选择后，其路径会写入 Pi 用户设置的 extensions。">
-                  安装本地拓展
-                </h3>
-                <div className="settings-extension-install-actions">
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void onInstallExtension('file').catch(() => undefined)}
-                  >
-                    选择文件
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void onInstallExtension('directory').catch(() => undefined)}
-                  >
-                    选择目录
-                  </button>
-                </div>
-              </article>
+              <div className="settings-resource-list">
+                <article className="settings-resource-row">
+                  <div className="settings-resource-copy">
+                    <h3 data-tooltip="第三方拓展拥有完整系统权限。选择后，其路径会写入 Pi 用户设置的 extensions。">
+                      安装本地拓展
+                    </h3>
+                    <p>卸载只移除配置，不删除拓展源码</p>
+                  </div>
+                  <div className="settings-resource-actions settings-extension-install-actions">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void onInstallExtension('file').catch(() => undefined)}
+                    >
+                      选择文件
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void onInstallExtension('directory').catch(() => undefined)}
+                    >
+                      选择目录
+                    </button>
+                  </div>
+                </article>
+              </div>
               {isWorkbenchAction(pendingAction, 'install-extension') ||
               isWorkbenchAction(pendingAction, 'remove-extension') ? (
                 <p className="settings-extension-status" role="status" aria-live="polite">
@@ -793,29 +819,31 @@ export function SettingsPanel({
                   <h3>暂无本地拓展</h3>
                 </div>
               ) : (
-                <div className="settings-extension-list">
+                <div className="settings-resource-list">
                   {state.extensions.map((extension) => (
-                    <article className="settings-card" key={extension.path}>
-                      <div className="settings-extension-details">
+                    <article className="settings-resource-row" key={extension.path}>
+                      <div className="settings-resource-copy">
                         <h3>{extension.name}</h3>
                         <code>{extension.path}</code>
                       </div>
-                      <button
-                        className="settings-extension-remove"
-                        type="button"
-                        aria-label={`卸载拓展 ${extension.name}`}
-                        data-tooltip="仅从 Pi 用户设置中移除此路径，不删除拓展源码。"
-                        disabled={busy}
-                        onClick={() => {
-                          if (!window.confirm(`卸载「${extension.name}」？源码文件不会被删除。`)) return
-                          setRemovingExtensionPath(extension.path)
-                          void onRemoveExtension(extension.path)
-                            .catch(() => undefined)
-                            .finally(() => setRemovingExtensionPath(null))
-                        }}
-                      >
-                        {removingExtensionPath === extension.path ? '卸载中…' : '卸载'}
-                      </button>
+                      <div className="settings-resource-actions">
+                        <button
+                          className="settings-extension-remove"
+                          type="button"
+                          aria-label={`卸载拓展 ${extension.name}`}
+                          data-tooltip="仅从 Pi 用户设置中移除此路径，不删除拓展源码。"
+                          disabled={busy}
+                          onClick={() => {
+                            if (!window.confirm(`卸载「${extension.name}」？源码文件不会被删除。`)) return
+                            setRemovingExtensionPath(extension.path)
+                            void onRemoveExtension(extension.path)
+                              .catch(() => undefined)
+                              .finally(() => setRemovingExtensionPath(null))
+                          }}
+                        >
+                          {removingExtensionPath === extension.path ? '卸载中…' : '卸载'}
+                        </button>
+                      </div>
                     </article>
                   ))}
                 </div>
@@ -894,6 +922,17 @@ export function SettingsPanel({
               onGetStatus={onGetRemoteAccessStatus}
               onCreatePairingCode={onCreateRemotePairingCode}
               onRevokeDevice={onRevokeRemoteDevice}
+              onGetTailscaleStatus={onGetTailscaleStatus}
+              onEnableTailscaleFunnel={onEnableTailscaleFunnel}
+              onEnableTailscaleServe={onEnableTailscaleServe}
+              onDisableTailscale={onDisableTailscale}
+              onOpenExternal={onOpenExternal}
+            />
+            <DesktopHostAccessPanel
+              busy={busy}
+              onGetStatus={onGetDesktopHostStatus}
+              onCreatePairingCode={onCreateDesktopHostPairingCode}
+              onRevokeDevice={onRevokeDesktopHostDevice}
             />
           </>
         ) : null}
@@ -905,47 +944,49 @@ export function SettingsPanel({
             onRecordingChange={onShortcutRecordingChange}
           />
         ) : null}
-
-        {section === 'preferences' ? (
-          <>
-            <div className="settings-section-heading">
-              <h2>偏好</h2>
-            </div>
-
-            <section
-              className="settings-group settings-group-inline"
-              aria-labelledby="settings-session-naming"
-            >
-              <h3 id="settings-session-naming" className="settings-group-heading">对话管理</h3>
-              <div className="settings-group-card">
-                <div className="settings-row">
-                  <div className="settings-row-copy">
-                    <label
-                      htmlFor="session-naming-mode"
-                      data-tooltip="认证由 Pi 管理；自动模式只使用当前已授权 Provider 中的低成本模型。"
-                    >
-                      自动对话命名
-                    </label>
-                  </div>
-                  <div className="settings-row-control">
-                    <Select
-                      id="session-naming-mode"
-                      value={namingValue}
-                      groups={namingOptionGroups}
-                      disabled={busy}
-                      onValueChange={(value) => {
-                        const settings = resolveSessionNaming(value, state)
-                        if (settings !== null) void onSetSessionNaming(settings).catch(() => undefined)
-                      }}
-                    />
-                  </div>
-                </div>
-              </div>
-            </section>
-          </>
-        ) : null}
       </div>
     </section>
+  )
+}
+
+const THEME_CUBES: ReadonlyArray<{
+  value: AppearanceSettings['theme']
+  label: string
+}> = [
+  { value: 'light', label: '浅色' },
+  { value: 'dark', label: '深色' },
+  { value: 'system', label: '跟随系统' }
+]
+
+function ThemeCubeIcon({ theme }: { theme: AppearanceSettings['theme'] }): React.JSX.Element {
+  const common = {
+    width: 18,
+    height: 18,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    'aria-hidden': true
+  } as const
+  if (theme === 'light') {
+    return (
+      <svg {...common}>
+        <circle cx="12" cy="12" r="3.5" stroke="currentColor" strokeWidth="1.8" />
+        <path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6 18 18M18 6l-1.4 1.4M7.4 16.6 6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      </svg>
+    )
+  }
+  if (theme === 'dark') {
+    return (
+      <svg {...common}>
+        <path d="M15.2 4.4A7.8 7.8 0 1 0 19.6 16.2 6.2 6.2 0 0 1 15.2 4.4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      </svg>
+    )
+  }
+  return (
+    <svg {...common}>
+      <circle cx="12" cy="12" r="8.25" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M12 3.75v16.5" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M12 3.75a8.25 8.25 0 0 0 0 16.5" fill="currentColor" />
+    </svg>
   )
 }
 
@@ -953,15 +994,22 @@ function DensityExample({
   density,
   selected,
   title,
-  description
+  description,
+  onSelect
 }: {
   density: ToolDisplayDensity
   selected: boolean
   title: string
   description: string
+  onSelect: (density: ToolDisplayDensity) => void
 }): React.JSX.Element {
   return (
-    <div className="settings-density-example" data-selected={selected || undefined}>
+    <button
+      type="button"
+      className="settings-density-example"
+      aria-pressed={selected}
+      onClick={() => onSelect(density)}
+    >
       <div className={`settings-density-figure ${density}`} aria-hidden="true">
         {density === 'compact' ? (
           <div className="density-compact-row">
@@ -989,12 +1037,8 @@ function DensityExample({
       </div>
       <strong>{title}</strong>
       <span>{description}</span>
-    </div>
+    </button>
   )
-}
-
-function isAppearanceTheme(value: string): value is AppearanceSettings['theme'] {
-  return value === 'system' || value === 'dark' || value === 'light'
 }
 
 function isAppearanceTextSize(value: string): value is AppearanceSettings['textSize'] {

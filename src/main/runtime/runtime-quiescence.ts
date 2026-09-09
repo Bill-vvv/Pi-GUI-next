@@ -200,7 +200,7 @@ const APP_OWNED_RUNTIME_EXTENSION_NAMES = [
   'pi-gui-task-notify',
   'pi-gui-ask',
   'pi-gui-openai-fast-mode',
-  'pi-gui-history-navigation'
+  'pi-gui-history-navigation',
 ] as const
 
 export function resolveRuntimeExtensionPaths(

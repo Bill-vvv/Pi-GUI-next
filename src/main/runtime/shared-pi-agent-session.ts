@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 
@@ -57,12 +58,18 @@ type PendingExtensionRequest = {
   resolve: (response: { value?: string, cancelled?: boolean }) => void
 }
 
+type ExtensionCommandInvocation = {
+  id: string
+  name: string
+}
+
 export type SharedPiAgentSessionOptions = {
   cwd: string
   sessionFile?: string
   projectTrust?: boolean
   subagentMaxDepth?: number
   fastExtensionLoading?: boolean
+  piExecutable?: string
   extensionPaths: string[]
   desktopNotification?: {
     socketPath: string
@@ -141,6 +148,7 @@ function environmentOverrides(options: SharedPiAgentSessionOptions): SharedPiEnv
     PI_PARALLEL_EXTENSION_IMPORTS: fastExtensionLoading ? '1' : '0',
     PI_NATIVE_COMPILED_EXTENSION_IMPORTS: fastExtensionLoading ? '1' : '0',
     JITI_TRY_NATIVE: fastExtensionLoading ? '0' : '1',
+    MAGIC_CONTEXT_PI_BINARY: options.piExecutable,
     PI_SUBAGENT_MAX_DEPTH: options.subagentMaxDepth === undefined
       ? undefined
       : String(options.subagentMaxDepth),
@@ -227,6 +235,8 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
   private unsubscribeSession: (() => void) | null = null
   private pendingExtensionRequests = new Map<string, PendingExtensionRequest>()
   private extensionEventChannels = new Set<string>()
+  private readonly extensionCommandScope = new AsyncLocalStorage<ExtensionCommandInvocation>()
+  private activeExtensionCommand: ExtensionCommandInvocation | null = null
   private disposed = false
 
   private constructor(
@@ -395,7 +405,19 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
       payload: Record<string, unknown>
     ): Promise<{ value?: string, cancelled?: boolean }> => {
       const id = randomUUID()
-      this.callbacks.onEvent({ type: 'extension_ui_request', id, method, ...payload })
+      const invocation = this.extensionCommandScope.getStore()
+      this.callbacks.onEvent({
+        type: 'extension_ui_request',
+        id,
+        method,
+        ...payload,
+        ...(invocation === undefined
+          ? {}
+          : {
+              commandName: invocation.name,
+              commandInvocationId: invocation.id
+            })
+      })
       return new Promise((resolve) => {
         this.pendingExtensionRequests.set(id, { resolve })
       })
@@ -455,7 +477,13 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
           title
         })
       },
-      custom: async () => undefined as never,
+      custom: async () => {
+        const invocation = this.extensionCommandScope.getStore()
+        const owner = invocation === undefined
+          ? 'This Extension'
+          : `Extension command /${invocation.name}`
+        throw new Error(`${owner} requires unsupported custom UI in Pi GUI.`)
+      },
       pasteToEditor: () => {},
       setEditorText: () => {},
       getEditorText: () => '',
@@ -645,15 +673,36 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
       }
       if (command.type === 'invoke_extension_command') {
         buildExtensionCommandPrompt(command.name, command.args)
+        if (
+          command.invocationId !== undefined &&
+          (
+            command.invocationId.length === 0 ||
+            command.invocationId.length > 256 ||
+            command.invocationId.trim() !== command.invocationId ||
+            CONTROL_CHARACTER_PATTERN.test(command.invocationId)
+          )
+        ) {
+          throw new Error('Extension command invocation ID is malformed.')
+        }
         const extensionCommand = session.extensionRunner.getCommand(command.name)
         if (extensionCommand === undefined) {
           throw new Error(`Extension command not found: /${command.name}`)
         }
+        if (this.activeExtensionCommand !== null) {
+          throw new Error(`Extension command is already running: /${this.activeExtensionCommand.name}`)
+        }
+        const invocation = {
+          id: command.invocationId ?? randomUUID(),
+          name: command.name
+        }
+        this.activeExtensionCommand = invocation
         try {
-          await extensionCommand.handler(
+          const run = () => extensionCommand.handler(
             command.args ?? '',
             session.extensionRunner.createCommandContext()
           )
+          if (command.invocationId === undefined) await run()
+          else await this.extensionCommandScope.run(invocation, run)
         } catch (error) {
           session.extensionRunner.emitError({
             extensionPath: `command:${command.name}`,
@@ -661,6 +710,8 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
             error: errorMessage(error)
           })
           throw error
+        } finally {
+          this.activeExtensionCommand = null
         }
         return { type: 'accepted' }
       }

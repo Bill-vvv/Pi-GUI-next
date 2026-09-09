@@ -1,10 +1,10 @@
 # Pi GUI 开发计划
 
-> 当前阶段：P3 — Ecosystem Integration
-> 计划版本：9.7
-> 最后更新：2026-07-30
+> 当前阶段：P4 — Remote & Cross-platform Clients
+> 计划版本：10.7
+> 最后更新：2026-08-27
 > 总体状态：In Progress
-> 当前 Slice：P3-2 — Commit & Push（Ready）
+> 当前 Slice：P4-2A — Windows Host connection foundation（Security Re-review Ready）
 
 ## 1. 计划用途
 
@@ -93,9 +93,9 @@ P1 固定支持 Pi 0.80.10，不在本阶段设计宽松版本兼容。
 
 ## 5. 长期产品方向与当前范围
 
-长期产品方向：Linux、Windows、macOS 桌面工作台；Windows 最终支持原生 Pi 与 WSL Pi 两种后端。
+长期产品方向是一个 Pi GUI 产品下的 Linux Host、Desktop Client 与 Web Remote：Linux Desktop 保持完整本地 Workbench 和唯一 Pi Host；Windows Desktop 第一版通过系统 OpenSSH 连接 Linux Host，不在 Windows 本地运行 Pi；现有浏览器 Remote App 继续作为 Host 托管的轻量 Web 客户端。Windows 原生 Pi、WSL Pi 与 macOS 本地 Runtime 均是后续独立范围，不与 remote-only 首版捆绑。
 
-当前优先级明确保持为把 Linux GUI 的功能、体验、稳定性、内存预算和发布链路做好。跨平台能力属于后期范围，实施顺序固定为 macOS → Windows 原生 → 按真实需求评估 WSL；在对应阶段正式开始前，不为这些平台增加当前 Linux 主路径未使用的兼容层或占位抽象。Linux 的 PATH、XDG、进程和权限逻辑仍必须留在 Main/Runtime 边界，不得渗入 renderer 或会话模型。
+当前 P3 在途实现仍先按既有单一 Slice 收口；用户已重新开启 P4 的远程桌面方向，但在当前 dirty candidate 集成完成前只冻结架构与实施顺序，不并行写入 Windows 产品代码。后续第一条跨平台链路固定为 Linux Desktop Gateway → Windows remote-only Desktop Client → 同 commit 的 Windows/Linux/Web 发布矩阵；Linux 的 PATH、XDG、进程和权限逻辑继续只留在 Host Main/Runtime，Windows Main 只拥有 SSH、设备凭证、连接状态与本地桌面行为。
 
 P1 必须包含：
 
@@ -441,8 +441,8 @@ P1 完成后进入 P2。P2/P3/P4 的当前路径见下一节；后续调整继�
 | --- | --- | --- | --- |
 | P1 — Linux Core Chain | 建立第一条可发布的 Linux 本地 Pi 核心链路 | `Complete` | 2026-07-21 完成 |
 | P2 — Workbench Foundation | 补齐日常工作台基础功能，并完成 UI、交互、Runtime 治理与内存预算收敛 | `Complete` | 2026-07-30；commit `152a9a3` 的 19 步正式 AppImage + memory gate 通过 |
-| P3 — Ecosystem Integration | 接入 Pi Extension、Package、Skill、prompt template、Git Workbench 与 MCP 等扩展能力 | `In Progress` | P3-1 已完成；P3-2 从已验证的 staged-content 链路增加 Commit & Push |
-| P4 — Cross-platform Desktop | 将已经稳定的 Linux Workbench 依次移植到 macOS、Windows 原生，并按需评估 WSL | `Deferred` | Linux GUI 的功能、体验、稳定性、内存预算和正式发布门槛稳定，且用户显式重新开启跨平台范围 |
+| P3 — Ecosystem Integration | 接入 Pi Extension、Package、Skill、prompt template、Git Workbench 与 MCP 等扩展能力 | `Paused` | P3-1、P3-2、P3-3、P3-4 已完成；P3-5 Settings Capability Center 保持 Ready，用户已将当前优先级切到 P4 |
+| P4 — Remote & Cross-platform Clients | 先交付 Windows remote-only Desktop Client over SSH，再独立评估 macOS、Windows 原生 Pi 与 WSL | `In Progress` | P4-1 Desktop Host 已通过独立 closure review并完成；P4-2A Windows Host connection foundation 已启动 |
 
 ### 15.2 P2 — Workbench Foundation
 
@@ -463,16 +463,17 @@ P2 先用一个短 Slice 固定结构，再实现基础功能，随后在真实�
 | S15 | TUI 日常能力补齐 | `Complete` | 六个阶段均已完成：Project 资源 trust / reload、Session Fork / 归档即时补救、安全导出 / 回复复制 / 生命周期统计、Project 路径搜索 / GUI typed 命令、公开 SDK 凭证交互 / Provider 定向 reload 标记，以及窗口内快捷键 / Pi 压缩生命周期；未照搬 Tree、Clone、CLI/headless、工具控制或完整生态管理 |
 | S16 | Subagent Extension 适配 | `Complete` | 固定适配 `pi-subagents`；拓展页以独立“已适配拓展”区域负责安装和真实启停；独立 Subagent 页只读取可用状态并修改最大嵌套深度，Runtime 通过 `PI_SUBAGENT_MAX_DEPTH` 配置，新建或显式 reload 后生效；不实现 Agent definition CRUD、任务监控或内建 Subagent Runtime |
 | S17 | Subagent Agent 管理 | `Complete` | Subagent 页接入真实用户级与当前项目 Agent Markdown 定义；内置 Package 文件不改写，界面直接编辑并可恢复默认；Agent 启停复用官方 disabled override，列表每页 6 项并支持作用域/启动状态筛选与多选批量修改；编辑器分基础/高级设置；Main 只读写固定 Agent 与 settings 路径，Renderer 不取得任意文件能力；core tests、typecheck、生产 build 与 diff check 通过 |
-| S17.1 | Magic Context 可选适配 | `Complete` | 拓展页增加固定 `@cortexkit/pi-magic-context` 安装与 Extension resource 启停；Package 状态不冒充配置健康，setup/doctor 继续由上游 CLI 负责，运行态复用 Pi 命令目录中的 `/ctx-status`；不解析私有 SQLite、不内嵌配置器或伪造缓存指标 |
+| S17.1 | Magic Context 可选适配 | `Complete` | 拓展页增加固定 `@cortexkit/pi-magic-context` 安装与 Extension resource 启停；Package 状态不冒充配置健康，setup/doctor 继续由上游 CLI 负责；当时计划复用 `/ctx-status`，其 TUI custom 路径后来由 D-073 隐藏并等待 S25 结构化协议；不解析私有 SQLite、不内嵌配置器或伪造缓存指标 |
 | S18 | OMP 多 Advisor Extension 与 GUI 适配 | `Paused` | S18-1 至 S18-4 已完成；S18-5 可观测性与发布作为非阻塞 backlog 保留，后续只有在恢复 Advisor 产品范围时继续，不阻塞 P2 完成或 P3-1 |
 | S19 | Subagent 任务详情侧栏 | `Complete` | Canonical clean commit `b9562b4` 的正式 `pnpm verify:linux` 已通过完整 P1/P2 回归与 S19：3 路并行 worker 同时 running、运行中选择、Escape 优先级、live→completed、宽屏第三列、窄屏替换、关闭/返回/Escape 焦点恢复和 reduced-motion。AppImage SHA-256 为 `4bbe45a505f601966c75ba8c3b4074f793ee88a7aff88e83bf00af03f039c29d`，证据位于 `release/evidence/2026-07-27T16-45-59-798Z-b9562b4ca6c3/` |
 | S20 | 动效与交互基础 | `Paused` | S20-1 与 S20-2 已完成；S20-3 作为非阻塞交互 backlog 保留，仅在真实一致性缺陷出现或对应产品面继续实施时恢复 |
-| S21 | Settings Workspace 2.0 | `Planned` | 设置导航按“应用 / 模型 / Agent / 生态”分组，增加收起、真实设置搜索和应用内 deep link；统一作用域、事实来源、生效时间及 saved/loaded 差异，不建立通用设置 registry，不静默 reload Runtime |
+| S21 | Settings Workspace 2.0 | `Planned` | 设置导航按“应用 / 模型 / 远程访问 / Agent / 生态”分组，增加收起、真实设置搜索和应用内 deep link；统一作用域、事实来源、生效时间及 saved/loaded 差异，不建立通用设置 registry，不静默 reload Runtime |
 | S22 | Personalization v1 | `Planned` | 第一批只增加用户级的对话阅读宽度、Navigator 密度和动效偏好；使用有限语义枚举与统一 token，窄窗口、触控命中和 OS reduced-motion 继续拥有更高约束，不提供任意 CSS、像素或颜色编辑 |
 | S23 | Subagent Effective State 与任务一致性 | `Planned` | Main 投影 effective Agent definition、覆盖来源、最终启停/depth、Package/Extension/当前 Runtime 加载及 reload 状态；任务详情补同 run participant 切换、汇总和实时→历史恢复一致性，不读取 child transcript/artifact，不提前加入 GUI 运行控制 |
 | S24 | Magic Context 状态可见性 | `Planned` | 安装/启停继续留在拓展页，独立 Context 页只读展示 Package、Extension、当前 Session loaded、真实 `/ctx-status`、状态时间与过期语义，并提供复制 setup/doctor 命令和上游文档入口；不解析 SQLite 或把“已开启”冒充健康 |
 | S25 | Magic Context 结构化可观测协议 | `Research` | 与上游共同评估版本化 capability/status/usage 协议，候选覆盖上下文占用、后台状态和 prompt-free token/cache/cost；协议稳定前不建立仪表盘，不暴露 prompt/output、embedding、credential、数据库路径或私有 schema |
 | S26 | Memory Budget & Automatic Runtime Hibernation | `Complete` | commit `152a9a3` 的正式 AppImage memory gate 建立并执行首轮硬预算；3 个物化 Runtime 经五分钟 grace 自动降到 2 个，显式恢复后回到 3 个且对话保留；峰值总 PSS 2.50 GiB、Renderer PSS 156.7 MiB、heap 25.9 MiB、state 98.2 KiB、swap 0，全部低于固定红线 | `release/evidence/2026-07-29T18-48-57-827Z-152a9a3a0725/report.json`；旧 Timeline 分页、内存压力触发和 30 分钟 slope 属于按真实回归触发的后续优化，不冒充本次已验证 |
+| S27 | Extension GUI 交互与原生适配 | `In Progress` | D-075 已接通 command-scoped invocation ID + per-adapter method capability 的原生 `select/confirm/input/editor` modal、桌面/Web Remote typed response、Session awaiting/hibernation/stop/crash identity，并恢复 blocking capability 为空的 notify-only `/todos`。真实 `/subagents <agent> details` 会输出绝对路径与完整 system prompt，继续隐藏。下一阶段仍需上游 Magic Context status 与 Subagent fleet 的版本化 typed snapshot，再实现原生 Context/Fleet 面板；副作用命令必须先有 GUI preflight metadata |
 
 P2 最初把“多 Project、多 Session”限定为可保存、发现和切换。2026-07-23 用户确认并行是旧版已有且当前必须恢复的核心能力后，D-017 替代该限制：Workbench Kernel 现在按 Session 管理独立 Runtime context，允许多个 Pi Runtime 并行，同时保持 Electron Main 单一 control plane。
 
@@ -578,7 +579,7 @@ S20 明确不以“更多动画”为目标，不让位移或 pulse 成为 runni
 
 | 阶段 | 状态 | 范围 | 完成门槛 |
 | --- | --- | --- | --- |
-| S21-1 Information Architecture | `Pending` | 导航分为“应用：常规/外观/快捷键”“模型：模型/凭证”“Agent：Subagent/Advisor/Context”“生态：Package/拓展/技能”；自动对话命名并入常规，删除单项偏好分类；导航可收起 | 既有功能和 dirty draft 保护无回退；窄窗口使用可访问的单页/覆盖式导航；Context 只有在 S24 有真实内容时出现 |
+| S21-1 Information Architecture | `Pending` | 当前导航分组为“应用：常规/外观/快捷键”“模型：模型/凭证”“远程访问：远程访问”“Agent：Subagent/Context”“生态：Package/拓展/技能”；分组与删除偏好已落地，本阶段剩余导航可收起 | 既有功能和 dirty draft 保护无回退；窄窗口使用可访问的单页/覆盖式导航；Context 只有在 S24 有真实内容时出现；不恢复 Advisor 分类 |
 | S21-2 Search & Deep Link | `Pending` | 扩展窄 typed section/group metadata，索引真实设置名称、组和人工同义词；搜索结果跳到稳定应用内目标 | 不索引 credential、endpoint、Agent prompt 或日志；Enter/Escape、焦点恢复和无结果状态通过；不注册 OS URL protocol，不建立插件 registry |
 | S21-3 Scope, Source & Activation | `Pending` | 为重要设置表达 application/user/project/session 作用域、GUI/Pi/Extension 事实来源与 immediate/next-session/reload 生效时机；区分 saved config 与当前 Runtime loaded config | Package installed、Extension enabled、当前 Session loaded、健康 verified 四层状态不混淆；设置保存不静默重启，reload 失败不伪装已应用 |
 
@@ -589,7 +590,7 @@ S20 明确不以“更多动画”为目标，不让位移或 pulse 成为 runni
 第一批只接入三个用户级设置：
 
 1. `conversationWidth: compact | standard | wide`：通过语义化 Conversation max-width 调整阅读宽度；窄窗口自动服从可用空间，Composer 与 Timeline 保持同一左右边界。
-2. `navigatorDensity: comfortable | compact`：只调整 Project/Session 行高、组间距和辅助信息密度；普通历史默认 5 个、每次继续展开 5 个及分页外保留项规则不变，触控/键盘命中仍满足最小尺寸。
+2. `navigatorDensity: comfortable | compact`：只调整 Project/Session 行高、组间距和辅助信息密度；普通历史默认 6 个、一次展开全部剩余项、可收起至 6 个及展开窗口外保留项规则不变，触控/键盘命中仍满足最小尺寸。
 3. `motionPreference: system | reduced | minimal`：`system` 遵循 OS；`reduced/minimal` 只能进一步减少动效，不能覆盖 OS reduced-motion 强制恢复完整动画。
 
 配置使用有限枚举、明确 migration 和首帧尽早应用；非法值回退默认。第一批不增加任意像素宽度、CSS、颜色、圆角或间距编辑，代码字号比例、默认 Sidebar 状态、代码换行和详情宽度留待真实使用反馈后另行规划。
@@ -827,10 +828,10 @@ P3 的具体 Slice 在 P2 接近完成、Pi 支持版本和可用接口重新核
 
 - 历史 Prompt 原位编辑直接复用 Pi Tree：GUI 解析当前可见活动路径上的 user turn，先调用受控 `navigate_tree`，再复用现有 `prompt`；发送失败保留草稿并只重试 prompt。没有新增 atomic navigate+prompt、projection watermark 或第二份 Conversation 事实源。
 - P3-1 开始前，Workbench composition 已拥有通用右侧栏壳层，当时唯一模块是“子任务”；P3-1 已增加真实 Git Tab，MCP、Browser、Terminal 仍不显示占位 Tab。
-- Git Main/IPC 使用 `simple-git@3.36.0` 提供受 Project identity 与 ancestor trust challenge 约束的 status/diff/stage 基础；P3-1 已接入 Renderer Changes 工作台，commit/push 和同步 UI 仍未实施。
+- Git Main/IPC 使用 `simple-git@3.36.0` 提供受 Project identity 与 ancestor trust challenge 约束的 status/diff/stage 基础；P3-1 已接入 Renderer Changes 工作台，P3-2 已在隔离候选中补齐两阶段 Commit / Commit & Push / Amend，独立 Fetch、Pull 与 branch sync 仍未实施。
 - Capability Inventory 是只读、离线的 Main service，复用现有 Pi 0.80.10 executable/package-root 验证；它不安装 Package、不执行 Extension factory，也尚未接 Settings 页面。
 
-P2/S26 已在 commit `152a9a3` 的正式 AppImage + memory gate 中完成；P3 现为 `In Progress`，P3-1 已完成且 P3-2 为 `Ready`。上述基础只能按实际接线 Slice 继续扩展，不能据此声明 Commit & Push、Capability Center、MCP 管理或 P3 已完成。
+P2/S26 已在 commit `152a9a3` 的正式 AppImage + memory gate 中完成；P3 现为 `In Progress`，P3-1、P3-2、P3-3 与 P3-4 已完成，P3-5 Settings Capability Center 为 `Ready`。上述基础只能按实际接线 Slice 继续扩展，不能据此声明 Capability Center、MCP 管理或 P3 已完成。
 
 P3 按以下顺序实施；只有当前 Slice 的真实调用链和 UI 验收通过后才进入下一项，不并行建立未使用的 Git、Capability 或 MCP 平台能力：
 
@@ -841,10 +842,11 @@ P3 按以下顺序实施；只有当前 Slice 的真实调用链和 UI 验收通
 5. P3-5 Settings Capability Center。
 6. P3-6 Package / Extension / Skill / Prompt 管理。
 7. P3-7 MCP 管理。
+8. P3-8 整体收尾与优化。
 
 **P3 并行实施规则**：
 
-- 顶层仍保持单一当前 Slice：当前 Slice 未验收前不启动下一项产品实现（现为 P3-2 未验收前不启动 P3-3），后续同理。允许并行的是当前 Slice 内已经冻结边界的独立层，不是提前铺设未来平台。
+- 顶层仍保持单一当前 Slice：当前 Slice 未验收前不启动下一项产品实现。允许并行的是当前 Slice 内已经冻结边界的独立层，不是提前铺设未来平台。
 - 每批最多两个隔离 writer + 一个只读 reviewer。Parent先冻结最小 typed contract和文件 ownership，两个 writer分别在独立 worktree/source snapshot写入；Parent负责唯一集成、冲突解决和最终验收。测试随对应 writer的实现一起维护，reviewer不向共享树写修复。
 - P3-1 可并行：① Header / shared Right Sidebar composition、焦点和响应式壳层；② 新建的 Git Changes feature状态、列表、diff和mutation UI；③ 只读 reviewer核对现有 `window.piGit` DTO、trust/stale/conflict边界。Shell writer不写Git feature文件，feature writer不改Workbench/RightSidebar既有composition文件，Parent最后完成单一接线。
 - P3-2 可并行：① commit/amend/push typed contract与Main adapter；② 紧凑确认层和结果UI。只有Parent先冻结 snapshot、结果和错误 DTO 后才开始；公共 `git-contract.ts` 只由backend writer拥有，Parent完成最终preload/Workbench接线。
@@ -896,19 +898,57 @@ P3 按以下顺序实施；只有当前 Slice 的真实调用链和 UI 验收通
 - 覆盖右侧栏 Git/Subagent真实 Tab组合、关闭/收起/Project切换/Settings、宽窄窗口替换、键盘 Tab、Escape、焦点恢复和 reduced-motion。
 - 最小 gate 为相关 Git/Renderer定向测试、`pnpm typecheck`、`pnpm build` 和 `git diff --check`；除非实际变更需要视觉运行证据，不启动 Electron或增加截图 gate。
 
-#### P3-2 — Commit & Push（Ready）
+#### P3-2 — Commit & Push（Complete）
 
-在 P3-1 的 staged-content 链路通过后增加提交能力。`Commit & Push` 点击后必须先打开紧凑确认层，展示 staged 文件数量、目标 branch/remote 和自动生成但可编辑的 commit message，并提供明确的 Commit、Commit & Push、Amend 选择。提交请求绑定确认时的 HEAD 与 index snapshot，不执行 `git add -A`，不把未勾选内容顺带暂存；commit成功而push失败时分别报告两个结果。确认层复用 `useModalDialog` 的焦点/Escape合同。AI message只能作为可编辑建议，不能成为提交前置条件，也不能修改 index。
+在 P3-1 的 staged-content 链路通过后增加提交能力。`Commit & Push` 点击后必须先打开紧凑确认层，展示 staged 文件数量、目标 branch/remote 和自动生成但可编辑的 commit message，并提供明确的 Commit、Commit & Push、Amend 选择。提交请求绑定确认时的 HEAD 与 index snapshot，不执行 `git add -A`，不把未勾选内容顺带暂存；commit成功而push失败时分别报告两个结果。确认层复用 `useModalDialog` 的焦点/Escape合同。
 
-#### P3-3 — Git History（Planned）
+**已冻结的首版合同**：
+
+- Main 提供只读 `prepare` 与 mutation `execute` 两阶段 typed API；Renderer 不提交 cwd、raw Git args、force、set-upstream、no-verify 或任意 remote URL。
+- `prepare` 从当前 active registered Project 和已授权 repository 重新读取事实，确认无 conflict、非 detached、status 未 truncated、存在 staged 内容和可用 Git author/committer identity；返回 repository root、branch、HEAD、index tree、index fingerprint、准确 staged 文件数、结构化 upstream remote/branch、是否可 Amend，以及基于 staged snapshot 的确定性可编辑 message 建议。首版不启动模型生成 commit message；未来 AI 建议只能是可空、可编辑、失败不阻塞的辅助输入，且不得修改 index。
+- `execute` 只接受 `commit`、`commit-and-push`、`amend` 三种 mode、最终 message 和 `prepare` 返回的 expected snapshot/target；Main 在同一 repository queue 内重读并精确比较 repository、branch、HEAD、index tree、index fingerprint 与 upstream。普通 unstaged worktree 变化不使已确认 index 失效，也不得被顺带提交。
+- Commit / Amend 使用正常 Git hooks、signing 和 credential 配置，禁止 `git add -A`、`git commit -a`、`--no-verify`、`--allow-empty`、force push、自动 pull/rebase、自动 retry 或 silent fallback。无 upstream 时 Commit 可用，Commit & Push 明确不可用；Amend 要求已有 HEAD 和 staged 内容。
+- 结果分别投影 commit step、push step 和独立 post-refresh；commit 已成功而 push 失败时保留新 commit、明确报告 partial success，不 reset、不重复 commit、不自动重试。
+- Renderer 确认层只显示当前 snapshot 的 staged 数量、branch/remote、可编辑 message 和三项明确动作；执行期间禁止重复提交，stale 返回最新状态并要求重新确认。modal 的初始焦点、Tab、Escape、busy dismiss 和焦点恢复由 `useModalDialog` 统一拥有。
+- 首版明确不实现独立 Push、Fetch、Pull、set-upstream、branch 管理、History、hunk staging、commit message 模型调用或 raw hook/stderr 展示；这些分别属于 P3-4、后续明确 Slice 或非目标。
+
+**完成证据（隔离候选，不等同 canonical / released）**：Backend/Frontend/Parent 集成后，定向集成测试 `85/85`、完整 `test:core` `1111/1111`、`pnpm typecheck`、`pnpm build`、`pnpm build:remote` 与 `git diff --check` 通过；最终只读复核为 Blocker/High/Medium `0`。真实 canonical 安装与正式 `pnpm verify:linux` 仍属于后续前台维护/发布证据，不用于夸大当前 Slice 的 released 状态。
+
+#### P3-3 — Git History（Complete）
 
 增加只读提交历史、提交元信息、changed files 和按文件 diff；复用同一 Project/repository identity和有界 DTO，不读取任意 revision/path。首期不提供 reset、rebase、cherry-pick、revert 或历史改写入口；只有真实只读链路验收后再决定是否需要独立 mutation Slice。
 
-#### P3-4 — Branches & Sync（Planned）
+**已冻结的首版合同**：
 
-增加当前/本地/远端 branch展示、受控新建与切换，以及彼此独立的 Fetch、Pull、Push动作。每项操作显示明确目标和独立结果，不建立含义不透明的“一键同步”；dirty worktree、detached HEAD、上游缺失、非 fast-forward、冲突和认证失败均 Fail Fast。Commit & Push继续复用 P3-2确认合同，不复制另一套提交路径。
+- History 保留在现有 Git 右侧栏 Tab 内，以可访问的 `Changes / History` 内部子视图切换；不增加第二个 Git 一级 Tab、独立窗口或 mutation 工具栏。详情替换列表并提供明确返回路径，Stage/Unstage/Commit 仍只属于 Changes。
+- Main 只读取确认时精确 HEAD 的可达提交，范围不扩到 `--all`；普通 merge commit 保留全部 parent metadata，但 changed files 与按文件 diff 统一按第一父提交解释。unborn HEAD 返回真实空历史，detached HEAD 仍允许只读浏览。
+- list request 只携带由当前 repository state 形成的 `repositoryRoot + headOid + branch` 只读 snapshot 和有界 offset；每页固定 50 条、总 offset 上限 500。snapshot 不包含 status/index/worktree revision，因此普通未提交变化不使历史失效；repository、HEAD 或 branch 变化必须返回 stale 并要求重新加载。
+- 列表只投影完整 OID、短 OID、subject、author/committer、canonical epoch-millisecond 时间与 parent OID；detail 额外返回有界完整 message、明确的 message truncation 和最多 200 个 changed files。文件列表超限只返回前 200 项并显式 `truncated=true`，不无界读取或隐藏扫描。
+- Renderer 只能把列表返回的完整 40/64 位 OID交回 Main；Main 必须验证该 OID 可从确认时 HEAD 到达。changed file 使用 Main 根据 commit/status/oldPath/path 生成的 opaque `fileId`；按文件 diff request 只提交 snapshot、commit OID 与 `fileId`，Main 重新读取该 commit 的有界文件表并解析真实路径，不接受 raw revision expression、path、cwd 或 Git args。
+- historical diff 复用现有单文件 patch parser和 1 MiB、200 hunks、5000 lines 边界；同一时间只展开一个文件，不预取隐藏 diff。binary、oversized、unsupported、trust-required、not-repository、stale 与 error 均显式投影，不返回未经验证的部分 patch或 raw stderr。
+- 所有 list/detail/diff 响应继续绑定 active registered Project、canonical repository、ancestor authorization、Project key、Renderer generation和request token；Project/HEAD identity变化清空旧列表、详情、文件diff与请求。首版不持久化History缓存，不建立Git数据库或watcher/polling。
+- 最小验收覆盖普通/root/merge/rename/binary/oversized commit、分页与截断、unborn/detached、Project与ancestor trust、HEAD/repository race、非法OID/fileId/raw字段、详情返回焦点、键盘子Tab、窄宽布局和无mutation入口；gate为相关定向测试、完整core、typecheck、production/remote build与diff check。
 
-#### P3-5 — Settings Capability Center（Planned）
+**完成证据（隔离候选，不等同 canonical / released）**：Parent 集成与复核修复后，Git/Main 定向测试 `78/78`、Renderer 定向测试 `45/45`、完整 `test:core` `1127/1127`、`pnpm typecheck`、`pnpm build`、`pnpm build:remote` 与 `git diff --check` 通过；最终独立只读复核为 Blocker/High/Medium `0`。历史读取明确隔离 replacement refs 与 legacy grafts，64 KiB message 返回真实前缀并标记截断，changed files 以 streaming parser 在第 201 项停止，Renderer navigation/destroy 会中止 Main Git 子进程。真实 canonical 安装与正式 `pnpm verify:linux` 仍属于后续前台维护/发布证据。
+
+#### P3-4 — Branches & Sync（Complete）
+
+增加当前/本地/远端 branch 展示、受控新建与切换，以及彼此独立的 Fetch、Pull、Push 动作。每项操作显示明确目标和独立结果，不建立含义不透明的“一键同步”。Commit & Push 继续复用 P3-2 确认合同，不复制另一套提交路径。
+
+**已冻结的首版合同**：
+
+- Git Tab 的内部子视图扩展为 `Changes / History / Branches`；Branches 页面拥有当前 branch/upstream/ahead/behind 摘要、本地 branch、remote-tracking branch、配置 remote 和五项明确动作。History 保持纯只读，Changes 保持文件与 Commit 工作流；不新增右侧栏一级 Git 模块、独立窗口或通用 Git 操作平台。
+- Main 提供一个只读 `prepare branch-sync` 与一个 discriminated `execute branch-sync`。prepare 只读取 active registered Project 与已授权 repository，返回最多 200 个本地 branch、200 个非 symbolic remote-tracking branch、32 个配置 remote、逐组 truncation、当前 HEAD/branch/upstream 和有界 action snapshot；不读取 remote URL，不联网，不触发 fetch，不建立 watcher/polling。Renderer 对既有 branch/remote 操作只回传 Main 生成的 opaque `branchId` / `remoteId`，不提交 raw refspec、cwd 或 Git args；只有新 branch 名称是用户输入，必须同时通过 bounded typed validation 与 `git check-ref-format --branch`。
+- Create 的唯一语义是“从确认时当前 HEAD 创建并切换到新的本地 branch”；Switch 只允许切换 prepare 返回的既有本地 branch。两者都要求 named non-unborn HEAD、完整且 clean 的 index/worktree、无 conflict、非 truncated status，并精确 fence repository、HEAD、current branch、index tree/fingerprint、worktree fingerprint 与 status revision；禁止 detached 起点、remote branch 自动 tracking、stash、force checkout、orphan、delete、rename、reset 或自动恢复。命令失败或超时后必须只读核对实际 branch/HEAD，不能把已落地切换报告成可安全重试。
+- Fetch 必须由用户选择 prepare 返回的一个明确 remote；允许 dirty、conflicted、detached 或 unborn worktree，因为它不修改 HEAD/index/worktree，但仍重新解析 `remoteId`、验证 repository identity，并在同一 repository queue 内执行。首版不支持 `--all`、prune、tag-only、自定义 refspec、remote URL、自动重试或 silent fallback；认证与网络错误使用 bounded public DTO，默认网络 gate 为 120 秒。
+- Pull 只针对当前 named branch 已配置的精确 upstream，要求 clean/完整/no-conflict snapshot，并分为“fetch 该 upstream remote”与“将当前 branch fast-forward 到重新解析后的 upstream ref”两个步骤；禁止 merge commit、rebase、autostash、strategy override、set-upstream 和非 fast-forward fallback。Fetch 已成功但 fast-forward 失败时必须保留更新后的 remote-tracking refs并分别报告 partial success；already-up-to-date 是明确成功结果。
+- Standalone Push 只允许确认时当前 named branch 的精确 configured upstream，重新 fence repository、HEAD、branch 与 upstream 后使用显式 `<confirmed-head-oid>:refs/heads/<upstream>`；不接受任意 remote/refspec，不 set-upstream，不 force/force-with-lease，不自动 pull/retry。普通 dirty/index 变化不阻塞 Push，因为只发布已确认的 HEAD，且不得把未提交内容误表述为已推送；conflict、detached、unborn、missing/changed upstream 与 non-fast-forward 均 Fail Fast。
+- 结果按 action 分离 branch/fetch/fast-forward/push step 与独立 post-view；操作已经成功而 post-view 失败时仍保留成功事实。网络 timeout/abort 后若远端结果无法本地证明，使用明确 `unknown`，不得伪装成确定失败或自动重试；Renderer 锁定同一 active operation，忽略迟到 generation/token，成功/失败/unknown/partial success 使用一个 live region并恢复触发控件焦点。Main 对只读 prepare 可随 Renderer navigation/destroy 中止；mutation 一旦进入 repository queue 不因 Renderer 销毁而主动终止，只服从有界 timeout，避免制造不可判定的半完成操作。
+- 最小验收覆盖 clean/dirty/conflict/detached/unborn、local/remote 名称边界与 truncation、create/switch landed-state 核对、remote 名含斜杠、missing/changed upstream、fetch 认证/timeout、pull already-current/fast-forward/non-fast-forward/partial success、push success/reject/unknown、Project/trust/stale 并发、宽窄布局、键盘/触控/modal/focus/reduced-motion；不测试或实现 stash、merge/rebase、force、remote tracking checkout、branch delete/rename 或“一键同步”。
+
+**完成证据（隔离候选，不等同 canonical / released）**：Parent 集成与两轮独立复核修复后，完整 `src/main/git/*.test.ts` `95/95`、Renderer/Parent 定向测试 `28/28`、完整 `test:core` `1159/1159`、`pnpm typecheck`、`pnpm build`、`pnpm build:remote` 与 `git diff --check` 通过；最终 Backend 与 Frontend 独立只读复核均为 Blocker/High/Medium `0`。首版已交付本地 branch 列表、从确认 HEAD 新建/切换、明确 remote Fetch、当前 upstream 的 ff-only Pull 与 standalone Push；prepare-scoped HMAC capability 绑定 snapshot 与目标 tip，Push 发布精确 confirmed OID，Pull 对命令报错但已落地的 fast-forward 返回成功 warning，Renderer 对每项结果与 post-view 做逐动作身份核验。真实 canonical 安装与正式 `pnpm verify:linux` 仍属于后续前台维护/发布证据。
+
+#### P3-5 — Settings Capability Center（Ready）
 
 Settings继续是独立全页，不进入右侧栏。先把现有只读、离线 Capability Inventory 接入 Settings，以 user/project scope、继承/override、来源和静态 resolved 状态统一展示 Package、Extension、Skill和Prompt；不得把配置声明误标成 Runtime实际加载成功。页面只消费 bounded DTO，不显示 Prompt/Skill正文、Theme body、settings JSON、credential或 package cache绝对路径。
 
@@ -920,17 +960,32 @@ Settings继续是独立全页，不进入右侧栏。先把现有只读、离线
 
 复用已安装的 `pi-mcp-adapter`，在 Settings中管理 server配置、连接/认证状态及真实 tools/resources；Package仍管理 adapter安装，Extension仍管理 loaded code，MCP只管理外部server和capability。配置 mutation继续使用严格 provenance、scope ownership和 malformed-target Fail Fast边界；不重写 MCP client、不复制 secret、不暴露 raw config或任意 Extension command passthrough。
 
-### 15.4 P4 — Cross-platform Desktop
+#### P3-8 — 整体收尾与优化（Planned）
 
-P4 明确延后，不与当前 Linux GUI 实施并行。正式启动后仍保留同一套 Renderer、Workbench Kernel、typed IPC、Pi RPC 与 Session 事实边界，只在 Electron Main/Runtime 中增加被目标平台真实使用的窄适配。
+P3-1 至 P3-7 全部完成后，对已经交付的 P3 工作流做一次整体验收、问题修复和一致性收口。P3-8 不增加新的 Git、Capability、Package、Extension、Skill、Prompt 或 MCP 能力；发现的新产品需求必须另行规划，不得借“优化”扩大范围。
+
+- 串联复核 Git 右侧栏、Settings capability 管理与 MCP 的入口、导航、状态刷新、stale/trust、loading/empty/error、partial success 和恢复路径，删除已失效占位、重复文案和死样式。
+- 统一 modal、焦点恢复、键盘、ARIA、窄宽布局、触控目标、reduced-motion、错误归属和操作进行中反馈；每个实际前端一致性 finding 仍需逐项说明并取得用户确认，P3-8 的加入不构成对未知改动的 blanket authorization。
+- 对已交付页面做有界性能与内存复核，处理可证实的重复读取、无界列表/缓存、迟到响应或不必要重渲染；不得为假设问题引入 watcher、第二事实源、fallback 或通用平台抽象。
+- 收口计划、架构、决策、适配台账、测试和错误文案，使 committed source、built artifact、verified current 与 released evidence 明确区分。
+- 完成门槛是 clean canonical candidate 上的相关定向测试、完整 core、typecheck、production build、diff check，以及强制的 `pnpm verify:linux` 正式发布 gate；所有审查 blocker/high 清零后，P3 才可标记 Complete。
+
+### 15.4 P4 — Remote & Cross-platform Clients
+
+P4 的方向已经由用户重新开启，当前优先级从 P3-5 切换到 P4-1；P3 既有 dirty candidate 保留且不得被本阶段覆盖或顺手整理。P4 保持一个产品、一个仓库、一个版本化 shared contract，并把 Linux Main 保持为远程工作区的唯一 control plane；产品统一不要求把 Desktop Renderer 与 Web Remote 合并成一个入口。
 
 实施顺序：
 
-1. **macOS**：先接通本地 Pi、路径搜索、通知、字体、Command 快捷键与原生窗口生命周期，再完成 arm64/x64 产物、签名和 notarization。
-2. **Windows 原生**：处理 `pi.cmd`/Pi package root、Bash 前置条件、盘符与 UNC 路径、进程树、named pipe、安装包、签名和 SmartScreen；首期不同时引入 WSL。
-3. **WSL**：仅在 Windows 原生版稳定且存在明确需求后评估；Windows 与 WSL 的路径、`~/.pi`、credential、Session 文件和 Runtime host identity 必须保持显式归属，不静默复制或合并。
+1. **P4-1 Desktop Host contract（Complete）**：Linux Main 已增加 loopback-only Desktop Gateway、host handshake、protocol version、build identity、capability、独立桌面设备配对、Bearer credential、单活动 controller、revision/snapshot/SSE 和明确的 remote command owner；设置页可生成/撤销 Windows 桌面设备。它不托管 Web 静态资源、不接受 Public Origin、Trusted Proxy 或 Secure Cookie，也不建立第二 Kernel。首轮安全 findings 已修复，后续独立 closure review 确认 Blocker / High / Medium 为 0。
+2. **P4-2 Windows remote-only Desktop Client（In Progress）**：复用完整 Renderer 与 typed preload API，由 Windows Main 通过用户现有 OpenSSH host alias 建立 local port forward；Windows 模式跳过本地 Pi probe、ProjectStore、Provider/Package 和 WorkbenchKernel 初始化。第一版只支持 SSH key/agent、已确认 Host Key 和一台 Linux Host，不保存 SSH 密码、不自动发现主机、不建立云端 relay。P4-2A 已实现 Host config、系统 SSH 子进程和 Node Desktop Host transport；首轮安全 findings 已修复并通过正式 gate，当前保持 Security Re-review Ready。P4-2B 仍只在独立 closure 通过后接入 remote-only Main/preload composition 与连接界面，P4-2C 再收口凭证存储、重连和完整 Renderer capability gating。
+3. **P4-3 Windows package and real gate**：从同一 tag 构建 Linux AppImage、Windows x64 installer 和 Host 内置 Web Remote；真实 Windows 环境验证 install/launch、SSH 配对、prompt/streaming/Ask/abort、断线重连、Host 重启、版本不匹配和设备撤销。无真实 Windows gate 不得声明 Windows 支持。
+4. **后续本地 Runtime**：macOS、Windows 原生 Pi 与 WSL 只有在各自真实需求重新确认后独立规划；不得把 remote-only 首版扩大为路径翻译、文件同步、本地 Pi 兼容层或多 Host 平台。
 
-P4 开始前必须重新确认 Pi 的分发策略：默认继续使用用户已安装且版本受控的 Pi；是否捆绑 Node、Pi 或 Windows Bash 需作为独立产品与发布决策，不在移植中顺手扩大范围。每个平台只有在原生打包产物完成 launch、Project、prompt/tool、abort、crash、restart/resume、Session 恢复和进程收口，并生成与 commit/产物一致的脱敏证据后，才可报告为完成。
+Windows 和 Linux/Web 必须从同一仓库/tag 发布。Web Remote 随 Linux Host 构建自动同步；Windows 每次连接读取 host product version、Desktop Host protocol、build commit 和 capabilities。首版协议版本必须完全一致，能力缺失由 host 显式报告并禁用对应入口，不做 silent fallback 或兼容猜测。完整决策见 D-067。
+
+**P4-1 完成证据**：新增 Desktop Host config/gateway/shared contract、Main event/command 接线、独立设备存储路径和 Settings 配对/撤销入口；首轮安全 findings 修复后，P4 定向 `20/20`、完整 remote/Settings 回归 `55/55`、完整 core `1198/1198`、`pnpm typecheck`、生产 Desktop/Web `pnpm build` 与 `git diff --check` 通过。command 携带并在 admission/异步准备边界复核客户端观察到的 `projectKey + sessionKey`，stale mutation 返回 typed `409 conflict`，命令自身成功改变 identity 不被误判，且非 JSON pairing 请求不消耗认证限流。独立 closure review 只读复跑 P4-1 `20/20`、扩展 remote/Settings `73/73`，确认 Blocker / High / Medium 为 0，故 P4-1 于 2026-08-22 标记 Complete。未启动 Electron、未执行真实 SSH、未生成 Windows 产物；这些仍属于 P4-2/P4-3，不把 Host 完成表述为 Windows 支持。
+
+**P4-2A 当前证据**：新增严格的单 alias/双端口配置校验、系统 `ssh` tunnel owner 和仅连接 `127.0.0.1` 的 Node Desktop Host client。SSH 固定使用 `BatchMode=yes`、`ExitOnForwardFailure=yes`，关闭 LocalCommand、multiplexing 与后台 fork；启动前通过有界 `ssh -G` 拒绝 alias 中额外的 LocalForward/RemoteForward/DynamicForward，同时不覆盖 Host Key、key/agent 或 ProxyJump。客户端先执行无凭证握手并严格校验 protocol/product/非空 exact build、capability、JSON/SSE 大小与 UTF-8，握手前本地拒绝配对或装载凭证；配对请求在 Host 持久化前再次绑定 product/build。SSH spawn error 直接拒绝启动，并固定连接/ServerAlive 边界；JSON 请求、SSE connect/idle 和 tunnel stop 均有显式 timeout，command 总是携带 snapshot identity 且网络失败不重放 mutation。首轮复核前候选曾通过 P4-2A 定向 `8/8`、完整 remote/Settings `63/63`、完整 core `1206/1206`、`pnpm typecheck`、生产 Desktop/Web `pnpm build` 与 `git diff --check`；core 当时仅报告既有 `24678` WebSocket/Vite dep-scan 噪声且退出为 0。首轮安全复核随后发现凭证可在兼容性前发送、配对可先产生 Host 替换副作用、SSH spawn 未 Fail Fast，以及请求/SSE/stop 生命周期和 same-build DTO 信任表述不完整。修复候选已通过 P4/Host 定向 `20/20`、完整 remote/Settings `90/90` 与 `pnpm typecheck`。首次完整 core 为 `1216/1218`，唯一叶子失败是既有 `pi-capability-inventory-service` overflow readiness 超时，当时按 Fail Fast 未继续 production build 与 diff check；经用户明确授权重跑后，完整 core `1219/1219`、生产 Desktop/Web `pnpm build` 与 `git diff --check` 均通过。core 仍输出既有 Vite dep-scan 与端口 `24678` 噪声，但命令退出为 0。该 Slice 涉及 SSH 子进程和设备凭证；独立 closure 通过前保持 Security Re-review Ready，不开始 P4-2B。
 
 ## 16. 进展日志
 
@@ -1078,7 +1133,17 @@ P4 开始前必须重新确认 Pi 的分发策略：默认继续使用用户已�
 | 2026-07-30 | P3-1 Shell correction | 按用户复核将 Session Header 的 Git 一级图标改为通用右侧栏展开/收起控制；新增与左侧栏镜像的右栏图标，Git 与 Subagent 继续只作为栏内真实 Tab | 删除独立浮动 reopen 入口，统一 Header toggle、栏内 collapse、Escape/close 焦点和正式 verifier 的重开路径；不建立模块 registry 或未来占位 Tab |
 | 2026-07-30 | P3-1 Changes density correction | 按用户实际使用反馈参考 Cursor 收敛大量文件时的信息层级；默认不展开 diff，增加可信 status 范围选择并压缩文件操作 | 单列表支持 Uncommitted/Unstaged/Staged；mixed 在过滤投影只显示对应 diff 与 mutation；文件操作改为图标，冲突说明不重复占高。DTO 未提供的总增删行、Last Turn、Branch Commits 不伪造；Renderer 54/54、typecheck、production build、verifier syntax 与 diff check 通过 |
 | 2026-07-30 | P3-1 Diff folding correction | 按 Cursor 真实行为允许多个文件独立展开，增加标题区全部折叠，并显示 hunk 间被省略的未修改行 | per-file token 隔离并发 diff；canonical hunk range 生成 `N unmodified lines` 折叠条并移除 raw `@@`。省略文本与尾部行数不在 DTO 中，因此当前折叠条保持只读，真实上下文展开留给有界 Main/IPC 协议；Renderer 56/56、typecheck、production build、verifier syntax 与 diff check 通过 |
-| 2026-07-30 | P3-1 Diff performance hardening | 按用户性能反馈加入 typed DTO 意图预取、snapshot-bound LRU、同 key single-flight 与大 diff 行虚拟化；独立只读审计覆盖 stale/trust、旧 callback、并发 mutation、DOM、水平滚动与可访问性 | 审计发现的 null-revision identity、exact displayed snapshot、同步 mutation gate、pointer/focus ownership、完整复制/连续阅读、稳定水平宽度和 panel 工作集上限均已修复并经 closure review 确认 Blocker/High 为 0；不修改 Main/IPC 或预渲染隐藏 DOM |
+| 2026-07-30 | P3-1 Diff performance hardening | 按用户性能反馈加入 typed DTO 意图预取、snapshot-bound LRU、同 key single-flight 与大 diff 行虚拟化；独立只读审计覆盖 stale/trust、旧 callback、并发 mutation、DOM、水平滚动与可访问性 | 审计发现的 null-revision identity、exact displayed snapshot、同步 mutation gate、pointer/focus ownership、完整复制/连续阅读、稳定水平宽度和可访问性 findings 已全部修复，最终 closure review 为 Blocker/High 0 |
+| 2026-08-10 | P3-2 Start / P3-8 Planning | 提交 P3-2 前置的 compaction/fork 完整 transcript 与 Remote/Select/SSE 收口候选；冻结 Commit、Commit & Push、Amend 的两阶段 typed snapshot、partial success、modal 与非目标合同；用户追加 P3-8 作为 P3-1 至 P3-7 完成后的整体收尾与优化 | 前置候选在隔离分支通过 1083 项 core、253 项最终定向测试、typecheck、production build、remote build 与 diff check，两路复核无提交阻塞；P3-2 改为 In Progress，下一步按 backend contract/Main adapter 与确认层/result UI 两条隔离 writer 实施 |
+| 2026-08-10 | P3-2 Complete | 完成 Project/ancestor-trust 约束下的两阶段 prepare→execute、HEAD/index/upstream fence、Commit / Commit & Push / Amend、正常 hook、landed-commit 真实性、safe push argv、partial success 与紧凑确认层；不增加 Fetch/Pull/force/auto-add/retry | 隔离候选通过定向 `85/85`、完整 core `1111/1111`、typecheck、production/remote build、diff check，最终复核 Blocker/High/Medium 为 0；P3-2 标记 Complete，P3-3 Git History 改为 Ready，canonical/released 证据留待前台维护与正式 gate |
+| 2026-08-10 | P3-3 Start | 冻结当前 HEAD 可达历史、提交详情、最多 200 changed files 与 opaque fileId 单文件 diff 的只读 typed 合同；History 作为现有 Git Tab 内部子视图，不增加 mutation、raw revision/path、数据库或 watcher | P3-3 改为 In Progress；按 Backend bounded read API 与 Frontend History/detail 两条隔离 writer 实施，Parent 集成 preload、子视图和共享 diff viewer后统一验收 |
+| 2026-08-21 | P4-1 Desktop Host source | 用户确认按 D-067 推进后，接通固定 loopback Desktop Gateway、独立 env/token/device store、一次性桌面配对、Bearer auth、协议/build/capability 握手、单活动 controller、SSE/state/command、Main/Settings 管理入口 | 初始定向 18/18、完整 core 1196/1196、typecheck、Desktop/Web build 与 diff check 通过；P3-5 暂停在 Ready。因远程认证边界需要独立安全复核，P4-1 保持 In Progress，P4-2 不提前启动 |
+| 2026-08-22 | P4-1 security findings repair | 首轮独立复核阻断 stale active-state mutation、非 typed controller conflict 与 pairing rate-limit DoS；为 command 增加 expected Project/Session identity，在 gateway 与异步 dispatcher 重复 fence，统一 typed command errors，并让 transport-invalid pairing 不消耗认证额度 | P4 定向 20/20、remote/Settings 55/55、完整 core 1198/1198、typecheck、Desktop/Web build、diff check 通过；同一会话已写修复，不能自证独立 closure，P4-1 继续 In Progress |
+| 2026-08-22 | P4-1 Complete / P4-2A Start | 独立 closure review 复核 identity fence、typed errors、controller/auth、pairing admission 与 Main dispatcher，未发现 Blocker / High / Medium；只读定向 20/20、扩展 remote/Settings 73/73 | P4-1 标记 Complete并解除 P4-2 gate；先以单一后端 Slice 实现 Host config、系统 OpenSSH tunnel 和 Desktop Host client transport，不提前增加 Windows 打包或凭证持久化 |
+| 2026-08-22 | P4-2A Security Review Ready | 完成严格 SSH alias/port config、OpenSSH `ssh -G` forwarding preflight、受控 tunnel argv/lifecycle、strict protocol/product/build/capability client、内存 credential、SSE/state/command/logout 与不重放 mutation | P4-2A 定向 8/8、remote/Settings 63/63、完整 core 1206/1206、typecheck、Desktop/Web build、diff check 通过；因新增 SSH 与 credential 边界，独立安全复核前不接入 P4-2B Main/Renderer |
+| 2026-08-23 | Settings 导航过时分类收口 | 删除只剩自动命名的「偏好」页并入常规；设置导航改为「应用 / 模型 / 远程访问 / Agent / 生态」分组，远程访问单独成组 | 不启动 S21；不增加搜索、收起、Context 页或生命周期 badge。P4-2A 仍为当前 Slice |
+| 2026-08-27 | P4-2A security findings repair | 修复兼容性前发送 credential、直接 pair 先替换 Host 设备、SSH spawn error 不拒绝启动，以及请求/SSE/tunnel 生命周期无显式边界；改为无凭证 exact-build handshake、Host pair precondition、Connect/ServerAlive、request/SSE idle/stop timeout | 定向 20/20、remote/Settings 90/90、typecheck 通过；首次完整 core 1216/1218，被既有 Capability Inventory overflow readiness timeout 阻断。按 Fail Fast 未重试、未继续 build/diff；P4-2A 标记 Security Fix Validation Blocked，P4-2B 不启动 |
+| 2026-08-27 | P4-2A Security Re-review Ready | 经用户明确授权重跑正式 gate；Capability Inventory overflow 本轮通过，完整 core 恢复为全绿 | 完整 core 1219/1219、生产 Desktop/Web build、diff check 通过；既有 Vite dep-scan 与 24678 端口噪声不改变成功退出。P4-2A 改为 Security Re-review Ready，独立 closure 前仍不启动 P4-2B |
 
 
 ## 17. 计划变更记录
@@ -1182,3 +1247,12 @@ P4 开始前必须重新确认 Pi 的分发策略：默认继续使用用户已�
 | 2026-07-30 | 9.5 | 补齐 Cursor 式全部折叠与未修改区域折叠层级 | 用户补充截图确认多个文件可同时展开，标题区提供全部折叠，diff 内的大段未修改内容以折叠条呈现 | diff 状态改为 per-file map 与独立 token；hunk range 精确生成未修改行折叠条。当前 DTO 未携带省略文本，故不伪造展开箭头；真实上下文按需展开需后续有界 Main/IPC contract |
 | 2026-07-30 | 9.6 | 增加正常重启后一次性继续全部精确运行中 Session 的调试开关 | 用户需要 GUI 重启后可选择自动继续所有当时仍在执行的前台/后台对话，同时要求不能把历史 `crashed` 或不完整 transcript 猜成运行事实 | config v14 默认关闭；Kernel shutdown 精确快照，XDG state 使用 boot-scoped claim-before-send；恢复不改前台选择、不绕过 Project trust，Ask/compaction/provisional/异常退出均不自动继续。P3 当前 Slice 状态不变 |
 | 2026-07-30 | 9.7 | 加固 P3-1 diff 首开等待与大型 DOM 性能，并完成独立审计闭环 | 用户要求避免自研 diff 在大量文件/大 patch 下卡顿，并要求完成后独立审计 | hover/focus 只预取有界 typed DTO；snapshot-bound 8 条/8 MiB LRU、single-flight、最多 8 个展开文件和 300 行虚拟化阈值进入当前合同。大型 diff 保留完整文本/复制路径；trust/repository identity、exact snapshot ownership、mutation gate、意图 ownership、稳定宽度与可访问性 findings 已全部修复，最终 closure review 为 Blocker/High 0 |
+| 2026-08-10 | 9.8 | 启动 P3-2 并追加 P3-8 整体收尾与优化 | 用户确认先提交当前收口修改、正式启动 Commit & Push，并要求在 P3 末尾增加对届时已完成工作的整体收尾和优化 | P3-2 进入 In Progress 并冻结两阶段 snapshot-bound commit/amend/push 合同；P3 顺序扩展为 P3-1 至 P3-8。P3-8 只修复和统一已交付能力，不新增产品范围；未知前端 finding 仍逐项确认，最终必须通过 clean canonical `pnpm verify:linux` |
+| 2026-08-10 | 9.9 | 完成 P3-2 Commit & Push 并开放 P3-3 | 两阶段 typed Git 链路、确认 UI、hook/timeout 后 landed-commit 真实性、safe push 和 partial success 已通过完整集成验收，计划必须区分 isolated candidate 与 canonical/released 证据 | P3-2 标记 Complete；P3-3 Git History 改为 Ready。P3-4 及以后保持 Planned；canonical 前台维护安装和 `pnpm verify:linux` 不被当前 source/build 证据替代 |
+| 2026-08-10 | 10.0 | 启动 P3-3 Git History 并冻结有界只读合同 | P3-2 已在隔离候选完成，下一条真实工作流是当前 HEAD 的提交历史；必须先阻止 raw revision/path 与无界 log/diff，再并行实现 Main 与 Renderer | P3-3 进入 In Progress；History 留在现有 Git Tab，固定 50×最多500提交、200文件、1 MiB/200 hunks/5000 lines diff，所有详情按 full OID reachability与opaque fileId校验，不加入mutation |
+| 2026-08-10 | 10.1 | 完成 P3-3 并启动 P3-4 Branches & Sync | 有界 History 已通过完整隔离候选验收；下一条真实 Git 工作流是本地 branch 与明确 Fetch/Pull/Push，必须保持 prepare→execute fence 与逐步 partial-success | P3-3 标记 Complete；P3-4 进入 In Progress，冻结本地 branch、新建/切换、明确 remote Fetch、upstream ff-only Pull 与 standalone Push 合同 |
+| 2026-08-10 | 10.2 | 完成 P3-4 Branches & Sync 并开放 P3-5 | typed Main/IPC、Branches UI、严格 capability/target/post-view fence、exact-OID Push 与 truthful Pull partial-success 已通过完整隔离候选验收 | P3-4 标记 Complete；P3-5 Settings Capability Center 改为 Ready。canonical 前台维护安装和正式 `pnpm verify:linux` 仍不被当前 source/build 证据替代 |
+| 2026-08-21 | 10.3 | 冻结一个产品下的 Linux Host、Windows Desktop Client 与 Web Remote 三角色，以及 Windows remote-only over SSH 路线 | 用户确认 Web Remote 可以归入同一产品，同时要求明确 Windows 实现、测试设备和双端版本同步 | 新增 D-067；P4 改为 Remote & Cross-platform Clients 并按 Desktop Host contract → Windows remote-only client → Windows真实发布 gate 实施。当前 P3 Slice 和 dirty candidate 不被本次规划变更抢占 |
+| 2026-08-21 | 10.4 | 启动 P4-1 并完成 Linux Desktop Host source 集成 gate | 用户明确要求按已冻结路线继续推进；Windows client 之前必须先建立真实、独立于 Web Cookie/Origin 的 Host 安全边界 | 当前阶段切到 P4，P3-5 Paused/Ready；P4-1 已接通 loopback、配对、Bearer、controller 与 Kernel 传输，但独立安全复核前不标记 Complete，不启动 P4-2 |
+| 2026-08-22 | 10.5 | 完成 P4-1 独立 closure并启动 P4-2A Windows Host connection foundation | 独立 reviewer 确认修复后无 Blocker / High / Medium，P4-2 security gate 可解除；Windows composition 前先建立可测试的 SSH 与 Host transport 边界 | P4-1 标记 Complete；P4-2 进入 In Progress，按 transport foundation → remote-only composition → credential/reconnect/capability closure 推进，P4-3 Windows package 与真实 gate 不提前 |
+| 2026-08-23 | 10.6 | 收口过时设置分类：删除偏好、五组导航，远程访问独立成组 | 偏好页只剩自动命名；用户确认远程访问不并入应用组 | 新增 D-071；当前设置导航落地五组。S21 仍 Planned，收起/搜索/作用域语义不提前实施；P4-2A 保持当前 Slice |

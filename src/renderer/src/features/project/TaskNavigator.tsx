@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import type { KernelState } from '../../../../shared/kernel-contract'
 import { Icon } from '../../components/Icon'
@@ -15,12 +15,10 @@ import {
   type SessionActivityObservation,
   type SessionActivitySnapshot
 } from './session-unread-state'
-import {
-  COLLAPSED_SESSION_LIMIT,
-  nextVisibleSessionCountWithRetained,
-  resolveVisibleSessionCount,
-  selectVisibleSessions
-} from './session-list-visibility'
+import { sessionPinIdentity } from './session-pinning'
+import { SessionHoverCard, useSessionHoverCard } from './SessionHoverCard'
+import { SessionListBrowser } from './SessionListBrowser'
+import type { SessionListQuery } from './session-list-query'
 import {
   SessionSpinner,
   sessionAriaLabel
@@ -32,9 +30,16 @@ export type TaskItem = {
   session: KernelState['sessions'][number]
 }
 
+type TaskListEntry = TaskItem & {
+  key: string
+  title: string
+  lastActivityAt: number | null
+}
+
 type TaskNavigatorProps = {
   hidden: boolean
   tasks: TaskItem[]
+  listQuery: SessionListQuery
   activeWorkspaceKey: string | null
   displayedSessionKey: string | null
   viewedSessionKey: string | null
@@ -45,6 +50,8 @@ type TaskNavigatorProps = {
   pendingAction: WorkbenchOperation | null
   contextActionStatus: string | null
   tokenCountFormat: KernelState['appearance']['tokenCountFormat']
+  pinnedSessionIdentities: ReadonlySet<string>
+  onTogglePinnedSession: (identity: string) => void
   onClearArchivedSessionPreview: () => void
   onActivateTask: (taskKey: string, sessionKey: string) => Promise<void>
   onOpenSession: (
@@ -57,6 +64,7 @@ type TaskNavigatorProps = {
 export function TaskNavigator({
   hidden,
   tasks,
+  listQuery,
   activeWorkspaceKey,
   displayedSessionKey,
   viewedSessionKey,
@@ -67,6 +75,8 @@ export function TaskNavigator({
   pendingAction,
   contextActionStatus,
   tokenCountFormat,
+  pinnedSessionIdentities,
+  onTogglePinnedSession,
   onClearArchivedSessionPreview,
   onActivateTask,
   onOpenSession,
@@ -74,7 +84,7 @@ export function TaskNavigator({
 }: TaskNavigatorProps): React.JSX.Element {
   const [activityClock, setActivityClock] = useState(() => Date.now())
   const [unreadSessionKeys, setUnreadSessionKeys] = useState<Set<string>>(() => new Set())
-  const [requestedVisibleCount, setRequestedVisibleCount] = useState<number | undefined>()
+  const sessionHoverCard = useSessionHoverCard(hidden)
   const sessionActivityByIdentityRef = useRef(new Map<string, SessionActivitySnapshot>())
 
   useEffect(() => {
@@ -83,24 +93,41 @@ export function TaskNavigator({
   }, [])
 
   useLayoutEffect(() => {
-    const observations: SessionActivityObservation[] = tasks.map(({ taskKey, session }) => ({
-      identity: `${taskKey}\u0000${session.id}`,
+    const observations: SessionActivityObservation[] = tasks.map(({ workspaceKey, session }) => ({
+      identity: `${workspaceKey}\u0000${session.id}`,
       sessionKey: session.key,
       lastActivityAt: session.lastActivityAt,
       runtimeStatus: session.runtimeStatus
     }))
+    const previousActivityByIdentity = sessionActivityByIdentityRef.current
     setUnreadSessionKeys((current) => reconcileUnreadSessionKeys(
       current,
       displayedSessionKey,
-      sessionActivityByIdentityRef.current,
+      previousActivityByIdentity,
       observations
     ))
     sessionActivityByIdentityRef.current = indexSessionActivity(observations)
   }, [displayedSessionKey, tasks])
 
   const orderedTasks = orderTaskItems(tasks)
-  const retainedSessionKeys = new Set(
-    orderedTasks
+  const listItems = useMemo<TaskListEntry[]>(
+    () => orderedTasks
+      .map((task, index) => ({
+        ...task,
+        key: task.session.key,
+        title: task.session.name?.trim() || `任务 ${index + 1}`,
+        lastActivityAt: task.session.lastActivityAt
+      }))
+      .filter(({ taskKey, session }) =>
+        !pinnedSessionIdentities.has(sessionPinIdentity('task', taskKey, session.id))
+      ),
+    [orderedTasks, pinnedSessionIdentities]
+  )
+  const hoveredTask = sessionHoverCard.sessionKey === null
+    ? null
+    : listItems.find(({ session }) => session.key === sessionHoverCard.sessionKey) ?? null
+  const retainedSessionKeys = useMemo(() => new Set(
+    listItems
       .filter(({ session }) =>
         session.key === displayedSessionKey ||
         session.key === viewedSessionKey ||
@@ -109,31 +136,11 @@ export function TaskNavigator({
         (session.runtimeStatus !== 'ready' && session.runtimeStatus !== 'stopped')
       )
       .map(({ session }) => session.key)
-  )
-  const requestedCount = resolveVisibleSessionCount(orderedTasks.length, requestedVisibleCount)
-  const visibleSessions = selectVisibleSessions(
-    orderedTasks.map(({ session }) => session),
-    requestedCount,
-    retainedSessionKeys
-  )
-  const tasksBySessionKey = new Map(orderedTasks.map((task) => [task.session.key, task]))
-  const visibleTasks = visibleSessions.map((session) => tasksBySessionKey.get(session.key)!)
-  const nextVisibleCount = nextVisibleSessionCountWithRetained(
-    orderedTasks.map(({ session }) => session),
-    requestedVisibleCount,
-    retainedSessionKeys
-  )
-  const nextVisibleSessions = selectVisibleSessions(
-    orderedTasks.map(({ session }) => session),
-    nextVisibleCount,
-    retainedSessionKeys
-  )
-  const remainingCount = orderedTasks.length - visibleTasks.length
-  const nextRevealCount = nextVisibleSessions.length - visibleSessions.length
-  const listExpanded = requestedCount > COLLAPSED_SESSION_LIMIT
+  ), [displayedSessionKey, listItems, unreadSessionKeys, viewedSessionKey])
 
   return (
-    <section
+    <>
+      <section
       id="task-navigator-panel"
       className="sidebar-section project-list-section task-list-section"
       aria-labelledby="task-navigator-panel-toggle"
@@ -151,14 +158,21 @@ export function TaskNavigator({
           </span>
         </div>
       ) : (
-        <div className="session-list task-session-list" id="task-sessions">
-          {visibleTasks.map(({ taskKey, workspaceKey, session }) => {
+        <SessionListBrowser
+          listId="task-sessions"
+          items={listItems}
+          query={listQuery}
+          now={activityClock}
+          retainedKeys={retainedSessionKeys}
+          resultNoun="任务"
+          emptyLabel={orderedTasks.length === 0 ? '暂无任务。' : '任务已显示在置顶区域。'}
+          noMatchLabel="没有匹配的任务。"
+          renderItem={({ taskKey, workspaceKey, session, title }) => {
             const selected = session.key === displayedSessionKey
-            const taskTitle = session.name?.trim() ||
-              `任务 ${orderedTasks.findIndex((task) => task.taskKey === taskKey) + 1}`
+            const pinIdentity = sessionPinIdentity('task', taskKey, session.id)
             const presentedSession = session.name?.trim()
               ? session
-              : { ...session, name: taskTitle }
+              : { ...session, name: title }
             const activeWorkspace = workspaceKey === activeWorkspaceKey
             const previewSelected = viewedSessionKey === session.key
             const lifecycleLabel = sessionLifecycleLabel(session.runtimeStatus)
@@ -171,14 +185,20 @@ export function TaskNavigator({
                   type="button"
                   aria-label={sessionAriaLabel(presentedSession, tokenCountFormat)}
                   aria-current={selected ? 'true' : undefined}
+                  aria-describedby={sessionHoverCard.describedBy(session.key)}
                   aria-busy={
                     (previewSelected && sessionPreviewPending) || session.runtimeStatus === 'starting'
                       ? true
                       : undefined
                   }
                   disabled={busy || (!activeWorkspace && !canChangeProjectOrSession)}
+                  onFocus={(event) => sessionHoverCard.open(session.key, event.currentTarget)}
+                  onBlur={sessionHoverCard.scheduleClose}
+                  onPointerMove={(event) => sessionHoverCard.request(session.key, event.currentTarget)}
+                  onPointerLeave={sessionHoverCard.scheduleClose}
                   onClick={() => {
                     if (busy) return
+                    sessionHoverCard.dismiss()
                     void (async () => {
                       if (viewingArchivedSession) onClearArchivedSessionPreview()
                       if (!activeWorkspace) {
@@ -190,7 +210,7 @@ export function TaskNavigator({
                     })().catch(() => undefined)
                   }}
                 >
-                  <span className="session-title">{taskTitle}</span>
+                  <span className="session-title">{title}</span>
                   {session.requiresReload === true ? (
                     <span
                       className="session-reload-required"
@@ -209,6 +229,8 @@ export function TaskNavigator({
                       ? '等待你的回复'
                       : lifecycleLabel ?? (unread ? '有未读更新' : undefined)
                   }
+                  onPointerEnter={sessionHoverCard.dismiss}
+                  onFocusCapture={sessionHoverCard.dismiss}
                 >
                   {session.awaitingUserInput ? (
                     <span
@@ -236,6 +258,16 @@ export function TaskNavigator({
                   )}
                   <div className="session-row-actions">
                     <IconButton
+                      className="session-pin"
+                      icon="pin"
+                      label="置顶任务"
+                      aria-pressed="false"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onTogglePinnedSession(pinIdentity)
+                      }}
+                    />
+                    <IconButton
                       className="session-archive"
                       icon="archive"
                       label="归档任务"
@@ -254,36 +286,19 @@ export function TaskNavigator({
                 </div>
               </div>
             )
-          })}
-          {orderedTasks.length > COLLAPSED_SESSION_LIMIT ? (
-            <div className="session-list-actions" role="group" aria-label="任务列表显示数量">
-              {listExpanded ? (
-                <button
-                  className="session-list-toggle"
-                  type="button"
-                  aria-expanded="true"
-                  aria-controls="task-sessions"
-                  onClick={() => setRequestedVisibleCount(undefined)}
-                >
-                  收起至 {COLLAPSED_SESSION_LIMIT} 个任务
-                </button>
-              ) : null}
-              {remainingCount > 0 ? (
-                <button
-                  className="session-list-toggle"
-                  type="button"
-                  aria-expanded={listExpanded}
-                  aria-controls="task-sessions"
-                  onClick={() => setRequestedVisibleCount(nextVisibleCount)}
-                >
-                  展开更多 {nextRevealCount} 个任务
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+          }}
+        />
       )}
-    </section>
+      </section>
+      <SessionHoverCard
+        hidden={hidden}
+        controller={sessionHoverCard}
+        session={hoveredTask?.session ?? null}
+        title={hoveredTask?.title ?? null}
+        tokenCountFormat={tokenCountFormat}
+        showSessionFile={false}
+      />
+    </>
   )
 }
 

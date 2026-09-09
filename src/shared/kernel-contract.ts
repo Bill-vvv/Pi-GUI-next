@@ -656,6 +656,23 @@ export type KernelAskToolState = {
   error: string | null
 }
 
+export type KernelExtensionDialogRequest = {
+  requestId: string
+  commandInvocationId: string
+  projectKey: string
+  sessionKey: string
+  sessionId: string
+  commandName: string
+  method: 'select' | 'confirm' | 'input' | 'editor'
+  title: string
+  message: string | null
+  options: string[]
+  placeholder: string | null
+  prefill: string | null
+  status: 'waiting' | 'submitting'
+  error: string | null
+}
+
 export type KernelToolEntry = {
   id: string
   kind: 'tool'
@@ -717,7 +734,7 @@ export type KernelSubagentNoticeEntry = {
 export type KernelExtensionStatusEntry = {
   id: string
   kind: 'extension-status'
-  source: 'magic-context'
+  source: 'magic-context' | 'extension'
   title: string
   text: string
   level: 'info' | 'success' | 'warning' | 'error'
@@ -757,6 +774,8 @@ export type KernelConversationEntry =
 
 export type KernelConversationPreviewState = {
   entries: KernelConversationEntry[]
+  /** Absolute index of entries[0] in the prepared detached Conversation. */
+  startIndex: number
   /** Preview-local index; previews are read-only and are never patched. */
   activeRunStartIndex: number | null
 }
@@ -770,6 +789,7 @@ export type KernelConversationState = {
 }
 
 export type KernelSessionPreview = {
+  previewId: string
   projectKey: string
   sessionKey: string
   sessionId: string
@@ -783,6 +803,10 @@ export type KernelConversationPageRequest = {
   sessionId: string
   beforeIndex: number
   beforeEntryId: string
+}
+
+export type KernelSessionPreviewPageRequest = KernelConversationPageRequest & {
+  previewId: string
 }
 
 export type KernelConversationPage = KernelConversationPageRequest & {
@@ -961,6 +985,8 @@ export type KernelState = {
   sessions: KernelSessionSummary[]
   activeSessionKey: string | null
   projectTrustRequest: KernelProjectTrustRequest | null
+  /** Blocking UI requested by the current adapted Extension command. */
+  extensionDialog?: KernelExtensionDialogRequest | null
   commands: KernelCommandDescriptor[]
   extensions: KernelExtensionDescriptor[]
   availableModels: KernelModelState[]
@@ -1058,6 +1084,7 @@ export type KernelCommand =
   | { type: 'kernel.preview-session'; sessionKey: string; requestId: string }
   | { type: 'kernel.complete-session-preview'; requestId: string }
   | { type: 'kernel.cancel-session-preview'; requestId: string }
+  | { type: 'kernel.load-earlier-session-preview'; request: KernelSessionPreviewPageRequest }
   | { type: 'kernel.preview-archived-session'; token: string }
   | { type: 'kernel.list-fork-candidates' }
   | { type: 'kernel.fork-session'; entryId: string }
@@ -1134,6 +1161,23 @@ export type KernelCommand =
       answers: KernelAskAnswer[]
     }
   | { type: 'kernel.cancel-ask'; sessionKey: string; toolCallId: string }
+  | {
+      type: 'kernel.respond-extension-dialog'
+      projectKey: string
+      sessionKey: string
+      sessionId: string
+      requestId: string
+      commandInvocationId: string
+      value: string
+    }
+  | {
+      type: 'kernel.cancel-extension-dialog'
+      projectKey: string
+      sessionKey: string
+      sessionId: string
+      requestId: string
+      commandInvocationId: string
+    }
   | {
       type: 'kernel.prompt'
       message: string
@@ -1215,6 +1259,9 @@ export type KernelApi = {
   previewSession: (sessionKey: string, requestId: string) => Promise<KernelSessionPreview>
   completeSessionPreview: (requestId: string) => Promise<KernelSessionPreview>
   cancelSessionPreview: (requestId: string) => Promise<void>
+  loadEarlierSessionPreview: (
+    request: KernelSessionPreviewPageRequest
+  ) => Promise<KernelConversationPage>
   previewArchivedSession: (token: string) => Promise<KernelSessionPreview>
   listForkCandidates: () => Promise<KernelForkCandidate[]>
   forkSession: (entryId: string) => Promise<KernelForkResult>
@@ -1291,6 +1338,21 @@ export type KernelApi = {
     answers: KernelAskAnswer[]
   ) => Promise<KernelMutationAck>
   cancelAsk: (sessionKey: string, toolCallId: string) => Promise<KernelMutationAck>
+  respondExtensionDialog: (
+    projectKey: string,
+    sessionKey: string,
+    sessionId: string,
+    requestId: string,
+    commandInvocationId: string,
+    value: string
+  ) => Promise<KernelMutationAck>
+  cancelExtensionDialog: (
+    projectKey: string,
+    sessionKey: string,
+    sessionId: string,
+    requestId: string,
+    commandInvocationId: string
+  ) => Promise<KernelMutationAck>
   prompt: (
     message: string,
     attachments?: KernelPromptAttachment[],

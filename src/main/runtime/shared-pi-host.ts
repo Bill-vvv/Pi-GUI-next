@@ -72,6 +72,7 @@ export type SharedPiRuntimeOptions = {
   sessionFile?: string
   projectTrust?: boolean
   fastExtensionLoading?: boolean
+  piExecutable?: string
   quiescenceExtensionPath?: string
   extensionPaths: string[]
   subagent?: SubagentSettings
@@ -295,6 +296,7 @@ export class SharedPiRuntime implements RuntimeHost {
         sessionFile: this.options.sessionFile,
         projectTrust: this.options.projectTrust,
         fastExtensionLoading: this.options.fastExtensionLoading,
+        piExecutable: this.options.piExecutable,
         extensionPaths: [...this.options.extensionPaths],
         subagentMaxDepth: this.options.subagent?.maxDepth,
         desktopNotification: this.options.desktopNotification,

@@ -5,6 +5,8 @@ import { isAbsolute } from 'node:path'
 
 import { deriveRemoteDeviceStorePath } from './remote-device-store.ts'
 
+const REMOTE_TOKEN_FILE_MAX_BYTES = 16 * 1024
+
 export type RemoteDisabledConfig = {
   enabled: false
 }
@@ -71,33 +73,40 @@ export async function loadRemoteConfig(
   }
 }
 
-export async function readRemoteTokenFile(tokenFile: string, uid: number): Promise<string> {
+export async function readRemoteTokenFile(
+  tokenFile: string,
+  uid: number,
+  label = 'PI_GUI_REMOTE_TOKEN_FILE'
+): Promise<string> {
   let file: FileHandle
   try {
     file = await open(tokenFile, constants.O_RDONLY | constants.O_NOFOLLOW)
   } catch (error) {
     throw new Error(
-      `PI_GUI_REMOTE_TOKEN_FILE must be a readable regular non-symlink file: ${error instanceof Error ? error.message : String(error)}`
+      `${label} must be a readable regular non-symlink file: ${error instanceof Error ? error.message : String(error)}`
     )
   }
   try {
     const stats = await file.stat()
     if (!stats.isFile()) {
-      throw new Error('PI_GUI_REMOTE_TOKEN_FILE must be a regular file owned by the current user.')
+      throw new Error(`${label} must be a regular file owned by the current user.`)
     }
     if (stats.uid !== uid) {
-      throw new Error('PI_GUI_REMOTE_TOKEN_FILE must be owned by the current user.')
+      throw new Error(`${label} must be owned by the current user.`)
     }
     if ((stats.mode & 0o777) !== 0o600) {
-      throw new Error('PI_GUI_REMOTE_TOKEN_FILE must have mode 0600.')
+      throw new Error(`${label} must have mode 0600.`)
+    }
+    if (stats.size > REMOTE_TOKEN_FILE_MAX_BYTES) {
+      throw new Error(`${label} exceeds the bounded size limit.`)
     }
 
     const token = (await file.readFile({ encoding: 'utf8' })).trim()
     if (token.length < 32 || token.length > 4096) {
-      throw new Error('PI_GUI_REMOTE_TOKEN_FILE must contain 32 to 4096 trimmed characters.')
+      throw new Error(`${label} must contain 32 to 4096 trimmed characters.`)
     }
     if (token.includes('\0') || /[\r\n]/u.test(token)) {
-      throw new Error('PI_GUI_REMOTE_TOKEN_FILE must contain one line without NUL bytes.')
+      throw new Error(`${label} must contain one line without NUL bytes.`)
     }
     return token
   } finally {

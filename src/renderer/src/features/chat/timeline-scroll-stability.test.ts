@@ -83,10 +83,43 @@ test('programmatic suppression derives from the synchronized scroll position wit
   assert.doesNotMatch(timelineSource, /programmaticScrollTopRef/)
 })
 
-test('Timeline stabilizes entries, resize, and measured Composer layout through one path', () => {
+test('opened conversations reuse the prompt rail and wait for authoritative content', () => {
+  assert.match(
+    timelineSource,
+    /const initialPromptNavigationPendingRef = useRef\(navigateToLatestPromptOnMount\)/
+  )
+  const stabilizationStart = timelineSource.indexOf('const stabilizeTimelineLayout')
   const stabilization = timelineSource.slice(
-    timelineSource.indexOf('const stabilizeTimelineLayout'),
-    timelineSource.indexOf('const scrollToMountedPrompt')
+    stabilizationStart,
+    timelineSource.indexOf('\n\n  useLayoutEffect', stabilizationStart)
+  )
+  assert.match(stabilization, /promptNavigationItems\.at\(-1\)\?\.turnId/)
+  assert.match(stabilization, /navigateToPrompt\(lastPromptTurnId\)/)
+  assert.ok(
+    stabilization.indexOf('updateScrollTail()') <
+      stabilization.indexOf('navigateToPrompt(lastPromptTurnId)')
+  )
+  assert.doesNotMatch(stabilization, /scrollToMountedPrompt\(lastPromptTurnId\)/)
+  assert.match(
+    stabilization,
+    /if \(!loading\) initialPromptNavigationPendingRef\.current = false/
+  )
+  assert.ok(
+    stabilization.indexOf('navigateToPrompt(lastPromptTurnId)') <
+      stabilization.indexOf('if (!loading) initialPromptNavigationPendingRef.current = false')
+  )
+  assert.match(
+    workbenchSource,
+    /const navigateTimelineToLatestPromptOnMount = !viewingNewSession/
+  )
+  assert.doesNotMatch(workbenchSource, /previousViewingNewSessionRef/)
+})
+
+test('Timeline stabilizes entries, resize, and measured Composer layout through one path', () => {
+  const stabilizationStart = timelineSource.indexOf('const stabilizeTimelineLayout')
+  const stabilization = timelineSource.slice(
+    stabilizationStart,
+    timelineSource.indexOf('\n\n  useLayoutEffect', stabilizationStart)
   )
   assert.match(stabilization, /updateScrollTail\(\)/)
   assert.match(stabilization, /scrollModeRef\.current === 'following'/)

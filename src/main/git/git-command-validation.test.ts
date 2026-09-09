@@ -1,8 +1,21 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { GIT_REPOSITORY_RELATIVE_PATH_MAX_UTF8_BYTES } from '../../shared/git-contract.ts'
-import { isGitCommand, isGitDiffRequest, isGitFileMutationRequest } from './git-command-validation.ts'
+import {
+  GIT_COMMIT_MESSAGE_MAX_UTF8_BYTES,
+  GIT_HISTORY_MAX_OFFSET,
+  GIT_REPOSITORY_RELATIVE_PATH_MAX_UTF8_BYTES
+} from '../../shared/git-contract.ts'
+import {
+  isGitBranchSyncExecutionRequest,
+  isGitCommand,
+  isGitCommitExecutionRequest,
+  isGitDiffRequest,
+  isGitFileMutationRequest,
+  isGitHistoryDetailRequest,
+  isGitHistoryFileDiffRequest,
+  isGitHistoryListRequest
+} from './git-command-validation.ts'
 
 const HASH = 'a'.repeat(64)
 const OID = 'b'.repeat(40)
@@ -30,6 +43,59 @@ const mutationRequest = {
   expectedStatusRevision: HASH
 }
 
+const commitRequest = {
+  mode: 'commit' as const,
+  message: 'Update src/file.ts',
+  snapshot: {
+    repositoryRoot: REPOSITORY,
+    headOid: OID,
+    branch: 'main',
+    indexTreeOid: HASH,
+    indexFingerprint: HASH
+  },
+  expectedPushTarget: null
+}
+
+const historySnapshot = {
+  repositoryRoot: REPOSITORY,
+  headOid: OID,
+  branch: 'main'
+}
+
+const historyListRequest = {
+  snapshot: historySnapshot,
+  offset: 0
+}
+
+const historyDetailRequest = {
+  snapshot: historySnapshot,
+  oid: OID
+}
+
+const historyFileDiffRequest = {
+  snapshot: historySnapshot,
+  oid: OID,
+  fileId: 'c'.repeat(32)
+}
+
+const branchSyncSnapshot = {
+  repositoryRoot: REPOSITORY,
+  headOid: OID,
+  branch: 'main',
+  indexTreeOid: HASH,
+  indexFingerprint: HASH,
+  worktreeFingerprint: HASH,
+  statusRevision: HASH,
+  upstreamRemote: 'origin',
+  upstreamBranch: 'main'
+}
+
+const branchSyncCreateRequest = {
+  action: 'create-and-switch' as const,
+  snapshot: branchSyncSnapshot,
+  name: 'feature/one'
+}
+
 test('accepts only the exact Git command union shapes', () => {
   assert.equal(isGitCommand({ type: 'git.refresh', projectKey: PROJECT }), true)
   assert.equal(isGitCommand({ type: 'git.refresh' }), false)
@@ -49,7 +115,53 @@ test('accepts only the exact Git command union shapes', () => {
   }), false)
   assert.equal(isGitCommand({ type: 'git.get-diff', projectKey: PROJECT, request: diffRequest }), true)
   assert.equal(isGitCommand({ type: 'git.mutate-file', projectKey: PROJECT, request: mutationRequest }), true)
+  assert.equal(isGitCommand({ type: 'git.prepare-commit', projectKey: PROJECT }), true)
+  assert.equal(isGitCommand({ type: 'git.prepare-commit', projectKey: PROJECT, cwd: '/tmp' }), false)
+  assert.equal(isGitCommand({ type: 'git.execute-commit', projectKey: PROJECT, request: commitRequest }), true)
+  assert.equal(isGitCommand({ type: 'git.list-history', projectKey: PROJECT, request: historyListRequest }), true)
+  assert.equal(isGitCommand({ type: 'git.get-history-detail', projectKey: PROJECT, request: historyDetailRequest }), true)
+  assert.equal(isGitCommand({ type: 'git.get-history-file-diff', projectKey: PROJECT, request: historyFileDiffRequest }), true)
+  assert.equal(isGitCommand({ type: 'git.prepare-branch-sync', projectKey: PROJECT }), true)
+  assert.equal(isGitCommand({
+    type: 'git.execute-branch-sync',
+    projectKey: PROJECT,
+    request: branchSyncCreateRequest
+  }), true)
   assert.equal(isGitCommand({ type: 'git.raw', projectKey: PROJECT, args: ['status'] }), false)
+  assert.equal(isGitCommand({
+    type: 'git.list-history',
+    projectKey: PROJECT,
+    request: historyListRequest,
+    cwd: '/tmp'
+  }), false)
+})
+
+test('validates exact bounded history list, detail, and file-diff requests', () => {
+  assert.equal(isGitHistoryListRequest(historyListRequest), true)
+  assert.equal(isGitHistoryDetailRequest(historyDetailRequest), true)
+  assert.equal(isGitHistoryFileDiffRequest(historyFileDiffRequest), true)
+  assert.equal(isGitHistoryListRequest({ ...historyListRequest, extra: true }), false)
+  assert.equal(isGitHistoryDetailRequest({ ...historyDetailRequest, path: 'src/file.ts' }), false)
+  assert.equal(isGitHistoryFileDiffRequest({ ...historyFileDiffRequest, revision: 'HEAD' }), false)
+  assert.equal(isGitHistoryListRequest({ snapshot: historySnapshot, offset: -1 }), false)
+  assert.equal(isGitHistoryListRequest({ snapshot: historySnapshot, offset: GIT_HISTORY_MAX_OFFSET + 1 }), false)
+  assert.equal(isGitHistoryListRequest({ snapshot: historySnapshot, offset: 1.5 }), false)
+  assert.equal(isGitHistoryDetailRequest({ snapshot: historySnapshot, oid: 'HEAD' }), false)
+  assert.equal(isGitHistoryDetailRequest({ snapshot: historySnapshot, oid: 'b'.repeat(39) }), false)
+  assert.equal(isGitHistoryFileDiffRequest({ ...historyFileDiffRequest, fileId: '' }), false)
+  assert.equal(isGitHistoryFileDiffRequest({ ...historyFileDiffRequest, fileId: 'not-hex!' }), false)
+  assert.equal(isGitHistoryListRequest({
+    snapshot: { ...historySnapshot, branch: 'bad\nbranch' },
+    offset: 0
+  }), false)
+  assert.equal(isGitHistoryListRequest({
+    snapshot: { repositoryRoot: REPOSITORY, headOid: null, branch: 'main' },
+    offset: 0
+  }), true)
+  assert.equal(isGitHistoryListRequest({
+    snapshot: { repositoryRoot: REPOSITORY, headOid: OID, branch: null },
+    offset: 0
+  }), true)
 })
 
 test('rejects unsafe and noncanonical Project and authorization roots', () => {
@@ -108,4 +220,186 @@ test('accepts only exact lowercase SHA-1 or SHA-256 Git object identity widths',
     assert.equal(isGitDiffRequest({ ...diffRequest, expectedIndexTreeOid: oid }), false, String(length))
   }
   assert.equal(isGitDiffRequest({ ...diffRequest, expectedHeadOid: 'B'.repeat(40) }), false)
+})
+
+test('validates exact commit execution requests and message bounds', () => {
+  assert.equal(isGitCommitExecutionRequest(commitRequest), true)
+  assert.equal(isGitCommitExecutionRequest({
+    ...commitRequest,
+    mode: 'commit-and-push',
+    expectedPushTarget: { remote: 'origin', branch: 'main' }
+  }), true)
+  assert.equal(isGitCommitExecutionRequest({ ...commitRequest, mode: 'amend' }), true)
+  assert.equal(isGitCommitExecutionRequest({ ...commitRequest, mode: 'commit-and-push', expectedPushTarget: null }), false)
+  assert.equal(isGitCommitExecutionRequest({ ...commitRequest, mode: 'push' }), false)
+  assert.equal(isGitCommitExecutionRequest({ ...commitRequest, force: true }), false)
+  assert.equal(isGitCommitExecutionRequest({ ...commitRequest, noVerify: true }), false)
+  assert.equal(isGitCommitExecutionRequest({ ...commitRequest, all: true }), false)
+  assert.equal(isGitCommitExecutionRequest({ ...commitRequest, setUpstream: true }), false)
+  assert.equal(isGitCommitExecutionRequest({ ...commitRequest, args: ['--allow-empty'] }), false)
+  assert.equal(isGitCommitExecutionRequest({ ...commitRequest, message: '   ' }), false)
+  assert.equal(isGitCommitExecutionRequest({ ...commitRequest, message: 'has\0nul' }), false)
+  assert.equal(isGitCommitExecutionRequest({
+    ...commitRequest,
+    message: '界'.repeat(Math.floor(GIT_COMMIT_MESSAGE_MAX_UTF8_BYTES / 3) + 1)
+  }), false)
+  assert.equal(isGitCommitExecutionRequest({
+    ...commitRequest,
+    message: 'x'.repeat(GIT_COMMIT_MESSAGE_MAX_UTF8_BYTES)
+  }), true)
+  assert.equal(isGitCommitExecutionRequest({
+    ...commitRequest,
+    message: 'line1\nline2\nunicode-提交'
+  }), true)
+  assert.equal(isGitCommitExecutionRequest({
+    ...commitRequest,
+    snapshot: { ...commitRequest.snapshot, branch: 'feature/name' }
+  }), true)
+  assert.equal(isGitCommitExecutionRequest({
+    ...commitRequest,
+    snapshot: { ...commitRequest.snapshot, branch: 'bad\nbranch' }
+  }), false)
+  assert.equal(isGitCommitExecutionRequest({
+    ...commitRequest,
+    snapshot: { ...commitRequest.snapshot, repositoryRoot: 'relative' }
+  }), false)
+  assert.equal(isGitCommitExecutionRequest({
+    ...commitRequest,
+    snapshot: { ...commitRequest.snapshot, indexFingerprint: 'not-a-hash' }
+  }), false)
+  assert.equal(isGitCommitExecutionRequest({
+    ...commitRequest,
+    expectedPushTarget: { remote: 'company/prod', branch: 'main', url: 'https://example.invalid' }
+  }), false)
+  assert.equal(isGitCommitExecutionRequest({
+    ...commitRequest,
+    mode: 'commit-and-push',
+    expectedPushTarget: { remote: 'company/prod', branch: 'release/1.0' }
+  }), true)
+  assert.equal(isGitCommand({
+    type: 'git.execute-commit',
+    projectKey: PROJECT,
+    request: {
+      ...commitRequest,
+      mode: 'commit-and-push',
+      expectedPushTarget: { remote: 'origin', branch: 'main' }
+    }
+  }), true)
+  for (const invalidName of [
+    '-u',
+    '--receive-pack=touch /tmp/pwned',
+    'bad name',
+    'bad..name',
+    'bad@{name',
+    'bad~name',
+    'bad^name',
+    'bad:name',
+    'bad?name',
+    'bad*name',
+    'bad[name',
+    'bad\\name',
+    'bad//name',
+    'trailing.',
+    'trailing.lock'
+  ]) {
+    assert.equal(isGitCommitExecutionRequest({
+      ...commitRequest,
+      mode: 'commit-and-push',
+      expectedPushTarget: { remote: invalidName, branch: 'main' }
+    }), false, invalidName)
+    assert.equal(isGitCommitExecutionRequest({
+      ...commitRequest,
+      mode: 'commit-and-push',
+      expectedPushTarget: { remote: 'origin', branch: invalidName }
+    }), false, invalidName)
+  }
+})
+
+test('validates exact branch-sync prepare/execute requests and rejects hostile inputs', () => {
+  assert.equal(isGitCommand({ type: 'git.prepare-branch-sync', projectKey: PROJECT }), true)
+  assert.equal(isGitCommand({ type: 'git.prepare-branch-sync', projectKey: PROJECT, cwd: '/tmp' }), false)
+  assert.equal(isGitBranchSyncExecutionRequest(branchSyncCreateRequest), true)
+  assert.equal(isGitBranchSyncExecutionRequest({
+    action: 'switch',
+    snapshot: branchSyncSnapshot,
+    branchId: 'd'.repeat(32)
+  }), true)
+  assert.equal(isGitBranchSyncExecutionRequest({
+    action: 'fetch',
+    snapshot: branchSyncSnapshot,
+    remoteId: 'e'.repeat(32)
+  }), true)
+  assert.equal(isGitBranchSyncExecutionRequest({
+    action: 'pull',
+    snapshot: branchSyncSnapshot
+  }), true)
+  assert.equal(isGitBranchSyncExecutionRequest({
+    action: 'push',
+    snapshot: branchSyncSnapshot
+  }), true)
+
+  assert.equal(isGitBranchSyncExecutionRequest({
+    ...branchSyncCreateRequest,
+    refspec: 'refs/heads/*'
+  }), false)
+  assert.equal(isGitBranchSyncExecutionRequest({
+    ...branchSyncCreateRequest,
+    cwd: '/tmp'
+  }), false)
+  assert.equal(isGitBranchSyncExecutionRequest({
+    action: 'switch',
+    snapshot: branchSyncSnapshot,
+    branchId: 'main'
+  }), false)
+  assert.equal(isGitBranchSyncExecutionRequest({
+    action: 'fetch',
+    snapshot: branchSyncSnapshot,
+    remoteId: 'origin'
+  }), false)
+  assert.equal(isGitBranchSyncExecutionRequest({
+    action: 'fetch',
+    snapshot: branchSyncSnapshot,
+    remoteId: 'e'.repeat(32),
+    remote: 'origin'
+  }), false)
+  assert.equal(isGitBranchSyncExecutionRequest({
+    action: 'create-and-switch',
+    snapshot: branchSyncSnapshot,
+    name: '-c'
+  }), false)
+  assert.equal(isGitBranchSyncExecutionRequest({
+    action: 'create-and-switch',
+    snapshot: branchSyncSnapshot,
+    name: '--help'
+  }), false)
+  assert.equal(isGitBranchSyncExecutionRequest({
+    action: 'create-and-switch',
+    snapshot: branchSyncSnapshot,
+    name: 'bad name'
+  }), false)
+  assert.equal(isGitBranchSyncExecutionRequest({
+    action: 'create-and-switch',
+    snapshot: branchSyncSnapshot,
+    name: 'feature..bad'
+  }), false)
+  assert.equal(isGitBranchSyncExecutionRequest({
+    action: 'push',
+    snapshot: {
+      ...branchSyncSnapshot,
+      upstreamRemote: 'company/prod'
+    }
+  }), true)
+  assert.equal(isGitBranchSyncExecutionRequest({
+    action: 'push',
+    snapshot: {
+      ...branchSyncSnapshot,
+      upstreamRemote: '-u'
+    }
+  }), false)
+  assert.equal(isGitCommand({
+    type: 'git.execute-branch-sync',
+    projectKey: PROJECT,
+    request: branchSyncCreateRequest,
+    args: ['fetch', '--all']
+  }), false)
 })

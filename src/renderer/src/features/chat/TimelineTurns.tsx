@@ -40,10 +40,6 @@ import {
 } from './SubagentTaskDetail'
 import type { ToolDisplayDensity } from '../../tool-display-density'
 import {
-  sameToolImageRequest,
-  type ToolImageRequestIdentity
-} from './tool-image-request'
-import {
   matchesSubagentTaskTarget,
   subagentParticipantStatusLabel
 } from './subagent-task-detail-model'
@@ -140,12 +136,15 @@ export const CompletedTurn = memo(function CompletedTurn({
       {user ? <MessageEntry entry={user} /> : null}
       <div className="assistant-run">
         {processEntries.length > 0 ? (
-          <CompletedProcess
-            entries={processEntries}
-            toolDisplayDensity={toolDisplayDensity}
-            runElapsedMs={displayedRunElapsedMs}
-            thinkingElapsedByEntryId={thinkingElapsedByEntryId}
-          />
+          <>
+            <CompletedProcess
+              entries={processEntries}
+              toolDisplayDensity={toolDisplayDensity}
+              runElapsedMs={displayedRunElapsedMs}
+              thinkingElapsedByEntryId={thinkingElapsedByEntryId}
+            />
+            <ProcessToolImages entries={processEntries} />
+          </>
         ) : null}
         {answerEntries.map((entry) => (
           <TimelineContentEntry entry={entry} key={entry.id} />
@@ -182,12 +181,14 @@ export const LiveTurn = memo(function LiveTurn({
       <div className="assistant-run live">
         {chunks.map((chunk) =>
           chunk.kind === 'process' ? (
-            <LiveProcess
-              entries={chunk.entries}
-              toolDisplayDensity={toolDisplayDensity}
-              thinkingElapsedByEntryId={thinkingElapsedByEntryId}
-              key={chunk.id}
-            />
+            <Fragment key={chunk.id}>
+              <LiveProcess
+                entries={chunk.entries}
+                toolDisplayDensity={toolDisplayDensity}
+                thinkingElapsedByEntryId={thinkingElapsedByEntryId}
+              />
+              <ProcessToolImages entries={chunk.entries} />
+            </Fragment>
           ) : (
             <TimelineContentEntry entry={chunk.entry} key={chunk.id} />
           )
@@ -342,6 +343,32 @@ function LiveProcess({
         />
       ) : null}
     </ol>
+  )
+}
+
+function ProcessToolImages({
+  entries
+}: {
+  entries: ProcessEntry[]
+}): React.JSX.Element | null {
+  const imageTools = entries.filter((entry): entry is KernelToolEntry => (
+    entry.kind === 'tool' &&
+    entry.subagent === null &&
+    compactToolName(entry.name) !== 'subagent' &&
+    (entry.attachments?.length ?? 0) > 0
+  ))
+  if (imageTools.length === 0) return null
+
+  return (
+    <div className="tool-result-inline-images" aria-label="工具生成的图片">
+      {imageTools.map((entry) => (
+        <ToolResultAttachments
+          attachments={entry.attachments ?? []}
+          toolCallId={entry.toolCallId}
+          key={`tool-images:${entry.toolCallId}`}
+        />
+      ))}
+    </div>
   )
 }
 
@@ -915,7 +942,6 @@ function hasToolDetailContent(entry: KernelToolEntry): boolean {
   return entry.args.trim().length > 0 ||
     entry.output.trim().length > 0 ||
     entry.details.trim().length > 0 ||
-    (entry.attachments?.length ?? 0) > 0 ||
     entry.truncated
 }
 
@@ -926,10 +952,9 @@ function ToolDetailContent({
   entry: KernelToolEntry
   detail: string
 }): React.JSX.Element {
-  const attachments = compactToolName(entry.name) === 'subagent'
-    ? []
-    : entry.attachments ?? []
-  const hasOutput = detail.length > 0 || attachments.length > 0
+  const hasOutput = detail.length > 0 || (
+    compactToolName(entry.name) !== 'subagent' && (entry.attachments?.length ?? 0) > 0
+  )
   return (
     <div className="process-tool-detail">
       {entry.args ? (
@@ -944,12 +969,6 @@ function ToolDetailContent({
           <pre>{detail}</pre>
         </section>
       ) : null}
-      {attachments.length > 0 ? (
-        <ToolResultAttachments
-          attachments={attachments}
-          toolCallId={entry.toolCallId}
-        />
-      ) : null}
       {!hasOutput ? <p>等待工具输出</p> : null}
       {entry.truncated ? <small>输出已截断</small> : null}
     </div>
@@ -962,113 +981,172 @@ function ToolResultAttachments({
 }: {
   attachments: KernelToolImageAttachment[]
   toolCallId: string
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   const sessionKey = useContext(TimelineSessionKeyContext)
+  if (attachments.length === 0) return null
+
+  return (
+    <ul className="message-attachment-list tool inline-images" aria-label="工具图片附件">
+      {attachments.map((attachment) => (
+        <InlineImageAttachment
+          contentIndex={attachment.contentIndex}
+          identity={JSON.stringify([
+            'tool',
+            sessionKey,
+            toolCallId,
+            attachment.contentIndex,
+            attachment.mimeType,
+            attachment.byteLength
+          ])}
+          key={`tool-image:${toolCallId}:${attachment.contentIndex}`}
+          loadImage={async () => {
+            if (sessionKey === null) throw new Error('当前没有可读取的会话来源。')
+            return getRendererHost().getToolImage(
+              sessionKey,
+              toolCallId,
+              attachment.contentIndex
+            )
+          }}
+          name={attachment.name}
+          path=""
+          source="tool"
+        />
+      ))}
+    </ul>
+  )
+}
+
+type InlineImageLoadState = {
+  status: 'idle' | 'loading' | 'ready' | 'error'
+  image: KernelMessageImage | null
+  error: string | null
+}
+
+function createIdleInlineImageState(): InlineImageLoadState {
+  return { status: 'idle', image: null, error: null }
+}
+
+function InlineImageAttachment({
+  contentIndex,
+  identity,
+  loadImage,
+  name,
+  path,
+  source
+}: {
+  contentIndex?: number
+  identity: string
+  loadImage: () => Promise<KernelMessageImage>
+  name: string
+  path: string
+  source: 'message' | 'tool'
+}): React.JSX.Element {
   const titleId = useId()
-  const attachmentIdentity = attachments
-    .map((attachment) => `${attachment.contentIndex}:${attachment.mimeType}:${attachment.byteLength}`)
-    .join('|')
-  const requestSequenceRef = useRef(0)
-  const [viewer, setViewer] = useState<{
-    request: ToolImageRequestIdentity
-    name: string
-    status: 'loading' | 'ready' | 'error'
-    image: KernelMessageImage | null
-    error: string | null
-  } | null>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const dialogRef = useRef<HTMLElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const requestSequenceRef = useRef(0)
+  const loadStatusRef = useRef<InlineImageLoadState['status']>('idle')
+  const loadImageRef = useRef(loadImage)
+  const [imageState, setImageState] = useState<InlineImageLoadState>(createIdleInlineImageState)
+  const [viewerOpen, setViewerOpen] = useState(false)
+  loadImageRef.current = loadImage
 
-  function closeViewer(): void {
-    requestSequenceRef.current += 1
-    setViewer(null)
+  function updateImageState(next: InlineImageLoadState): void {
+    loadStatusRef.current = next.status
+    setImageState(next)
   }
 
+  function startImageLoad(): void {
+    if (loadStatusRef.current === 'loading' || loadStatusRef.current === 'ready') return
+    const requestId = requestSequenceRef.current += 1
+    updateImageState({ status: 'loading', image: null, error: null })
+    void Promise.resolve()
+      .then(() => loadImageRef.current())
+      .then((image) => {
+        if (requestSequenceRef.current !== requestId) return
+        updateImageState({ status: 'ready', image, error: null })
+      })
+      .catch((error: unknown) => {
+        if (requestSequenceRef.current !== requestId) return
+        updateImageState({
+          status: 'error',
+          image: null,
+          error: unknownErrorMessage(error)
+        })
+      })
+  }
+
+  function closeViewer(): void {
+    setViewerOpen(false)
+  }
+
+  useLayoutEffect(() => {
+    requestSequenceRef.current += 1
+    loadStatusRef.current = 'idle'
+    setImageState(createIdleInlineImageState())
+    setViewerOpen(false)
+  }, [identity])
+
+  useEffect(() => {
+    const trigger = triggerRef.current
+    if (trigger === null) return
+    const observer = new IntersectionObserver((entries) => {
+      if (entries[0]?.isIntersecting) startImageLoad()
+    }, { rootMargin: '320px 0px' })
+    observer.observe(trigger)
+    return () => observer.disconnect()
+  }, [identity])
+
   useModalDialog({
-    open: viewer !== null,
+    open: viewerOpen,
     dialogRef,
     initialFocus: () => closeButtonRef.current,
     onDismiss: closeViewer
   })
 
-  useLayoutEffect(() => {
-    requestSequenceRef.current += 1
-    setViewer(null)
-  }, [sessionKey, toolCallId, attachmentIdentity])
-
-  async function openToolImage(contentIndex: number, name: string): Promise<void> {
-    const request: ToolImageRequestIdentity = {
-      requestId: requestSequenceRef.current += 1,
-      sessionKey,
-      toolCallId,
-      contentIndex
-    }
-    if (sessionKey === null) {
-      setViewer({
-        request,
-        name,
-        status: 'error',
-        image: null,
-        error: '当前没有可读取的会话来源。'
-      })
-      return
-    }
-    setViewer({
-      request,
-      name,
-      status: 'loading',
-      image: null,
-      error: null
-    })
-    try {
-      const image = await getRendererHost().getToolImage(sessionKey, toolCallId, contentIndex)
-      setViewer((current) => {
-        if (current === null || !sameToolImageRequest(current.request, request)) return current
-        return {
-          ...current,
-          status: 'ready',
-          image,
-          error: null
-        }
-      })
-    } catch (error) {
-      setViewer((current) => {
-        if (current === null || !sameToolImageRequest(current.request, request)) return current
-        return {
-          ...current,
-          status: 'error',
-          image: null,
-          error: unknownErrorMessage(error)
-        }
-      })
-    }
-  }
-
   return (
-    <>
-      <ul className="message-attachment-list tool" aria-label="工具图片附件">
-        {attachments.map((attachment) => (
-          <li
-            className="message-attachment image"
-            key={`tool-image:${toolCallId}:${attachment.contentIndex}`}
-            data-tool-image-content-index={attachment.contentIndex}
-          >
-            <button
-              className="message-attachment-open"
-              type="button"
-              aria-label={`查看工具图片 ${attachment.name}`}
-              data-tool-image-open="true"
-              onClick={() => {
-                void openToolImage(attachment.contentIndex, attachment.name)
-              }}
+    <li
+      className="message-attachment image inline-image"
+      data-tooltip={path || undefined}
+      data-tooltip-variant={path ? 'mono' : undefined}
+      data-tool-image-content-index={source === 'tool' ? contentIndex : undefined}
+    >
+      <button
+        ref={triggerRef}
+        className="message-inline-image-open"
+        type="button"
+        aria-label={`查看图片 ${name}`}
+        aria-busy={imageState.status === 'loading' ? true : undefined}
+        data-inline-image-open="true"
+        data-message-image-open={source === 'message' ? 'true' : undefined}
+        data-tool-image-open={source === 'tool' ? 'true' : undefined}
+        onClick={() => {
+          setViewerOpen(true)
+          startImageLoad()
+        }}
+      >
+        <span className="message-inline-image-frame">
+          {imageState.status === 'ready' && imageState.image !== null ? (
+            <img
+              className="message-inline-image-preview"
+              src={`data:${imageState.image.mimeType};base64,${imageState.image.data}`}
+              alt=""
+            />
+          ) : (
+            <span
+              className={`message-inline-image-state ${imageState.status}`}
+              role={imageState.status === 'error'
+                ? 'alert'
+                : imageState.status === 'loading' ? 'status' : undefined}
             >
-              <span className="message-attachment-kind">图片</span>
-              <span className="message-attachment-name">{attachment.name}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
-      {viewer === null ? null : createPortal(
+              {imageState.status === 'error' ? '图片加载失败，点击重试' : '正在读取图片…'}
+            </span>
+          )}
+        </span>
+        <span className="message-inline-image-caption">{name}</span>
+      </button>
+      {!viewerOpen ? null : createPortal(
         <div
           className="message-image-viewer-backdrop"
           onPointerDown={(event) => {
@@ -1081,13 +1159,21 @@ function ToolResultAttachments({
             role="dialog"
             aria-modal="true"
             aria-labelledby={titleId}
-            aria-busy={viewer.status === 'loading' ? true : undefined}
-            data-tool-image-viewer="true"
+            aria-busy={imageState.status === 'loading' || imageState.status === 'idle'
+              ? true
+              : undefined}
+            data-message-image-viewer={source === 'message' ? 'true' : undefined}
+            data-tool-image-viewer={source === 'tool' ? 'true' : undefined}
             tabIndex={-1}
           >
             <header className="message-image-viewer-header">
               <div className="message-image-viewer-copy">
-                <h2 id={titleId}>{viewer.name}</h2>
+                <h2 id={titleId}>{name}</h2>
+                {path ? (
+                  <p className="message-image-viewer-path" data-tooltip={path} data-tooltip-variant="mono">
+                    {path}
+                  </p>
+                ) : null}
               </div>
               <IconButton
                 ref={closeButtonRef}
@@ -1098,17 +1184,17 @@ function ToolResultAttachments({
               />
             </header>
             <div className="message-image-viewer-body">
-              {viewer.status === 'loading' ? (
+              {imageState.status === 'loading' || imageState.status === 'idle' ? (
                 <p className="message-image-viewer-state" role="status">正在读取图片…</p>
-              ) : viewer.status === 'error' ? (
+              ) : imageState.status === 'error' ? (
                 <p className="message-image-viewer-state error" role="alert">
-                  {viewer.error ?? '无法打开图片。'}
+                  {imageState.error ?? '无法打开图片。'}
                 </p>
-              ) : viewer.image === null ? null : (
+              ) : imageState.image === null ? null : (
                 <img
                   className="message-image-viewer-image"
-                  src={`data:${viewer.image.mimeType};base64,${viewer.image.data}`}
-                  alt={viewer.name}
+                  src={`data:${imageState.image.mimeType};base64,${imageState.image.data}`}
+                  alt={name}
                 />
               )}
             </div>
@@ -1116,7 +1202,7 @@ function ToolResultAttachments({
         </div>,
         document.body
       )}
-    </>
+    </li>
   )
 }
 
@@ -1302,160 +1388,41 @@ export function MessageAttachments({
   label?: string
 }): React.JSX.Element | null {
   const sessionKey = useContext(TimelineSessionKeyContext)
-  const [viewer, setViewer] = useState<{
-    attachmentIndex: number
-    name: string
-    path: string
-    status: 'loading' | 'ready' | 'error'
-    image: KernelMessageImage | null
-    error: string | null
-  } | null>(null)
-  const dialogRef = useRef<HTMLElement>(null)
-  const closeButtonRef = useRef<HTMLButtonElement>(null)
-
-  function closeViewer(): void {
-    setViewer(null)
-  }
-
-  useModalDialog({
-    open: viewer !== null && attachments.length > 0,
-    dialogRef,
-    initialFocus: () => closeButtonRef.current,
-    onDismiss: closeViewer
-  })
-
   if (attachments.length === 0) return null
 
-  async function openImageAttachment(attachmentIndex: number): Promise<void> {
-    const attachment = attachments[attachmentIndex]
-    if (attachment === undefined || attachment.type !== 'image') return
-    if (sessionKey === null) {
-      setViewer({
-        attachmentIndex,
-        name: attachment.name,
-        path: attachment.path,
-        status: 'error',
-        image: null,
-        error: '当前没有可读取的会话来源。'
-      })
-      return
-    }
-    setViewer({
-      attachmentIndex,
-      name: attachment.name,
-      path: attachment.path,
-      status: 'loading',
-      image: null,
-      error: null
-    })
-    try {
-      const image = await getRendererHost().getMessageImage(sessionKey, messageId, attachmentIndex)
-      setViewer((current) => {
-        if (current === null || current.attachmentIndex !== attachmentIndex) return current
-        return {
-          ...current,
-          status: 'ready',
-          image,
-          error: null
-        }
-      })
-    } catch (error) {
-      setViewer((current) => {
-        if (current === null || current.attachmentIndex !== attachmentIndex) return current
-        return {
-          ...current,
-          status: 'error',
-          image: null,
-          error: unknownErrorMessage(error)
-        }
-      })
-    }
-  }
-
   return (
-    <>
-      <ul className={`message-attachment-list ${role}`} aria-label={label}>
-        {attachments.map((attachment, index) => (
-          <li
-            className={`message-attachment ${attachment.type}`}
-            data-tooltip={attachment.path || undefined}
-            data-tooltip-variant={attachment.path ? 'mono' : undefined}
-            key={`${attachment.type}:${attachment.path}:${index}`}
-          >
-            {attachment.type === 'image' ? (
-              <button
-                className="message-attachment-open"
-                type="button"
-                aria-label={`查看图片 ${attachment.name}`}
-                onClick={() => {
-                  void openImageAttachment(index)
-                }}
-              >
-                <span className="message-attachment-kind">图片</span>
-                <span className="message-attachment-name">{attachment.name}</span>
-              </button>
-            ) : (
-              <>
-                <span className="message-attachment-kind">文件</span>
-                <span className="message-attachment-name">{attachment.name}</span>
-              </>
-            )}
-          </li>
-        ))}
-      </ul>
-      {viewer === null ? null : createPortal(
-        <div
-          className="message-image-viewer-backdrop"
-          onPointerDown={(event) => {
-            if (event.target === event.currentTarget) closeViewer()
+    <ul className={`message-attachment-list ${role}`} aria-label={label}>
+      {attachments.map((attachment, index) => attachment.type === 'image' ? (
+        <InlineImageAttachment
+          identity={JSON.stringify([
+            'message',
+            sessionKey,
+            messageId,
+            index,
+            attachment.name,
+            attachment.path
+          ])}
+          key={`${attachment.type}:${attachment.path}:${index}`}
+          loadImage={async () => {
+            if (sessionKey === null) throw new Error('当前没有可读取的会话来源。')
+            return getRendererHost().getMessageImage(sessionKey, messageId, index)
           }}
+          name={attachment.name}
+          path={attachment.path}
+          source="message"
+        />
+      ) : (
+        <li
+          className="message-attachment file"
+          data-tooltip={attachment.path || undefined}
+          data-tooltip-variant={attachment.path ? 'mono' : undefined}
+          key={`${attachment.type}:${attachment.path}:${index}`}
         >
-          <section
-            ref={dialogRef}
-            className="message-image-viewer"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="message-image-viewer-title"
-            aria-busy={viewer.status === 'loading' ? true : undefined}
-            tabIndex={-1}
-          >
-            <header className="message-image-viewer-header">
-              <div className="message-image-viewer-copy">
-                <h2 id="message-image-viewer-title">{viewer.name}</h2>
-                {viewer.path ? (
-                  <p className="message-image-viewer-path" data-tooltip={viewer.path} data-tooltip-variant="mono">
-                    {viewer.path}
-                  </p>
-                ) : null}
-              </div>
-              <IconButton
-                ref={closeButtonRef}
-                className="message-image-viewer-close"
-                icon="close"
-                label="关闭图像预览"
-                onClick={closeViewer}
-              />
-            </header>
-            <div className="message-image-viewer-body">
-              {viewer.status === 'loading' ? (
-                <p className="message-image-viewer-state" role="status">正在读取图片…</p>
-              ) : viewer.status === 'error' ? (
-                <p className="message-image-viewer-state error" role="alert">
-                  {viewer.error ?? '无法打开图片。'}
-                </p>
-              ) : viewer.image === null ? null : (
-                <img
-                  className="message-image-viewer-image"
-                  src={`data:${viewer.image.mimeType};base64,${viewer.image.data}`}
-                  alt={viewer.name}
-                />
-              )}
-            </div>
-          </section>
-        </div>,
-        document.body
-      )}
-    </>
+          <span className="message-attachment-kind">文件</span>
+          <span className="message-attachment-name">{attachment.name}</span>
+        </li>
+      ))}
+    </ul>
   )
 }
 

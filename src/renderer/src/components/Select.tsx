@@ -6,9 +6,13 @@ import { useViewportPopoverPosition } from './useViewportPopoverPosition'
 import './selection-control.css'
 import './select.css'
 
+export type SelectOptionDetailTone = 'default' | 'active' | 'attention' | 'error'
+
 export type SelectOption = {
   value: string
   label: string
+  detail?: string
+  detailTone?: SelectOptionDetailTone
   disabled?: boolean
 }
 
@@ -153,7 +157,17 @@ export function Select({
         }}
       >
         <span className="select-control-value">
-          {selectedOption?.label ?? '请选择'}
+          <span className="select-control-value-label">
+            {selectedOption?.label ?? '请选择'}
+          </span>
+          {selectedOption?.detail === undefined ? null : (
+            <span
+              className="select-control-value-detail"
+              data-tone={selectedOption.detailTone ?? 'default'}
+            >
+              {selectedOption.detail}
+            </span>
+          )}
         </span>
         <span className="select-control-chevron" aria-hidden="true">
           <Icon name="chevron-down" size="sm" />
@@ -202,7 +216,17 @@ export function Select({
                     }}
                     onClick={() => selectValue(option.value)}
                   >
-                    <span>{option.label}</span>
+                    <span className="select-control-option-content">
+                      <span className="select-control-option-label">{option.label}</span>
+                      {option.detail === undefined ? null : (
+                        <span
+                          className="select-control-option-detail"
+                          data-tone={option.detailTone ?? 'default'}
+                        >
+                          {option.detail}
+                        </span>
+                      )}
+                    </span>
                     <span className="select-control-check" aria-hidden="true">
                       {selected ? <Icon name="check" size="sm" /> : null}
                     </span>

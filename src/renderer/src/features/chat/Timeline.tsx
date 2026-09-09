@@ -57,6 +57,7 @@ type TimelineProps = {
   runtimeStatus: RuntimeStatus
   loading: boolean
   compactionActive: boolean
+  navigateToLatestPromptOnMount: boolean
   showPromptNavigation: boolean
   toolDisplayDensity: ToolDisplayDensity
   sessionKey: string | null
@@ -72,7 +73,7 @@ type TimelineProps = {
   onCopyAnswer: (text: string) => Promise<void>
   onExportSession: () => Promise<void>
   onLoadEarlierConversation: () => Promise<void>
-  onForkTurn: (userText: string) => void
+  onForkTurn: (userText: string) => Promise<void>
   onNavigateHistoryPrompt: (messageId: string) => Promise<void>
   onSendHistoryPrompt: (message: string) => Promise<void>
   onHistoryPromptEditingChange: (editing: boolean) => void
@@ -137,6 +138,7 @@ export function Timeline({
   runtimeStatus,
   loading,
   compactionActive,
+  navigateToLatestPromptOnMount,
   showPromptNavigation,
   toolDisplayDensity,
   sessionKey,
@@ -178,6 +180,7 @@ export function Timeline({
   const activePromptTurnIdRef = useRef<string | null>(null)
   const activePromptScrollTopRef = useRef(0)
   const pendingPromptNavigationTargetRef = useRef<string | null>(null)
+  const initialPromptNavigationPendingRef = useRef(navigateToLatestPromptOnMount)
   const revealScrollHeightRef = useRef<number | null>(null)
   const observedRunRef = useRef<{ startedAt: number; turnId: string | null } | null>(null)
   const observedThinkingStartsRef = useRef(new Map<string, number>())
@@ -212,17 +215,22 @@ export function Timeline({
     const boundary = activeRunStartIndex === null
       ? entries.length
       : Math.max(0, Math.min(activeRunStartIndex, entries.length))
-    const nextActiveEntries = activeRunStartIndex === null
+    const activeRunEntries = activeRunStartIndex === null
       ? []
       : entries
           .slice(boundary)
           .filter(isTimelineEntryVisible)
-    const nextCompletedTurns = groupConversationTurns(
-      entries
-        .slice(0, boundary)
-        .filter(isTimelineEntryVisible)
-    )
-    const nextActiveTurns = groupConversationTurns(nextActiveEntries)
+    const activeRunTurns = groupConversationTurns(activeRunEntries)
+    const nextActiveTurns = activeRunTurns.slice(-1)
+    const nextActiveEntries = nextActiveTurns[0]?.entries ?? []
+    const nextCompletedTurns = [
+      ...groupConversationTurns(
+        entries
+          .slice(0, boundary)
+          .filter(isTimelineEntryVisible)
+      ),
+      ...activeRunTurns.slice(0, -1)
+    ]
     return {
       completedTurns: nextCompletedTurns,
       activeEntries: nextActiveEntries,
@@ -475,24 +483,6 @@ export function Timeline({
       scrollTail.style.height = `${requiredTailHeight}px`
     }
   }, [])
-  const stabilizeTimelineLayout = useCallback(() => {
-    const viewport = viewportRef.current
-    if (viewport === null) return
-    const viewportRect = viewport.getBoundingClientRect()
-    if (!isTimelineViewportMeasurable({
-      width: viewportRect.width,
-      height: viewportRect.height
-    })) return
-    updateScrollTail()
-    if (scrollModeRef.current === 'following') scrollToOutputEnd()
-    else restoreReadingAnchor()
-    scheduleActivePromptTurnUpdate()
-  }, [
-    restoreReadingAnchor,
-    scheduleActivePromptTurnUpdate,
-    scrollToOutputEnd,
-    updateScrollTail
-  ])
   const scrollToMountedPrompt = useCallback((turnId: string): boolean => {
     const viewport = viewportRef.current
     if (viewport === null) return false
@@ -519,16 +509,45 @@ export function Timeline({
     setScrollMode,
     setViewportScrollTop
   ])
-  const navigateToPrompt = useCallback((turnId: string) => {
-    if (scrollToMountedPrompt(turnId)) return
+  const navigateToPrompt = useCallback((turnId: string): boolean => {
+    if (scrollToMountedPrompt(turnId)) return true
     const completedIndex = completedTurns.findIndex((turn) => turn.id === turnId)
-    if (completedIndex < 0) return
+    if (completedIndex < 0) return false
     const requiredWindow = completedTurns.length - completedIndex
     pendingPromptNavigationTargetRef.current = turnId
     setCompletedTurnWindow((current) =>
       Math.max(current, Math.ceil(requiredWindow / COMPLETED_TURN_WINDOW_SIZE) * COMPLETED_TURN_WINDOW_SIZE)
     )
+    return true
   }, [completedTurns, scrollToMountedPrompt])
+  const stabilizeTimelineLayout = useCallback(() => {
+    const viewport = viewportRef.current
+    if (viewport === null) return
+    const viewportRect = viewport.getBoundingClientRect()
+    if (!isTimelineViewportMeasurable({
+      width: viewportRect.width,
+      height: viewportRect.height
+    })) return
+    updateScrollTail()
+    if (initialPromptNavigationPendingRef.current) {
+      const lastPromptTurnId = promptNavigationItems.at(-1)?.turnId
+      if (lastPromptTurnId !== undefined && navigateToPrompt(lastPromptTurnId)) {
+        if (!loading) initialPromptNavigationPendingRef.current = false
+        return
+      }
+    }
+    if (scrollModeRef.current === 'following') scrollToOutputEnd()
+    else restoreReadingAnchor()
+    scheduleActivePromptTurnUpdate()
+  }, [
+    loading,
+    navigateToPrompt,
+    promptNavigationItems,
+    restoreReadingAnchor,
+    scheduleActivePromptTurnUpdate,
+    scrollToOutputEnd,
+    updateScrollTail
+  ])
 
   useLayoutEffect(() => () => {
     if (activePromptFrameRef.current !== null) {
@@ -911,7 +930,7 @@ export function Timeline({
                             iconSize="sm"
                             label="从此轮用户消息分叉对话"
                             disabled={conversationActionBusy}
-                            onClick={() => onForkTurn(forkUserText)}
+                            onClick={() => void onForkTurn(forkUserText).catch(() => undefined)}
                           />
                         ) : null}
                         {showTurnFeedback && conversationActionStatus !== null ? (

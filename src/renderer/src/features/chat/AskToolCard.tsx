@@ -13,6 +13,7 @@ import type {
   KernelAskToolState,
   KernelToolEntry
 } from '../../../../shared/kernel-contract'
+import { Icon } from '../../components/Icon'
 import { unknownErrorMessage } from '../../unknown-error-message'
 
 export type AskToolInteraction = {
@@ -45,40 +46,57 @@ export function AskToolCard({
   interaction: AskToolInteraction | null
 }): React.JSX.Element {
   const formId = useId()
-  const questionStageRef = useRef<HTMLDivElement>(null)
-  const shouldFocusQuestionRef = useRef(false)
+  const stepPanelRef = useRef<HTMLDivElement>(null)
+  const shouldFocusStepRef = useRef(false)
   const questions = ask.questions
   const [draft, setDraft] = useState<AnswerDraft>(() => initialDraft(questions))
-  const [activeQuestionIndex, setActiveQuestionIndex] = useState(0)
+  const [activeStep, setActiveStep] = useState(0)
   const [localPending, setLocalPending] = useState<'submit' | 'cancel' | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
   const answers = useMemo(() => buildAskAnswers(questions, draft), [draft, questions])
-  const currentQuestion = questions[Math.min(activeQuestionIndex, questions.length - 1)]!
-  const currentDraft = draft[currentQuestion.id] ?? emptyQuestionDraft(currentQuestion)
-  const currentComplete = isQuestionComplete(currentQuestion, currentDraft)
-  const lastQuestion = activeQuestionIndex === questions.length - 1
+  const completedQuestions = useMemo(() => questions.map((question) => {
+    const questionDraft = draft[question.id] ?? emptyQuestionDraft(question)
+    return isQuestionComplete(question, questionDraft)
+  }), [draft, questions])
+  const answeredCount = completedQuestions.filter(Boolean).length
+  const reviewing = activeStep === questions.length
+  const currentQuestion = reviewing ? null : questions[activeStep]!
+  const currentDraft = currentQuestion === null
+    ? null
+    : draft[currentQuestion.id] ?? emptyQuestionDraft(currentQuestion)
+  const currentComplete = currentQuestion !== null && currentDraft !== null
+    ? isQuestionComplete(currentQuestion, currentDraft)
+    : false
+  const lastQuestion = activeStep === questions.length - 1
   const submitting = ask.status === 'submitting' || localPending !== null
   const canInteract = interaction?.sessionKey !== null && interaction?.sessionKey !== undefined
 
   useEffect(() => {
-    if (!shouldFocusQuestionRef.current) return
-    shouldFocusQuestionRef.current = false
-    questionStageRef.current?.querySelector<HTMLElement>('input, textarea')?.focus()
-  }, [activeQuestionIndex])
+    if (!shouldFocusStepRef.current) return
+    shouldFocusStepRef.current = false
+    const panel = stepPanelRef.current
+    const target = panel?.querySelector<HTMLElement>(
+      'input:not(:disabled), textarea:not(:disabled), button:not(:disabled)'
+    )
+    if (target !== null && target !== undefined) target.focus()
+    else panel?.focus()
+  }, [activeStep])
 
-  const moveToQuestion = (nextIndex: number): void => {
-    shouldFocusQuestionRef.current = true
-    setActiveQuestionIndex(Math.max(0, Math.min(nextIndex, questions.length - 1)))
+  const moveToStep = (nextStep: number): void => {
+    shouldFocusStepRef.current = true
+    setActiveStep(Math.max(0, Math.min(nextStep, questions.length)))
+    setLocalError(null)
   }
 
   const updateCurrentDraft = (next: QuestionDraft): void => {
+    if (currentQuestion === null) return
     setDraft((current) => ({ ...current, [currentQuestion.id]: next }))
     setLocalError(null)
   }
 
   const advance = (): void => {
-    if (!currentComplete || lastQuestion) return
-    moveToQuestion(activeQuestionIndex + 1)
+    if (!currentComplete || reviewing) return
+    moveToStep(activeStep + 1)
   }
 
   const submit = async (): Promise<void> => {
@@ -119,44 +137,83 @@ export function AskToolCard({
         <span className="ask-tool-status" role="status" aria-live="polite">
           {ask.status === 'submitting'
             ? '正在提交'
-            : `第 ${activeQuestionIndex + 1} / ${questions.length} 题`}
+            : reviewing
+              ? `已回答 ${answeredCount} / ${questions.length}`
+              : `第 ${activeStep + 1} / ${questions.length} 题 · 已回答 ${answeredCount}`}
         </span>
       </header>
 
-      <div
-        className="ask-tool-progress"
-        role="progressbar"
-        aria-label="回答进度"
-        aria-valuemin={1}
-        aria-valuemax={questions.length}
-        aria-valuenow={activeQuestionIndex + 1}
-      >
-        <span style={{ width: `${((activeQuestionIndex + 1) / questions.length) * 100}%` }} />
-      </div>
+      <nav className="ask-step-navigation" aria-label="问卷步骤">
+        <ol className="ask-step-list">
+          {questions.map((question, questionIndex) => {
+            const complete = completedQuestions[questionIndex] === true
+            const current = activeStep === questionIndex
+            return (
+              <li className="ask-step-item" key={question.id}>
+                <button
+                  aria-current={current ? 'step' : undefined}
+                  aria-label={`第 ${questionIndex + 1} 题，${complete ? '已回答' : '未回答'}：${question.prompt}`}
+                  className={`ask-step-button${current ? ' current' : ''}${complete ? ' complete' : ''}`}
+                  data-tooltip={question.prompt}
+                  disabled={submitting}
+                  type="button"
+                  onClick={() => moveToStep(questionIndex)}
+                >
+                  <span className="ask-step-number">{questionIndex + 1}</span>
+                  {complete ? <Icon name="check" size="sm" /> : null}
+                </button>
+              </li>
+            )
+          })}
+          <li className="ask-step-item ask-step-review-item">
+            <button
+              aria-current={reviewing ? 'step' : undefined}
+              aria-label={`确认回答，已完成 ${answeredCount} / ${questions.length} 题`}
+              className={`ask-step-button ask-step-review${reviewing ? ' current' : ''}`}
+              disabled={submitting}
+              type="button"
+              onClick={() => moveToStep(questions.length)}
+            >
+              确认
+            </button>
+          </li>
+        </ol>
+      </nav>
 
       <form
         aria-busy={submitting}
         className="ask-tool-form"
         onSubmit={(event) => {
           event.preventDefault()
-          if (!lastQuestion) {
+          if (!reviewing) {
             advance()
             return
           }
           void submit()
         }}
       >
-        <div className="ask-tool-question-stage" ref={questionStageRef}>
-          <AskQuestionField
-            disabled={!canInteract || submitting}
-            draft={currentDraft}
-            formId={formId}
-            question={currentQuestion}
-            onChange={updateCurrentDraft}
-            onSingleChoice={() => {
-              if (!lastQuestion) moveToQuestion(activeQuestionIndex + 1)
-            }}
-          />
+        <div
+          className="ask-tool-question-stage"
+          ref={stepPanelRef}
+          tabIndex={-1}
+        >
+          {reviewing ? (
+            <AskReviewStep
+              draft={draft}
+              formId={formId}
+              questions={questions}
+              onEdit={moveToStep}
+            />
+          ) : currentQuestion !== null && currentDraft !== null ? (
+            <AskQuestionField
+              disabled={!canInteract || submitting}
+              draft={currentDraft}
+              formId={formId}
+              question={currentQuestion}
+              onChange={updateCurrentDraft}
+              onSingleChoice={() => moveToStep(activeStep + 1)}
+            />
+          ) : null}
         </div>
 
         {ask.error !== null || localError !== null ? (
@@ -170,35 +227,38 @@ export function AskToolCard({
             <button
               className="ask-tool-cancel"
               type="button"
-              disabled={!canInteract || localPending !== null}
+              disabled={!canInteract || submitting}
               onClick={() => void cancel()}
             >
               {localPending === 'cancel' ? '正在取消…' : '取消'}
             </button>
-            {activeQuestionIndex > 0 ? (
+            {activeStep > 0 ? (
               <button
                 className="ask-tool-back"
                 type="button"
                 disabled={submitting}
-                onClick={() => {
-                  moveToQuestion(activeQuestionIndex - 1)
-                  setLocalError(null)
-                }}
+                onClick={() => moveToStep(activeStep - 1)}
               >
-                上一题
+                {reviewing ? '返回上一题' : '上一题'}
               </button>
             ) : null}
           </div>
           <button
             className="ask-tool-submit"
             type="submit"
-            disabled={!canInteract || submitting || !currentComplete || (lastQuestion && answers === null)}
+            disabled={
+              !canInteract ||
+              submitting ||
+              (reviewing ? answers === null : !currentComplete)
+            }
           >
             {ask.status === 'submitting' || localPending === 'submit'
               ? '正在提交…'
-              : lastQuestion
+              : reviewing
                 ? '提交回答'
-                : '下一题'}
+                : lastQuestion
+                  ? '检查回答'
+                  : '下一题'}
           </button>
         </footer>
       </form>
@@ -330,6 +390,86 @@ function AskQuestionField({
       </small>
     </fieldset>
   )
+}
+
+function AskReviewStep({
+  draft,
+  formId,
+  questions,
+  onEdit
+}: {
+  draft: AnswerDraft
+  formId: string
+  questions: readonly KernelAskQuestion[]
+  onEdit: (questionIndex: number) => void
+}): React.JSX.Element {
+  const missingCount = questions.reduce((count, question) => {
+    const questionDraft = draft[question.id] ?? emptyQuestionDraft(question)
+    return count + (isQuestionComplete(question, questionDraft) ? 0 : 1)
+  }, 0)
+
+  return (
+    <section className="ask-review" aria-labelledby={`${formId}-review-title`}>
+      <header className="ask-review-header">
+        <h4 id={`${formId}-review-title`}>确认回答</h4>
+        <p>提交前检查一下；点击任意问题可以返回修改。</p>
+      </header>
+      <ol className="ask-review-list">
+        {questions.map((question, questionIndex) => {
+          const questionDraft = draft[question.id] ?? emptyQuestionDraft(question)
+          const summary = summarizeAskDraft(question, questionDraft)
+          return (
+            <li className={`ask-review-item${summary === null ? ' incomplete' : ''}`} key={question.id}>
+              <div className="ask-review-copy">
+                <span>第 {questionIndex + 1} 题</span>
+                <strong>{question.prompt}</strong>
+                <p>{summary ?? '尚未回答'}</p>
+              </div>
+              <button
+                aria-label={`修改第 ${questionIndex + 1} 题：${question.prompt}`}
+                className="ask-review-edit"
+                type="button"
+                onClick={() => onEdit(questionIndex)}
+              >
+                <Icon name="edit" size="sm" />
+                修改
+              </button>
+            </li>
+          )
+        })}
+      </ol>
+      <p
+        className={`ask-review-readiness${missingCount > 0 ? ' incomplete' : ''}`}
+        role="status"
+      >
+        {missingCount > 0
+          ? `还有 ${missingCount} 题未回答，完成后才能提交。`
+          : '所有问题均已回答，可以提交。'}
+      </p>
+    </section>
+  )
+}
+
+export function summarizeAskDraft(
+  question: KernelAskQuestion,
+  draft: QuestionDraft
+): string | null {
+  if (!isQuestionComplete(question, draft)) return null
+  if (question.type === 'text') {
+    return typeof draft.value === 'string' ? draft.value.trim() : null
+  }
+  if (question.type === 'single') {
+    if (draft.customSelected) return draft.customValue.trim()
+    if (typeof draft.value !== 'string') return null
+    return question.options.find((option) => option.value === draft.value)?.label ?? null
+  }
+  if (!Array.isArray(draft.value)) return null
+  const selectedValues = new Set(draft.value)
+  const labels = question.options
+    .filter((option) => selectedValues.has(option.value))
+    .map((option) => option.label)
+  if (draft.customSelected) labels.push(draft.customValue.trim())
+  return labels.length > 0 ? labels.join('、') : null
 }
 
 function emptyQuestionDraft(question: KernelAskQuestion): QuestionDraft {

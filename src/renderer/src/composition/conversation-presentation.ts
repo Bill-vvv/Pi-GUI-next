@@ -17,5 +17,9 @@ export function timelineConversation(
   ) {
     throw new Error('Conversation active run boundary is outside the loaded window.')
   }
-  return { entries: conversation.entries, activeRunStartIndex }
+  return {
+    entries: conversation.entries,
+    startIndex: conversation.startIndex,
+    activeRunStartIndex
+  }
 }

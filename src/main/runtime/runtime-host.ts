@@ -36,7 +36,7 @@ export type RuntimeCommand =
   | { type: 'get_available_models' }
   | { type: 'compact'; customInstructions?: string }
   | { type: 'set_session_name'; name: string }
-  | { type: 'invoke_extension_command'; name: string; args?: string }
+  | { type: 'invoke_extension_command'; name: string; args?: string; invocationId?: string }
   | { type: 'subscribe_extension_events'; channels: string[] }
   | { type: 'extension_ui_response'; id: string; value: string }
   | { type: 'extension_ui_response'; id: string; cancelled: true }

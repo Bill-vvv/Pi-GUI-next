@@ -119,19 +119,22 @@ export function ShortcutSettingsPanel({
         </button>
       </div>
 
-      <section className="settings-group" aria-labelledby="shortcut-settings-heading">
+      <section
+        className="settings-group settings-group-inline settings-prefs"
+        aria-labelledby="shortcut-settings-heading"
+      >
         <h3 id="shortcut-settings-heading" className="settings-group-heading">应用快捷键</h3>
-        <div className="settings-group-card shortcut-settings-list">
+        <div className="settings-group-card">
           {SHORTCUT_ACTION_IDS.map((actionId) => {
             const recording = recordingActionId === actionId
             const binding = settings[actionId]
             return (
-              <div className="shortcut-settings-row" key={actionId}>
-                <div className="shortcut-settings-copy">
+              <div className="settings-row" key={actionId}>
+                <div className="settings-row-copy">
                   <h4>{SHORTCUT_ACTION_LABELS[actionId]}</h4>
-                  <span>{binding ?? '未绑定'}</span>
+                  {binding === null ? <p>未绑定</p> : <p className="shortcut-binding">{binding}</p>}
                 </div>
-                <div className="shortcut-settings-actions">
+                <div className="settings-row-control shortcut-settings-actions">
                   <button
                     className={recording ? 'recording' : ''}
                     type="button"
@@ -142,7 +145,7 @@ export function ShortcutSettingsPanel({
                       setRecordingActionId(recording ? null : actionId)
                     }}
                   >
-                    {recording ? '请按下一组快捷键…' : binding ?? '录入'}
+                    {recording ? '请按下一组快捷键…' : binding === null ? '录入' : '更改'}
                   </button>
                   <button
                     className="shortcut-clear"

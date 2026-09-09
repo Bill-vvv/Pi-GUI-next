@@ -215,33 +215,54 @@
   min-width: 30px;
   align-items: center;
   justify-content: flex-end;
+  gap: 0.05rem;
   margin-right: 0.25rem;
 }
 
-.workspace-navigator-group-add {
+.workspace-navigator-group-add,
+.workspace-navigator-group-query-action {
   width: 30px;
   min-width: 30px;
   height: 30px;
   color: var(--color-text-soft);
-}
-
-.workspace-navigator-group[data-kind='project'] .workspace-navigator-group-add {
-  color: var(--color-text-primary);
   opacity: 0;
   pointer-events: none;
-  transition: opacity var(--motion-duration-fast) var(--motion-easing-standard), border-color var(--motion-duration-control) var(--motion-easing-standard), background var(--motion-duration-control) var(--motion-easing-standard);
+  transition: opacity var(--motion-duration-fast) var(--motion-easing-standard), border-color var(--motion-duration-control) var(--motion-easing-standard), background var(--motion-duration-control) var(--motion-easing-standard), color var(--motion-duration-control) var(--motion-easing-standard);
 }
 
-.workspace-navigator-group[data-kind='project'] .workspace-navigator-group-action-slot:hover .workspace-navigator-group-add:not(:disabled),
-.workspace-navigator-group[data-kind='project'] .workspace-navigator-group-action-slot:focus-within .workspace-navigator-group-add:not(:disabled),
-.workspace-navigator-group[data-kind='project'] .workspace-navigator-group-add:focus-visible:not(:disabled) {
+.workspace-navigator-group-add {
+  color: var(--color-text-primary);
+}
+
+.workspace-navigator-group-header:hover .workspace-navigator-group-add:not(:disabled),
+.workspace-navigator-group-header:focus-within .workspace-navigator-group-add:not(:disabled),
+.workspace-navigator-group-add:focus-visible:not(:disabled),
+.workspace-navigator-group-header:hover .workspace-navigator-group-query-action,
+.workspace-navigator-group-header:focus-within .workspace-navigator-group-query-action,
+.workspace-navigator-group-query-action:focus-visible,
+.workspace-navigator-group-query-action[data-query-active='true'],
+.workspace-navigator-group-query-action.active,
+.workspace-navigator-group-query-action.open {
   opacity: 1;
   pointer-events: auto;
 }
 
-.workspace-navigator-group[data-kind='project'] .workspace-navigator-group-add:disabled {
+.workspace-navigator-group-add:disabled {
   opacity: 0;
   pointer-events: none;
+}
+
+.workspace-navigator-group-query-action.active,
+.workspace-navigator-group-query-action.open {
+  color: var(--color-text-primary);
+  background: var(--color-surface-subtle-strong);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-navigator-group-add,
+  .workspace-navigator-group-query-action {
+    transition: none;
+  }
 }
 
 .navigator-busy-count {

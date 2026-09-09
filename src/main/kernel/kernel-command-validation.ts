@@ -229,6 +229,16 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
       isAskIdentity(value.toolCallId) &&
       Object.keys(value).length === 3
   }
+  if (value.type === 'kernel.respond-extension-dialog') {
+    return isExtensionDialogOwner(value) &&
+      typeof value.value === 'string' &&
+      value.value.length <= 16_000 &&
+      !value.value.includes('\0') &&
+      Object.keys(value).length === 7
+  }
+  if (value.type === 'kernel.cancel-extension-dialog') {
+    return isExtensionDialogOwner(value) && Object.keys(value).length === 6
+  }
   if (value.type === 'kernel.logout-provider') {
     return isProviderId(value.providerId) && Object.keys(value).length === 2
   }
@@ -327,6 +337,16 @@ function isSessionPreviewRequestId(value: unknown): value is string {
     value.length > 0 &&
     value.length <= 128 &&
     /^[A-Za-z0-9._:-]+$/u.test(value)
+}
+
+function isExtensionDialogOwner(value: Record<string, unknown>): boolean {
+  return isBoundedIdentity(value.projectKey, 4_096) &&
+    isAbsolute(value.projectKey) &&
+    isBoundedIdentity(value.sessionKey, 4_096) &&
+    isAbsolute(value.sessionKey) &&
+    isBoundedIdentity(value.sessionId, 256) &&
+    isBoundedIdentity(value.requestId, 256) &&
+    isBoundedIdentity(value.commandInvocationId, 256)
 }
 
 function isAskIdentity(value: unknown): value is string {

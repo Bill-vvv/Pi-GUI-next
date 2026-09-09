@@ -110,14 +110,14 @@ export function InstalledPackages({
           <div className="settings-pi-dev-empty" role="status">尚未安装用户级 Package。</div>
         ) : null}
         {packages === null || packages.length === 0 ? null : (
-          <div className="settings-package-list">
+          <div className="settings-resource-list">
             {packages.map((pkg) => (
-              <article className="settings-package-item" key={pkg.source}>
-                <div className="settings-package-copy">
-                  <code>{pkg.source}</code>
-                  {pkg.filtered ? <span>部分资源已配置</span> : null}
+              <article className="settings-resource-row" key={pkg.source}>
+                <div className="settings-resource-copy">
+                  <h3><code>{pkg.source}</code></h3>
+                  {pkg.filtered ? <p>部分资源已配置</p> : null}
                 </div>
-                <div className="settings-package-actions">
+                <div className="settings-resource-actions">
                   <button
                     type="button"
                     className="settings-link-button"

@@ -12,6 +12,7 @@ export type IconName =
   | 'close'
   | 'collapse-all'
   | 'copy'
+  | 'credentials'
   | 'edit'
   | 'enter'
   | 'export'
@@ -24,6 +25,8 @@ export type IconName =
   | 'right-sidebar-close'
   | 'right-sidebar-open'
   | 'loader'
+  | 'search'
+  | 'filter'
   | 'messages'
   | 'model'
   | 'packages'
@@ -33,9 +36,9 @@ export type IconName =
   | 'question'
   | 'undo'
   | 'unread'
-  | 'preferences'
   | 'remote'
   | 'settings'
+  | 'shortcuts'
   | 'skills'
   | 'stop'
   | 'subagents'
@@ -145,6 +148,13 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
           <path d="M16 8V6.25A2.25 2.25 0 0 0 13.75 4h-7.5A2.25 2.25 0 0 0 4 6.25v7.5A2.25 2.25 0 0 0 6.25 16H8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
         </svg>
       )
+    case 'credentials':
+      return (
+        <svg {...common}>
+          <circle cx="8.25" cy="12" r="3.35" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M11.5 12H20M17.35 12v2.45M20 12v2.45" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      )
     case 'edit':
       return (
         <svg {...common}>
@@ -234,6 +244,19 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
           <path d="M20 12a8 8 0 1 1-2.34-5.66" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
         </svg>
       )
+    case 'search':
+      return (
+        <svg {...common}>
+          <circle cx="11" cy="11" r="5.75" stroke="currentColor" strokeWidth="1.8" />
+          <path d="m15.5 15.5 4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      )
+    case 'filter':
+      return (
+        <svg {...common}>
+          <path d="M4.5 6.5h15l-5.5 6.4V18l-4 2v-7.1L4.5 6.5Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+        </svg>
+      )
     case 'messages':
       return (
         <svg {...common}>
@@ -297,14 +320,6 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
           <circle cx="16.75" cy="7.25" r="2.75" fill="currentColor" stroke="var(--color-surface-popover)" strokeWidth="1.5" />
         </svg>
       )
-    case 'preferences':
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.8" />
-          <circle cx="12" cy="9" r="2.4" stroke="currentColor" strokeWidth="1.8" />
-          <path d="M6.8 17c.75-2.45 2.5-3.7 5.2-3.7s4.45 1.25 5.2 3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        </svg>
-      )
     case 'remote':
       return (
         <svg {...common}>
@@ -320,6 +335,13 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
           <circle cx="11.75" cy="7" r="2" stroke="currentColor" strokeWidth="1.8" />
           <circle cx="14.75" cy="12" r="2" stroke="currentColor" strokeWidth="1.8" />
           <circle cx="9.25" cy="17" r="2" stroke="currentColor" strokeWidth="1.8" />
+        </svg>
+      )
+    case 'shortcuts':
+      return (
+        <svg {...common}>
+          <rect x="3.5" y="6.25" width="17" height="11.5" rx="2.2" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M7 10h.01M10.5 10h.01M14 10h.01M17.25 10h.01M8.5 13.75h7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
         </svg>
       )
     case 'skills':

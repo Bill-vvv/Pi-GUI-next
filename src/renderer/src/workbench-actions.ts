@@ -61,7 +61,6 @@ export type WorkbenchSettingsActionSection =
   | 'models'
   | 'extensions'
   | 'subagent'
-  | 'preferences'
 
 export type WorkbenchActionErrorOwner =
   | 'local'
@@ -146,7 +145,7 @@ const WORKBENCH_ACTION_PRESENTATION = {
   'set-openai-fast-mode': TIMELINE,
   'set-general': { ...HEADER, errorOwner: 'general' },
   'set-appearance': { ...HEADER, errorOwner: 'appearance' },
-  'set-session-naming': { ...HEADER, errorOwner: 'preferences' },
+  'set-session-naming': { ...HEADER, errorOwner: 'general' },
   'set-subagent': { ...HEADER, errorOwner: 'subagent' },
   'set-subagent-enabled': { ...HEADER, errorOwner: 'subagent' },
   'set-magic-context-enabled': { ...HEADER, errorOwner: 'extensions' },

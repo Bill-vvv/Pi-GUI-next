@@ -102,6 +102,25 @@ export async function dispatchTerminalKernelCommand(
     case 'kernel.cancel-ask':
       await kernel.cancelAsk(command.sessionKey, command.toolCallId)
       return kernel.acknowledge()
+    case 'kernel.respond-extension-dialog':
+      await kernel.respondExtensionDialog(
+        command.projectKey,
+        command.sessionKey,
+        command.sessionId,
+        command.requestId,
+        command.commandInvocationId,
+        command.value
+      )
+      return kernel.acknowledge()
+    case 'kernel.cancel-extension-dialog':
+      await kernel.cancelExtensionDialog(
+        command.projectKey,
+        command.sessionKey,
+        command.sessionId,
+        command.requestId,
+        command.commandInvocationId
+      )
+      return kernel.acknowledge()
     case 'kernel.prompt':
       await kernel.prompt(command.message, command.attachments, command.expectedSessionKey)
       return kernel.acknowledge()

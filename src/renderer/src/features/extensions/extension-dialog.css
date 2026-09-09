@@ -1,0 +1,171 @@
+.extension-dialog-backdrop {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  overflow: auto;
+  place-items: center;
+  padding: 1rem;
+  background: color-mix(in srgb, var(--color-bg-app) 72%, transparent);
+  pointer-events: auto;
+}
+
+.extension-dialog {
+  width: min(36rem, 100%);
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+  border: 1px solid var(--color-border-panel);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface-popover);
+  box-shadow: var(--shadow-popover);
+  color: var(--color-text-primary);
+  padding: 1.25rem;
+}
+
+.extension-dialog-header > span {
+  display: block;
+  color: var(--color-text-muted);
+  font-family: var(--font-code);
+  font-size: var(--text-caption);
+  line-height: var(--line-caption);
+}
+
+.extension-dialog-header h2 {
+  margin: 0.4rem 0 0;
+  font-family: var(--font-display);
+  font-size: var(--text-section-title);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-heading);
+}
+
+.extension-dialog-header p {
+  margin: 0.65rem 0 0;
+  white-space: pre-wrap;
+  color: var(--color-text-body);
+  font-size: var(--text-body-sm);
+  line-height: var(--line-body-sm);
+}
+
+.extension-dialog-field {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 1rem;
+}
+
+.extension-dialog-field > span {
+  color: var(--color-text-soft);
+  font-size: var(--text-meta);
+  line-height: var(--line-meta);
+}
+
+.extension-dialog-field select,
+.extension-dialog-field input,
+.extension-dialog-field textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-input);
+  color: var(--color-text-primary);
+  font-size: var(--text-control);
+  line-height: var(--line-control);
+}
+
+.extension-dialog-field select,
+.extension-dialog-field input {
+  min-height: 2.35rem;
+  padding: 0.45rem 0.65rem;
+}
+
+.extension-dialog-field textarea {
+  min-height: 10rem;
+  resize: vertical;
+  padding: 0.65rem;
+  font-family: var(--font-code);
+  line-height: var(--line-code);
+}
+
+.extension-dialog-field select:focus-visible,
+.extension-dialog-field input:focus-visible,
+.extension-dialog-field textarea:focus-visible,
+.extension-dialog-actions button:focus-visible {
+  outline: 2px solid var(--color-focus-outline);
+  outline-offset: 2px;
+}
+
+.extension-dialog-error {
+  margin: 1rem 0 0;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--color-error-border);
+  border-radius: var(--radius-control);
+  background: var(--color-error-bg-subtle);
+  color: var(--color-error-text);
+  font-size: var(--text-meta);
+  line-height: var(--line-meta);
+}
+
+.extension-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+.extension-dialog-actions button {
+  min-width: 5.5rem;
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: var(--text-control);
+  line-height: var(--line-control);
+  transition:
+    border-color var(--motion-duration-control) var(--motion-easing-standard),
+    background var(--motion-duration-control) var(--motion-easing-standard),
+    color var(--motion-duration-control) var(--motion-easing-standard);
+}
+
+.extension-dialog-actions button:hover:not(:disabled) {
+  border-color: var(--color-border-hover);
+  background: var(--color-surface-hover);
+}
+
+.extension-dialog-actions .extension-dialog-primary {
+  border-color: var(--color-accent-primary);
+  background: color-mix(in srgb, var(--color-accent-primary) 14%, var(--color-surface));
+  color: var(--color-text-primary);
+}
+
+.extension-dialog-actions button:disabled,
+.extension-dialog-field select:disabled,
+.extension-dialog-field input:disabled,
+.extension-dialog-field textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+@media (max-width: 32rem) {
+  .extension-dialog-backdrop {
+    align-items: end;
+    padding: 0.75rem;
+  }
+
+  .extension-dialog {
+    max-height: calc(100vh - 1.5rem);
+    padding: 1rem;
+  }
+
+  .extension-dialog-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .extension-dialog-actions button {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .extension-dialog-actions button {
+    transition-duration: 0.01ms;
+  }
+}

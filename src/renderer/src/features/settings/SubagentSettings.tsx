@@ -610,9 +610,9 @@ export function SubagentSettings({
         <h2>Subagent</h2>
         <span className="settings-subagent-status" data-state={packageState}>
           {packageState === 'enabled'
-            ? '拓展已开启'
+            ? '已安装并开启'
             : packageState === 'disabled'
-              ? '拓展已关闭'
+              ? '已安装，未开启'
               : packageState === 'not-installed'
                 ? '尚未安装'
                 : packageState === 'loading'

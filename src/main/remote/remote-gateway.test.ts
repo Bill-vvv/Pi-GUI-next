@@ -53,6 +53,7 @@ async function withGateway(
     now?: () => number
     randomDeviceCredential?: () => string
     randomPairingCode?: () => string
+    port?: number
     deviceStorePath?: string
     existingDeviceStore?: RemoteDeviceStore
   },
@@ -67,7 +68,7 @@ async function withGateway(
 ): Promise<void> {
   const staticRoot = await mkdtemp(join(tmpdir(), 'pi-gui-remote-static-'))
   const storeDir = await mkdtemp(join(tmpdir(), 'pi-gui-remote-store-'))
-  const port = await listenPort()
+  const port = handlers.port ?? await listenPort()
   const deviceStorePath = handlers.deviceStorePath ?? join(storeDir, 'remote.token.device')
   const config: RemoteEnabledConfig = {
     enabled: true,
@@ -105,7 +106,7 @@ async function withGateway(
   })
   try {
     await run({
-      baseUrl: `http://127.0.0.1:${port}`,
+      baseUrl: `http://127.0.0.1:${gateway.port}`,
       config,
       gateway,
       staticRoot,
@@ -208,6 +209,13 @@ async function pair(
   assert.match(header, /Expires=/i)
   return cookie
 }
+
+test('gateway reports the actual ephemeral port when configured with port zero', async () => {
+  await withGateway({ port: 0 }, async ({ gateway }) => {
+    assert.ok(gateway.port > 0)
+    assert.ok(gateway.port <= 65_535)
+  })
+})
 
 test('normalizePeerAddress strips IPv4-mapped IPv6 prefixes', () => {
   assert.equal(normalizePeerAddress('::ffff:192.168.6.1'), '192.168.6.1')

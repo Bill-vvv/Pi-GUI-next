@@ -3,8 +3,10 @@ import test from 'node:test'
 
 import type {
   KernelConversationEntry,
+  KernelConversationPage,
   KernelConversationState,
   KernelMutationAck,
+  KernelSessionPreviewPageRequest,
   KernelSessionPreview,
   KernelState
 } from '../../../shared/kernel-contract.ts'
@@ -32,6 +34,14 @@ test('a completed runtime target absorbs same-target requests queued while it ra
 
   assert.equal(nextDesiredRuntimeEnsureAfterCompletion(newTarget, newTarget), null)
   assert.equal(nextDesiredRuntimeEnsureAfterCompletion(sessionTarget, sessionTarget), null)
+  assert.equal(
+    nextDesiredRuntimeEnsureAfterCompletion(sessionTarget, sessionTarget, false, true),
+    sessionTarget
+  )
+  assert.equal(
+    nextDesiredRuntimeEnsureAfterCompletion(sessionTarget, sessionTarget, true, false),
+    null
+  )
   assert.equal(
     runtimeEnsureTargetsEqual(
       sessionTarget,
@@ -147,7 +157,7 @@ test('a Session selection publishes its target before deferred outgoing cache wo
   await selecting
 })
 
-test('rapid A to B to C browsing starts preview and activation only for C', async () => {
+test('rapid A to B to C browsing starts preview only for C', async () => {
   const harness = createHarness(kernelState())
   const selectingA = harness.controller.select(SESSION_A)
   const rejectedA = assert.rejects(selectingA, /Session activation superseded/)
@@ -164,7 +174,7 @@ test('rapid A to B to C browsing starts preview and activation only for C', asyn
   await selectingC
 
   assert.deepEqual(harness.previewCalls, [SESSION_C])
-  assert.deepEqual(harness.activateCalls, [SESSION_C])
+  assert.deepEqual(harness.activateCalls, [])
 })
 
 test('ready and running historical Sessions activate without browse settle', async () => {
@@ -182,7 +192,7 @@ test('ready and running historical Sessions activate without browse settle', asy
   }
 })
 
-test('stopped and crashed historical Sessions still wait for browse settle', async () => {
+test('stopped and crashed historical Sessions wait for preview without activation', async () => {
   for (const runtimeStatus of ['stopped', 'crashed'] as const) {
     const harness = createHarness(kernelState({
       activeSessionKey: SESSION_A,
@@ -197,7 +207,7 @@ test('stopped and crashed historical Sessions still wait for browse settle', asy
     await selecting
 
     assert.deepEqual(harness.previewCalls, [SESSION_B])
-    assert.deepEqual(harness.activateCalls, [SESSION_B])
+    assert.deepEqual(harness.activateCalls, [])
   }
 })
 
@@ -227,7 +237,7 @@ test('an immediate force commit supersedes a different pending browse target', a
   assert.deepEqual(harness.activateCalls, [SESSION_B])
 })
 
-test('an immediate ensure forces the pending viewed target now', async () => {
+test('prompt-time activation replaces the pending preview dwell', async () => {
   const harness = createHarness(kernelState())
   const selecting = harness.controller.select(SESSION_A)
   const forcing = harness.controller.activate(SESSION_A, 'immediate')
@@ -235,7 +245,7 @@ test('an immediate ensure forces the pending viewed target now', async () => {
   assert.equal(harness.timers.size, 0)
   await Promise.all([selecting, forcing])
 
-  assert.deepEqual(harness.previewCalls, [SESSION_A])
+  assert.deepEqual(harness.previewCalls, [])
   assert.deepEqual(harness.activateCalls, [SESSION_A])
 })
 
@@ -439,6 +449,103 @@ test('a static Session preview publishes tail before full completion with stable
   assert.equal(harness.snapshot.previewPendingKey, null)
 })
 
+test('a completed static Session preview prepends an exact detached history page', async () => {
+  const preview = sessionPreviewWithEntries(SESSION_A, ['e4', 'e5'])
+  preview.conversation.startIndex = 4
+  const harness = createHarness(kernelState(), {
+    previewSession: async () => preview,
+    completeSessionPreview: async () => preview,
+    loadEarlierSessionPreview: async (request) => ({
+      projectKey: request.projectKey,
+      sessionKey: request.sessionKey,
+      sessionId: request.sessionId,
+      beforeIndex: request.beforeIndex,
+      beforeEntryId: request.beforeEntryId,
+      startIndex: 2,
+      entries: [messageEntry('e2', 'user'), messageEntry('e3', 'assistant')]
+    })
+  })
+
+  await harness.controller.preview(SESSION_A)
+  await harness.controller.loadEarlierPreview()
+
+  assert.deepEqual(harness.previewPageCalls, [{
+    previewId: preview.previewId,
+    projectKey: PROJECT_A,
+    sessionKey: SESSION_A,
+    sessionId: 'session-a',
+    beforeIndex: 4,
+    beforeEntryId: 'e4'
+  }])
+  assert.equal(harness.snapshot.sessionPreview?.conversation.startIndex, 2)
+  assert.deepEqual(
+    harness.snapshot.sessionPreview?.conversation.entries.map(({ id }) => id),
+    ['e2', 'e3', 'e4', 'e5']
+  )
+})
+
+test('a detached history page is rejected after the preview target changes', async () => {
+  const previewA = sessionPreviewWithEntries(SESSION_A, ['e4', 'e5'])
+  previewA.conversation.startIndex = 4
+  const page = deferred<KernelConversationPage>()
+  let completionCount = 0
+  const harness = createHarness(kernelState(), {
+    previewSession: async (sessionKey) => sessionKey === SESSION_A
+      ? previewA
+      : sessionPreviewWithEntries(sessionKey, ['b1']),
+    completeSessionPreview: async () => {
+      completionCount += 1
+      return completionCount === 1
+        ? previewA
+        : sessionPreviewWithEntries(SESSION_B, ['b1'])
+    },
+    loadEarlierSessionPreview: () => page.promise
+  })
+
+  await harness.controller.preview(SESSION_A)
+  const loading = harness.controller.loadEarlierPreview()
+  await harness.controller.preview(SESSION_B)
+  page.resolve({
+    projectKey: PROJECT_A,
+    sessionKey: SESSION_A,
+    sessionId: 'session-a',
+    beforeIndex: 4,
+    beforeEntryId: 'e4',
+    startIndex: 2,
+    entries: [messageEntry('e2', 'user'), messageEntry('e3', 'assistant')]
+  })
+
+  await assert.rejects(loading, /page response is stale/)
+  assert.equal(harness.snapshot.sessionPreview?.sessionKey, SESSION_B)
+})
+
+test('prompt-time activation invalidates an in-flight detached history page', async () => {
+  const preview = sessionPreviewWithEntries(SESSION_A, ['e4', 'e5'])
+  preview.conversation.startIndex = 4
+  const page = deferred<KernelConversationPage>()
+  const harness = createHarness(kernelState(), {
+    previewSession: async () => preview,
+    completeSessionPreview: async () => preview,
+    loadEarlierSessionPreview: () => page.promise
+  })
+
+  await harness.controller.preview(SESSION_A)
+  const loading = harness.controller.loadEarlierPreview()
+  await harness.controller.activate(SESSION_A)
+  page.resolve({
+    projectKey: PROJECT_A,
+    sessionKey: SESSION_A,
+    sessionId: 'session-a',
+    beforeIndex: 4,
+    beforeEntryId: 'e4',
+    startIndex: 2,
+    entries: [messageEntry('e2', 'user'), messageEntry('e3', 'assistant')]
+  })
+
+  await assert.rejects(loading, /page response is stale/)
+  assert.equal(harness.snapshot.sessionPreview, null)
+})
+
 test('a current full-scan failure keeps the validated tail and reports the error', async () => {
   const full = deferred<KernelSessionPreview>()
   const tail = sessionPreviewWithEntries(SESSION_A, ['tail-u2', 'tail-a2'])
@@ -513,38 +620,38 @@ test('authoritative ready state cancels an unfinished static full scan', async (
   assert.deepEqual(harness.errors, [])
 })
 
-test('a hung B preview never gates the activation pump from advancing to C', async () => {
-  const completionB = deferred<KernelSessionPreview>()
-  let bRequestId: string | null = null
+test('prompt-time activation cancels an in-flight preview and joins one Runtime start', async () => {
+  const completion = deferred<KernelSessionPreview>()
+  const activation = deferred<KernelMutationAck>()
   const harness = createHarness(kernelState(), {
-    activateSession: async () => ({ revision: 1 }),
-    previewSession: async (sessionKey, requestId) => {
-      if (sessionKey === SESSION_B) bRequestId = requestId
-      return sessionPreviewWithEntries(sessionKey, [`${sessionKey}:tail`])
-    },
-    completeSessionPreview: (requestId) => (
-      requestId === bRequestId
-        ? completionB.promise
-        : Promise.resolve(sessionPreviewWithEntries(SESSION_C, ['c-full']))
-    )
+    activateSession: () => activation.promise,
+    previewSession: async (sessionKey) =>
+      sessionPreviewWithEntries(sessionKey, [`${sessionKey}:tail`]),
+    completeSessionPreview: () => completion.promise
   })
 
-  const selectingB = harness.controller.select(SESSION_B)
+  const selecting = harness.controller.select(SESSION_A)
   harness.runOnlyTimer()
-  await selectingB
   await flushAsyncWork()
-  assert.deepEqual(harness.activateCalls, [SESSION_B])
+
+  assert.deepEqual(harness.previewCalls, [SESSION_A])
+  assert.deepEqual(harness.activateCalls, [])
   assert.equal(harness.completePreviewCalls.length, 1)
 
-  const selectingC = harness.controller.select(SESSION_C)
-  harness.runOnlyTimer()
-  await selectingC
-
-  assert.deepEqual(harness.activateCalls, [SESSION_B, SESSION_C])
-  assert.equal(harness.cancelPreviewCalls.length, 1)
-  completionB.resolve(sessionPreviewWithEntries(SESSION_B, ['b-full']))
+  const firstActivation = harness.controller.activate(SESSION_A)
+  const secondActivation = harness.controller.activate(SESSION_A)
+  completion.reject(new Error('cancelled preview completion'))
+  await selecting
   await flushAsyncWork()
-  assert.equal(harness.snapshot.sessionPreview?.sessionKey, SESSION_C)
+
+  assert.equal(harness.cancelPreviewCalls.length, 1)
+  assert.deepEqual(harness.activateCalls, [SESSION_A])
+
+  activation.resolve({ revision: 1 })
+  await Promise.all([firstActivation, secondActivation])
+  await flushAsyncWork()
+
+  assert.deepEqual(harness.errors, [])
 })
 
 test('a stale preview response cannot replace the latest target', async () => {
@@ -741,6 +848,9 @@ type HarnessOptions = {
   previewSession?: (sessionKey: string, requestId: string) => Promise<KernelSessionPreview>
   completeSessionPreview?: (requestId: string) => Promise<KernelSessionPreview>
   cancelSessionPreview?: (requestId: string) => Promise<void>
+  loadEarlierSessionPreview?: (
+    request: KernelSessionPreviewPageRequest
+  ) => Promise<KernelConversationPage>
 }
 
 function createHarness(initialState: KernelState, options: HarnessOptions = {}) {
@@ -758,6 +868,7 @@ function createHarness(initialState: KernelState, options: HarnessOptions = {}) 
   const previewRequests: Array<{ sessionKey: string; requestId: string }> = []
   const completePreviewCalls: string[] = []
   const cancelPreviewCalls: string[] = []
+  const previewPageCalls: KernelSessionPreviewPageRequest[] = []
   const staticPreviews = new Map<string, KernelSessionPreview>()
   const errors: unknown[] = []
   const completedActions: Array<{
@@ -815,6 +926,13 @@ function createHarness(initialState: KernelState, options: HarnessOptions = {}) 
       staticPreviews.delete(requestId)
       await options.cancelSessionPreview?.(requestId)
     },
+    loadEarlierSessionPreview: async (request) => {
+      previewPageCalls.push(request)
+      if (options.loadEarlierSessionPreview === undefined) {
+        throw new Error('Unexpected Session preview page request.')
+      }
+      return options.loadEarlierSessionPreview(request)
+    },
     beginActionPresentation: () => {
       actionPresentationRevision += 1
       return actionPresentationRevision
@@ -859,6 +977,7 @@ function createHarness(initialState: KernelState, options: HarnessOptions = {}) 
     previewRequests,
     completePreviewCalls,
     cancelPreviewCalls,
+    previewPageCalls,
     errors,
     completedActions,
     timers,
@@ -938,6 +1057,7 @@ function sessionPreviewWithEntries(
   entryIds: string[]
 ): KernelSessionPreview {
   return {
+    previewId: `preview-${sessionId(sessionKey)}`,
     projectKey: PROJECT_A,
     sessionKey,
     sessionId: sessionId(sessionKey),

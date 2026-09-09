@@ -287,6 +287,46 @@ export function projectPiEvent(
     return projected === null ? entries : upsert(entries, projected)
   }
 
+  if (event.type === 'extension_ui_request' && event.method === 'notify') {
+    if (!isBoundedString(event.message, MAX_DISPLAY_CHARS, true)) return entries
+    const level = extensionNotifyLevel(event.notifyType)
+    if (level === null) return entries
+    const requestId = isBoundedString(event.id, MAX_CUSTOM_ID_CHARS, true)
+      ? event.id
+      : `${now}:${entries.length}`
+    return upsert(entries, {
+      id: `extension-notify:${requestId}`,
+      kind: 'extension-status',
+      source: 'extension',
+      title: level === 'error'
+        ? 'Extension 错误'
+        : level === 'warning'
+          ? 'Extension 警告'
+          : 'Extension 通知',
+      text: event.message,
+      level,
+      timestamp: now
+    })
+  }
+
+  if (
+    event.type === 'extension_ui_request' &&
+    (event.method === 'select' || event.method === 'confirm' ||
+      event.method === 'input' || event.method === 'editor')
+  ) {
+    const requestId = isBoundedString(event.id, MAX_CUSTOM_ID_CHARS, true)
+      ? event.id
+      : `${now}:${entries.length}`
+    return upsert(entries, {
+      id: `error:extension-ui:${requestId}`,
+      kind: 'error',
+      title: 'Extension UI 不受支持',
+      message: `Pi GUI 不支持 Extension 的 ${event.method} 交互；请求已取消。`,
+      source: 'extension',
+      timestamp: now
+    })
+  }
+
   if (
     event.type === 'extension_ui_request' &&
     event.method === 'setStatus' &&
@@ -515,6 +555,11 @@ function magicContextLevel(value: unknown): KernelExtensionStatusEntry['level'] 
   return value === 'info' || value === 'success' || value === 'warning' || value === 'error'
     ? value
     : null
+}
+
+function extensionNotifyLevel(value: unknown): KernelExtensionStatusEntry['level'] | null {
+  if (value === undefined || value === 'info') return 'info'
+  return value === 'warning' || value === 'error' ? value : null
 }
 
 function projectAdvisoryDetails(value: unknown): {

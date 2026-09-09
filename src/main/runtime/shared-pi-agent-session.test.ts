@@ -143,6 +143,57 @@ test('SharedPiHost runs two real Pi SDK Sessions in one process and drains both'
   }
 })
 
+test('SharedPiHost scopes the Magic Context Pi binary for embedded Sessions', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-shared-sdk-magic-context-cli-'))
+  const agentDir = join(root, 'agent')
+  const project = join(root, 'project')
+  const extensionPath = join(root, 'magic-context-cli-extension.ts')
+  const piExecutable = '/opt/pi/bin/pi'
+  await Promise.all([
+    mkdir(agentDir, { recursive: true }),
+    mkdir(project, { recursive: true }),
+    writeFile(
+      extensionPath,
+      `export default function extension(pi) {
+  pi.on('session_start', (_event, ctx) => {
+    ctx.ui.setStatus('magic-context-pi-binary', process.env.MAGIC_CONTEXT_PI_BINARY)
+  })
+}\n`,
+      'utf8'
+    )
+  ])
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR
+  process.env.PI_CODING_AGENT_DIR = agentDir
+  const host = new SharedPiHost()
+  const runtime = host.createRuntime({
+    cwd: project,
+    projectTrust: true,
+    piExecutable,
+    extensionPaths: [extensionPath]
+  })
+
+  try {
+    const reported = new Promise<string | undefined>((resolve) => {
+      const unsubscribe = runtime.subscribe((event) => {
+        if (
+          event.type !== 'pi-event' || event.event.type !== 'extension_ui_request' ||
+          event.event.method !== 'setStatus' ||
+          event.event.statusKey !== 'magic-context-pi-binary'
+        ) return
+        unsubscribe()
+        resolve(typeof event.event.statusText === 'string' ? event.event.statusText : undefined)
+      })
+    })
+    await runtime.start()
+    assert.equal(await reported, piExecutable)
+  } finally {
+    await host.dispose()
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('SharedPiHost activates extension tools and fails when an extension cannot load', async () => {
   const root = await mkdtemp(join(tmpdir(), 'pi-shared-sdk-tools-'))
   const agentDir = join(root, 'agent')
@@ -259,6 +310,131 @@ test('SharedPiHost initializes the Pi theme before session_start uses ui.theme',
     })
     await runtime.start()
     assert.equal(await started, 'ok')
+  } finally {
+    await host.dispose()
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('SharedPiAgentSession bridges standard command UI and fails fast for custom UI', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-shared-sdk-command-ui-'))
+  const agentDir = join(root, 'agent')
+  const project = join(root, 'project')
+  const extensionPath = join(root, 'command-ui-extension.ts')
+  await Promise.all([
+    mkdir(agentDir, { recursive: true }),
+    mkdir(project, { recursive: true }),
+    writeFile(
+      extensionPath,
+      `export default function extension(pi) {
+  pi.registerCommand('needs-select', {
+    handler: async (_args, ctx) => {
+      await ctx.ui.select('Choose', ['one'])
+    }
+  })
+  pi.registerCommand('needs-custom', {
+    handler: async (_args, ctx) => {
+      await ctx.ui.custom(() => undefined)
+    }
+  })
+  pi.registerCommand('safe-status', {
+    handler: async (_args, ctx) => {
+      ctx.ui.setStatus('command-ui-test', 'ok')
+    }
+  })
+  pi.on('session_start', async (_event, ctx) => {
+    setTimeout(() => {
+      void ctx.ui.confirm('Unrelated lifecycle request', 'Must not inherit command ownership')
+    }, 500)
+  })
+}\n`,
+      'utf8'
+    )
+  ])
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR
+  process.env.PI_CODING_AGENT_DIR = agentDir
+  const host = new SharedPiHost()
+  const runtime = host.createRuntime({
+    cwd: project,
+    projectTrust: true,
+    extensionPaths: [extensionPath]
+  })
+
+  try {
+    await runtime.start()
+    const selectRequest = new Promise<{
+      id: string
+      commandName: string | undefined
+      commandInvocationId: string | undefined
+    }>((resolve) => {
+      const unsubscribe = runtime.subscribe((event) => {
+        if (
+          event.type !== 'pi-event' || event.event.type !== 'extension_ui_request' ||
+          event.event.method !== 'select'
+        ) return
+        unsubscribe()
+        resolve({
+          id: String(event.event.id),
+          commandName: typeof event.event.commandName === 'string'
+            ? event.event.commandName
+            : undefined,
+          commandInvocationId: typeof event.event.commandInvocationId === 'string'
+            ? event.event.commandInvocationId
+            : undefined
+        })
+      })
+    })
+    const unrelatedRequest = new Promise<{ id: string, commandInvocationId: unknown }>((resolve) => {
+      const unsubscribe = runtime.subscribe((event) => {
+        if (
+          event.type !== 'pi-event' || event.event.type !== 'extension_ui_request' ||
+          event.event.method !== 'confirm' || event.event.title !== 'Unrelated lifecycle request'
+        ) return
+        unsubscribe()
+        resolve({
+          id: String(event.event.id),
+          commandInvocationId: event.event.commandInvocationId
+        })
+      })
+    })
+    const selectInvocation = runtime.send({
+      type: 'invoke_extension_command',
+      name: 'needs-select',
+      invocationId: 'select-invocation'
+    })
+    const request = await selectRequest
+    assert.equal(request.commandName, 'needs-select')
+    assert.equal(request.commandInvocationId, 'select-invocation')
+    const unrelated = await unrelatedRequest
+    assert.equal(unrelated.commandInvocationId, undefined)
+    await runtime.send({ type: 'extension_ui_response', id: unrelated.id, cancelled: true })
+    await runtime.send({ type: 'extension_ui_response', id: request.id, value: 'one' })
+    assert.deepEqual(await selectInvocation, { type: 'accepted' })
+
+    await assert.rejects(
+      runtime.send({
+        type: 'invoke_extension_command',
+        name: 'needs-custom',
+        invocationId: 'custom-invocation'
+      }),
+      /\/needs-custom requires unsupported custom UI/u
+    )
+
+    const status = new Promise<string | undefined>((resolve) => {
+      const unsubscribe = runtime.subscribe((event) => {
+        if (
+          event.type !== 'pi-event' || event.event.type !== 'extension_ui_request' ||
+          event.event.method !== 'setStatus' ||
+          event.event.statusKey !== 'command-ui-test'
+        ) return
+        unsubscribe()
+        resolve(typeof event.event.statusText === 'string' ? event.event.statusText : undefined)
+      })
+    })
+    await runtime.send({ type: 'invoke_extension_command', name: 'safe-status' })
+    assert.equal(await status, 'ok')
   } finally {
     await host.dispose()
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR

@@ -1,5 +1,6 @@
 :root {
-  --remote-keyboard-inset: 0px;
+  --remote-viewport-height: 100dvh;
+  --remote-viewport-offset-top: 0px;
   --remote-touch-min: 44px;
   --composer-reserved-space: clamp(8.5rem, 28dvh, 12rem);
 }
@@ -13,10 +14,13 @@ body {
 }
 
 #root {
+  position: absolute;
+  top: var(--remote-viewport-offset-top);
+  left: 0;
   display: flex;
   width: 100%;
   max-width: 100%;
-  height: 100dvh;
+  height: var(--remote-viewport-height);
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
@@ -42,7 +46,7 @@ body {
   padding:
     env(safe-area-inset-top, 0px)
     env(safe-area-inset-right, 0px)
-    var(--remote-keyboard-inset)
+    0
     env(safe-area-inset-left, 0px);
 }
 
@@ -50,7 +54,7 @@ body {
   padding:
     env(safe-area-inset-top, 0px)
     env(safe-area-inset-right, 0px)
-    calc(env(safe-area-inset-bottom, 0px) + var(--remote-keyboard-inset))
+    env(safe-area-inset-bottom, 0px)
     env(safe-area-inset-left, 0px);
 }
 
@@ -87,20 +91,6 @@ body {
   background: var(--color-surface-sidebar);
 }
 
-.remote-topbar-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-width: 0;
-}
-
-.remote-topbar-actions {
-  display: flex;
-  margin-left: auto;
-  align-items: center;
-  gap: 0.35rem;
-}
-
 .remote-connection {
   display: inline-flex;
   align-items: center;
@@ -131,11 +121,24 @@ body {
   background: var(--color-status-error);
 }
 
-.remote-selectors {
+.remote-project-row,
+.remote-session-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto;
+  min-width: 0;
   gap: 0.4rem;
   align-items: center;
+}
+
+.remote-project-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.remote-session-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.remote-project-row .remote-connection {
+  flex: none;
 }
 
 .remote-select-field,
@@ -146,7 +149,6 @@ body {
   gap: 0.2rem;
 }
 
-.remote-select-field select,
 .remote-composer-field select,
 .remote-login-field input,
 .remote-composer-input {
@@ -161,10 +163,14 @@ body {
   line-height: var(--line-control);
 }
 
-.remote-select-field select,
 .remote-composer-field select,
 .remote-login-field input {
   padding: 0.55rem 0.7rem;
+}
+
+.remote-select-field .select-control-trigger,
+.select-control-popover .select-control-option {
+  min-height: var(--remote-touch-min);
 }
 
 .remote-pairing-code-input {
@@ -185,23 +191,6 @@ body {
 .remote-icon-action {
   width: var(--remote-touch-min);
   height: var(--remote-touch-min);
-}
-
-.remote-topbar-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 0.45rem;
-  min-width: 0;
-  color: var(--color-text-muted);
-  font-size: var(--text-caption);
-  line-height: var(--line-caption);
-}
-
-.remote-topbar-meta span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .remote-action-error,

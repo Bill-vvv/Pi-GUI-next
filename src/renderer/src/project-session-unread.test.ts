@@ -26,6 +26,21 @@ test('initial session activity establishes a baseline without marking history un
   )
 })
 
+test('hydrating historical activity after a null baseline does not mark the session unread', () => {
+  const before = [session('project-a\u0000one', '/sessions/one.jsonl', null)]
+  const after = [session('project-a\u0000one', '/sessions/one.jsonl', 100)]
+
+  assert.deepEqual(
+    [...reconcileUnreadSessionKeys(
+      new Set(),
+      '/sessions/two.jsonl',
+      indexSessionActivity(before),
+      after
+    )],
+    []
+  )
+})
+
 test('a newer message marks an undisplayed session unread without observing a running frame', () => {
   const before = [session('project-a\u0000one', '/sessions/one.jsonl', 100)]
   const after = [session('project-a\u0000one', '/sessions/one.jsonl', 200)]

@@ -282,15 +282,15 @@ function SkillCommandCatalog({
           <p>调整关键词或筛选条件后再试。</p>
         </div>
       ) : (
-        <div className="settings-skill-list">
+        <div className="settings-resource-list">
           {filteredCommands.map((command) => (
-            <article className="settings-skill-item" key={command.id}>
-              <div className="settings-skill-item-copy">
+            <article className="settings-resource-row" key={command.id}>
+              <div className="settings-resource-copy">
                 <h3>/{command.name}</h3>
                 <p>{command.description || '该技能未提供说明。'}</p>
               </div>
               {command.sourceInfo === null ? null : (
-                <div className="settings-skill-item-meta">
+                <div className="settings-resource-meta">
                   <span>{skillScopeLabel(command.sourceInfo.scope)}</span>
                   <span>{command.sourceInfo.origin === 'package' ? 'Package' : '独立'}</span>
                 </div>

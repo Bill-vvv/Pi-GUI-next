@@ -66,6 +66,9 @@ test('token file must be regular, current-user owned, mode 0600, and one bounded
   await withTokenFile(0o600, 'a'.repeat(4097), async (tokenFile) => {
     await assert.rejects(() => readRemoteTokenFile(tokenFile, uid), /32 to 4096/)
   })
+  await withTokenFile(0o600, 'a'.repeat(16 * 1024 + 1), async (tokenFile) => {
+    await assert.rejects(() => readRemoteTokenFile(tokenFile, uid), /size limit/)
+  })
 
   const directory = await mkdtemp(join(tmpdir(), 'pi-gui-remote-token-link-'))
   try {

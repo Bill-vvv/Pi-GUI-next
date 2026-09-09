@@ -26,6 +26,29 @@ test('completed turn action slots reserve layout space while icons are hidden', 
   )
 })
 
+test('static history previews keep completed-turn actions and bind stateful actions to the viewed Session', () => {
+  assert.match(
+    workbenchSource,
+    /const canUseStaticPreviewActions =\s*!viewingArchivedSession &&\s*viewingInactiveSession &&\s*sessionPreview !== null &&\s*!sessionPreviewPending/
+  )
+  assert.match(
+    workbenchSource,
+    /const canUseCompletedTurnActions =\s*canUseSettledSessionActions \|\| canUseStaticPreviewActions/
+  )
+  assert.match(
+    appSource,
+    /async function openForkDialog[\s\S]*?viewTarget\?\.kind === 'session'[\s\S]*?await ensureSessionRuntime\(viewTarget\.sessionKey, 'immediate'\)[\s\S]*?setForkDialogOpen\(true\)/
+  )
+  assert.match(
+    appSource,
+    /async function exportSession[\s\S]*?const targetSessionKey[\s\S]*?await ensureSessionRuntime\(viewTarget\.sessionKey, 'immediate'\)[\s\S]*?activeSessionKey !== targetSessionKey[\s\S]*?window\.piGui\.exportSession\(\)/
+  )
+  assert.match(
+    timelineSource,
+    /onForkTurn\(forkUserText\)\.catch\(\(\) => undefined\)/
+  )
+})
+
 test('a new copy, export or fork action clears stale completion feedback', () => {
   for (const action of ['forkSession', 'exportSession', 'copyAnswer']) {
     assert.match(

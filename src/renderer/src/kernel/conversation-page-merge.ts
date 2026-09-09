@@ -1,6 +1,10 @@
 import type {
   KernelConversationPage,
+  KernelConversationPageRequest,
+  KernelConversationPreviewState,
   KernelConversationState,
+  KernelSessionPreview,
+  KernelSessionPreviewPageRequest,
   KernelState
 } from '../../../shared/kernel-contract.ts'
 
@@ -52,7 +56,6 @@ export function mergeEarlierConversationPage(
   state: KernelState,
   page: KernelConversationPage
 ): KernelState {
-  validatePage(page)
   if (
     page.projectKey !== state.activeProjectKey ||
     page.sessionKey !== state.activeSessionKey ||
@@ -61,7 +64,33 @@ export function mergeEarlierConversationPage(
     throw new Error('Conversation page identity is stale.')
   }
 
-  const conversation = state.conversation
+  const conversation = mergeEarlierConversationWindow(state.conversation, page)
+  return conversation === state.conversation ? state : { ...state, conversation }
+}
+
+/** Merge one detached preview page while retaining its immutable preview identity. */
+export function mergeEarlierSessionPreviewPage(
+  preview: KernelSessionPreview,
+  request: KernelSessionPreviewPageRequest,
+  page: KernelConversationPage
+): KernelSessionPreview {
+  if (
+    request.previewId !== preview.previewId ||
+    request.projectKey !== preview.projectKey ||
+    request.sessionKey !== preview.sessionKey ||
+    request.sessionId !== preview.sessionId
+  ) {
+    throw new Error('Session preview page identity is stale.')
+  }
+  assertPageMatchesRequest(page, request)
+  const conversation = mergeEarlierConversationWindow(preview.conversation, page)
+  return conversation === preview.conversation ? preview : { ...preview, conversation }
+}
+
+function mergeEarlierConversationWindow<
+  T extends KernelConversationState | KernelConversationPreviewState
+>(conversation: T, page: KernelConversationPage): T {
+  validatePage(page)
   const existingIds = new Set<string>()
   for (const entry of conversation.entries) {
     if (existingIds.has(entry.id)) {
@@ -81,17 +110,29 @@ export function mergeEarlierConversationPage(
       }
     }
     return {
-      ...state,
-      conversation: {
-        ...conversation,
-        startIndex: page.startIndex,
-        entries: [...page.entries, ...conversation.entries]
-      }
+      ...conversation,
+      startIndex: page.startIndex,
+      entries: [...page.entries, ...conversation.entries]
     }
   }
 
-  if (pageIsAlreadyCovered(conversation, page)) return state
+  if (pageIsAlreadyCovered(conversation, page)) return conversation
   throw new Error('Conversation page result is stale for the current window.')
+}
+
+function assertPageMatchesRequest(
+  page: KernelConversationPage,
+  request: KernelConversationPageRequest
+): void {
+  if (
+    page.projectKey !== request.projectKey ||
+    page.sessionKey !== request.sessionKey ||
+    page.sessionId !== request.sessionId ||
+    page.beforeIndex !== request.beforeIndex ||
+    page.beforeEntryId !== request.beforeEntryId
+  ) {
+    throw new Error('Session preview page response identity is stale.')
+  }
 }
 
 function validatePage(page: KernelConversationPage): void {

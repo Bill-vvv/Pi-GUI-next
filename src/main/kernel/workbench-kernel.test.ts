@@ -323,6 +323,24 @@ class FakeRuntimeHost implements RuntimeHost {
   }
 }
 
+class DeferredExtensionCommandRuntimeHost extends FakeRuntimeHost {
+  private readonly pendingExtensionCommandResponses: Array<(result: RuntimeCommandResult) => void> = []
+
+  override async send(command: RuntimeCommand): Promise<RuntimeCommandResult> {
+    if (command.type !== 'invoke_extension_command') return super.send(command)
+    this.commands.push(command)
+    return new Promise<RuntimeCommandResult>((resolve) => {
+      this.pendingExtensionCommandResponses.push(resolve)
+    })
+  }
+
+  resolveNextExtensionCommand(): void {
+    const resolve = this.pendingExtensionCommandResponses.shift()
+    assert.ok(resolve)
+    resolve({ type: 'accepted' })
+  }
+}
+
 class DeferredSessionStatsRuntimeHost extends FakeRuntimeHost {
   private deferSessionStats = false
   private readonly pendingSessionStats: Array<(result: RuntimeCommandResult) => void> = []
@@ -397,11 +415,12 @@ class AdvisorRuntimeHost extends FakeRuntimeHost {
 
   override async send(command: RuntimeCommand): Promise<RuntimeCommandResult> {
     if (
-      command.type === 'prompt' &&
+      command.type === 'invoke_extension_command' &&
+      command.name === 'advisor' &&
       this.confirmToggle &&
-      (command.message === '/advisor on' || command.message === '/advisor off')
+      (command.args === 'on' || command.args === 'off')
     ) {
-      this.replaceEntries([advisorCapabilities(command.message.endsWith('on'))])
+      this.replaceEntries([advisorCapabilities(command.args === 'on')])
     }
     return super.send(command)
   }
@@ -748,6 +767,13 @@ function staticPreviewReader(
 
 function staticPreviewPhase(messages: unknown[]): SessionTranscriptMessagePhase {
   return {
+    generation: {
+      device: 1,
+      inode: 1,
+      size: 1,
+      modifiedAtMs: 1,
+      changedAtMs: 1
+    },
     capturedEof: 1,
     messages: messages.map((message, index) => ({
       entryId: `entry-${index}`,
@@ -775,11 +801,19 @@ function kernelOptions(
   ) => Promise<void>
   persistArchivedSession: (projectPath: string, sessionKey: string) => Promise<void>
   validateSession: (pointer: SessionPointer) => Promise<SessionPointer>
+  readSessionTranscriptGeneration: () => Promise<SessionTranscriptMessagePhase['generation']>
   generateSessionName?: SessionNameGenerator
 } {
   return {
     sessionRegistry: sessionRegistry(recentSession),
     validateSession: async (pointer) => pointer,
+    readSessionTranscriptGeneration: async () => ({
+      device: 1,
+      inode: 1,
+      size: 1,
+      modifiedAtMs: 1,
+      changedAtMs: 1
+    }),
     persistProject: async (project) => {
       persistedProjects.push(project)
     },
@@ -841,9 +875,8 @@ test('advisor system toggle gates capability and refreshes the confirmed state',
 
   await kernel.setAdvisorSystemEnabled(true)
   assert.equal(kernel.getState().advisor.systemEnabled, true)
-  assert.deepEqual(runtime.commands.slice(-3), [
-    { type: 'prompt', message: '/advisor on' },
-    { type: 'get_state' },
+  assert.deepEqual(runtime.commands.slice(-2), [
+    { type: 'invoke_extension_command', name: 'advisor', args: 'on' },
     { type: 'get_entries' }
   ])
 
@@ -1098,6 +1131,35 @@ test('ask commands require bounded structured answer payloads', () => {
     type: 'kernel.cancel-ask',
     sessionKey: '/tmp/session-1.jsonl',
     toolCallId: 'ask-1',
+    extra: true
+  }), false)
+})
+
+test('Extension dialog commands require exact bounded owner identities', () => {
+  const owner = {
+    projectKey: '/tmp/project',
+    sessionKey: '/tmp/session-1.jsonl',
+    sessionId: 'session-1',
+    requestId: 'dialog-1',
+    commandInvocationId: 'invocation-1'
+  }
+  assert.equal(isKernelCommand({
+    type: 'kernel.respond-extension-dialog',
+    ...owner,
+    value: 'Selected'
+  }), true)
+  assert.equal(isKernelCommand({
+    type: 'kernel.cancel-extension-dialog',
+    ...owner
+  }), true)
+  assert.equal(isKernelCommand({
+    type: 'kernel.respond-extension-dialog',
+    ...owner,
+    value: 'x'.repeat(16_001)
+  }), false)
+  assert.equal(isKernelCommand({
+    type: 'kernel.cancel-extension-dialog',
+    ...owner,
     extra: true
   }), false)
 })
@@ -2349,10 +2411,10 @@ test('discovers the normalized command catalog and routes typed commands', async
     [],
     [
       {
-        name: 'review',
-        description: 'Review changes',
+        name: 'run',
+        description: 'Run a subagent',
         source: 'extension',
-        sourceInfo: { source: 'review-extension', scope: 'project', origin: 'top-level' }
+        sourceInfo: { source: 'npm:pi-subagents@0.37.2', scope: 'project', origin: 'package' }
       },
       {
         name: 'ship',
@@ -2379,7 +2441,7 @@ test('discovers the normalized command catalog and routes typed commands', async
       .filter(({ source }) => source === 'extension' || source === 'prompt' || source === 'skill')
       .map(({ name, source }) => ({ name, source })),
     [
-    { name: 'review', source: 'extension' },
+    { name: 'run', source: 'extension' },
     { name: 'ship', source: 'prompt' },
     { name: 'skill:verify', source: 'skill' }
     ]
@@ -2415,7 +2477,7 @@ test('discovers the normalized command catalog and routes typed commands', async
   )
 })
 
-test('compact atomically rebuilds the conversation and preserves it when projection fails', async () => {
+test('compact preserves the complete conversation and keeps it when projection fails', async () => {
   const initialMessages = [
     { role: 'user', content: [{ type: 'text', text: 'Long request' }], timestamp: 10 },
     { role: 'assistant', content: [{ type: 'text', text: 'Long response' }], timestamp: 20 }
@@ -2434,9 +2496,11 @@ test('compact atomically rebuilds the conversation and preserves it when project
   await kernel.invokeCommand(COMPACT_COMMAND_ID, '')
 
   let entries = kernel.getState().conversation.entries
-  assert.equal(entries.length, 2)
-  assert.equal(entries[0]?.kind === 'message' ? entries[0].text : null, 'Compacted summary')
-  assert.equal(entries[1]?.kind === 'command' ? entries[1].text : null, '/compact')
+  assert.equal(entries.length, 3)
+  assert.deepEqual(entries.slice(0, 2).map((entry) =>
+    entry.kind === 'message' ? entry.text : null
+  ), ['Long request', 'Long response'])
+  assert.equal(entries[2]?.kind === 'command' ? entries[2].text : null, '/compact')
   assert.deepEqual(runtime.commands.slice(-4), [
     { type: 'compact' },
     { type: 'get_state' },
@@ -2788,7 +2852,7 @@ test('stopping during a compaction projection rejects the command and clears lif
   runtime.releaseProjection()
 })
 
-test('completed compaction atomically refreshes conversation, usage, and session statistics', async () => {
+test('completed compaction preserves conversation while refreshing usage and session statistics', async () => {
   const pointer: SessionPointer = {
     projectPath: '/tmp/project',
     sessionFile: '/tmp/session-1.jsonl',
@@ -2837,7 +2901,7 @@ test('completed compaction atomically refreshes conversation, usage, and session
   const state = kernel.getState()
   assert.equal(state.conversation.entries[0]?.kind === 'message'
     ? state.conversation.entries[0].text
-    : null, 'After compaction')
+    : null, 'Before')
   assert.equal(state.session.usage?.contextTokens, 80)
   assert.equal(state.sessions[0]?.statistics?.totalMessages, 7)
   assert.equal(state.session.compaction, null)
@@ -3132,7 +3196,7 @@ test('automatic naming still persists after the session is no longer foreground'
   ))
 })
 
-test('automatic naming prefers mini then codex-spark within the active provider', async () => {
+test('automatic naming prefers Luna, then mini, then codex-spark within the active provider', async () => {
   const pointer: SessionPointer = {
     projectPath: '/tmp/project',
     sessionFile: '/tmp/auto-model-order-session.jsonl',
@@ -3152,7 +3216,9 @@ test('automatic naming prefers mini then codex-spark within the active provider'
     [],
     [
       { id: 'gpt-5.6-sol', provider: 'vvqq-cpa', name: 'Sol', reasoning: true },
+      { id: 'gpt-5.4-nano', provider: 'vvqq-cpa', name: 'Nano', reasoning: true },
       { id: 'gpt-5.3-codex-spark', provider: 'vvqq-cpa', name: 'Spark', reasoning: true },
+      { id: 'gpt-5.4-mini', provider: 'vvqq-cpa', name: 'Mini', reasoning: true },
       { id: 'gpt-5.6-luna', provider: 'vvqq-cpa', name: 'Luna', reasoning: true }
     ]
   )
@@ -3162,7 +3228,7 @@ test('automatic naming prefers mini then codex-spark within the active provider'
     { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
     kernelOptions(pointer, [], [], [], async (request) => {
       generationRequest = request
-      return 'Spark title model'
+      return 'Luna title model'
     })
   )
 
@@ -3172,7 +3238,7 @@ test('automatic naming prefers mini then codex-spark within the active provider'
   assert.ok(request)
   assert.deepEqual({ provider: request.provider, modelId: request.modelId }, {
     provider: 'vvqq-cpa',
-    modelId: 'gpt-5.3-codex-spark'
+    modelId: 'gpt-5.6-luna'
   })
 })
 
@@ -3230,15 +3296,19 @@ test('a manual session name cancels an in-flight generated name', async () => {
   assert.equal(kernel.getState().session.name, 'Manual purpose name')
 })
 
-test('invokes catalog prompt commands without passing unknown slash text through', async () => {
+test('invokes adapted Extension commands directly and expands prompt commands through Pi', async () => {
   const runtime = new FakeRuntimeHost(
     undefined,
     [],
     [
       {
-        name: 'review',
+        name: 'run',
         source: 'extension',
-        sourceInfo: { source: 'review-extension', scope: 'project', origin: 'top-level' }
+        sourceInfo: {
+          source: 'npm:pi-subagents@0.37.2',
+          scope: 'project',
+          origin: 'package'
+        }
       },
       {
         name: 'ship',
@@ -3249,7 +3319,7 @@ test('invokes catalog prompt commands without passing unknown slash text through
         name: 'ctx-status',
         source: 'extension',
         sourceInfo: {
-          source: '@cortexkit/pi-magic-context',
+          source: 'npm:@cortexkit/pi-magic-context',
           scope: 'user',
           origin: 'package'
         }
@@ -3263,25 +3333,28 @@ test('invokes catalog prompt commands without passing unknown slash text through
   )
 
   await kernel.start()
-  const extension = kernel.getState().commands.find(({ name }) => name === 'review')
+  const extension = kernel.getState().commands.find(({ name }) => name === 'run')
   const prompt = kernel.getState().commands.find(({ name }) => name === 'ship')
-  const magicStatus = kernel.getState().commands.find(({ name }) => name === 'ctx-status')
+  const unsupportedMagicStatus = kernel.getState().commands.find(({ name }) => name === 'ctx-status')
   assert.ok(extension)
   assert.ok(prompt)
-  assert.ok(magicStatus)
+  assert.equal(unsupportedMagicStatus, undefined)
 
-  await kernel.invokeCommand(extension.id, 'current diff')
+  await kernel.invokeCommand(extension.id, 'explorer current diff')
   assert.equal(kernel.getState().runtime.status, 'ready')
-  assert.deepEqual(runtime.commands.slice(-2), [
-    { type: 'prompt', message: '/review current diff' },
-    { type: 'get_state' }
-  ])
+  const invokedExtensionCommand = runtime.commands.at(-1)
+  assert.equal(invokedExtensionCommand?.type, 'invoke_extension_command')
+  if (invokedExtensionCommand?.type === 'invoke_extension_command') {
+    assert.equal(invokedExtensionCommand.name, 'run')
+    assert.equal(invokedExtensionCommand.args, 'explorer current diff')
+    assert.match(invokedExtensionCommand.invocationId ?? '', /^[0-9a-f-]{36}$/u)
+  }
   const commandEcho = kernel.getState().conversation.entries.find(
     (entry) => entry.kind === 'command'
   )
   assert.equal(
     commandEcho?.kind === 'command' ? commandEcho.text : null,
-    '/review current diff'
+    '/run explorer current diff'
   )
 
   runtime.setStreaming(true)
@@ -3295,28 +3368,339 @@ test('invokes catalog prompt commands without passing unknown slash text through
   runtime.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
   assert.equal(kernel.getState().runtime.status, 'ready')
 
+  await assert.rejects(kernel.invokeCommand('missing-command', ''), /not available/)
+  await assert.rejects(kernel.invokeCommand(SET_MODEL_COMMAND_ID, 'missing-provider'), /provider\/model/)
+})
+
+test('projects and resolves dialogs only for the exact adapted command invocation', async () => {
+  const runtime = new DeferredExtensionCommandRuntimeHost(
+    undefined,
+    [],
+    [{
+      name: 'run',
+      source: 'extension',
+      sourceInfo: {
+        source: 'npm:pi-subagents@0.37.2',
+        scope: 'user',
+        origin: 'package'
+      }
+    }]
+  )
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+
+  await kernel.start()
+  const run = kernel.getState().commands.find(({ name }) => name === 'run')
+  assert.ok(run)
+  const invocationPromise = kernel.invokeCommand(run.id, 'explorer inspect')
+  const invoked = runtime.commands.at(-1)
+  assert.equal(invoked?.type, 'invoke_extension_command')
+  if (invoked?.type !== 'invoke_extension_command') return
+  assert.equal(invoked.name, 'run')
+  assert.match(invoked.invocationId ?? '', /^[0-9a-f-]{36}$/u)
+
   runtime.emit({
     type: 'pi-event',
     event: {
       type: 'extension_ui_request',
-      method: 'setStatus',
-      statusKey: 'magic-context',
-      statusText: 'mc: 8.2k (13%) · idle'
+      id: 'unrelated-request',
+      commandName: 'run',
+      method: 'confirm',
+      title: 'Unrelated callback'
     }
   })
-  await kernel.invokeCommand(magicStatus.id, '')
-  const magicEntries = kernel.getState().conversation.entries.filter(
-    (entry) => entry.kind === 'extension-status'
-  )
-  assert.deepEqual(magicEntries.map((entry) => entry.kind === 'extension-status'
-    ? { title: entry.title, text: entry.text, level: entry.level }
-    : null), [
-    { title: 'Magic Context', text: 'mc: 8.2k (13%) · idle', level: 'info' },
-    { title: 'Magic Context 状态', text: 'mc: 8.2k (13%) · idle', level: 'info' }
-  ])
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(kernel.getState().extensionDialog, null)
+  assert.deepEqual(runtime.commands.at(-1), {
+    type: 'extension_ui_response',
+    id: 'unrelated-request',
+    cancelled: true
+  })
 
-  await assert.rejects(kernel.invokeCommand('missing-command', ''), /not available/)
-  await assert.rejects(kernel.invokeCommand(SET_MODEL_COMMAND_ID, 'missing-provider'), /provider\/model/)
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'extension_ui_request',
+      id: 'select-agent',
+      commandInvocationId: invoked.invocationId,
+      commandName: 'run',
+      method: 'select',
+      title: 'Choose agent',
+      options: ['explorer', 'reviewer']
+    }
+  })
+
+  const request = kernel.getState().extensionDialog
+  assert.ok(request)
+  assert.deepEqual(request, {
+    requestId: 'select-agent',
+    commandInvocationId: invoked.invocationId,
+    projectKey: '/tmp/project',
+    sessionKey: '/tmp/session-1.jsonl',
+    sessionId: 'session-1',
+    commandName: 'run',
+    method: 'select',
+    title: 'Choose agent',
+    message: null,
+    options: ['explorer', 'reviewer'],
+    placeholder: null,
+    prefill: null,
+    status: 'waiting',
+    error: null
+  })
+  assert.equal(kernel.getState().sessions[0]?.awaitingUserInput, true)
+
+  await assert.rejects(
+    kernel.respondExtensionDialog(
+      request.projectKey,
+      request.sessionKey,
+      'other-session',
+      request.requestId,
+      request.commandInvocationId,
+      'explorer'
+    ),
+    /another Session/u
+  )
+  await assert.rejects(
+    kernel.respondExtensionDialog(
+      request.projectKey,
+      request.sessionKey,
+      request.sessionId,
+      request.requestId,
+      'another-invocation',
+      'explorer'
+    ),
+    /stale or mismatched/u
+  )
+  await assert.rejects(
+    kernel.respondExtensionDialog(
+      request.projectKey,
+      request.sessionKey,
+      request.sessionId,
+      request.requestId,
+      request.commandInvocationId,
+      'unknown'
+    ),
+    /not one of the offered options/u
+  )
+
+  await kernel.respondExtensionDialog(
+    request.projectKey,
+    request.sessionKey,
+    request.sessionId,
+    request.requestId,
+    request.commandInvocationId,
+    'reviewer'
+  )
+  assert.deepEqual(runtime.commands.at(-1), {
+    type: 'extension_ui_response',
+    id: 'select-agent',
+    value: 'reviewer'
+  })
+  assert.equal(kernel.getState().extensionDialog, null)
+  assert.equal(kernel.getState().sessions[0]?.awaitingUserInput, false)
+
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'extension_ui_request',
+      id: 'confirm-run',
+      commandInvocationId: invoked.invocationId,
+      commandName: 'run',
+      method: 'confirm',
+      title: 'Continue?',
+      message: 'Continue the command?'
+    }
+  })
+  const confirm = kernel.getState().extensionDialog
+  assert.ok(confirm)
+  await kernel.cancelExtensionDialog(
+    confirm.projectKey,
+    confirm.sessionKey,
+    confirm.sessionId,
+    confirm.requestId,
+    confirm.commandInvocationId
+  )
+  assert.deepEqual(runtime.commands.at(-1), {
+    type: 'extension_ui_response',
+    id: 'confirm-run',
+    cancelled: true
+  })
+
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'extension_ui_request',
+      id: 'input-before-crash',
+      commandInvocationId: invoked.invocationId,
+      commandName: 'run',
+      method: 'input',
+      title: 'Input',
+      placeholder: 'Value'
+    }
+  })
+  assert.equal(kernel.getState().extensionDialog?.requestId, 'input-before-crash')
+  runtime.emit({ type: 'process-exit', code: 9, signal: null })
+  assert.equal(kernel.getState().extensionDialog, null)
+  assert.equal(kernel.getState().sessions[0]?.awaitingUserInput, false)
+
+  runtime.resolveNextExtensionCommand()
+  await invocationPromise
+})
+
+test('failed Runtime stop does not restore an unusable Extension dialog', async () => {
+  class FailingStopDeferredRuntimeHost extends DeferredExtensionCommandRuntimeHost {
+    override async stop(): Promise<void> {
+      this.stopCalls += 1
+      throw new Error('stop failed')
+    }
+  }
+  const runtime = new FailingStopDeferredRuntimeHost(
+    undefined,
+    [],
+    [{
+      name: 'run',
+      source: 'extension',
+      sourceInfo: {
+        source: 'npm:pi-subagents@0.37.2',
+        scope: 'user',
+        origin: 'package'
+      }
+    }]
+  )
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+
+  await kernel.start()
+  const run = kernel.getState().commands.find(({ name }) => name === 'run')
+  assert.ok(run)
+  const invocationPromise = kernel.invokeCommand(run.id, 'explorer inspect')
+  const invoked = runtime.commands.at(-1)
+  assert.equal(invoked?.type, 'invoke_extension_command')
+  if (invoked?.type !== 'invoke_extension_command') return
+  assert.equal(invoked.name, 'run')
+  assert.match(invoked.invocationId ?? '', /^[0-9a-f-]{36}$/u)
+
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'extension_ui_request',
+      id: 'stop-failure-dialog',
+      commandInvocationId: invoked.invocationId,
+      commandName: 'run',
+      method: 'confirm',
+      title: 'Continue?',
+      message: 'Continue the command?'
+    }
+  })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(kernel.getState().extensionDialog?.requestId, 'stop-failure-dialog')
+  assert.equal(kernel.getState().sessions[0]?.awaitingUserInput, true)
+
+  await assert.rejects(kernel.stop(), /stop failed/u)
+  assert.equal(kernel.getState().runtime.status, 'crashed')
+  assert.equal(kernel.getState().extensionDialog, null)
+  assert.equal(kernel.getState().sessions[0]?.awaitingUserInput, false)
+
+  runtime.resolveNextExtensionCommand()
+  await invocationPromise
+})
+
+test('notify-only adapted commands cannot escalate into blocking Extension UI', async () => {
+  const runtime = new DeferredExtensionCommandRuntimeHost(
+    undefined,
+    [],
+    [{
+      name: 'todos',
+      source: 'extension',
+      sourceInfo: {
+        source: 'npm:@cortexkit/pi-magic-context',
+        scope: 'user',
+        origin: 'package'
+      }
+    }]
+  )
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+
+  await kernel.start()
+  const todos = kernel.getState().commands.find(({ name }) => name === 'todos')
+  assert.ok(todos)
+  const invocationPromise = kernel.invokeCommand(todos.id, '')
+  const invoked = runtime.commands.at(-1)
+  assert.equal(invoked?.type, 'invoke_extension_command')
+  if (invoked?.type !== 'invoke_extension_command') return
+
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'extension_ui_request',
+      id: 'todos-confirm',
+      commandInvocationId: invoked.invocationId,
+      commandName: 'todos',
+      method: 'confirm',
+      title: 'Unexpected escalation'
+    }
+  })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+
+  assert.equal(kernel.getState().extensionDialog, null)
+  assert.deepEqual(runtime.commands.at(-1), {
+    type: 'extension_ui_response',
+    id: 'todos-confirm',
+    cancelled: true
+  })
+
+  runtime.resolveNextExtensionCommand()
+  await invocationPromise
+})
+
+test('cancels unsupported Extension dialogs instead of leaving the Runtime blocked', async () => {
+  const runtime = new FakeRuntimeHost()
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+
+  await kernel.start()
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'extension_ui_request',
+      id: 'unsupported-confirm',
+      method: 'confirm',
+      title: 'Apply profile?',
+      message: 'This dialog has no GUI adapter.'
+    }
+  })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+
+  assert.deepEqual(runtime.commands.at(-1), {
+    type: 'extension_ui_response',
+    id: 'unsupported-confirm',
+    cancelled: true
+  })
+  const error = kernel.getState().conversation.entries.find(
+    (entry) => entry.kind === 'error' && entry.id === 'error:extension-ui:unsupported-confirm'
+  )
+  assert.deepEqual(error, {
+    id: 'error:extension-ui:unsupported-confirm',
+    kind: 'error',
+    title: 'Extension UI 不受支持',
+    message: 'Pi GUI 不支持 Extension 的 confirm 交互；请求已取消。',
+    source: 'extension',
+    timestamp: error?.timestamp
+  })
 })
 
 test('GUI-only slash commands reject direct kernel invocation without reaching Pi', async () => {
@@ -5170,7 +5554,7 @@ test('switching projects discards an empty provisional Runtime', async () => {
   assert.deepEqual(kernel.getState().projects[0]?.sessions, [])
 })
 
-test('the settled first turn uses a low-cost model to generate and persist a purpose-based session name', async () => {
+test('the accepted first prompt starts purpose-based naming before the assistant responds', async () => {
   const runtime = new FakeRuntimeHost({
     sessionId: 'unnamed-session',
     sessionFile: '/tmp/unnamed-session.jsonl',
@@ -5199,6 +5583,29 @@ test('the settled first turn uses a low-cost model to generate and persist a pur
 
   await kernel.start()
   await kernel.prompt('请让对话名称体现会话目的，而不是复制第一条消息。')
+
+  const request = generationRequest as SessionNameGenerationRequest | null
+  assert.ok(request)
+  assert.deepEqual({
+    executable: request.executable,
+    cwd: request.cwd,
+    provider: request.provider,
+    modelId: request.modelId,
+    userMessage: request.userMessage,
+    assistantMessage: request.assistantMessage,
+    aborted: request.signal.aborted
+  }, {
+    executable: '/usr/bin/pi',
+    cwd: '/tmp/project',
+    provider: 'openai',
+    modelId: 'gpt-5.4-mini',
+    userMessage: '请让对话名称体现会话目的，而不是复制第一条消息。',
+    assistantMessage: null,
+    aborted: false
+  })
+  assert.equal(kernel.getState().session.name, automaticName)
+  assert.equal(persisted.length, 0)
+
   const materialized = new Promise<void>((resolve) => {
     const unsubscribe = kernel.subscribe(() => {
       if (kernel.getState().activeSessionKey === canonicalSessionFile) {
@@ -5219,47 +5626,17 @@ test('the settled first turn uses a low-cost model to generate and persist a pur
     }
   })
   await materialized
-  assert.equal(generationRequest, null)
 
-  const named = new Promise<void>((resolve) => {
-    const unsubscribe = kernel.subscribe(() => {
-      if (kernel.getState().session.name === automaticName && persisted.length === 2) {
-        unsubscribe()
-        resolve()
-      }
-    })
-  })
-  runtime.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
-  await named
-
-  const request = generationRequest as SessionNameGenerationRequest | null
-  assert.ok(request)
-  assert.deepEqual({
-    executable: request.executable,
-    cwd: request.cwd,
-    provider: request.provider,
-    modelId: request.modelId,
-    userMessage: request.userMessage,
-    assistantMessage: request.assistantMessage,
-    aborted: request.signal.aborted
-  }, {
-    executable: '/usr/bin/pi',
-    cwd: '/tmp/project',
-    provider: 'openai',
-    modelId: 'gpt-5.4-mini',
-    userMessage: '请让对话名称体现会话目的，而不是复制第一条消息。',
-    assistantMessage: '我会改用独立模型请求生成语义标题。',
-    aborted: false
-  })
   const expectedPointer: SessionPointer = {
     projectPath: '/tmp/project',
     sessionFile: canonicalSessionFile,
     sessionId: 'unnamed-session',
     sessionName: automaticName
   }
-  assert.equal(persisted.length, 2)
-  assert.deepEqual(persisted[0], { ...expectedPointer, sessionName: null })
-  assert.deepEqual(persisted[1], expectedPointer)
+  assert.deepEqual(persisted, [expectedPointer])
+  runtime.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.deepEqual(persisted, [expectedPointer])
   assert.deepEqual(
     runtime.commands.filter(({ type }) => type === 'prompt' || type === 'set_session_name'),
     [
@@ -5268,6 +5645,70 @@ test('the settled first turn uses a low-cost model to generate and persist a pur
     ]
   )
   assert.equal(kernel.getState().sessions[0]?.name, automaticName)
+})
+
+test('failed provisional naming is not retried after materialization or settlement', async () => {
+  const runtime = new FakeRuntimeHost({
+    sessionId: 'failed-name-session',
+    sessionFile: '/tmp/failed-name-session.jsonl',
+    model: { provider: 'openai', id: 'gpt-purpose' }
+  })
+  const canonicalSessionFile = '/tmp/canonical-failed-name-session.jsonl'
+  const persisted: SessionPointer[] = []
+  let generationCalls = 0
+  let validationCalls = 0
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(null, persisted, [], [], async () => {
+        generationCalls += 1
+        throw new Error('Title generation failed.')
+      }),
+      validateSession: async (pointer) => {
+        validationCalls += 1
+        if (validationCalls === 1) throw fileError('ENOENT', 'session file not written yet')
+        return { ...pointer, sessionFile: canonicalSessionFile }
+      }
+    }
+  )
+
+  await kernel.start()
+  await kernel.prompt('Do not retry failed title generation.')
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(generationCalls, 1)
+
+  const materialized = new Promise<void>((resolve) => {
+    const unsubscribe = kernel.subscribe(() => {
+      if (kernel.getState().activeSessionKey === canonicalSessionFile) {
+        unsubscribe()
+        resolve()
+      }
+    })
+  })
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'The main response still completes.' }],
+        timestamp: 20
+      }
+    }
+  })
+  await materialized
+  runtime.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+
+  assert.equal(generationCalls, 1)
+  assert.deepEqual(persisted, [{
+    projectPath: '/tmp/project',
+    sessionFile: canonicalSessionFile,
+    sessionId: 'failed-name-session',
+    sessionName: null
+  }])
+  assert.equal(kernel.getState().session.name, null)
 })
 
 test('renaming a provisional session persists the real name and replaces the provisional pointer', async () => {
@@ -6054,6 +6495,98 @@ test('activateSession reconciles a persisted target missing from the in-memory r
   assert.deepEqual(persisted.map(({ sessionId }) => sessionId), [pointer.sessionId])
 })
 
+test('persisted activation keeps complete transcript history across Runtime compaction', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/compacted-session.jsonl',
+    sessionId: 'compacted-session',
+    sessionName: 'Compacted session'
+  }
+  const runtime = new FakeRuntimeHost(
+    {
+      sessionId: pointer.sessionId,
+      sessionFile: pointer.sessionFile,
+      sessionName: pointer.sessionName ?? undefined
+    },
+    [{
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Runtime compacted context only' }],
+      timestamp: 30
+    }]
+  )
+  const transcript = staticPreviewPhase([
+    { role: 'user', content: 'Original first prompt', timestamp: 1 },
+    {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Original first answer' }],
+      timestamp: 2
+    },
+    { role: 'user', content: 'Later prompt', timestamp: 3 },
+    {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Later answer' }],
+      timestamp: 4
+    }
+  ])
+  let transcriptReads = 0
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: pointer.projectPath }], activeProjectKey: pointer.projectPath },
+    {
+      ...kernelOptions(pointer),
+      readSessionMessagesTailFirst: async (_pointer, options) => {
+        transcriptReads += 1
+        await options.onTail(transcript)
+        return transcript
+      }
+    }
+  )
+
+  await kernel.activateSession(pointer.sessionFile)
+
+  const projectedMessages = () => kernel.getState().conversation.entries
+    .filter((entry) => entry.kind === 'message')
+  assert.deepEqual(
+    projectedMessages().map((entry) => entry.kind === 'message' ? entry.text : null),
+    ['Original first prompt', 'Original first answer', 'Later prompt', 'Later answer']
+  )
+  assert.deepEqual(
+    projectedMessages().map(({ id }) => id),
+    [
+      'message:transcript:entry-0:user',
+      'message:transcript:entry-1:assistant',
+      'message:transcript:entry-2:user',
+      'message:transcript:entry-3:assistant'
+    ]
+  )
+  assert.equal(transcriptReads, 1)
+
+  runtime.replaceMessages([{
+    role: 'assistant',
+    content: [{ type: 'text', text: 'New compacted context only' }],
+    timestamp: 40
+  }])
+  const completed = waitForCompactionOutcome(kernel, 'completed')
+  runtime.emit({ type: 'pi-event', event: { type: 'compaction_start', reason: 'threshold' } })
+  runtime.emit({
+    type: 'pi-event',
+    event: {
+      type: 'compaction_end',
+      reason: 'threshold',
+      result: { summary: 'Private summary', firstKeptEntryId: 'kept', tokensBefore: 100 },
+      aborted: false,
+      willRetry: false
+    }
+  })
+  await completed
+
+  assert.deepEqual(
+    projectedMessages().map((entry) => entry.kind === 'message' ? entry.text : null),
+    ['Original first prompt', 'Original first answer', 'Later prompt', 'Later answer']
+  )
+  assert.equal(transcriptReads, 1)
+})
+
 test('previewSession reads a persisted target missing from the in-memory registry', async () => {
   const pointer: SessionPointer = {
     projectPath: '/tmp/project',
@@ -6100,6 +6633,13 @@ test('static Session preview returns tail before full completion with stable can
   const order: string[] = []
   let readCalls = 0
   const tailPhase: SessionTranscriptMessagePhase = {
+    generation: {
+      device: 1,
+      inode: 1,
+      size: 100,
+      modifiedAtMs: 1,
+      changedAtMs: 1
+    },
     capturedEof: 100,
     messages: [
       { entryId: 'u2', message: { role: 'user', content: 'second', timestamp: 3 } },
@@ -6114,6 +6654,7 @@ test('static Session preview returns tail before full completion with stable can
     ]
   }
   const fullPhase: SessionTranscriptMessagePhase = {
+    generation: { ...tailPhase.generation },
     capturedEof: 100,
     messages: [
       { entryId: 'u1', message: { role: 'user', content: 'first', timestamp: 1 } },
@@ -6159,6 +6700,61 @@ test('static Session preview returns tail before full completion with stable can
   assert.deepEqual(
     full.conversation.entries.slice(-2).map(({ id }) => id),
     tail.conversation.entries.map(({ id }) => id)
+  )
+})
+
+test('detached Session preview pages reuse the completed preparation without starting a Runtime', async () => {
+  const pointer: SessionPointer = {
+    projectPath: '/tmp/project',
+    sessionFile: '/tmp/paged-preview.jsonl',
+    sessionId: 'paged-preview',
+    sessionName: 'Paged preview'
+  }
+  const messages = Array.from({ length: 61 }, (_, index) => ([
+    { role: 'user', content: `prompt ${index}` },
+    {
+      role: 'assistant',
+      content: [{ type: 'text', text: `answer ${index}` }]
+    }
+  ])).flat()
+  let readCalls = 0
+  const kernel = new WorkbenchKernel(
+    () => {
+      throw new Error('Detached preview must not create a Runtime.')
+    },
+    { projects: [{ path: pointer.projectPath }], activeProjectKey: pointer.projectPath },
+    {
+      ...kernelOptions(pointer),
+      readSessionMessagesTailFirst: async (_pointer, options) => {
+        readCalls += 1
+        const phase = staticPreviewPhase(messages)
+        await options.onTail(phase)
+        return phase
+      }
+    }
+  )
+
+  await kernel.previewSession(pointer.sessionFile, 'preview-page')
+  const preview = await kernel.completeSessionPreview('preview-page')
+  assert.equal(preview.conversation.startIndex, 2)
+  const firstEntry = preview.conversation.entries[0]
+  assert.ok(firstEntry)
+
+  const page = await kernel.loadEarlierSessionPreview({
+    previewId: preview.previewId,
+    projectKey: preview.projectKey,
+    sessionKey: preview.sessionKey,
+    sessionId: preview.sessionId,
+    beforeIndex: preview.conversation.startIndex,
+    beforeEntryId: firstEntry.id
+  })
+
+  assert.equal(page.startIndex, 0)
+  assert.equal(page.entries.length, 2)
+  assert.equal(readCalls, 1)
+  await assert.rejects(
+    kernel.loadEarlierSessionPreview({ ...page, previewId: 'stale-preview' }),
+    /identity is stale/
   )
 })
 
@@ -6463,7 +7059,7 @@ test('previewing another session while ready projects its messages without chang
   await kernel.previewSession(secondPointer.sessionFile, 'preview-second')
   const preview = await kernel.completeSessionPreview('preview-second')
 
-  assert.deepEqual(readPointers, [secondPointer])
+  assert.deepEqual(readPointers, [firstPointer, secondPointer])
   assert.equal(preview.projectKey, secondPointer.projectPath)
   assert.equal(preview.sessionKey, secondPointer.sessionFile)
   assert.equal(preview.sessionId, secondPointer.sessionId)
@@ -7684,7 +8280,7 @@ test('background compaction refresh remains isolated from the foreground context
   await kernel.activateSession(pointerA.sessionFile)
   entry = kernel.getState().conversation.entries[0]
   assert.equal(kernel.getState().session.id, pointerA.sessionId)
-  assert.equal(entry?.kind === 'message' ? entry.text : null, 'Compacted A')
+  assert.equal(entry?.kind === 'message' ? entry.text : null, 'Old A')
   assert.equal(kernel.getState().sessions.find(({ id }) => id === pointerA.sessionId)?.statistics?.totalTokens, 15)
 })
 
@@ -8504,9 +9100,13 @@ test('reload replaces only the active settled persisted runtime after refreshing
     },
     [{ role: 'assistant', content: [{ type: 'text', text: 'Fresh A' }], timestamp: 20 }],
     [{
-      name: 'fresh',
+      name: 'ctx-flush',
       source: 'extension',
-      sourceInfo: { source: 'fresh-extension', scope: 'project', origin: 'top-level' }
+      sourceInfo: {
+        source: 'npm:@cortexkit/pi-magic-context',
+        scope: 'project',
+        origin: 'package'
+      }
     }],
     [{ id: 'fresh-model', provider: 'fresh-provider' }]
   )
@@ -8560,7 +9160,7 @@ test('reload replaces only the active settled persisted runtime after refreshing
   assert.equal(state.session.id, pointerA.sessionId)
   assert.equal(state.session.thinkingLevel, 'high')
   assert.equal(state.availableModels[0]?.id, 'fresh-model')
-  assert.ok(state.commands.some(({ name }) => name === 'fresh'))
+  assert.ok(state.commands.some(({ name }) => name === 'ctx-flush'))
   const entry = state.conversation.entries[0]
   assert.equal(entry?.kind === 'message' ? entry.text : null, 'Fresh A')
   assert.deepEqual(
@@ -9261,31 +9861,53 @@ test('archived preview is runtime-free, expiring, and consumes its credential', 
     {
       ...kernelOptions(),
       sessionRegistry: { sessions: pointers, activeSessionKey: active.sessionFile },
-      readSessionMessages: async () => {
+      readSessionMessagesTailFirst: async (_pointer, options) => {
         readCalls += 1
-        return [{
-          role: 'assistant',
-          content: [{ type: 'text', text: 'Archived history' }],
-          timestamp: 1
-        }]
+        const phase = staticPreviewPhase(Array.from({ length: 61 }, (_, index) => ([
+          { role: 'user', content: `Archived prompt ${index}`, timestamp: index * 2 },
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: `Archived history ${index}` }],
+            timestamp: index * 2 + 1
+          }
+        ])).flat())
+        await options.onTail(phase)
+        return phase
       },
       now: () => now
     }
   )
 
   const previewReceipt = await kernel.archiveSession(previewPointer.sessionFile)
+  const expiredReceipt = await kernel.archiveSession(expired.sessionFile)
   const preview = await kernel.previewArchivedSession(previewReceipt.token)
-  const previewEntry = preview.conversation.entries[0]
+  const previewEntry = preview.conversation.entries.at(-1)
   assert.equal(createCalls, 0)
   assert.equal(readCalls, 1)
   assert.equal(preview.sessionKey, previewPointer.sessionFile)
-  assert.equal(previewEntry?.kind === 'message' ? previewEntry.text : null, 'Archived history')
+  assert.equal(preview.conversation.startIndex, 2)
+  assert.equal(previewEntry?.kind === 'message' ? previewEntry.text : null, 'Archived history 60')
   assert.equal(kernel.getState().sessions.some(({ key }) => key === previewPointer.sessionFile), false)
   await assert.rejects(kernel.previewArchivedSession(previewReceipt.token), /invalid or already used/)
   await assert.rejects(kernel.undoArchiveSession(previewReceipt.token), /invalid or already used/)
 
-  const expiredReceipt = await kernel.archiveSession(expired.sessionFile)
+  const firstEntry = preview.conversation.entries[0]
+  assert.ok(firstEntry)
+  const pageRequest = {
+    previewId: preview.previewId,
+    projectKey: preview.projectKey,
+    sessionKey: preview.sessionKey,
+    sessionId: preview.sessionId,
+    beforeIndex: preview.conversation.startIndex,
+    beforeEntryId: firstEntry.id
+  }
+  const page = await kernel.loadEarlierSessionPreview(pageRequest)
+  assert.equal(page.startIndex, 0)
+  assert.equal(page.entries.length, 2)
+  assert.equal(readCalls, 1)
+
   now = 5_000
+  await assert.rejects(kernel.loadEarlierSessionPreview(pageRequest), /expired/)
   await assert.rejects(kernel.previewArchivedSession(expiredReceipt.token), /expired/)
   assert.equal(readCalls, 1)
 })
@@ -9502,7 +10124,7 @@ test('background compaction with unchanged stats emits lifecycle only', async ()
 
   await kernel.activateSession(pointerA.sessionFile)
   const entry = kernel.getState().conversation.entries[0]
-  assert.equal(entry?.kind === 'message' ? entry.text : null, 'Compacted A')
+  assert.equal(entry?.kind === 'message' ? entry.text : null, 'Old A')
 })
 
 test('background compaction with changed stats emits exactly one state snapshot', async () => {

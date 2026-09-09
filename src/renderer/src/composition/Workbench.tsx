@@ -12,6 +12,7 @@ import type {
   AppearanceSettings,
   GeneralSettings,
   KernelAskAnswer,
+  KernelExtensionDialogRequest,
   KernelExtensionSelectionKind,
   KernelForkCandidate,
   KernelInstalledPackage,
@@ -39,8 +40,10 @@ import type {
   ThinkingLevel
 } from '../../../shared/kernel-contract'
 import type {
+  DesktopHostAccessStatus,
   RemoteAccessStatus,
-  RemotePairingCode
+  RemotePairingCode,
+  TailscaleRemoteStatus
 } from '../../../shared/remote-admin-contract'
 import {
   DEFAULT_SHORTCUT_SETTINGS,
@@ -55,11 +58,18 @@ import {
   type ComposerControlRequest,
   type ComposerDraftRequest
 } from '../features/composer/Composer'
+import { NavigatorListQueryControls } from '../features/project/NavigatorListQueryControls'
+import { PinnedSessionNavigator } from '../features/project/PinnedSessionNavigator'
+import { sessionPinIdentity } from '../features/project/session-pinning'
 import {
   basename,
   ProjectNavigator,
   sessionTitle
 } from '../features/project/ProjectNavigator'
+import {
+  EMPTY_SESSION_LIST_QUERY,
+  type SessionListQuery
+} from '../features/project/session-list-query'
 import {
   orderTaskItems,
   TaskNavigator
@@ -80,6 +90,7 @@ import {
   type SubagentTaskSelection,
   type SubagentTaskTarget
 } from '../features/chat/subagent-task-detail-model'
+import { ExtensionDialog } from '../features/extensions/ExtensionDialog'
 import { GitChangesPanel } from '../features/git/GitChangesPanel'
 import { ProjectTrustDialog } from '../features/trust/ProjectTrustDialog'
 import { RIGHT_SIDEBAR_ID, RightSidebar } from './RightSidebar'
@@ -102,6 +113,7 @@ import {
 
 const TOOL_DISPLAY_DENSITY_STORAGE_KEY = 'pi-workbench.tool-display-density'
 const PINNED_PROJECTS_STORAGE_KEY = 'pi-workbench.pinned-projects'
+const PINNED_SESSIONS_STORAGE_KEY = 'pi-workbench.pinned-sessions'
 const EDITABLE_TARGET_SHORTCUTS = new Set(
   Object.values(DEFAULT_SHORTCUT_SETTINGS).filter((binding): binding is string => binding !== null)
 )
@@ -147,7 +159,7 @@ type WorkbenchProps = {
   onSelectSession: (sessionKey: string) => Promise<void>
   onClearSessionPreview: () => void
   onClearArchivedSessionPreview: () => void
-  onOpenForkDialog: (preferredUserText?: string) => void
+  onOpenForkDialog: (preferredUserText?: string) => Promise<void>
   onCloseForkDialog: () => void
   onRetryForkCandidates: () => void
   onForkSession: (entryId: string) => Promise<void>
@@ -193,6 +205,13 @@ type WorkbenchProps = {
   onGetRemoteAccessStatus: () => Promise<RemoteAccessStatus>
   onCreateRemotePairingCode: () => Promise<RemotePairingCode>
   onRevokeRemoteDevice: () => Promise<RemoteAccessStatus>
+  onGetTailscaleStatus: () => Promise<TailscaleRemoteStatus>
+  onEnableTailscaleFunnel: () => Promise<TailscaleRemoteStatus>
+  onEnableTailscaleServe: () => Promise<TailscaleRemoteStatus>
+  onDisableTailscale: () => Promise<TailscaleRemoteStatus>
+  onGetDesktopHostStatus: () => Promise<DesktopHostAccessStatus>
+  onCreateDesktopHostPairingCode: () => Promise<RemotePairingCode>
+  onRevokeDesktopHostDevice: () => Promise<DesktopHostAccessStatus>
   onSelectPromptAttachments: () => Promise<KernelPromptAttachment[]>
   onSearchProjectPaths: (query: string) => Promise<KernelProjectPathSearchResult>
   onSubmitAsk: (
@@ -201,6 +220,11 @@ type WorkbenchProps = {
     answers: KernelAskAnswer[]
   ) => Promise<void>
   onCancelAsk: (sessionKey: string, toolCallId: string) => Promise<void>
+  onRespondExtensionDialog: (
+    request: KernelExtensionDialogRequest,
+    value: string
+  ) => Promise<void>
+  onCancelExtensionDialog: (request: KernelExtensionDialogRequest) => Promise<void>
   onPrompt: (
     message: string,
     attachments?: KernelPromptAttachment[],
@@ -306,10 +330,19 @@ export function Workbench({
   onGetRemoteAccessStatus,
   onCreateRemotePairingCode,
   onRevokeRemoteDevice,
+  onGetTailscaleStatus,
+  onEnableTailscaleFunnel,
+  onEnableTailscaleServe,
+  onDisableTailscale,
+  onGetDesktopHostStatus,
+  onCreateDesktopHostPairingCode,
+  onRevokeDesktopHostDevice,
   onSelectPromptAttachments,
   onSearchProjectPaths,
   onSubmitAsk,
   onCancelAsk,
+  onRespondExtensionDialog,
+  onCancelExtensionDialog,
   onPrompt,
   onNavigateHistoryPrompt,
   onSteer,
@@ -336,6 +369,8 @@ export function Workbench({
   )
   const [projectNavigatorExpanded, setProjectNavigatorExpanded] = useState(true)
   const [taskNavigatorExpanded, setTaskNavigatorExpanded] = useState(true)
+  const [projectListQuery, setProjectListQuery] = useState<SessionListQuery>(EMPTY_SESSION_LIST_QUERY)
+  const [taskListQuery, setTaskListQuery] = useState<SessionListQuery>(EMPTY_SESSION_LIST_QUERY)
   const {
     settingsOpen,
     settingsSection,
@@ -378,6 +413,18 @@ export function Workbench({
       ) : [])
     } catch {
       return new Set()
+    }
+  })
+  const [pinnedSessionIdentities, setPinnedSessionIdentities] = useState<string[]>(() => {
+    try {
+      const stored: unknown = JSON.parse(
+        window.localStorage.getItem(PINNED_SESSIONS_STORAGE_KEY) ?? '[]'
+      )
+      return Array.isArray(stored)
+        ? [...new Set(stored.filter((value): value is string => typeof value === 'string'))]
+        : []
+    } catch {
+      return []
     }
   })
   const {
@@ -478,13 +525,7 @@ export function Workbench({
         event.stopPropagation()
         return
       }
-      if (subagentTaskSelection !== null && !rightSidebarCollapsed && event.key === 'Escape') {
-        closeRightSidebar(true)
-        event.preventDefault()
-        event.stopPropagation()
-        return
-      }
-      if (gitSidebarAvailable && !rightSidebarCollapsed && event.key === 'Escape') {
+      if (rightSidebarOpen && event.key === 'Escape') {
         closeRightSidebar(true)
         event.preventDefault()
         event.stopPropagation()
@@ -537,6 +578,30 @@ export function Workbench({
     }))
   })
   const orderedTaskItems = orderTaskItems(taskItems)
+  const allNavigableSessionItems = [
+    ...userProjects.flatMap((project) => {
+      const projectSessions = project.sessions ?? (project.path === activeProjectKey ? sessions : [])
+      return projectSessions.map((session) => ({
+        identity: sessionPinIdentity('project', project.path, session.id),
+        workspaceKind: 'project' as const,
+        workspaceKey: project.path,
+        taskKey: null,
+        contextLabel: basename(project.path) ?? project.path,
+        title: sessionTitle(session),
+        session
+      }))
+    }),
+    ...orderedTaskItems.map((item, index) => ({
+      identity: sessionPinIdentity('task', item.taskKey, item.session.id),
+      workspaceKind: 'task' as const,
+      workspaceKey: item.workspaceKey,
+      taskKey: item.taskKey,
+      contextLabel: '任务',
+      title: item.session.name?.trim() || `任务 ${index + 1}`,
+      session: item.session
+    }))
+  ]
+  const pinnedSessionIdentitySet = new Set(pinnedSessionIdentities)
   const projectBusyCount = userProjects.reduce(
     (count, project) => count + (project.busySessionCount ?? 0),
     0
@@ -575,11 +640,20 @@ export function Workbench({
           : timelineConversation(conversation)
       )
   )
-  const hasEarlierAuthoritativeConversation =
-    displayingAuthoritativeConversation &&
-    !viewingNewSession &&
-    activeSessionKey !== null &&
-    conversation.startIndex > 0
+  const hasEarlierDisplayedConversation = !sessionPreviewPending && (
+    (archivedSessionPreview !== null && archivedSessionPreview.conversation.startIndex > 0) ||
+    (
+      viewingInactiveSession &&
+      sessionPreview !== null &&
+      sessionPreview.conversation.startIndex > 0
+    ) ||
+    (
+      displayingAuthoritativeConversation &&
+      !viewingNewSession &&
+      activeSessionKey !== null &&
+      conversation.startIndex > 0
+    )
+  )
   const displayedTodos = currentTurnTodos(displayedConversation.entries)
   const displayedConversationIdentity = workbenchConversationIdentity({
     activeProjectKey,
@@ -587,6 +661,7 @@ export function Workbench({
     viewingNewSession,
     archivedSessionKey: archivedSessionPreview?.sessionKey ?? null
   })
+  const navigateTimelineToLatestPromptOnMount = !viewingNewSession
   useEffect(() => {
     setHistoryPromptEditing(false)
   }, [displayedConversationIdentity])
@@ -703,8 +778,16 @@ export function Workbench({
     activeSessionKey !== null &&
     runtime.status === 'ready' &&
     state.session.settled
-  const canForkSession = canUseSettledSessionActions && activeWorkspace?.workspaceKind !== 'task'
-  const canExportSession =
+  const canUseStaticPreviewActions =
+    !viewingArchivedSession &&
+    viewingInactiveSession &&
+    sessionPreview !== null &&
+    !sessionPreviewPending
+  const canUseCompletedTurnActions =
+    canUseSettledSessionActions || canUseStaticPreviewActions
+  const canForkSession =
+    canUseCompletedTurnActions && activeWorkspace?.workspaceKind !== 'task'
+  const canExportSession = canUseStaticPreviewActions || (
     !viewingArchivedSession &&
     sessionPreview === null &&
     !viewingInactiveSession &&
@@ -714,7 +797,8 @@ export function Workbench({
     runtime.status !== 'running' &&
     runtime.status !== 'stopping' &&
     state.session.settled
-  const canCopyLastAnswer = canUseSettledSessionActions
+  )
+  const canCopyLastAnswer = canUseCompletedTurnActions
   const settingsState = activeWorkspace?.workspaceKind === 'task'
     ? { ...state, activeProjectKey: null }
     : state
@@ -795,6 +879,15 @@ export function Workbench({
       if (next.has(projectKey)) next.delete(projectKey)
       else next.add(projectKey)
       window.localStorage.setItem(PINNED_PROJECTS_STORAGE_KEY, JSON.stringify([...next]))
+      return next
+    })
+  }
+  const togglePinnedSession = (identity: string): void => {
+    setPinnedSessionIdentities((current) => {
+      const next = current.includes(identity)
+        ? current.filter((candidate) => candidate !== identity)
+        : [...current, identity]
+      window.localStorage.setItem(PINNED_SESSIONS_STORAGE_KEY, JSON.stringify(next))
       return next
     })
   }
@@ -934,6 +1027,33 @@ export function Workbench({
               }}
             />
           ) : null}
+          <PinnedSessionNavigator
+            hidden={settingsOpen || sidebarCollapsed}
+            items={allNavigableSessionItems}
+            pinnedIdentities={pinnedSessionIdentities}
+            activeWorkspaceKey={activeProjectKey}
+            displayedSessionKey={displayedSessionKey}
+            viewedSessionKey={viewedSessionKey}
+            viewingArchivedSession={viewingArchivedSession}
+            busy={interactionBusy}
+            canChangeProjectOrSession={canChangeProjectOrSession}
+            sessionPreviewPending={sessionPreviewPending}
+            pendingAction={pendingAction}
+            contextActionStatus={contextActionStatus}
+            tokenCountFormat={state.appearance.tokenCountFormat}
+            onTogglePinnedSession={togglePinnedSession}
+            onClearArchivedSessionPreview={onClearArchivedSessionPreview}
+            onActivateProject={(projectKey) => {
+              invalidateRightSidebarFocusRestoration()
+              return onActivateProject(projectKey)
+            }}
+            onActivateTask={(taskKey, sessionKey) => {
+              invalidateRightSidebarFocusRestoration()
+              return onActivateTask(taskKey, sessionKey)
+            }}
+            onOpenSession={openSession}
+            onArchiveSession={onArchiveSession}
+          />
           <WorkspaceNavigatorGroup
             hidden={settingsOpen}
             kind="project"
@@ -945,12 +1065,17 @@ export function Workbench({
             addLabel="添加项目"
             addBusy={isWorkbenchAction(pendingAction, 'add-project')}
             addDisabled={!canChangeProjectOrSession}
+            listQuery={projectListQuery}
+            onListQueryChange={setProjectListQuery}
+            searchPlaceholder="搜索对话"
+            queryResultNoun="对话"
             onToggle={() => setProjectNavigatorExpanded((current) => !current)}
             onAdd={onAddProject}
           >
             <ProjectNavigator
               hidden={settingsOpen || !projectNavigatorExpanded}
               projects={displayedProjects}
+              listQuery={projectListQuery}
               activeProjectKey={activeProject?.path ?? null}
               activeSessionKey={activeSessionKey}
               sessions={sessions}
@@ -965,7 +1090,9 @@ export function Workbench({
               contextActionStatus={contextActionStatus}
               tokenCountFormat={state.appearance.tokenCountFormat}
               pinnedProjectKeys={pinnedProjectKeys}
+              pinnedSessionIdentities={pinnedSessionIdentitySet}
               onTogglePinnedProject={togglePinnedProject}
+              onTogglePinnedSession={togglePinnedSession}
               onExpandSidebar={() => setSidebarCollapsed(false)}
               onClearArchivedSessionPreview={onClearArchivedSessionPreview}
               onActivateProject={(projectKey) => {
@@ -995,6 +1122,10 @@ export function Workbench({
               isWorkbenchAction(pendingAction, 'start-session')
             }
             addDisabled={!canChangeProjectOrSession}
+            listQuery={taskListQuery}
+            onListQueryChange={setTaskListQuery}
+            searchPlaceholder="搜索任务"
+            queryResultNoun="任务"
             onToggle={() => setTaskNavigatorExpanded((current) => !current)}
             onAdd={() => {
               invalidateRightSidebarFocusRestoration()
@@ -1004,6 +1135,7 @@ export function Workbench({
             <TaskNavigator
               hidden={settingsOpen || !taskNavigatorExpanded}
               tasks={orderedTaskItems}
+              listQuery={taskListQuery}
               activeWorkspaceKey={activeWorkspace?.workspaceKind === 'task' ? activeWorkspace.path : null}
               displayedSessionKey={displayedSessionKey}
               viewedSessionKey={viewedSessionKey}
@@ -1014,6 +1146,8 @@ export function Workbench({
               pendingAction={pendingAction}
               contextActionStatus={contextActionStatus}
               tokenCountFormat={state.appearance.tokenCountFormat}
+              pinnedSessionIdentities={pinnedSessionIdentitySet}
+              onTogglePinnedSession={togglePinnedSession}
               onClearArchivedSessionPreview={onClearArchivedSessionPreview}
               onActivateTask={(taskKey, sessionKey) => {
                 invalidateRightSidebarFocusRestoration()
@@ -1108,6 +1242,13 @@ export function Workbench({
             onGetRemoteAccessStatus={onGetRemoteAccessStatus}
             onCreateRemotePairingCode={onCreateRemotePairingCode}
             onRevokeRemoteDevice={onRevokeRemoteDevice}
+            onGetTailscaleStatus={onGetTailscaleStatus}
+            onEnableTailscaleFunnel={onEnableTailscaleFunnel}
+            onEnableTailscaleServe={onEnableTailscaleServe}
+            onDisableTailscale={onDisableTailscale}
+            onGetDesktopHostStatus={onGetDesktopHostStatus}
+            onCreateDesktopHostPairingCode={onCreateDesktopHostPairingCode}
+            onRevokeDesktopHostDevice={onRevokeDesktopHostDevice}
             onSetModel={(provider, modelId) => onSetModel(provider, modelId, 'settings')}
             onSetSessionNaming={onSetSessionNaming}
             onSetGeneral={onSetGeneral}
@@ -1195,6 +1336,7 @@ export function Workbench({
             ? activeSession?.runtimeStatus ?? 'ready'
             : runtime.status}
           loading={sessionPreviewPending}
+          navigateToLatestPromptOnMount={navigateTimelineToLatestPromptOnMount}
           compactionActive={
             !viewingArchivedSession &&
             !viewingInactiveSession &&
@@ -1219,7 +1361,7 @@ export function Workbench({
           canExportSession={canExportSession}
           canForkSession={canForkSession}
           canEditHistoryPrompt={canForkSession}
-          hasEarlierConversation={hasEarlierAuthoritativeConversation}
+          hasEarlierConversation={hasEarlierDisplayedConversation}
           conversationActionBusy={busy}
           conversationActionStatus={conversationActionStatus}
           conversationActionError={conversationActionError}
@@ -1331,6 +1473,21 @@ export function Workbench({
         />
       )}
 
+      {state.extensionDialog === null || state.extensionDialog === undefined ? null : (
+        <ExtensionDialog
+          key={[
+            state.extensionDialog.projectKey,
+            state.extensionDialog.sessionKey,
+            state.extensionDialog.sessionId,
+            state.extensionDialog.commandInvocationId,
+            state.extensionDialog.requestId
+          ].join('\u0000')}
+          request={state.extensionDialog}
+          onRespond={onRespondExtensionDialog}
+          onCancel={onCancelExtensionDialog}
+        />
+      )}
+
       {state.projectTrustRequest === null ? null : (
         <ProjectTrustDialog
           key={state.projectTrustRequest.id}
@@ -1365,6 +1522,10 @@ type WorkspaceNavigatorGroupProps = {
   addLabel: string
   addBusy: boolean
   addDisabled: boolean
+  listQuery: SessionListQuery
+  onListQueryChange: (query: SessionListQuery) => void
+  searchPlaceholder: string
+  queryResultNoun: string
   onToggle: () => void
   onAdd: () => Promise<void>
   children: ReactNode
@@ -1381,6 +1542,10 @@ function WorkspaceNavigatorGroup({
   addLabel,
   addBusy,
   addDisabled,
+  listQuery,
+  onListQueryChange,
+  searchPlaceholder,
+  queryResultNoun,
   onToggle,
   onAdd,
   children
@@ -1416,6 +1581,12 @@ function WorkspaceNavigatorGroup({
           ) : null}
         </button>
         <div className="workspace-navigator-group-action-slot">
+          <NavigatorListQueryControls
+            query={listQuery}
+            onQueryChange={onListQueryChange}
+            searchPlaceholder={searchPlaceholder}
+            resultNoun={queryResultNoun}
+          />
           <IconButton
             className="workspace-navigator-group-add"
             icon="plus"

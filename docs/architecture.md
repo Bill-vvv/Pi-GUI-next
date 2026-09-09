@@ -15,12 +15,15 @@ pi --mode rpc
 DesktopNotificationBroker（Electron Main）
     -> notify-send / default action
 
-Optional private remote (disabled unless PI_GUI_REMOTE_ENABLED=1)
+Optional private remote (default off)
 Desktop Settings
-    -> typed RemoteAdmin IPC (generate one-time code / revoke remembered phone)
+    -> typed RemoteAdmin IPC (one-click Tailscale / pairing / revoke)
 Browser
-    -> HTTPS dedicated subdomain (Lucky on router or NAS)
-       -> http://fixed-LAN-IP:port   (exact Lucky peer only)
+    -> default: Tailscale Funnel HTTPS (any browser)
+       or Tailscale Serve HTTPS (approved Tailnet devices)
+       -> http://127.0.0.1:managed-port   (exact loopback proxy only)
+    -> advanced: HTTPS dedicated subdomain (Lucky on router or NAS)
+       -> http://fixed-LAN-IP:port        (exact Lucky peer only)
 Main remote http listener
     -> static out/remote
     -> GET /api/session, /api/state, /api/events (SSE KernelEvent stream)
@@ -29,7 +32,25 @@ Main remote http listener
     -> same Workbench Kernel (no second Kernel / no WebSocket)
 ```
 
-Electron Main 仍是唯一 control plane，但可同时管理多个相互隔离的 Session Runtime。当前主路径不建立第二 Kernel、WebSocket、SQLite、launcher/mirror 或直接 Pi SDK 的第二条主路径。可选的私有远程呈现面（默认关闭）在同一 Main/Kernel 上提供 SSE + JSON POST，详见 [`remote-access.md`](remote-access.md)；它不是第二 control plane，也不把 electron-vite 开发服务器对外暴露。
+Electron Main 仍是唯一 control plane，但可同时管理多个相互隔离的 Session Runtime。当前主路径不建立第二 Kernel、WebSocket、SQLite、launcher/mirror 或直接 Pi SDK 的第二条主路径。可选的私有远程呈现面（默认关闭）在同一 Main/Kernel 上提供 SSE + JSON POST，详见 [`remote-access.md`](remote-access.md)；默认入口由 Main 通过窄 RemoteAdmin IPC 管理系统 Tailscale Funnel/Serve，并让 Gateway 只监听 loopback，手动 Lucky 环境变量模式继续作为互斥的高级入口。两种入口都不是第二 control plane，也不把 electron-vite 开发服务器对外暴露。
+
+统一远程产品拓扑如下；P4-1 已实现 Linux loopback Desktop Gateway，P4-2A 的 Windows Host config、系统 OpenSSH tunnel 与 Node transport 已修复首轮安全 findings并通过正式 gate，但独立 closure 前保持不可用；Windows remote-only Main/Renderer composition 仍待 P4-2B：
+
+```text
+Windows Desktop Renderer
+    -> local typed preload IPC
+Windows Main RemoteHostConnection
+    -> system OpenSSH local port forward
+Linux Main loopback-only Desktop Gateway
+    -> same Workbench Kernel / Runtime contexts
+
+Web Remote
+    -> Tailscale Funnel/Serve loopback proxy (default one-click)
+       or existing Lucky HTTPS trusted-proxy gateway (advanced)
+    -> same Workbench Kernel / Runtime contexts
+```
+
+Windows Desktop 是完整桌面客户端，不嵌入 `src/remote/RemoteApp.tsx`；Web Remote 仍是独立轻量入口。远程模式的 Windows Main 不创建本地 Kernel、不探测本地 Pi，也不拥有 Linux Project、Session、Git、Provider 或 Package 事实。P4-2A 的 transport 只连接固定本机 loopback 端口，先完成无凭证握手并强制 product/protocol/非空 build 完全一致，再允许配对或装载设备凭证；系统 `ssh -G` 拒绝 alias 中非 Pi GUI 所有的额外 forwarding，SSH 启动、连接存活、请求、SSE idle 与停止均有显式边界。它尚未接入 Main/preload，也不持久化凭证。Desktop Gateway 只复用 shared Kernel DTO、revision/event 和有界传输语义，不复用浏览器 Public Origin、Trusted Proxy、Secure Cookie 或静态资源安全边界。P4-1 的启用、SSH、配对和协议边界见 [`desktop-host.md`](desktop-host.md)；统一产品决策与后续发布条件见 D-067。
 
 ## 所有权
 
@@ -41,6 +62,8 @@ Electron Main 仍是唯一 control plane，但可同时管理多个相互隔离�
 | LinuxLocalRuntime | executable、cwd、spawn、signal、退出语义，以及 Main 授予该 Pi 子进程的通知 Broker capability | renderer 状态、Pi message 解释 |
 | PiRpcClient | LF JSONL framing、request/response correlation、RPC 事件接收 | GUI identity、重启策略 |
 | DesktopNotificationBroker | 私有 Unix socket、桌面通知动作和已注册 Session 激活 | Conversation 内容、通用远程控制或任意路径打开 |
+| Web Remote Gateway | 静态 Remote、配对 Cookie、SSE、allowlisted JSON command 与受信代理校验 | Tailscale 账户、Lucky 配置、第二 Kernel 或任意 Main API |
+| Tailscale Remote Manager | 探测系统 Tailscale、管理 Pi GUI 精确拥有的 HTTPS 443 根 handler、持久化 loopback port/origin/token | 安装 Tailscale、保存账户凭据、覆盖未知 Serve/Funnel 配置或自建 relay |
 
 Electron Main 是唯一 control plane 和全部 Pi 子进程 owner。Renderer 不启动进程、不读取 Pi stdout，也不解析 raw Pi event。多个 Runtime 可并发运行，但每个 Runtime 只绑定一个 Pi Session；Renderer 同一时间只投影当前选中的 Session，后台状态通过 Session summary 展示。
 
@@ -71,7 +94,7 @@ subscribe
 | Subagent 运行参数 | Workbench Kernel | XDG config；只在新建或显式重载 Runtime 时通过 `PI_SUBAGENT_MAX_DEPTH` 环境变量生效 |
 | Subagent Agent 定义 | `pi-subagents` Markdown frontmatter | Main 只管理用户级 `~/.agents/` 与当前项目 `.pi/agents/`；内置定义只读 |
 | Subagent Agent 启停 | `pi-subagents` `settings.subagents.agentOverrides` | 用户级写入 Pi `settings.json`，项目级写入 `.pi/settings.json`；项目级优先 |
-| Magic Context 安装与 Extension 启停 | Pi `settings.json` `packages` | GUI 只展示真实 Package/资源过滤状态；配置与健康由上游 setup、doctor 和 `/ctx-status` 负责 |
+| Magic Context 安装与 Extension 启停 | Pi `settings.json` `packages` | GUI 只展示真实 Package/资源过滤状态；配置与健康继续由上游 setup/doctor 负责；当前 `/ctx-status` 依赖 TUI custom UI，不进入 GUI 命令目录 |
 | 历史 Advisor advisory | Pi session 中既有的固定 custom message | Kernel 继续严格归一化为只读 Conversation entry；当前产品不再提供安装、启停或 roster 控制面 |
 | Project、外观、通用与有限应用快捷键设置 | Workbench Kernel | XDG config |
 | 最近 session 指针与非敏感启动证据 | Workbench Kernel | XDG state |
@@ -81,6 +104,8 @@ subscribe
 | Package/Extension/Skill/Prompt 静态 inventory | 已验证 Pi 0.83.0 package root 与 Pi settings | 离线 child 只读投影；不安装 Package、不执行 Extension factory、不表示当前 Runtime effective state |
 
 GUI 不建立 Conversation 数据库，也不把 renderer 投影当作对话事实来源。
+
+Pi `get_commands` 只作为原始资源发现清单，不证明命令已经适配 GUI。Prompt Template 与 Skill 保持动态发现并经 Pi prompt 展开；Extension 命令只有命中固定名称、固定 Package provenance 和明确参数提示的 GUI 适配时才进入 normalized catalog。未知、TUI-only、仅依赖 custom renderer 或未适配 UI 的 Extension 命令不向 Renderer 暴露。已适配 Extension 命令通过 typed `invoke_extension_command` 直接调用，不伪装成普通 prompt；普通 `notify` 事件进入严格、有界的 Timeline 投影。固定 `ask` 工具协议继续拥有自己的多问题响应序列；由当前已适配 Slash Command 发起的 `select`、`confirm`、`input`、`editor` 则归一化为 `KernelState.extensionDialog`，绑定 Project、Session、Session ID、request ID 和内部 RuntimeContext，由桌面或 Web Remote 的原生 modal 通过窄 typed command 回复。提交失败保留同一请求与错误，停止或崩溃清理请求，等待期间禁止 Runtime hibernation。未知命令、模型工具或其他非命令来源的阻塞 UI 仍立即取消并显示错误，`custom` 继续 Fail Fast；GUI 不建立任意 TUI renderer。
 
 自定义模型的 `cost` 仍由 Pi 官方 `models.json` 持久化。用户显式点击一键拉价时，
 Electron Main 只请求一次 LiteLLM 公开价格目录，批量匹配当前 Provider 的全部模型，并通过窄
@@ -110,10 +135,12 @@ GUI 运行设置只持久化最大嵌套深度；`pi-subagents` 通过该深度�
 Magic Context 作为固定但可选的上下文引擎适配。安装和启停复用 Pi PackageSource；
 “已开启”只证明 Extension resource 会在新 Runtime 中加载，不证明 historian、embedding、
 SQLite 或 provider 配置健康。GUI 不解析 Magic Context 私有数据库，也不复制其交互式 setup：
-用户继续使用上游 `setup --harness pi` 和 `doctor --harness pi`，运行中的缓存、Historian 与
-压缩状态通过 Pi 命令目录自然发现的 `/ctx-status` 查看。Extension 启用后由 Magic Context
-取消 Pi 原生自动压缩并接管上下文，因此现有 `compaction_start` / `compaction_end` 只描述
-仍由 Pi 原生 compaction 产生的生命周期，不能被 Renderer 推断为 Magic Context 状态。
+用户继续使用上游 `setup --harness pi` 和 `doctor --harness pi`。当前上游 `/ctx-status` 在 RPC
+`hasUI=true` 时仍调用 TUI `custom()`，因此不进入 GUI 命令目录；在上游提供稳定结构化状态或
+GUI 建立专用 typed adapter 前，运行中的缓存、Historian 与压缩状态保持 unavailable，不能用
+状态栏缓存或失败命令回声冒充。Extension 启用后由 Magic Context 取消 Pi 原生自动压缩并接管
+上下文，因此现有 `compaction_start` / `compaction_end` 只描述仍由 Pi 原生 compaction 产生的
+生命周期，不能被 Renderer 推断为 Magic Context 状态。
 
 S18 的多 Advisor 安装、Extension resource、实时 system 开关和 roster 管理已退出当前产品。
 用户级 Pi 环境不再安装 `pi-gui-multi-advisor`，Settings 也不再展示 Advisor 专页或已适配
@@ -123,11 +150,11 @@ Conversation projector 只读展示，避免旧记录因功能退役而不可读
 
 ## Conversation 展示投影
 
-Workbench Kernel 将 Pi message content 按原始顺序投影成 `message`、`thinking`、`tool`、`error`，以及固定适配的 `subagent-notice` 与历史 `advisor` entry。合法的既有 Advisor advisory 继续通过 strict projector 留在对应 turn 内；Renderer 不接收 raw custom payload，也不提供新的 Advisor 控制入口。GUI / typed Pi RPC slash 命令另投影为本地-only 的 `command` entry（只存在于当前 Runtime context 的展示投影，不写入 Pi session）。一次工具调用始终由 `toolCallId` 标识为同一个 entry，`pending/running/success/error` 与输出只原地更新，不为 tool result 创建第二个展示节点。
+Workbench Kernel 将 Pi message content 按原始顺序投影成 `message`、`thinking`、`tool`、`error`，以及固定适配的 `subagent-notice` 与历史 `advisor` entry。合法的既有 Advisor advisory 继续通过 strict projector 留在对应 turn 内；Renderer 不接收 raw custom payload，也不提供新的 Advisor 控制入口。GUI / typed Pi RPC slash 命令以及成功执行的固定适配 Extension 命令另投影为本地-only 的 `command` entry（只存在于当前 Runtime context 的展示投影，不写入 Pi session）；Extension `notify` 使用有界 `extension-status` entry，未支持的阻塞式 Extension UI 使用明确 `error` entry。一次工具调用始终由 `toolCallId` 标识为同一个 entry，`pending/running/success/error` 与输出只原地更新，不为 tool result 创建第二个展示节点。
 
 `todowrite` 使用固定工具适配：Main 只从合法完整参数中投影 `id/content/status/priority`，不把原始 Todo 参数或 details 交给专用界面解析。Renderer 只选择最后一个用户轮次内最新的非失败列表；新用户轮次尚未创建 Todo、空列表或 Conversation identity 变化时旧面板退出。Todo 在 Composer 上方使用专用可折叠面板，普通 Timeline 不重复展示同一工具卡；面板实际高度继续由 Composer 测量并进入 Timeline clearance。
 
-`ask` 使用固定的交互式工具适配。Main 只接受严格归一化的 `single`、`multiple` 与 `text` 问题，把受控交互状态附着在原 `toolCallId` 对应的运行中 tool entry 上，不创建第二个 Timeline 节点，也不把原始 `extension_ui_request` payload 交给 Renderer。Renderer 只通过窄 typed IPC 提交结构化答案或取消；Kernel 必须同时校验当前 `sessionKey`、`toolCallId` 与等待中的 extension UI request，并按问题顺序发送 `extension_ui_response`。Session、工具或请求 identity 变化时旧交互立即失效，提交错误只更新该工具的受控错误状态。
+`ask` 使用固定的交互式工具适配。Main 只接受严格归一化的 `single`、`multiple` 与 `text` 问题，把受控交互状态附着在原 `toolCallId` 对应的运行中 tool entry 上，不创建第二个 Timeline 节点，也不把原始 `extension_ui_request` payload 交给 Renderer。Renderer 只通过窄 typed IPC 提交结构化答案或取消；Kernel 必须同时校验当前 `sessionKey`、`toolCallId` 与等待中的 extension UI request，并按问题顺序发送 `extension_ui_response`。Session、工具或请求 identity 变化时旧交互立即失效，提交错误只更新该工具的受控错误状态。普通 Extension Command Dialog 与 Ask 分开：它是 Runtime 阻塞状态而非 Conversation entry，每个 RuntimeContext 同时最多一个。Workbench 为每次已适配命令调用生成 opaque invocation ID，Shared Runtime 通过 command-scoped `AsyncLocalStorage` 只给该 handler 的请求附加 owner；Kernel 同时核对 active invocation、精确 adapter blocking-method capability 与 Project/Session/Session ID/request identity。Renderer 只接收严格有界字段，桌面和 Web Remote 的 modal key 由完整 owner identity 构成，并使用共享焦点/Escape 协议。Session summary 对 Ask 与 Extension Dialog 统一报告 `awaitingUserInput`；无 capability、无 invocation owner 或未知来源请求继续取消。
 
 Kernel 在活动开始时记录当前 run 的 entry 起点，并只以 `agent_settled` 结束该边界。Renderer 对活动 run 线性展示 thinking 与工具状态；run settled 后，把 thinking 和工具项折叠到该轮最终回答上方，展开时仍使用原始顺序。文件操作摘要只从有明确结构化路径的工具参数提取，不猜测 `bash` 的文件副作用。
 
@@ -155,9 +182,9 @@ Markdown 强行关联原 run，也不直接绕过主 Agent 回复子代理。
 
 Composer 附件沿 Pi 0.83.0 的交互式 TUI 与 RPC 边界处理：普通文件只把 `@路径` 放入消息，由 Agent 使用 Pi 原生 `read` 工具按需读取；不在首条 prompt 中内联文件正文。`read` 的文本结果遵循 Pi 的 2,000 行或 50 KiB 截断边界，并可用 offset/limit 继续。图片转换为 RPC `images` 中的 `{ type: "image", mimeType, data }`，直接使用原生多模态输入。系统文件选择由 Main 取得路径，显式拖放由 Renderer 通过 Electron `webUtils.getPathForFile` 取得路径；普通文件只读取小段签名头用于区分图片，图片在进入 IPC/RPC 前满足 2000×2000 与 4.5 MiB base64 边界。
 
-Pi session 仍保存完整用户消息和 image content block。Kernel 对 Renderer 只投影文件名、路径和类型摘要，不把附件正文或图片 base64 放入 `KernelState`；恢复历史和实时事件使用同一投影。用户点击时间线中的图片附件时，Renderer 通过窄 typed command 按需读取对应 session 消息中的 `ImageContent` 并在灯箱中展示，仍不把图片 payload 写入常驻状态。附件变化不能走纯文本 append patch，必须回退全量状态以避免静默丢失附件。
+Pi session 仍保存完整用户消息和 image content block。Kernel 对 Renderer 只投影文件名、路径和类型摘要，不把附件正文或图片 base64 放入 `KernelState`；恢复历史和实时事件使用同一投影。用户消息中的图片附件直接占据 Timeline 内联缩略图位置；缩略图接近可视区域后，Renderer 才通过窄 typed command 按需读取对应 session 消息中的 `ImageContent`，并只保存在该图片组件的短生命周期 state 中。点击缩略图复用同一 payload 打开灯箱；Session/message/attachment identity 变化会使旧异步结果失效并关闭 viewer。附件变化不能走纯文本 append patch，必须回退全量状态以避免静默丢失附件。
 
-工具结果同样可以携带混合 `TextContent` / `ImageContent`。`tool_execution_update`、`tool_execution_end` 与历史 `role: 'toolResult'` 统一投影为同一 `KernelToolEntry`：文本进入 `output`，合法图片只进入 metadata-only `attachments`（含稳定 `contentIndex` 与 `toolCallId`），base64 绝不进入 KernelState、patch 或 Renderer 常驻状态。支持 PNG/JPEG/GIF/WebP；非法、空、非 canonical、超限或 MIME/signature 不匹配的图片块被忽略，且不破坏同结果中的合法文本或合法图片；terminal tool 忽略晚到的 start/update。Renderer 在普通工具详情中展示图片入口（即使没有文本输出也不显示“等待工具输出”），点击后通过 `getToolImage(sessionKey, toolCallId, contentIndex)` 按需读取；历史以当前 active branch 的 Pi transcript 为事实源。只有 terminal end 可写入 Main 实时兜底 cache；cache 绑定 Project、Session、Runtime generation 与工具图片 identity，只有同一 displayed Runtime 仍投影该附件且消息列表尚未 materialize 对应 toolResult 时才能读取，并受 60 秒 TTL、8 条目和 24 MiB base64 总预算约束。权威消息读取成功、terminal 替换、identity 迁移、归档或停止会清理相应 cache。Subagent 专用工具不投影/显示该通用图片 UI；Session HTML export 不在此路径扩展。
+工具结果同样可以携带混合 `TextContent` / `ImageContent`。`tool_execution_update`、`tool_execution_end` 与历史 `role: 'toolResult'` 统一投影为同一 `KernelToolEntry`：文本进入 `output`，合法图片只进入 metadata-only `attachments`（含稳定 `contentIndex` 与 `toolCallId`），base64 绝不进入 KernelState、patch 或 Renderer 常驻状态。支持 PNG/JPEG/GIF/WebP；非法、空、非 canonical、超限或 MIME/signature 不匹配的图片块被忽略，且不破坏同结果中的合法文本或合法图片；terminal tool 忽略晚到的 start/update。普通工具图片作为该轮次的直接内容显示在过程块之后，不受 completed process 折叠状态影响；缩略图接近可视区域后通过 `getToolImage(sessionKey, toolCallId, contentIndex)` 按需读取，点击后复用统一灯箱。历史以当前 active branch 的 Pi transcript 为事实源。只有 terminal end 可写入 Main 实时兜底 cache；cache 绑定 Project、Session、Runtime generation 与工具图片 identity，只有同一 displayed Runtime 仍投影该附件且消息列表尚未 materialize 对应 toolResult 时才能读取，并受 60 秒 TTL、8 条目和 24 MiB base64 总预算约束。权威消息读取成功、terminal 替换、identity 迁移、归档或停止会清理相应 cache。Subagent 专用工具不投影/显示该通用图片 UI；Session HTML export 不在此路径扩展。
 
 高频 Pi message、thinking 和 tool update 不重复发送完整 `KernelState`。Main 的 RuntimeContext 始终保留当前 active branch 的完整 Conversation，但发布给 Renderer 的权威 `KernelState.conversation` 只携带有明确绝对 `startIndex` 的活动窗口：最近 60 个完整 settled turn 加完整 active run；用户向上加载时通过 identity- 与边界绑定的窄 typed IPC 每次前置最多 60 轮；该只读请求不改变 Kernel revision，也不得扩张后续 Main snapshot。Renderer 只在新权威尾窗与本地窗口存在连续 entry identity 重叠时保留已加载前缀，否则立即丢弃。Kernel 发送带单调 revision 的 `kernel.state-patched`：entry patch index 与 `activeRunStartIndex` 均使用完整 Conversation 的绝对 index，Renderer 以 `absoluteIndex - startIndex` 定位当前窗口；新 entry 只发送插入项，append-only 文本和工具输出只发送起始长度与新增后缀。Project、Session、Session ID、窗口边界 index 或边界 entry ID 不匹配时分页结果必须明确拒绝；非前缀改写或无法安全增量化时立即退回带 revision 的 `kernel.state-changed` 窗口快照。初始读取和显式重同步返回将 state 与当前 revision 原子绑定的 `KernelSnapshot`。Renderer 严格按 revision 应用事件，连续 patch 最多每动画帧提交一次 React state；revision 缺口、patch 队列溢出或 acknowledgement 等待超时只触发一个定向 snapshot 重同步，已经应用更新后的同 revision 或旧 snapshot 直接忽略，不能回退较新的事件状态。
 
@@ -165,9 +192,9 @@ Pi session 仍保存完整用户消息和 image content block。Kernel 对 Rende
 
 Main→Renderer 的连续 `kernel.state-changed` / `kernel.state-patched` 使用 8ms 窗口和最多 64 个成员的有界 envelope。新的完整 state 会替代此前尚未发送的 state/patch，之后的 patch 仍按 revision 顺序保留；compaction 等领域事件先 flush pending state，作为顺序屏障。Renderer 逐成员复用同一 revision barrier、RAF patch 合并和 snapshot resync，不改变 ack 语义。该边界约束 Main 发送前队列与 structured-clone envelope 数量，不声称能够控制 Electron/Chromium 已接收后的下游字节队列。
 
-Pi compaction 不进入 Conversation entry：Kernel 以独立 lifecycle 标记所属 Runtime context，成功后核对 identity 并一次替换 Conversation、usage 与生命周期 statistics，失败或取消保留旧投影。
+Pi compaction 不进入 Conversation entry：Kernel 以独立 lifecycle 标记所属 Runtime context，成功后核对 identity，保留完整 active-branch Conversation，只刷新 Session usage 与生命周期 statistics；失败或取消保留旧投影。
 
-Timeline 初始只接收并挂载最近 60 个 settled turn 与完整 active run；用户可按 60 轮向前加载并保持当前滚动锚点。加载更早历史只扩展当前活动 Conversation 的 Renderer 工作窗口，不建立跨 Session 对话缓存或第二事实源；切换 Project/Session 后重新从尾窗开始。折叠的工作过程只保留摘要，展开时才挂载 thinking、工具参数与输出正文。完整 Conversation 继续只存在于 Main 的 RuntimeContext / Pi transcript，导出、fork、图片读取和“复制最后回答”的选择逻辑不得依赖当前 Renderer 页。长对话滚动时，Renderer 只从已加载的用户 message 计算顶部阅读轮次，供 Prompt 导航轨高亮与定位使用；这只是展示投影，不复制或持久化 Conversation 事实，也不在 Session Header 下粘着 prompt。
+Timeline 初始只接收并挂载最近 60 个 settled turn 与完整 active run；用户可按 60 轮向前加载并保持当前滚动锚点。`stopped` / `crashed` Session 和临时归档 Session 的 detached preview 也只从最近 60 轮开始，并通过额外绑定 `previewId` 的窄 typed IPC 复用同一 Timeline 向前加载交互；分页只更新当前只读 preview，不启动 Runtime、不推进 Kernel revision，切换目标、退出归档预览或 prompt-time activation 后的旧响应必须丢弃。加载更早历史只扩展当前显示 Conversation 的 Renderer 工作窗口，不建立跨 Session 对话缓存或第二事实源；切换 Project/Session 后重新从尾窗开始。折叠的工作过程只保留摘要，展开时才挂载 thinking、工具参数与输出正文；普通工具图片的 metadata 由对应轮次直接挂载，payload 只在缩略图接近可视区域后读取。完整 Conversation 继续只存在于 Main 的 RuntimeContext / Pi transcript，导出、fork、图片读取和“复制最后回答”的选择逻辑不得依赖当前 Renderer 页。长对话滚动时，Renderer 只从已加载的用户 message 计算顶部阅读轮次，供 Prompt 导航轨高亮与定位使用；这只是展示投影，不复制或持久化 Conversation 事实，也不在 Session Header 下粘着 prompt。
 
 ## 历史 Prompt 与 P3 前置基础
 
@@ -188,7 +215,7 @@ stopped -> starting -> ready -> running -> ready -> stopping -> stopped
 
 ## Runtime 内存与休眠边界
 
-持久 Session、managed RuntimeContext 与 Renderer 工作集是三个不同生命周期。休眠停止一个非前台 Pi Runtime，同时保留 Session pointer、导航 identity 与 transcript；再次选择时按同一 Session identity 重新启动。Renderer 的 Chromium native allocation 不属于 Runtime 休眠直接回收的内存。
+持久 Session、managed RuntimeContext 与 Renderer 工作集是三个不同生命周期。休眠停止一个非前台 Pi Runtime，同时保留 Session pointer、导航 identity 与 transcript；再次选择只读取同一 Session 的静态历史，首个明确依赖 Runtime 的操作才按该 identity 重新启动。Renderer 的 Chromium native allocation 不属于 Runtime 休眠直接回收的内存。
 
 每个 managed Pi RPC 都显式加载 app-owned `pi-gui-runtime-quiescence` Extension。Main 通过隐藏命令和 nonce-correlated `setStatus` 取得 provider 协调结果，通过严格 `get_extensions` RPC 取得完整、脱敏、版本化的 loaded-Extension inventory；Pi 0.83.0 使用受版本约束的 private inventory bridge。protocol、complete/loading 一致性、capability、数量、路径边界或 owner discovery 任一异常都 fail-closed，不允许回退扫描 Timeline 或猜测 Extension 状态。
 

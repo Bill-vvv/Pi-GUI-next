@@ -48,6 +48,7 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 - 分组标题通过 `aria-expanded` / `aria-controls` 只控制本组显隐；当前 `navigatorKind` 只提供活动类别强调与真实运行数量，不把分组标题重新变成类别切换按钮。
 - “项目”分组标题的独立 `＋` 是唯一添加 Project 入口；“任务”分组标题的独立 `＋` 创建 Task。Project 行继续提供该 Project 的新建 Session 入口；操作按钮不得触发父级 disclosure。
 - Session 行负责打开已有 Session；选中的 Project 和 Session 必须有唯一、清晰的选中态。
+- Project 可通过 Renderer 本地偏好置顶，并在项目组内排在普通 Project 之前。Project Conversation 与独立 Task Session 都可置顶；置顶项从原 Project/Task 列表移出，按置顶操作顺序统一显示在两个顶层分组之前，不受 Project 手动顺序、Project 内 Session 活动顺序或 Task 顺序影响。置顶只保存稳定的 Project path / `taskKey` + Session ID 和显示顺序，不进入 Kernel、不持久化 Task 私有 Runtime path，也不改变 Runtime ownership 或 Conversation 事实源。
 - Project path 放在 Project 行的次级信息或 tooltip，不继续占用 Composer 底部。
 - Navigator 只展示已经贯通真实能力的行内操作；Session/Task 归档已接入，搜索和其他管理入口仍不得提前展示。
 - Task 的应用私有 Runtime path 不进入 Project 行、Header、hover card 或设置作用域；Renderer 只依据 typed `workspaceKind` / `taskKey` 判断类别。
@@ -57,7 +58,7 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 - Project 保留手动拖拽排序，但不得把整行做成常驻原生 `draggable`。排序手势只能从主行内容的主指针按下开始，并在超过明确移动阈值后才进入拖拽；action slot、行内按钮和普通单击不得触发排序。实现可使用 pointer capture 与独立拖拽预览，但必须在 `pointerup`、`pointercancel`、lost capture、窗口失焦或目标失效等任一路径清理手势和临时顺序。
 - 每个 Project 的 Session 都由 Kernel 独立排序，并将 `running` 项无条件置顶。运行中组和非运行组内部始终按 `lastActivityAt` 倒序输出；最新活动在前，无可用活动时间的项放在末尾，同状态、同时间项保持稳定顺序。Session 不提供手动拖拽或第二套持久化顺序。
 - `lastActivityAt` 只读取 Pi transcript 当前 active branch，按 branch entry 顺序选择最后一个顶层 `type: "message"` entry，并且只接受 canonical `Date#toISOString()` 字符串，再一次性转换为 Unix epoch milliseconds。不得跨分支或按数值最大 timestamp 选择，不接受数字秒/毫秒、相对时钟、非 canonical 日期字符串或嵌套 `message.timestamp`；capability custom entry、`session_info`、点击、恢复和其他 Runtime 元数据同样不得刷新活动时间或排序。
-- Renderer 的普通历史默认显示 5 个并按 5 个继续展开，但当前展示项、provisional / 非空闲 Runtime，以及后台刚完成但尚未查看的 Session 必须作为分页外保留项；结束后的 Kernel 重排不得让用户尚未查看的完成项从导航消失。未读标记是 Renderer 根据同一 Session identity 的 `lastActivityAt` 观察结果派生的瞬时展示状态：初次观察只建立基线，未展示 Session 的活动时间推进才标记未读，打开后清除，provisional 升级为 canonical identity 时保持连续；Kernel 不持久化第二份未读事实。
+- Renderer 的 Session/Task 历史列表复用统一的搜索、时间过滤与分段展开浏览：默认显示 6 个普通摘要，展开按钮明确显示剩余数量并一次展示全部，展开后可收起至默认 6 个；当前展示项、provisional / 非空闲 Runtime，以及后台刚完成但尚未查看的 Session 必须作为过滤与展开窗口之外的保留项且不占普通展开额度；结束后的 Kernel 重排不得让用户尚未查看的完成项从导航消失。未读标记是 Renderer 根据同一 Session identity 的活动观察派生的瞬时展示状态：初次观察只建立基线；未展示 Session 的 `lastActivityAt` 推进，或 Runtime 从 `running` 进入 `ready` / `crashed`，都标记未读；打开后清除，provisional 升级为 canonical identity 时保持连续。后台完成同时在当前窗口显示不自动消失的 identity-scoped 通知，并提供“查看”动作回到准确的 Project/Task 与 Session；打开目标或手动关闭后移除，最多保留最近 3 项。完成结果仍只属于原 Session，不复制进当前 Conversation；Kernel 不持久化第二份未读或通知事实。
 - 新建等 Project action slot 不得武装行拖拽；Project 与 Session 行内按钮都必须拥有独立点击边界。
 - action slot 内叠放时间文字、运行指示和操作按钮时，操作按钮必须位于最上层并独占可见区域的指针命中；被隐藏或替换的文字、图标及状态层必须使用 `pointer-events: none`，文字层同时禁止文本选择。
 - `opacity: 0` 只改变绘制结果，不代表元素已经退出 hit testing。任何悬浮切换实现都必须分别核对视觉层、pointer events、文本选择和 stacking order，不能只验证图标是否显示。
@@ -80,15 +81,15 @@ S8 不实现真实多 Project、多 Session 或命令执行，也不对 icon、�
 - 既有 Session 中合法的历史 Advisor advisory 继续留在触发它的 turn 内，按归一化 entry 时序只读显示名称、严重度、正文和 guidance；blocker 不覆盖 Assistant 最终回答，Renderer 不解析 raw custom message 或 XML，也不恢复已退役的 Advisor 安装、启停或 roster 控制面。
 - Navigator 完全展开时，Timeline 左缘显示与真实用户轮次对应的 Prompt 导航短标记；默认只挂载以当前阅读轮次为中心、最多 7 条的局部窗口，悬浮后可用滚轮、键盘和预览跨窗口浏览其余 Prompt，点击定位对应轮次，离轨收起后回到当前阅读窗口。首次悬浮成立后扩展为连续命中带，邻近标记保持固定线高和矩形端点，宽度使用有界离散层级并只在相邻层级间按整数像素插值，短暂离轨不会立即收起；折叠与窄窗口下隐藏。不在 Session Header 下粘着当前阅读轮次的用户 prompt。
 - 复制回答、导出 HTML 与分叉对话属于当前 Conversation 操作：每个具备真实操作能力的已完成 turn 都在下方常驻预留同高的内联图标槽，悬停该 turn 或用键盘聚焦槽内按钮时只切换图标可见性与命中，不改变后续内容位置，也不占用 Session Header。复制/导出反馈固定留在发起操作的同一 turn 槽内，并以单行省略保持槽高；没有 turn 来源的快捷键反馈才使用时间线末尾的稳定位置。图标保持无底板的轻量外观。导出与分叉仍是会话级能力；复制作用于当前聚焦轮次的最终回答。
-- Project 或 Session 选择变化时，Timeline identity 随活动二元组变化，不复用上一 Session 的滚动和 disclosure 状态。
+- Project 或 Session 选择变化时，Timeline identity 随活动二元组变化，不复用上一 Session 的滚动和 disclosure 状态；打开已有 Conversation 后首次定位到最后一条用户 Prompt 的顶部，空白新对话继续从输出末尾自动跟随。
 
 ### 3.4 Composer 与命令入口
 
 - Composer 在 Runtime `ready` 时使用 Enter 发送普通 prompt；在 `running` 时继续可编辑，Enter 排队 `follow_up`、Alt+Enter 排队 `steer`，同时保留 Shift+Enter 换行和 Escape abort。
 - Composer 支持系统多选、拖放和剪贴板附件；普通文件按 Pi 交互式 TUI 的 `@路径` 语义引用，并由 Agent 使用原生 `read` 工具按需读取；图片走 Pi RPC 原生 `images`。两者都适用于 prompt、steer 与 follow-up。
 - 输入 `/` 时，命令菜单在 Composer 上方进入正常交互层；S8 只提供明确指向 S11 的空态，不实现假命令、查询或执行。
-- S11 的命令表区分 GUI 本地命令、typed Pi RPC 命令，以及 Pi `get_commands` 返回的 extension、prompt 和 skill 命令。
-- 不建立一个可绕过 typed Kernel 边界的通用“执行任意命令”IPC。
+- S11 的命令表区分 GUI 本地命令、typed Pi RPC 命令，以及 Pi `get_commands` 返回的 extension、prompt 和 skill 命令。当前 Extension 只有固定名称、Package provenance、参数与交互策略的适配项进入菜单；只有精确 command invocation owner 且 adapter 声明对应 blocking-method capability 的 `select`、`confirm`、`input`、`editor` 才通过 identity-bound Kernel state 和原生 modal 处理，Ask 保持独立 Timeline 工具协议，任意 `custom()` TUI 组件仍不进入 GUI。
+- 不建立一个可绕过 typed Kernel 边界的通用“执行任意命令”IPC，也不把 raw Extension UI request 或任意 TUI renderer 暴露给 Renderer。
 
 ## 4. P2 状态身份
 
@@ -166,15 +167,15 @@ S9 先加入 `projects[]` 与 `activeProjectKey`，S10 再加入 Session 集合�
 1. 校验目标 `projectKey` 已登记且仍对应 canonical、可读、可执行的目录，并加载该 Project 的 Session 注册表。
 2. 当前 Project 存在运行中的 Session 时仍允许切换；切换不停止或取消其他 Project 的 Runtime。
 3. 持久化 `activeProjectKey` 后发布目标 Project 的 Session 摘要和当前投影；不得把上一 Project 的 Conversation 标成目标 Project。
-4. 目标 Session 已有受管 RuntimeContext 时直接载入该 context；停止状态的历史 Session 在用户点击时无感激活 Runtime，可先异步投影历史。
+4. 目标 Session 已有可用受管 RuntimeContext 时直接载入该 context；停止或崩溃状态的历史 Session 在用户点击时只异步投影历史，不恢复 Runtime，直到用户提交 prompt 或触发其他明确依赖 Runtime 的操作。
 5. 持久化或加载失败时保留明确错误，不创建 ghost Session，也不静默停止后台 Runtime。
 
 ### 6.2 Session 切换
 
 1. Renderer 先切换可见目标，再异步加载目标 Session；快速连续切换只接受最后一次读取结果。
 2. 目标 Session 已有受管 RuntimeContext 时直接切换当前投影，不停止原 Session 或其他后台 Runtime；发布给 Renderer 的权威 Conversation 只包含最近 60 个 settled turn 与完整 active run，较早历史按 60 轮向前读取。
-3. 停止状态的历史 Session 在点击时立即切换可见目标，并后台激活 Runtime；先校验 canonical `sessionFile`、普通文件、可读性和 `sessionId`，再启动或恢复。可先异步投影历史，不要求用户再点“启动 Pi”。
-4. 后台启动不得阻塞导航：不把 `activate-session` / `start-session` 做成全局 exclusive busy；侧栏在启动过程中仍可继续点击。快速连点历史 Session 时以短 settle（约 120ms）合并启动意图，只真正启动最后停留的目标；已有受管 Runtime 的目标立即切换，无 settle。Kernel 侧 launch 仍单飞，Renderer 用串行 ensure 泵对齐。目标 Session 已进入 `starting` 后，Composer 仍可先接受一条普通 prompt，并等待同一启动任务完成后提交；slash 命令必须等目标命令目录可用。
+3. 停止或崩溃状态的历史 Session 在点击时立即切换可见目标，只通过只读 preview 校验 canonical `sessionFile`、普通文件、可读性和 `sessionId` 并投影历史；普通浏览不得调用 `activate-session` 或启动 Pi Runtime。
+4. 快速连点停止或崩溃的历史 Session 时以短 settle（约 120ms）合并 preview 意图，只读取最后停留的目标；已有 `ready` / `running` Runtime 的目标仍立即切换，无 settle。用户提交普通 prompt 时，Renderer 取消同目标尚未完成的静态 preview，通过既有串行 ensure 泵只启动一次精确 Runtime，并在准备完成后提交；slash 命令仍等待目标 Runtime 的命令目录可用。冷启动恢复持久化 active Session 的既有路径不受此浏览语义影响。
 5. 新 Session 先进入可输入的空白工作区，后台启动 Runtime；首次提交复用同一启动任务。
 6. 失败时保留目标页面并显式展示错误，不把旧 Conversation 标成新目标，也不静默新建 Session。
 7. 普通选择或切换不得收口原 Runtime；归档、显式 reload/stop、应用退出等生命周期操作才可停止对应进程。S26 只在 Main/Kernel 内保留单个后台持久 Runtime 的回收原语，用于复用严格 busy gate、stop ownership、launch 串行化与同 Pi Session 恢复；它不经 typed IPC 暴露，Renderer 没有 Session、Project 或全局主动休眠入口。未来自动回收必须先取得 Kernel 与已加载 Extension 的 quiescence/operation lease 事实，再由策略选择候选；未知状态 fail-closed，自动回收与 LRU 当前仍未交付。

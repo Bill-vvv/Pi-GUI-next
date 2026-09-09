@@ -33,6 +33,10 @@ const taskNavigatorSource = await readFile(
   new URL('./TaskNavigator.tsx', import.meta.url),
   'utf8'
 )
+const sessionHoverCardSource = await readFile(
+  new URL('./SessionHoverCard.tsx', import.meta.url),
+  'utf8'
+)
 const composerSource = await readFile(
   new URL('../composer/Composer.tsx', import.meta.url),
   'utf8'
@@ -140,7 +144,7 @@ test('Workbench exposes independent Project and Task disclosure groups', () => {
   assert.match(workbenchSource, /aria-controls=\{contentId\}/)
   assert.match(
     workbenchSource,
-    /className="workspace-navigator-group-action-slot"[\s\S]*className="workspace-navigator-group-add"/
+    /className="workspace-navigator-group-action-slot"[\s\S]*NavigatorListQueryControls[\s\S]*className="workspace-navigator-group-add"/
   )
   assert.match(
     workbenchCssSource,
@@ -148,11 +152,15 @@ test('Workbench exposes independent Project and Task disclosure groups', () => {
   )
   assert.match(
     workbenchCssSource,
-    /data-kind='project'[\s\S]*workspace-navigator-group-add \{[\s\S]*opacity: 0;/
+    /workspace-navigator-group-add,[\s\S]*workspace-navigator-group-query-action \{[\s\S]*opacity: 0;/
   )
   assert.match(
     workbenchCssSource,
-    /workspace-navigator-group-action-slot:hover[\s\S]*workspace-navigator-group-add:not\(:disabled\)/
+    /workspace-navigator-group-header:hover[\s\S]*workspace-navigator-group-add:not\(:disabled\)/
+  )
+  assert.match(
+    workbenchCssSource,
+    /workspace-navigator-group-header:hover[\s\S]*workspace-navigator-group-query-action/
   )
   assert.doesNotMatch(workbenchSource, /className="add-project-entry/)
 })
@@ -173,6 +181,7 @@ test('Task Navigator gives pending ask replies priority over lifecycle and unrea
   const html = renderToStaticMarkup(createElement(TaskNavigator, {
     hidden: false,
     tasks: [awaitingTask],
+    listQuery: { search: '', timeFilter: 'all' },
     activeWorkspaceKey: awaitingTask.workspaceKey,
     displayedSessionKey: null,
     viewedSessionKey: null,
@@ -183,6 +192,8 @@ test('Task Navigator gives pending ask replies priority over lifecycle and unrea
     pendingAction: null,
     contextActionStatus: null,
     tokenCountFormat: 'full',
+    pinnedSessionIdentities: new Set<string>(),
+    onTogglePinnedSession: () => {},
     onClearArchivedSessionPreview: () => {},
     onActivateTask: () => Promise.resolve(),
     onOpenSession: () => {},
@@ -195,10 +206,32 @@ test('Task Navigator gives pending ask replies priority over lifecycle and unrea
   assert.doesNotMatch(html, /session-unread-indicator/)
 })
 
+test('Task Navigator exposes the shared Session hover details without private paths', () => {
+  assert.match(taskNavigatorSource, /const sessionHoverCard = useSessionHoverCard\(hidden\)/)
+  assert.match(
+    taskNavigatorSource,
+    /aria-describedby=\{sessionHoverCard\.describedBy\(session\.key\)\}/
+  )
+  assert.match(
+    taskNavigatorSource,
+    /onFocus=\{\(event\) => sessionHoverCard\.open\(session\.key, event\.currentTarget\)\}/
+  )
+  assert.match(
+    taskNavigatorSource,
+    /onPointerMove=\{\(event\) => sessionHoverCard\.request\(session\.key, event\.currentTarget\)\}/
+  )
+  assert.match(
+    taskNavigatorSource,
+    /<SessionHoverCard[\s\S]*showSessionFile=\{false\}/
+  )
+  assert.match(sessionHoverCardSource, /showSessionFile \? \(/)
+})
+
 test('Task Navigator exposes a flat task list without hidden workspace paths', () => {
   const html = renderToStaticMarkup(createElement(TaskNavigator, {
     hidden: false,
     tasks: [task('task-1', 'ready', 20)],
+    listQuery: { search: '', timeFilter: 'all' },
     activeWorkspaceKey: '/var/lib/pi-gui-next/tasks/task-1',
     displayedSessionKey: '/tmp/task-1.jsonl',
     viewedSessionKey: '/tmp/task-1.jsonl',
@@ -209,6 +242,8 @@ test('Task Navigator exposes a flat task list without hidden workspace paths', (
     pendingAction: null,
     contextActionStatus: null,
     tokenCountFormat: 'full',
+    pinnedSessionIdentities: new Set<string>(),
+    onTogglePinnedSession: () => {},
     onClearArchivedSessionPreview: () => {},
     onActivateTask: () => Promise.resolve(),
     onOpenSession: () => {},
@@ -218,6 +253,36 @@ test('Task Navigator exposes a flat task list without hidden workspace paths', (
   assert.doesNotMatch(html, /role="tabpanel"/)
   assert.match(html, /aria-labelledby="task-navigator-panel-toggle"/)
   assert.match(html, />任务 1</)
+  assert.match(html, /aria-label="置顶任务"/)
   assert.doesNotMatch(html, /aria-label="新建任务"/)
   assert.doesNotMatch(html, /\/tmp\/task-1\.jsonl/)
+})
+
+test('Task Navigator moves pinned tasks out of the Task group', () => {
+  const pinnedTask = task('task-1', 'ready', 20)
+  const identity = `task:${pinnedTask.taskKey}\u0000${pinnedTask.session.id}`
+  const html = renderToStaticMarkup(createElement(TaskNavigator, {
+    hidden: false,
+    tasks: [pinnedTask],
+    listQuery: { search: '', timeFilter: 'all' },
+    activeWorkspaceKey: pinnedTask.workspaceKey,
+    displayedSessionKey: pinnedTask.session.key,
+    viewedSessionKey: null,
+    viewingArchivedSession: false,
+    busy: false,
+    canChangeProjectOrSession: true,
+    sessionPreviewPending: false,
+    pendingAction: null,
+    contextActionStatus: null,
+    tokenCountFormat: 'full',
+    pinnedSessionIdentities: new Set([identity]),
+    onTogglePinnedSession: () => {},
+    onClearArchivedSessionPreview: () => {},
+    onActivateTask: () => Promise.resolve(),
+    onOpenSession: () => {},
+    onArchiveSession: () => Promise.resolve()
+  }))
+
+  assert.match(html, /任务已显示在置顶区域。/)
+  assert.doesNotMatch(html, />任务 1</)
 })

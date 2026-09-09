@@ -26,7 +26,21 @@
 
 .remote-access-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  gap: 8px;
+}
+
+.remote-access-default-label {
+  margin-left: 6px;
+  color: var(--color-accent-primary);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+}
+
+.remote-access-action-primary:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-accent-primary) 58%, var(--color-border-input));
+  color: var(--color-accent-primary);
 }
 
 .remote-access-action,
@@ -71,8 +85,8 @@
 }
 
 .remote-access-code-status {
-  margin: 0 18px;
-  padding: 12px 0 4px;
+  margin: 0;
+  padding: 4px 0 12px;
 }
 
 .remote-access-code-empty,
@@ -138,10 +152,12 @@
 }
 
 @media (max-width: 500px) {
+  .remote-access-actions,
   .remote-access-dialog-actions {
     display: grid;
   }
 
+  .remote-access-actions button,
   .remote-access-dialog-actions button {
     width: 100%;
   }

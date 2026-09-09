@@ -3,6 +3,8 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 const PANEL_PATH = new URL('./RemoteAccessPanel.tsx', import.meta.url)
+const DESKTOP_HOST_PANEL_PATH = new URL('./DesktopHostAccessPanel.tsx', import.meta.url)
+const SETTINGS_PANEL_PATH = new URL('./SettingsPanel.tsx', import.meta.url)
 const APP_PATH = new URL('../../App.tsx', import.meta.url)
 const PRELOAD_PATH = new URL('../../../../preload/index.ts', import.meta.url)
 const REMOTE_APP_PATH = new URL('../../../../remote/RemoteApp.tsx', import.meta.url)
@@ -14,6 +16,14 @@ test('RemoteAccessPanel uses typed remote admin callbacks and modal revoke confi
   assert.match(source, /onGetStatus:\s*\(\)\s*=>\s*Promise<RemoteAccessStatus>/u)
   assert.match(source, /onCreatePairingCode:\s*\(\)\s*=>\s*Promise<RemotePairingCode>/u)
   assert.match(source, /onRevokeDevice:\s*\(\)\s*=>\s*Promise<RemoteAccessStatus>/u)
+  assert.match(source, /onGetTailscaleStatus:\s*\(\)\s*=>\s*Promise<TailscaleRemoteStatus>/u)
+  assert.match(source, /onEnableTailscaleFunnel:\s*\(\)\s*=>\s*Promise<TailscaleRemoteStatus>/u)
+  assert.match(source, /onEnableTailscaleServe:\s*\(\)\s*=>\s*Promise<TailscaleRemoteStatus>/u)
+  assert.match(source, /onDisableTailscale:\s*\(\)\s*=>\s*Promise<TailscaleRemoteStatus>/u)
+  assert.match(source, /任意浏览器/u)
+  assert.match(source, /一键开启/u)
+  assert.match(source, /仅我的设备/u)
+  assert.match(source, /Tailscale Funnel/u)
   assert.match(source, /生成配对码/u)
   assert.match(source, /5 分钟内一次有效/u)
   assert.match(source, /撤销已配对手机/u)
@@ -25,16 +35,38 @@ test('RemoteAccessPanel uses typed remote admin callbacks and modal revoke confi
   assert.doesNotMatch(source, /ipcRenderer|electron/iu)
 })
 
+test('DesktopHostAccessPanel keeps SSH pairing separate from Web Remote browser auth', async () => {
+  const [source, settings] = await Promise.all([
+    readFile(DESKTOP_HOST_PANEL_PATH, 'utf8'),
+    readFile(SETTINGS_PANEL_PATH, 'utf8')
+  ])
+  assert.match(source, /Desktop Host（SSH）/u)
+  assert.match(source, /Linux loopback/u)
+  assert.match(source, /生成桌面配对码/u)
+  assert.match(source, /撤销 Windows 客户端/u)
+  assert.match(source, /useModalDialog/u)
+  assert.doesNotMatch(source, /document\.cookie|localStorage|sessionStorage|Public Origin/u)
+  assert.match(settings, /<DesktopHostAccessPanel/u)
+})
+
 test('App passes stable remote admin method references so pairing codes survive parent renders', async () => {
   const source = await readFile(APP_PATH, 'utf8')
   assert.match(source, /onGetRemoteAccessStatus=\{window\.piRemote\.getStatus\}/u)
   assert.match(source, /onCreateRemotePairingCode=\{window\.piRemote\.createPairingCode\}/u)
   assert.match(source, /onRevokeRemoteDevice=\{window\.piRemote\.revokeDevice\}/u)
+  assert.match(source, /onGetTailscaleStatus=\{window\.piRemote\.getTailscaleStatus\}/u)
+  assert.match(source, /onEnableTailscaleFunnel=\{window\.piRemote\.enableTailscaleFunnel\}/u)
+  assert.match(source, /onEnableTailscaleServe=\{window\.piRemote\.enableTailscaleServe\}/u)
+  assert.match(source, /onDisableTailscale=\{window\.piRemote\.disableTailscale\}/u)
+  assert.match(source, /onGetDesktopHostStatus=\{window\.piRemote\.getDesktopHostStatus\}/u)
+  assert.match(source, /onCreateDesktopHostPairingCode=\{window\.piRemote\.createDesktopHostPairingCode\}/u)
+  assert.match(source, /onRevokeDesktopHostDevice=\{window\.piRemote\.revokeDesktopHostDevice\}/u)
   assert.doesNotMatch(source, /onGetRemoteAccessStatus=\{\(\) =>/u)
 })
 
-test('Settings navigation exposes a dedicated remote access section', async () => {
+test('Settings navigation exposes a dedicated remote access group', async () => {
   const source = await readFile(NAV_PATH, 'utf8')
+  assert.match(source, /id:\s*'remote'/u)
   assert.match(source, /section:\s*'remote'/u)
   assert.match(source, /label:\s*'远程访问'/u)
   assert.match(source, /icon:\s*'remote'/u)
@@ -52,6 +84,13 @@ test('preload exposes a narrow piRemote admin bridge', async () => {
   assert.match(bridge, /remote-admin\.get-status/u)
   assert.match(bridge, /remote-admin\.create-pairing-code/u)
   assert.match(bridge, /remote-admin\.revoke-device/u)
+  assert.match(bridge, /remote-admin\.get-tailscale-status/u)
+  assert.match(bridge, /remote-admin\.enable-tailscale-funnel/u)
+  assert.match(bridge, /remote-admin\.enable-tailscale-serve/u)
+  assert.match(bridge, /remote-admin\.disable-tailscale/u)
+  assert.match(bridge, /remote-admin\.get-desktop-host-status/u)
+  assert.match(bridge, /remote-admin\.create-desktop-host-pairing-code/u)
+  assert.match(bridge, /remote-admin\.revoke-desktop-host-device/u)
   assert.doesNotMatch(bridge, /child_process|node:fs|tokenFile|TOKEN_FILE|process\.env/u)
   assert.doesNotMatch(source, /exposeInMainWorld\('piRemote',\s*(?:ipcRenderer|webUtils|process|Buffer)/u)
 })

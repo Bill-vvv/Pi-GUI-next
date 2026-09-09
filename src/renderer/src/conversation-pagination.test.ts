@@ -4,11 +4,14 @@ import test from 'node:test'
 import type {
   KernelConversationEntry,
   KernelConversationPage,
+  KernelSessionPreview,
+  KernelSessionPreviewPageRequest,
   KernelState
 } from '../../shared/kernel-contract.ts'
 import { timelineConversation } from './composition/conversation-presentation.ts'
 import {
   mergeEarlierConversationPage,
+  mergeEarlierSessionPreviewPage,
   preserveEarlierConversationWindow
 } from './kernel/conversation-page-merge.ts'
 import { applyStatePatches } from './kernel/kernel-state-patches.ts'
@@ -93,6 +96,42 @@ test('page merge is strict, boundary-only, and idempotent once fully covered', (
     { ...state(), conversation: { ...state().conversation, startIndex: 3 } },
     page()
   ), /stale for the current window/)
+})
+
+test('detached preview page merge requires exact preview, response, and boundary identity', () => {
+  const preview: KernelSessionPreview = {
+    previewId: 'preview-1',
+    projectKey: '/tmp/project',
+    sessionKey: '/tmp/session.jsonl',
+    sessionId: 'session-1',
+    sessionName: null,
+    conversation: {
+      startIndex: 4,
+      entries: [message('e4'), message('e5')],
+      activeRunStartIndex: null
+    }
+  }
+  const request: KernelSessionPreviewPageRequest = {
+    previewId: preview.previewId,
+    projectKey: preview.projectKey,
+    sessionKey: preview.sessionKey,
+    sessionId: preview.sessionId,
+    beforeIndex: 4,
+    beforeEntryId: 'e4'
+  }
+
+  const merged = mergeEarlierSessionPreviewPage(preview, request, page())
+  assert.equal(merged.conversation.startIndex, 2)
+  assert.deepEqual(merged.conversation.entries.map(({ id }) => id), ['e2', 'e3', 'e4', 'e5'])
+  assert.equal(mergeEarlierSessionPreviewPage(merged, request, page()), merged)
+  assert.throws(
+    () => mergeEarlierSessionPreviewPage(preview, { ...request, previewId: 'stale' }, page()),
+    /identity is stale/
+  )
+  assert.throws(
+    () => mergeEarlierSessionPreviewPage(preview, request, page({ beforeEntryId: 'other' })),
+    /response identity is stale/
+  )
 })
 
 test('a newer bounded authority tail preserves only an exact overlapping local prefix', () => {

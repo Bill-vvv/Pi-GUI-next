@@ -9,6 +9,7 @@ const vite = await createServer({
   configFile: false,
   root: new URL('../../../../../', import.meta.url).pathname,
   appType: 'custom',
+  optimizeDeps: { noDiscovery: true },
   server: { middlewareMode: true, hmr: false }
 })
 after(() => vite.close())
@@ -17,6 +18,8 @@ const module = await vite.ssrLoadModule(
   '/src/renderer/src/features/git/GitChangesPanel.tsx'
 ) as typeof import('./GitChangesPanel.tsx')
 const source = await readFile(new URL('./GitChangesPanel.tsx', import.meta.url), 'utf8')
+const diffViewerSource = await readFile(new URL('./GitDiffViewer.tsx', import.meta.url), 'utf8')
+const historyPanelSource = await readFile(new URL('./GitHistoryPanel.tsx', import.meta.url), 'utf8')
 const styles = await readFile(new URL('./git-changes.css', import.meta.url), 'utf8')
 
 test('GitChangesPanel exports a narrow project-owned integration contract and SSR loading state', () => {
@@ -33,6 +36,10 @@ test('renderer uses only the existing piGit bridge with generation and project r
   assert.match(source, /window\.piGit\.getDiff/)
   assert.match(source, /window\.piGit\.stageFile/)
   assert.match(source, /window\.piGit\.unstageFile/)
+  assert.match(source, /window\.piGit\.prepareCommit\(requestProjectKey\)/)
+  assert.match(source, /window\.piGit\.executeCommit\(requestProjectKey/)
+  assert.match(source, /window\.piGit\.prepareBranchSync\(requestProjectKey\)/)
+  assert.match(source, /window\.piGit\.executeBranchSync\(requestProjectKey, request\)/)
   assert.match(source, /isCurrentGitResponse\(/)
   assert.match(source, /response\.projectKey/)
   assert.match(source, /requestProjectKey !== projectKey \|\|[\s\S]*?requestGeneration !== generationRef\.current/)
@@ -70,11 +77,13 @@ test('file diffs expand independently and the heading owns one real collapse-all
 })
 
 test('diff content remains plain React text and marks omitted unchanged ranges without inventing source lines', () => {
-  assert.match(source, /\{line\.content\}/)
-  assert.match(source, /buildGitDiffRenderRows\(result\.files\)/)
-  assert.match(source, /\{row\.unmodifiedLines\} unmodified lines/)
-  assert.doesNotMatch(source, /\{hunk\.header\}/)
-  assert.doesNotMatch(source, /dangerouslySetInnerHTML|innerHTML|react-markdown|MarkdownMessage/)
+  assert.match(source, /import \{ GitDiffViewer, type GitDiffViewerResult \} from '\.\/GitDiffViewer'/)
+  assert.match(source, /<GitDiffViewer result=\{expanded\.result\} \/>/)
+  assert.match(diffViewerSource, /\{line\.content\}/)
+  assert.match(diffViewerSource, /buildGitDiffRenderRows\(result\.files\)/)
+  assert.match(diffViewerSource, /\{row\.unmodifiedLines\} unmodified lines/)
+  assert.doesNotMatch(diffViewerSource, /\{hunk\.header\}/)
+  assert.doesNotMatch(diffViewerSource, /dangerouslySetInnerHTML|innerHTML|react-markdown|MarkdownMessage/)
   assert.match(styles, /\.git-diff-scroll[\s\S]*?overflow: auto;/)
   assert.match(styles, /\.git-diff-fold[\s\S]*?position: sticky;/)
   assert.match(styles, /\.git-diff-line[\s\S]*?white-space: pre;/)
@@ -96,19 +105,20 @@ test('intent prefetch is revision-bound, deduplicated and bounded instead of pre
 })
 
 test('large diffs virtualize after a fixed threshold while small diffs keep the simple path', () => {
-  assert.match(source, /from '@tanstack\/react-virtual'/)
-  assert.match(source, /const GIT_DIFF_VIRTUALIZE_AFTER_ROWS = 300/)
-  assert.match(source, /rows\.length > GIT_DIFF_VIRTUALIZE_AFTER_ROWS/)
-  assert.match(source, /data-virtualized="false"/)
-  assert.match(source, /useVirtualizer\(\{/)
-  assert.match(source, /estimateSize: \(\) => GIT_DIFF_ROW_HEIGHT/)
-  assert.match(source, /overscan: GIT_DIFF_OVERSCAN/)
-  assert.match(source, /virtualizer\.getVirtualItems\(\)/)
-  assert.match(source, /gitDiffRenderRowsMaxColumns\(rows\)/)
-  assert.match(source, /gitDiffRenderRowsText\(rows\)/)
-  assert.match(source, /查看完整文本/)
-  assert.match(source, /复制全部/)
-  assert.match(source, /width: `max\(100%, calc\(\$\{maximumColumns\}ch \+ 8\.5em\)\)`/)
+  assert.match(source, /import \{ GitDiffViewer, type GitDiffViewerResult \} from '\.\/GitDiffViewer'/)
+  assert.match(diffViewerSource, /from '@tanstack\/react-virtual'/)
+  assert.match(diffViewerSource, /export const GIT_DIFF_VIRTUALIZE_AFTER_ROWS = 300/)
+  assert.match(diffViewerSource, /rows\.length > GIT_DIFF_VIRTUALIZE_AFTER_ROWS/)
+  assert.match(diffViewerSource, /data-virtualized="false"/)
+  assert.match(diffViewerSource, /useVirtualizer\(\{/)
+  assert.match(diffViewerSource, /estimateSize: \(\) => GIT_DIFF_ROW_HEIGHT/)
+  assert.match(diffViewerSource, /overscan: GIT_DIFF_OVERSCAN/)
+  assert.match(diffViewerSource, /virtualizer\.getVirtualItems\(\)/)
+  assert.match(diffViewerSource, /gitDiffRenderRowsMaxColumns\(rows\)/)
+  assert.match(diffViewerSource, /gitDiffRenderRowsText\(rows\)/)
+  assert.match(diffViewerSource, /查看完整文本/)
+  assert.match(diffViewerSource, /复制全部/)
+  assert.match(diffViewerSource, /width: `max\(100%, calc\(\$\{maximumColumns\}ch \+ 8\.5em\)\)`/)
   assert.match(styles, /\.git-diff-scroll\.virtualized[\s\S]*?contain: strict;/)
   assert.match(styles, /\.git-diff-virtual-row[\s\S]*?position: absolute;[\s\S]*?width: 100%;/)
   assert.match(styles, /\.git-diff-scroll\.virtualized \.git-diff-line[\s\S]*?height: 32px;/)
@@ -131,9 +141,98 @@ test('stale trust and mutation paths refresh read-only state without replaying w
   assert.equal(source.match(/window\.piGit\.(?:stageFile|unstageFile)\(/g)?.length, 2)
 })
 
-test('P3-1 UI excludes future Git operations and conflict mutation controls', () => {
+test('P3-2 commit remains a fenced confirmation flow beside later read/write Git slices', () => {
   assert.match(source, /P3-1 不提供 diff、暂存或冲突解决/)
   assert.match(source, /gitActionsForScope\(file, scope\)/)
-  assert.doesNotMatch(source, /Commit & Push|\bAmend\b|\bFetch\b|\bPull\b|cherry-pick|rebase/)
+  assert.match(source, /Commit & Push/)
+  assert.match(source, /<GitCommitDialog/)
+  assert.match(source, /snapshot: active\.preview\.snapshot/)
+  assert.match(source, /expectedPushTarget: active\.preview\.pushTarget/)
+  assert.match(source, /active\.result\?\.commit\.status === 'succeeded'/)
+  assert.equal(source.match(/window\.piGit\.executeCommit\(/g)?.length, 1)
+  assert.doesNotMatch(source, /cherry-pick|rebase|force push|--force|setUpstream/)
   assert.doesNotMatch(source, /stderrCharacters/)
+})
+
+test('P3-4 prepares and executes Branches & Sync through Parent-owned identity fences', () => {
+  assert.match(source, /branchPrepareTokenRef/)
+  assert.match(source, /branchExecuteTokenRef/)
+  assert.match(source, /branchSnapshotRef/)
+  assert.match(source, /gitBranchSyncSnapshotMatchesState/)
+  assert.match(source, /mapGitBranchSyncPrepareResult/)
+  assert.match(source, /buildGitBranchSyncExecutionRequest/)
+  assert.match(source, /mapGitBranchSyncExecutionResult/)
+  assert.match(source, /response\.result\.action !== expectedAction/)
+  assert.match(source, /gitBranchSyncExecutionMatchesPreview\(response\.result, dialog\.preview, payload, snapshot\)/)
+  assert.match(source, /requestToken !== branchExecuteTokenRef\.current/)
+  assert.match(source, /<GitBranchesPanel/)
+  assert.match(source, /branchDialog !== null/)
+  assert.equal(source.match(/window\.piGit\.prepareBranchSync\(/g)?.length, 1)
+  assert.equal(source.match(/window\.piGit\.executeBranchSync\(/g)?.length, 1)
+})
+
+test('Git tab hosts an internal accessible Changes/History/Branches tabset without a second sidebar module', () => {
+  assert.match(source, /role="tablist"/)
+  assert.match(source, /aria-label="Git 子视图"/)
+  assert.match(source, /role="tab"/)
+  assert.match(source, /role="tabpanel"/)
+  assert.match(source, /GIT_HISTORY_SUBVIEWS/)
+  assert.match(source, /gitPanelSubviewFromKey/)
+  assert.match(source, /tabIndex=\{selected \? 0 : -1\}/)
+  assert.match(source, /selectSubviewFromKeyboard/)
+  assert.match(source, /import \{ GitHistoryPanel \} from '\.\/GitHistoryPanel'/)
+  assert.match(source, /import \{ GitBranchesPanel \} from '\.\/GitBranchesPanel'/)
+  assert.match(source, /createEmptyGitHistoryDraft/)
+  assert.match(source, /candidate === 'history' \? 'History' : 'Branches'/)
+  assert.equal(source.match(/window\.piGit\.listHistory\(/g)?.length, 1)
+  assert.equal(source.match(/window\.piGit\.getHistoryDetail\(/g)?.length, 1)
+  assert.equal(source.match(/window\.piGit\.getHistoryFileDiff\(/g)?.length, 1)
+  assert.match(source, /snapshot,\s*oid,\s*fileId/)
+  assert.doesNotMatch(historyPanelSource, /window\.piGit/)
+  assert.doesNotMatch(historyPanelSource, /stageFile|unstageFile|prepareCommit|executeCommit|Commit & Push/)
+  assert.match(styles, /\.git-subview-tabs[\s\S]*?role|\.git-subview-tab/)
+  assert.match(styles, /\.git-history-/)
+})
+
+test('History activation, refresh, pagination and file-diff identities stay fenced in Parent state', () => {
+  assert.match(source, /historySnapshotRef\.current = snapshot/)
+  assert.match(source, /if \(subview !== 'history' \|\| historySnapshotRef\.current !== null\) return/)
+  assert.match(source, /if \(snapshot !== null\) activateHistory\(false\)/)
+  assert.doesNotMatch(source, /activateHistory\(true\)/)
+  assert.match(source, /result\.offset !== offset/)
+  assert.match(source, /result\.commits\.length > GIT_HISTORY_PAGE_SIZE/)
+  assert.match(source, /nextOffset,\s*hasMore/)
+  assert.match(source, /historyDraft\.nextOffset/)
+  assert.match(source, /response\.result\.oid !== oid/)
+  assert.match(source, /response\.result\.fileId !== fileId/)
+  assert.match(source, /response\.result\.originalPath === file\.originalPath/)
+  assert.match(source, /const seenOids = new Set/)
+  assert.match(source, /if \(seenOids\.has\(commit\.oid\)\) return false/)
+})
+
+test('commit result mapping keeps partial success and landed warnings independent', () => {
+  const mapped = module.buildGitCommitDialogResult({
+    mode: 'commit-and-push',
+    commit: {
+      status: 'succeeded',
+      oid: 'a'.repeat(40),
+      warnings: ['command-error-after-landing', 'confirmed-snapshot-diverged']
+    },
+    push: {
+      status: 'failed',
+      remote: 'origin',
+      branch: 'main',
+      error: { code: 'git-error', message: 'Git operation failed.', stderrCharacters: 12 }
+    },
+    postState: {
+      ok: false,
+      error: { code: 'timeout', message: 'Git operation timed out.', stderrCharacters: 0 }
+    }
+  })
+  assert.equal(mapped.commit.status, 'succeeded')
+  assert.match(mapped.commit.detail ?? '', /不会重复提交/)
+  assert.match(mapped.commit.detail ?? '', /Hook 改变了最终 commit 内容/)
+  assert.equal(mapped.push.status, 'failed')
+  assert.equal(mapped.push.detail, 'Git operation failed.')
+  assert.equal(mapped.refresh?.status, 'failed')
 })

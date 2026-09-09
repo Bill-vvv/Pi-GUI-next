@@ -29,7 +29,13 @@ Pi GUI 的长期方向是桌面 Agent Workbench。P1 只建立第一条可发布
 
 ## 私有远程呈现面（opt-in，非 P1 必达）
 
-在桌面核心链路之外，产品允许一个**默认关闭**的私有远程呈现面：经受信 HTTPS 反代（如 Lucky）访问同一 Electron Main / WorkbenchKernel，传输为 SSE 事件流 + JSON 命令 POST，而不是 WebSocket 或第二套 Kernel/daemon。它只服务个人/家庭场景下的受控手机或浏览器查看与有限操作，不是公网多用户服务器，也不替代桌面 control plane。启用条件、鉴权、反代与验证见 [`remote-access.md`](remote-access.md) 与决策 D-065。
+在桌面核心链路之外，产品允许一个**默认关闭**的私有远程呈现面：设置页默认由 Electron Main 一键配置系统 Tailscale Funnel（任意浏览器）或 Serve（仅 Tailnet 设备），Gateway 只监听 loopback；现有 Lucky/受信 HTTPS 反代继续作为互斥的高级手动入口。两种入口都访问同一 Electron Main / WorkbenchKernel，传输为 SSE 事件流 + JSON 命令 POST，而不是 WebSocket 或第二套 Kernel/daemon。它只服务个人/家庭场景下的受控手机或浏览器查看与有限操作，不是公网多用户服务器，也不替代桌面 control plane。启用条件、鉴权、反代与验证见 [`remote-access.md`](remote-access.md) 与决策 D-065、D-066、D-074。
+
+## 统一远程产品方向（P4-1 Host 已完成，P4-2 Windows Client 实施中）
+
+Pi GUI 后续统一为一个产品下的三种角色：Linux Desktop 同时承载完整界面和唯一 Pi Host；Windows Desktop 第一版作为通过系统 OpenSSH 连接 Linux Host 的 remote-only 完整桌面客户端；现有浏览器 Remote App 继续作为由 Linux Host 托管的轻量 Web Remote。三者共享版本化 contract 和 Linux Main 的同一 `WorkbenchKernel`，不复制 Session、Runtime 或 control plane。
+
+该方向不把 Web Remote 嵌入 Windows Electron，也不把浏览器 Public Origin、Trusted Proxy 与 Secure Cookie 直接复用于 SSH。P4-1 已完成 Linux loopback Desktop Gateway、独立桌面设备配对、Bearer credential、单活动 controller 和 Kernel SSE/command 入口；启用与协议见 [`desktop-host.md`](desktop-host.md)。P4-2A 已建立严格 Host config、系统 OpenSSH tunnel owner 和 Node Desktop Host transport；首轮安全 findings 已修复并通过正式 gate，但独立 closure 前保持不可用；它尚未接入 Windows remote-only Main/preload/Renderer，也未实现凭证持久化。Windows remote-only 模式不得要求本地 Pi，也不得在本机创建第二 Kernel；SSH 负责主机身份、用户认证、加密和跳板连接。完整边界见决策 D-067；Windows 产物和真实 Windows→Linux 发布 gate 落地前，不得宣称 Windows 已受支持。
 
 ## 旧项目边界
 

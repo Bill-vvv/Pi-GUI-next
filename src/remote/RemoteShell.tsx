@@ -2,15 +2,26 @@ import { useCallback, useMemo, useRef } from 'react'
 
 import type {
   KernelAskAnswer,
+  KernelExtensionDialogRequest,
+  KernelProjectState,
+  KernelSessionSummary,
   KernelState,
   ThinkingLevel
 } from '../shared/kernel-contract.ts'
 import { IconButton } from '../renderer/src/components/IconButton.tsx'
+import {
+  Select,
+  type SelectOption,
+  type SelectOptionDetailTone,
+  type SelectOptionGroup
+} from '../renderer/src/components/Select.tsx'
 import { Timeline } from '../renderer/src/features/chat/Timeline.tsx'
+import { ExtensionDialog } from '../renderer/src/features/extensions/ExtensionDialog.tsx'
 import {
   basename,
   sessionTitle
 } from '../renderer/src/features/project/ProjectNavigator.tsx'
+import { formatSessionActivityAge } from '../renderer/src/features/project/session-activity-time.ts'
 import { timelineConversation } from '../renderer/src/composition/conversation-presentation.ts'
 import { DEFAULT_TOOL_DISPLAY_DENSITY } from '../renderer/src/tool-display-density.ts'
 import { RemoteComposer } from './RemoteComposer.tsx'
@@ -34,10 +45,14 @@ type RemoteShellProps = {
   onAbort: () => Promise<void>
   onSubmitAsk: (sessionKey: string, toolCallId: string, answers: KernelAskAnswer[]) => Promise<void>
   onCancelAsk: (sessionKey: string, toolCallId: string) => Promise<void>
+  onRespondExtensionDialog: (
+    request: KernelExtensionDialogRequest,
+    value: string
+  ) => Promise<void>
+  onCancelExtensionDialog: (request: KernelExtensionDialogRequest) => Promise<void>
   onSetModel: (provider: string, modelId: string) => Promise<void>
   onSetThinkingLevel: (level: ThinkingLevel) => Promise<void>
   onSetOpenAiFastMode: (enabled: boolean) => Promise<void>
-  onLogout: () => Promise<void>
   onReconnect: () => void
 }
 
@@ -58,10 +73,11 @@ export function RemoteShell({
   onAbort,
   onSubmitAsk,
   onCancelAsk,
+  onRespondExtensionDialog,
+  onCancelExtensionDialog,
   onSetModel,
   onSetThinkingLevel,
   onSetOpenAiFastMode,
-  onLogout,
   onReconnect
 }: RemoteShellProps): React.JSX.Element {
   const mainChatRef = useRef<HTMLElement>(null)
@@ -72,6 +88,8 @@ export function RemoteShell({
   const activeProject = userProjects.find((project) => project.path === state.activeProjectKey) ?? null
   const sessions = activeProject === null ? [] : state.sessions
   const activeSession = sessions.find((session) => session.key === state.activeSessionKey) ?? null
+  const projectOptions = projectSelectOptions(userProjects, state.activeProjectKey, sessions)
+  const sessionGroups = sessionSelectGroups(sessions, Date.now())
   const timeline = activeProject === null ? null : timelineConversation(state.conversation)
   const runtimeStatus = state.runtime.status
   const connected = connectionStatus === 'connected'
@@ -103,13 +121,28 @@ export function RemoteShell({
       {connectionError !== null && !connected ? (
         <div className="remote-connection-banner" role="alert">
           <span>{connectionError}</span>
-          <button type="button" onClick={onReconnect}>
-            重新连接
-          </button>
+          {connectionStatus === 'disconnected' ? (
+            <button type="button" onClick={onReconnect}>
+              重新连接
+            </button>
+          ) : null}
         </div>
       ) : null}
       <header className="remote-topbar">
-        <div className="remote-topbar-row">
+        <div className="remote-project-row">
+          <div className="remote-select-field">
+            <label className="visually-hidden" htmlFor="remote-project-select">项目</label>
+            <Select
+              id="remote-project-select"
+              disabled={!connected || busy || userProjects.length === 0}
+              value={activeProject?.path ?? ''}
+              groups={[{ options: projectOptions }]}
+              onValueChange={(value) => {
+                if (!value) return
+                void onActivateProject(value)
+              }}
+            />
+          </div>
           <span
             className={`remote-connection remote-connection-${connectionStatus}`}
             role="status"
@@ -117,62 +150,22 @@ export function RemoteShell({
           >
             {connectionLabel}
           </span>
-          <div className="remote-topbar-actions">
-            <button
-              type="button"
-              className="remote-text-button"
-              disabled={busy}
-              onClick={() => {
-                void onLogout()
-              }}
-            >
-              退出
-            </button>
-          </div>
         </div>
 
-        <div className="remote-topbar-row remote-selectors">
-          <label className="remote-select-field">
-            <span className="visually-hidden">项目</span>
-            <select
-              aria-label="选择项目"
-              disabled={!connected || busy || userProjects.length === 0}
-              value={activeProject?.path ?? ''}
-              onChange={(event) => {
-                const value = event.target.value
-                if (!value) return
-                void onActivateProject(value)
-              }}
-            >
-              {activeProject === null ? <option value="">选择项目</option> : null}
-              {userProjects.map((project) => (
-                <option key={project.path} value={project.path}>
-                  {basename(project.path) ?? project.path}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="remote-select-field">
-            <span className="visually-hidden">会话</span>
-            <select
-              aria-label="选择会话"
+        <div className="remote-session-row">
+          <div className="remote-select-field">
+            <label className="visually-hidden" htmlFor="remote-session-select">会话</label>
+            <Select
+              id="remote-session-select"
               disabled={!connected || busy || activeProject === null || sessions.length === 0}
               value={activeSession?.key ?? ''}
-              onChange={(event) => {
-                const value = event.target.value
+              groups={sessionGroups}
+              onValueChange={(value) => {
                 if (!value) return
                 void onActivateSession(value)
               }}
-            >
-              {activeSession === null ? <option value="">选择会话</option> : null}
-              {sessions.map((session) => (
-                <option key={session.key} value={session.key}>
-                  {sessionTitle(session)}
-                </option>
-              ))}
-            </select>
-          </label>
+            />
+          </div>
 
           <IconButton
             className="remote-icon-action"
@@ -197,14 +190,6 @@ export function RemoteShell({
           ) : null}
         </div>
 
-        <div className="remote-topbar-meta" aria-live="polite">
-          <span>{basename(activeProject?.path ?? null) ?? '未选择项目'}</span>
-          <span aria-hidden="true">·</span>
-          <span>{activeSession ? sessionTitle(activeSession) : '未选择会话'}</span>
-          <span aria-hidden="true">·</span>
-          <span>{runtimeStatusLabel(runtimeStatus)}</span>
-        </div>
-
         {actionError !== null ? (
           <p className="remote-action-error" role="alert">{actionError}</p>
         ) : null}
@@ -224,6 +209,7 @@ export function RemoteShell({
             runtimeStatus={runtimeStatus}
             loading={false}
             compactionActive={state.session.compaction !== null}
+            navigateToLatestPromptOnMount={state.activeSessionKey !== null}
             showPromptNavigation={false}
             toolDisplayDensity={DEFAULT_TOOL_DISPLAY_DENSITY}
             sessionKey={state.activeSessionKey}
@@ -243,7 +229,7 @@ export function RemoteShell({
               throw new Error('Remote does not support export.')
             }}
             onLoadEarlierConversation={onLoadEarlierConversation}
-            onForkTurn={() => undefined}
+            onForkTurn={async () => undefined}
             onNavigateHistoryPrompt={async () => {
               throw new Error('Remote does not support history prompt edit.')
             }}
@@ -275,25 +261,114 @@ export function RemoteShell({
           onMeasuredHeightChange={handleComposerMeasuredHeightChange}
         />
       </main>
+
+      {state.extensionDialog === null || state.extensionDialog === undefined ? null : (
+        <ExtensionDialog
+          key={[
+            state.extensionDialog.projectKey,
+            state.extensionDialog.sessionKey,
+            state.extensionDialog.sessionId,
+            state.extensionDialog.commandInvocationId,
+            state.extensionDialog.requestId
+          ].join('\u0000')}
+          request={state.extensionDialog}
+          onRespond={onRespondExtensionDialog}
+          onCancel={onCancelExtensionDialog}
+        />
+      )}
     </div>
   )
 }
 
-function runtimeStatusLabel(status: KernelState['runtime']['status']): string {
-  switch (status) {
-    case 'ready':
-      return '就绪'
-    case 'running':
-      return '运行中'
-    case 'starting':
-      return '启动中'
-    case 'stopping':
-      return '停止中'
-    case 'stopped':
-      return '已停止'
-    case 'crashed':
-      return '已崩溃'
-    default:
-      return status
+type SelectDetail = {
+  text: string
+  tone: SelectOptionDetailTone
+}
+
+function projectSelectOptions(
+  projects: readonly KernelProjectState[],
+  activeProjectKey: string | null,
+  activeSessions: readonly KernelSessionSummary[]
+): SelectOption[] {
+  return projects.map((project) => {
+    const sessions = project.path === activeProjectKey
+      ? activeSessions
+      : project.sessions ?? []
+    const awaitingCount = sessions.filter((session) => session.awaitingUserInput).length
+    const observedBusyCount = sessions.filter((session) => isSessionBusy(session.runtimeStatus)).length
+    const busyCount = Math.max(project.busySessionCount ?? 0, observedBusyCount)
+    const processingCount = Math.max(0, busyCount - awaitingCount)
+    const details: string[] = []
+    if (awaitingCount > 0) details.push(`${awaitingCount} 待回复`)
+    if (processingCount > 0) details.push(`${processingCount} 处理中`)
+
+    return {
+      value: project.path,
+      label: basename(project.path) ?? project.path,
+      detail: details.length === 0 ? undefined : details.join(' · '),
+      detailTone: awaitingCount > 0 ? 'attention' : 'active'
+    }
+  })
+}
+
+function sessionSelectGroups(
+  sessions: readonly KernelSessionSummary[],
+  now: number
+): SelectOptionGroup[] {
+  const attention: SelectOption[] = []
+  const active: SelectOption[] = []
+  const history: SelectOption[] = []
+
+  for (const session of sessions) {
+    const detail = sessionSelectDetail(session, now)
+    const option: SelectOption = {
+      value: session.key,
+      label: sessionTitle(session),
+      detail: detail.text,
+      detailTone: detail.tone
+    }
+    if (sessionNeedsAttention(session)) attention.push(option)
+    else if (isSessionBusy(session.runtimeStatus)) active.push(option)
+    else history.push(option)
   }
+
+  return [
+    { label: '需要处理', options: attention },
+    { label: '进行中', options: active },
+    { label: '其他会话', options: history }
+  ].filter((group) => group.options.length > 0)
+}
+
+function sessionSelectDetail(session: KernelSessionSummary, now: number): SelectDetail {
+  if (session.awaitingUserInput) return { text: '等待你回复', tone: 'attention' }
+  if (session.requiresReload === true) return { text: '需要重载', tone: 'attention' }
+
+  switch (session.runtimeStatus) {
+    case 'running':
+      return { text: '正在处理', tone: 'active' }
+    case 'starting':
+      return { text: '正在启动', tone: 'active' }
+    case 'stopping':
+      return { text: '正在收尾', tone: 'active' }
+    case 'crashed':
+      return { text: '已中断', tone: 'error' }
+    case 'ready':
+      return { text: '空闲', tone: 'default' }
+    case 'stopped': {
+      const age = formatSessionActivityAge(session.lastActivityAt, now)
+      return { text: age === null ? '已停止' : age === '刚刚' ? age : `${age}前`, tone: 'default' }
+    }
+    default:
+      return { text: session.runtimeStatus, tone: 'default' }
+  }
+}
+
+function sessionNeedsAttention(session: KernelSessionSummary): boolean {
+  return session.awaitingUserInput ||
+    session.requiresReload === true ||
+    session.runtimeStatus === 'crashed'
+}
+
+function isSessionBusy(status: KernelSessionSummary['runtimeStatus']): boolean {
+  return status === 'starting' || status === 'running' || status === 'stopping'
 }

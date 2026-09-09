@@ -12,6 +12,9 @@ test('labels Agent availability as enabled rather than running', () => {
   assert.match(source, /启用状态/u)
   assert.match(source, /已启用/u)
   assert.match(source, /已停用/u)
+  assert.match(source, /已安装并开启/u)
+  assert.match(source, /已安装，未开启/u)
+  assert.doesNotMatch(source, /拓展已开启|拓展已关闭/u)
 })
 
 test('makes the complete paginated Agent result count visible', () => {

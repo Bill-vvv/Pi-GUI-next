@@ -205,6 +205,7 @@ test('Workbench fences deferred focus restoration while preserving close, collap
   assert.match(workbenchSource, /findSubagentTaskTrigger\(mainChat, selection\)/)
   assert.match(workbenchSource, /rightSidebarShellTriggerRef\.current/)
   assert.match(workbenchSource, /restoreRightSidebarTriggerFocus\(rightSidebarTabId, subagentTaskSelection\)/)
+  assert.match(workbenchSource, /if \(rightSidebarOpen && event\.key === 'Escape'\)/)
   assert.doesNotMatch(workbenchSource, /right-sidebar-reopen-trigger/)
 })
 

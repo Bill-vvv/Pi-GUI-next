@@ -43,7 +43,7 @@ const expectedSimpleOwners = {
   'set-openai-fast-mode': 'timeline',
   'set-general': 'general',
   'set-appearance': 'appearance',
-  'set-session-naming': 'preferences',
+  'set-session-naming': 'general',
   'set-subagent': 'subagent',
   'set-subagent-enabled': 'subagent',
   'set-magic-context-enabled': 'extensions',

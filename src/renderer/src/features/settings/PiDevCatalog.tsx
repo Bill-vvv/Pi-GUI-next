@@ -159,17 +159,17 @@ export function PiDevCatalog({
         ) : null}
 
         {catalog === null ? null : (
-          <div className="settings-pi-dev-list" aria-label={`pi.dev ${catalogLabel}目录`}>
+          <div className="settings-pi-dev-list settings-resource-list" aria-label={`pi.dev ${catalogLabel}目录`}>
             {catalog.packages.map((pkg) => (
-              <article className="settings-pi-dev-item" key={pkg.name}>
-                <div className="settings-pi-dev-copy">
-                  <div className="settings-pi-dev-title">
+              <article className="settings-resource-row" key={pkg.name}>
+                <div className="settings-resource-copy">
+                  <div className="settings-resource-title">
                     <h4>{pkg.name}</h4>
                     <span>{pkg.downloads}</span>
                   </div>
                   <p>{pkg.description}</p>
                 </div>
-                <div className="settings-pi-dev-actions">
+                <div className="settings-resource-actions">
                   <button
                     type="button"
                     className="settings-link-button"

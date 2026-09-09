@@ -2,9 +2,21 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import type {
+  GitBranchSyncExecutionRequest,
+  GitBranchSyncExecutionResult,
+  GitBranchSyncPrepareResult,
+  GitCommitExecutionRequest,
+  GitCommitExecutionResult,
+  GitCommitPreviewResult,
   GitDiffRequest,
   GitDiffResult,
   GitFileMutationRequest,
+  GitHistoryDetailRequest,
+  GitHistoryDetailResult,
+  GitHistoryFileDiffRequest,
+  GitHistoryFileDiffResult,
+  GitHistoryListRequest,
+  GitHistoryListResult,
   GitMutationResult,
   GitRefreshResult,
   GitRepositoryState
@@ -74,18 +86,87 @@ function state(
 }
 
 function service(options: {
-  refresh: () => GitRefreshResult | Promise<GitRefreshResult>
+  refresh: (signal?: AbortSignal) => GitRefreshResult | Promise<GitRefreshResult>
   getDiff?: (request: GitDiffRequest) => GitDiffResult | Promise<GitDiffResult>
   mutateFile?: (request: GitFileMutationRequest) => GitMutationResult | Promise<GitMutationResult>
+  prepareCommit?: () => GitCommitPreviewResult | Promise<GitCommitPreviewResult>
+  executeCommit?: (request: GitCommitExecutionRequest) => GitCommitExecutionResult | Promise<GitCommitExecutionResult>
+  listHistory?: (request: GitHistoryListRequest, signal?: AbortSignal) => GitHistoryListResult | Promise<GitHistoryListResult>
+  getHistoryDetail?: (request: GitHistoryDetailRequest, signal?: AbortSignal) => GitHistoryDetailResult | Promise<GitHistoryDetailResult>
+  getHistoryFileDiff?: (request: GitHistoryFileDiffRequest, signal?: AbortSignal) => GitHistoryFileDiffResult | Promise<GitHistoryFileDiffResult>
+  prepareBranchSync?: (signal?: AbortSignal) => GitBranchSyncPrepareResult | Promise<GitBranchSyncPrepareResult>
+  executeBranchSync?: (request: GitBranchSyncExecutionRequest) => GitBranchSyncExecutionResult | Promise<GitBranchSyncExecutionResult>
 }): GitCapabilityService {
   return {
-    refreshSafe: async () => await options.refresh(),
+    refreshSafe: async (signal) => await options.refresh(signal),
     getDiff: async (request) => options.getDiff === undefined
       ? diffResult(request)
       : await options.getDiff(request),
     mutateFile: async (request) => options.mutateFile === undefined
       ? { ok: false, action: request.action, path: request.path, error: error('git-error'), state: null }
-      : await options.mutateFile(request)
+      : await options.mutateFile(request),
+    prepareCommit: async () => options.prepareCommit === undefined
+      ? { ok: false, error: error('git-error'), state: null }
+      : await options.prepareCommit(),
+    executeCommit: async (request) => options.executeCommit === undefined
+      ? {
+          mode: request.mode,
+          commit: { status: 'failed', error: error('git-error') },
+          push: null,
+          postState: { ok: false, error: error('git-error') }
+        }
+      : await options.executeCommit(request),
+    listHistory: async (request, signal) => options.listHistory === undefined
+      ? { ok: false, error: error('git-error'), snapshot: request.snapshot, current: null }
+      : await options.listHistory(request, signal),
+    getHistoryDetail: async (request, signal) => options.getHistoryDetail === undefined
+      ? { ok: false, error: error('git-error'), snapshot: request.snapshot, current: null }
+      : await options.getHistoryDetail(request, signal),
+    getHistoryFileDiff: async (request, signal) => options.getHistoryFileDiff === undefined
+      ? {
+          oid: request.oid,
+          fileId: request.fileId,
+          path: null,
+          originalPath: null,
+          status: null,
+          state: 'error',
+          snapshot: null,
+          current: null,
+          files: [],
+          byteCount: 0,
+          hunkCount: 0,
+          lineCount: 0,
+          error: error('git-error')
+        }
+      : await options.getHistoryFileDiff(request, signal),
+    prepareBranchSync: async (signal) => options.prepareBranchSync === undefined
+      ? { ok: false, error: error('git-error'), state: null }
+      : await options.prepareBranchSync(signal),
+    executeBranchSync: async (request) => options.executeBranchSync === undefined
+      ? {
+          action: request.action,
+          branch: { status: 'failed', error: error('git-error') },
+          fetch: null,
+          fastForward: null,
+          push: null,
+          postView: { ok: false, error: error('git-error'), state: null }
+        }
+      : await options.executeBranchSync(request)
+  }
+}
+
+function commitRequest(): GitCommitExecutionRequest {
+  return {
+    mode: 'commit',
+    message: 'Update file',
+    snapshot: {
+      repositoryRoot: PROJECT,
+      headOid: OID,
+      branch: 'main',
+      indexTreeOid: HASH,
+      indexFingerprint: HASH
+    },
+    expectedPushTarget: null
   }
 }
 
@@ -569,4 +650,372 @@ test('revalidates commands at the controller boundary', async () => {
     controller.dispatch({ type: 'git.refresh', projectKey: PROJECT, cwd: '/tmp/arbitrary' }),
     /Invalid Git command/
   )
+})
+
+test('project-tags prepare and execute results and forwards validated execute requests', async () => {
+  const expected = commitRequest()
+  let received: GitCommitExecutionRequest | null = null
+  const preview: GitCommitPreviewResult = {
+    ok: true,
+    preview: {
+      snapshot: expected.snapshot,
+      stagedFileCount: 2,
+      pushTarget: { remote: 'origin', branch: 'main' },
+      amendAvailable: true,
+      suggestedMessage: 'Update a.txt, b.txt'
+    }
+  }
+  const execution: GitCommitExecutionResult = {
+    mode: 'commit-and-push',
+    commit: { status: 'succeeded', oid: 'c'.repeat(40), warnings: [] },
+    push: {
+      status: 'failed',
+      remote: 'origin',
+      branch: 'main',
+      error: error('git-error')
+    },
+    postState: { ok: true, state: state(PROJECT) }
+  }
+  const controller = new GitCapabilityController(
+    async () => PROJECT,
+    () => service({
+      refresh: () => ({ ok: true, state: state(PROJECT) }),
+      prepareCommit: () => preview,
+      executeCommit: (request) => {
+        received = request
+        return execution
+      }
+    })
+  )
+
+  const prepared = await controller.dispatch({ type: 'git.prepare-commit', projectKey: PROJECT })
+  const executed = await controller.dispatch({
+    type: 'git.execute-commit',
+    projectKey: PROJECT,
+    request: { ...expected, mode: 'commit-and-push', expectedPushTarget: { remote: 'origin', branch: 'main' } }
+  })
+  assert.equal(prepared.projectKey, PROJECT)
+  assert.deepEqual(prepared.result, preview)
+  assert.equal(executed.projectKey, PROJECT)
+  assert.deepEqual(executed.result, execution)
+  assert.notEqual(received, null)
+  const forwarded = received as unknown as GitCommitExecutionRequest
+  assert.equal(forwarded.mode, 'commit-and-push')
+  assert.equal(forwarded.expectedPushTarget?.remote, 'origin')
+})
+
+test('prepare and execute reject before service when active Project is unavailable', async () => {
+  let factoryCalls = 0
+  const controller = new GitCapabilityController(
+    async () => { throw new Error('inactive') },
+    () => {
+      factoryCalls += 1
+      return service({ refresh: () => ({ ok: true, state: state(PROJECT) }) })
+    }
+  )
+
+  const prepared = await controller.dispatch({ type: 'git.prepare-commit', projectKey: PROJECT })
+  const executed = await controller.dispatch({
+    type: 'git.execute-commit',
+    projectKey: PROJECT,
+    request: commitRequest()
+  })
+  assert.equal(factoryCalls, 0)
+  assert.equal(prepared.projectKey, PROJECT)
+  assert.equal('ok' in prepared.result && prepared.result.ok, false)
+  if ('ok' in prepared.result && !prepared.result.ok) {
+    assert.equal(prepared.result.error.message, 'Active Project is unavailable for Git.')
+  }
+  assert.equal(executed.projectKey, PROJECT)
+  assert.equal('commit' in executed.result && executed.result.commit.status, 'failed')
+  if ('commit' in executed.result && executed.result.commit.status === 'failed') {
+    assert.equal(executed.result.commit.error.message, 'Active Project is unavailable for Git.')
+  }
+})
+
+test('maps trust-required preflight into prepare and execute shapes', async () => {
+  const controller = new GitCapabilityController(
+    async () => PROJECT,
+    () => service({ refresh: () => ({ ok: true, state: state(PROJECT, 'trust-required', REPOSITORY) }) })
+  )
+
+  const prepared = await controller.dispatch({ type: 'git.prepare-commit', projectKey: PROJECT })
+  const executed = await controller.dispatch({
+    type: 'git.execute-commit',
+    projectKey: PROJECT,
+    request: commitRequest()
+  })
+  assert.equal('ok' in prepared.result && prepared.result.ok, false)
+  if ('ok' in prepared.result && !prepared.result.ok) {
+    assert.equal(prepared.result.error.code, 'trust-required')
+    assert.equal(prepared.result.state?.kind, 'trust-required')
+  }
+  assert.equal('commit' in executed.result && executed.result.commit.status, 'failed')
+  if ('commit' in executed.result && executed.result.commit.status === 'failed') {
+    assert.equal(executed.result.commit.error.code, 'trust-required')
+    assert.equal(executed.result.push, null)
+  }
+})
+
+test('serializes prepare and execute with concurrent refresh on the same Project', async () => {
+  const preflight = deferred<GitRefreshResult>()
+  let refreshCalls = 0
+  let prepareCalls = 0
+  let executeCalls = 0
+  const sharedService = service({
+    refresh: () => {
+      refreshCalls += 1
+      if (refreshCalls === 1) return { ok: true, state: state(PROJECT) }
+      if (refreshCalls === 2) return preflight.promise
+      return { ok: true, state: state(PROJECT) }
+    },
+    prepareCommit: () => {
+      prepareCalls += 1
+      return {
+        ok: true,
+        preview: {
+          snapshot: commitRequest().snapshot,
+          stagedFileCount: 1,
+          pushTarget: null,
+          amendAvailable: true,
+          suggestedMessage: 'Update src/file.ts'
+        }
+      }
+    },
+    executeCommit: (request) => {
+      executeCalls += 1
+      return {
+        mode: request.mode,
+        commit: { status: 'succeeded', oid: OID, warnings: [] },
+        push: null,
+        postState: { ok: true, state: state(PROJECT) }
+      }
+    }
+  })
+  const controller = new GitCapabilityController(async () => PROJECT, () => sharedService)
+  await controller.dispatch({ type: 'git.refresh', projectKey: PROJECT })
+
+  const pendingPrepare = controller.dispatch({ type: 'git.prepare-commit', projectKey: PROJECT })
+  await waitFor(() => refreshCalls === 2)
+  const pendingRefresh = controller.dispatch({ type: 'git.refresh', projectKey: PROJECT })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(prepareCalls, 0)
+  preflight.resolve({ ok: true, state: state(PROJECT) })
+  const prepared = await pendingPrepare
+  const refresh = await pendingRefresh
+  assert.equal('ok' in prepared.result && prepared.result.ok, true)
+  assert.equal(prepareCalls, 1)
+  assert.equal('ok' in refresh.result && refresh.result.ok, true)
+
+  const executed = await controller.dispatch({
+    type: 'git.execute-commit',
+    projectKey: PROJECT,
+    request: commitRequest()
+  })
+  assert.equal('commit' in executed.result && executed.result.commit.status, 'succeeded')
+  assert.equal(executeCalls, 1)
+})
+
+
+test('dispatches bounded history list/detail/diff through the active Project queue', async () => {
+  const historySnapshot = {
+    repositoryRoot: PROJECT,
+    headOid: OID,
+    branch: 'main'
+  }
+  let listCalls = 0
+  let detailCalls = 0
+  let diffCalls = 0
+  const operationController = new AbortController()
+  const receivedSignals: Array<AbortSignal | undefined> = []
+  const factory: GitCapabilityServiceFactory = () => service({
+    refresh: () => ({ ok: true, state: state(PROJECT) }),
+    listHistory: (request, signal) => {
+      listCalls += 1
+      receivedSignals.push(signal)
+      assert.deepEqual(request.snapshot, historySnapshot)
+      return {
+        ok: true,
+        snapshot: request.snapshot,
+        commits: [],
+        offset: request.offset,
+        pageSize: 50,
+        hasMore: false
+      }
+    },
+    getHistoryDetail: (request, signal) => {
+      detailCalls += 1
+      receivedSignals.push(signal)
+      return {
+        ok: true,
+        snapshot: request.snapshot,
+        commit: {
+          oid: request.oid,
+          shortOid: 'bbbbbbb',
+          subject: 'subject',
+          authorName: 'A',
+          authorEmail: 'a@example.invalid',
+          authorAt: 1,
+          committerName: 'C',
+          committerEmail: 'c@example.invalid',
+          committerAt: 1,
+          parentOids: [],
+          message: 'subject',
+          messageTruncated: false
+        },
+        files: [],
+        filesTruncated: false
+      }
+    },
+    getHistoryFileDiff: (request, signal) => {
+      diffCalls += 1
+      receivedSignals.push(signal)
+      return {
+        oid: request.oid,
+        fileId: request.fileId,
+        path: 'src/file.ts',
+        originalPath: null,
+        status: 'modified',
+        state: 'ready',
+        snapshot: request.snapshot,
+        current: null,
+        files: [],
+        byteCount: 0,
+        hunkCount: 0,
+        lineCount: 0,
+        error: null
+      }
+    }
+  })
+  const controller = new GitCapabilityController(async (projectKey) => {
+    assert.equal(projectKey, RENDERER_KEY)
+    return PROJECT
+  }, factory)
+
+  const list = await controller.dispatch({
+    type: 'git.list-history',
+    projectKey: RENDERER_KEY,
+    request: { snapshot: historySnapshot, offset: 0 }
+  }, operationController.signal)
+  assert.equal(list.result.ok, true)
+  assert.equal(listCalls, 1)
+
+  const detail = await controller.dispatch({
+    type: 'git.get-history-detail',
+    projectKey: RENDERER_KEY,
+    request: { snapshot: historySnapshot, oid: OID }
+  }, operationController.signal)
+  assert.equal(detail.result.ok, true)
+  assert.equal(detailCalls, 1)
+
+  const diff = await controller.dispatch({
+    type: 'git.get-history-file-diff',
+    projectKey: RENDERER_KEY,
+    request: { snapshot: historySnapshot, oid: OID, fileId: 'c'.repeat(32) }
+  }, operationController.signal)
+  assert.equal(diff.result.state, 'ready')
+  assert.equal(diffCalls, 1)
+  assert.deepEqual(receivedSignals, [
+    operationController.signal,
+    operationController.signal,
+    operationController.signal
+  ])
+})
+
+test('dispatches prepare and execute branch-sync through the active Project queue', async () => {
+  const snapshot = {
+    repositoryRoot: PROJECT,
+    headOid: OID,
+    branch: 'main',
+    indexTreeOid: HASH,
+    indexFingerprint: HASH,
+    worktreeFingerprint: HASH,
+    statusRevision: HASH,
+    upstreamRemote: 'origin',
+    upstreamBranch: 'main'
+  }
+  let prepareSignal: AbortSignal | undefined
+  let executeCalls = 0
+  const controller = new GitCapabilityController(
+    async () => PROJECT,
+    () => service({
+      refresh: () => ({ ok: true, state: state(PROJECT) }),
+      prepareBranchSync: (signal) => {
+        prepareSignal = signal
+        return {
+          ok: true,
+          snapshot,
+          current: {
+            branch: 'main',
+            headOid: OID,
+            detached: false,
+            unborn: false,
+            upstream: 'origin/main',
+            upstreamRemote: 'origin',
+            upstreamBranch: 'main',
+            ahead: 0,
+            behind: 0,
+            clean: true,
+            conflicted: false,
+            truncated: false
+          },
+          localBranches: [{
+            branchId: 'a'.repeat(32),
+            kind: 'local',
+            name: 'main',
+            headOid: OID,
+            isCurrent: true
+          }],
+          localBranchesTruncated: false,
+          remoteTrackingBranches: [],
+          remoteTrackingBranchesTruncated: false,
+          remotes: [{ remoteId: 'b'.repeat(32), name: 'origin' }],
+          remotesTruncated: false,
+          actions: {
+            canCreate: true,
+            canSwitch: true,
+            canFetch: true,
+            canPull: true,
+            canPush: true
+          }
+        }
+      },
+      executeBranchSync: (request) => {
+        executeCalls += 1
+        assert.equal(request.action, 'fetch')
+        return {
+          action: 'fetch',
+          branch: null,
+          fetch: { status: 'succeeded', remote: 'origin' },
+          fastForward: null,
+          push: null,
+          postView: { ok: false, error: error('git-error'), state: null }
+        }
+      }
+    })
+  )
+
+  const prepareController = new AbortController()
+  const prepared = await controller.dispatch(
+    { type: 'git.prepare-branch-sync', projectKey: RENDERER_KEY },
+    prepareController.signal
+  )
+  assert.equal(prepared.projectKey, RENDERER_KEY)
+  assert.equal(prepared.result.ok, true)
+  assert.equal(prepareSignal, prepareController.signal)
+
+  const executed = await controller.dispatch({
+    type: 'git.execute-branch-sync',
+    projectKey: RENDERER_KEY,
+    request: {
+      action: 'fetch',
+      snapshot,
+      remoteId: 'b'.repeat(32)
+    }
+  })
+  assert.equal(executed.projectKey, RENDERER_KEY)
+  assert.equal(executed.result.action, 'fetch')
+  assert.equal(executed.result.fetch?.status, 'succeeded')
+  assert.equal(executed.result.postView.ok, false)
+  assert.equal(executeCalls, 1)
 })

@@ -32,14 +32,21 @@ import {
   type KernelProviderAuthEvent
 } from '../shared/kernel-contract.ts'
 import { GIT_COMMAND_CHANNEL } from '../shared/git-contract.ts'
+import type { DesktopHostControlIdentity } from '../shared/desktop-host-contract.ts'
 import {
   REMOTE_ADMIN_COMMAND_CHANNEL,
   isRemoteAdminCommand,
+  type DesktopHostAccessStatus,
   type RemoteAccessStatus,
   type RemoteAdminCommand,
-  type RemotePairingCode
+  type RemotePairingCode,
+  type TailscaleRemoteMode,
+  type TailscaleRemoteStatus
 } from '../shared/remote-admin-contract.ts'
-import { isRemoteKernelCommand } from '../shared/remote-contract.ts'
+import {
+  isRemoteKernelCommand,
+  type RemoteKernelCommand
+} from '../shared/remote-contract.ts'
 import { normalizeOpenTarget } from '../shared/external-url.ts'
 import { AdvisorDefinitionStore } from './advisor/advisor-definition-store.ts'
 import { PiExtensionStore } from './extension/pi-extension-store.ts'
@@ -62,15 +69,30 @@ import {
   WorkbenchKernel
 } from './kernel/workbench-kernel.ts'
 import { assertRemoteKernelCommandPolicy } from './remote/remote-command-policy.ts'
-import { loadRemoteConfig } from './remote/remote-config.ts'
+import { loadDesktopHostConfig } from './remote/desktop-host-config.ts'
+import {
+  startDesktopHostGateway,
+  type DesktopHostGateway
+} from './remote/desktop-host-gateway.ts'
+import {
+  loadRemoteConfig,
+  readRemoteTokenFile,
+  type RemoteEnabledConfig
+} from './remote/remote-config.ts'
 import {
   openRemoteDeviceStore,
   type RemoteDeviceStore
 } from './remote/remote-device-store.ts'
 import {
   startRemoteGateway,
-  type RemoteGateway
+  type RemoteGateway,
+  type RemoteGatewayHandlers
 } from './remote/remote-gateway.ts'
+import {
+  createTailscaleRemoteGatewayConfig,
+  openTailscaleRemoteManager,
+  type TailscaleRemoteManager
+} from './remote/tailscale-remote.ts'
 import { readPromptAttachments } from './prompt/prompt-attachment-selection.ts'
 import { PiProviderStore } from './provider/pi-provider-store.ts'
 import { PiProviderAuth } from './provider/pi-provider-auth.ts'
@@ -79,9 +101,13 @@ import { testProviderConnection } from './provider/provider-connection-test.ts'
 import { ProjectStore } from './project/project-store.ts'
 import { searchProjectPaths } from './project/project-path-search.ts'
 import { readSessionMetadata, readSessionStatistics } from './project/session-statistics.ts'
-import { readSessionMessagesTailFirst } from './project/session-transcript-tail.ts'
+import {
+  readSessionMessagesTailFirst,
+  readSessionTranscriptGeneration
+} from './project/session-transcript-tail.ts'
 import { readSessionActivityAt, readSessionMessages } from './project/session-transcript.ts'
 import { probePiRpc } from './runtime/linux-local-runtime.ts'
+import { resolvePiExecutable } from './runtime/pi-executable.ts'
 import { SharedPiHost } from './runtime/shared-pi-host.ts'
 import { generateSessionNameWithPi } from './runtime/session-name-generator.ts'
 import { errorMessage } from './utils/errors.ts'
@@ -102,15 +128,57 @@ let providerAuth: PiProviderAuth | null = null
 let desktopNotificationBroker: DesktopNotificationBroker | null = null
 let sharedPiHost: SharedPiHost | null = null
 let remoteGateway: RemoteGateway | null = null
+let remoteGatewaySource: 'manual' | 'tailscale' | null = null
+let remoteGatewayCleanupError: Error | null = null
+let remoteGatewayHandlers: RemoteGatewayHandlers | null = null
+let tailscaleRemoteManager: TailscaleRemoteManager | null = null
+let desktopHostGateway: DesktopHostGateway | null = null
 let remoteDeviceStore: RemoteDeviceStore | null = null
 let shutdownPromise: Promise<void> | null = null
 let autoHibernateTimer: ReturnType<typeof setInterval> | null = null
 let allowQuit = false
 let packageInstallDrain: Promise<void> = Promise.resolve()
+let tailscaleRemoteMutationDrain: Promise<void> = Promise.resolve()
 
 const MAX_PACKAGE_INSTALL_JOBS = 32
+const STARTUP_READY_NONCE_PATTERN = /^[0-9a-f]{32}$/
 
 const kernelEventForwarder = createKernelEventForwarder({ send: sendKernelEvent })
+
+async function publishStartupReady(window: BrowserWindow): Promise<void> {
+  const nonce = process.env.PI_GUI_STARTUP_READY_NONCE
+  if (nonce === undefined) return
+  if (!STARTUP_READY_NONCE_PATTERN.test(nonce)) {
+    throw new Error('PI_GUI_STARTUP_READY_NONCE must be 32 lowercase hexadecimal characters.')
+  }
+
+  const probe: unknown = await window.webContents.executeJavaScript(`
+    (async () => {
+      const root = document.getElementById('root')
+      const api = window.piGui
+      if (document.readyState !== 'complete') return { ready: false, reason: 'document' }
+      if (root === null || root.childElementCount === 0) return { ready: false, reason: 'root' }
+      if (api === undefined || typeof api.getState !== 'function') return { ready: false, reason: 'preload' }
+      const state = await api.getState()
+      if (state === null || typeof state !== 'object' || !Number.isSafeInteger(state.revision)) {
+        return { ready: false, reason: 'kernel' }
+      }
+      return { ready: true, reason: null }
+    })()
+  `, true)
+  if (
+    probe === null ||
+    typeof probe !== 'object' ||
+    !('ready' in probe) ||
+    probe.ready !== true
+  ) {
+    const reason = probe !== null && typeof probe === 'object' && 'reason' in probe
+      ? String(probe.reason)
+      : 'unknown'
+    throw new Error(`Renderer startup readiness failed: ${reason}`)
+  }
+  console.info(`[Pi GUI] STARTUP_READY nonce=${nonce} pid=${process.pid}`)
+}
 
 async function createMainWindow(rendererTarget: RendererTarget): Promise<void> {
   if (mainWindow !== null) {
@@ -167,6 +235,7 @@ async function createMainWindow(rendererTarget: RendererTarget): Promise<void> {
   })
 
   await window.loadURL(rendererTarget.url)
+  await publishStartupReady(window)
 }
 
 async function startApplication(): Promise<void> {
@@ -200,6 +269,9 @@ async function startApplication(): Promise<void> {
   const storedProjects = await projectStore.loadProjects()
   const storedTasks = await projectStore.loadTasks()
   const sessionNaming = await projectStore.loadSessionNaming()
+  const piExecutable = resolvePiExecutable({
+    explicitPath: process.env.PI_GUI_PI_EXECUTABLE
+  })
   const appearance = await projectStore.loadAppearance()
   const subagent = await projectStore.loadSubagent()
   const shortcuts = await projectStore.loadShortcuts()
@@ -327,6 +399,7 @@ async function startApplication(): Promise<void> {
         sessionFile: launchOptions.sessionFile,
         projectTrust: launchOptions.projectTrust,
         fastExtensionLoading: launchOptions.fastExtensionLoading,
+        piExecutable,
         quiescenceExtensionPath,
         extensionPaths: runtimeExtensionPaths,
         ...(subagentPackageEnabled ? { subagent: launchOptions.subagent } : {}),
@@ -370,6 +443,7 @@ async function startApplication(): Promise<void> {
       readSessionMetadata,
       readSessionMessages,
       readSessionMessagesTailFirst,
+      readSessionTranscriptGeneration,
       persistProjectOrder: (projectKeys) => projectStore.reorderProjects(projectKeys),
       sessionNaming,
       persistSessionNaming: (settings) => projectStore.saveSessionNaming(settings),
@@ -384,12 +458,18 @@ async function startApplication(): Promise<void> {
       persistSubagent: (settings) => projectStore.saveSubagent(settings),
       shortcuts,
       persistShortcuts: (settings) => projectStore.saveShortcuts(settings),
-      generateSessionName: generateSessionNameWithPi,
+      generateSessionName: async (request) => {
+        try {
+          return await generateSessionNameWithPi({ ...request, executable: piExecutable })
+        } catch (error) {
+          console.error(`[Pi GUI] Automatic session naming failed: ${errorMessage(error)}`)
+          throw error
+        }
+      },
       projectTrust
     }
   )
   await kernel.resumeInterruptedSessions()
-  await kernel.refreshSessionActivities()
   kernel.subscribe(forwardKernelEvent)
   autoHibernateTimer = setInterval(() => {
     const activeKernel = kernel
@@ -400,50 +480,104 @@ async function startApplication(): Promise<void> {
   }, AUTO_HIBERNATE_SWEEP_INTERVAL_MS)
   autoHibernateTimer.unref()
 
-  const remoteConfig = await loadRemoteConfig(process.env)
-  if (remoteConfig.enabled) {
-    const uid = process.getuid?.()
-    if (uid === undefined) {
-      throw new Error('Remote device store ownership can only be verified when process.getuid is available.')
-    }
-    remoteDeviceStore = await openRemoteDeviceStore({
-      path: remoteConfig.deviceStorePath,
+  const assertRemoteCommandPolicy = async (command: RemoteKernelCommand): Promise<void> => {
+    const activeKernel = kernel
+    if (activeKernel === null) throw new Error('Workbench kernel is unavailable.')
+    await assertRemoteKernelCommandPolicy(command, { kernel: activeKernel })
+  }
+  const dispatchRemoteCommand = async (
+    command: RemoteKernelCommand,
+    assertCurrentBoundary?: () => Promise<void>
+  ): Promise<unknown> => {
+    const activeKernel = kernel
+    if (activeKernel === null) throw new Error('Workbench kernel is unavailable.')
+    const result = await dispatchTerminalKernelCommand(command, {
+      kernel: activeKernel,
+      projectStore,
+      assertCurrentPolicy: async () => {
+        await assertCurrentBoundary?.()
+        await assertRemoteKernelCommandPolicy(command, { kernel: activeKernel })
+      }
+    })
+    if (command.type !== 'kernel.activate-project') return result
+    await activeKernel.refreshWorkspaceMetadata(command.projectKey)
+    return activeKernel.acknowledge()
+  }
+
+  remoteGatewayHandlers = {
+    assertCommandPolicy: assertRemoteCommandPolicy,
+    dispatchCommand: dispatchRemoteCommand
+  }
+
+  const uid = process.getuid?.()
+  if (uid !== undefined) {
+    tailscaleRemoteManager = await openTailscaleRemoteManager({
+      configPath: join(app.getPath('userData'), 'tailscale-remote.json'),
+      tokenFile: join(app.getPath('userData'), 'tailscale-remote.token'),
       uid
     })
-    remoteGateway = await startRemoteGateway({
-      config: remoteConfig,
-      staticRoot: join(mainBundleDirectory, '../remote'),
-      deviceStore: remoteDeviceStore,
+  }
+
+  const remoteConfig = await loadRemoteConfig(process.env)
+  const managedTailscaleConfig = tailscaleRemoteManager?.getManagedConfig() ?? null
+  if (remoteConfig.enabled && managedTailscaleConfig !== null) {
+    throw new Error('Manual Remote and Tailscale one-click Remote cannot be enabled together.')
+  }
+  if (remoteConfig.enabled) {
+    await startApplicationRemoteGateway(remoteConfig, 'manual')
+  } else if (managedTailscaleConfig !== null) {
+    if (uid === undefined || tailscaleRemoteManager === null) {
+      throw new Error('Tailscale Remote ownership can only be verified when process.getuid is available.')
+    }
+    const prepared = await tailscaleRemoteManager.prepareEnable(managedTailscaleConfig.mode)
+    const token = await readRemoteTokenFile(tailscaleRemoteManager.tokenFile, uid)
+    await startApplicationRemoteGateway(
+      createTailscaleRemoteGatewayConfig({
+        publicOrigin: prepared.publicOrigin,
+        port: managedTailscaleConfig.port,
+        token,
+        tokenFile: tailscaleRemoteManager.tokenFile
+      }),
+      'tailscale'
+    )
+    await tailscaleRemoteManager.activate(prepared, managedTailscaleConfig.port)
+  }
+
+  const desktopHostConfig = await loadDesktopHostConfig(process.env)
+  if (desktopHostConfig.enabled) {
+    const uid = process.getuid?.()
+    if (uid === undefined) {
+      throw new Error(
+        'Desktop Host device store ownership can only be verified when process.getuid is available.'
+      )
+    }
+    const desktopHostDeviceStore = await openRemoteDeviceStore({
+      path: desktopHostConfig.deviceStorePath,
+      uid
+    })
+    desktopHostGateway = await startDesktopHostGateway({
+      config: desktopHostConfig,
+      productVersion: app.getVersion(),
+      buildCommit: process.env.PI_GUI_BUILD_COMMIT ?? null,
+      deviceStore: desktopHostDeviceStore,
       handlers: {
-        assertCommandPolicy: async (command) => {
+        getControlIdentity: (): DesktopHostControlIdentity => {
           const activeKernel = kernel
-          if (activeKernel === null) {
-            throw new Error('Workbench kernel is unavailable.')
+          if (activeKernel === null) throw new Error('Workbench kernel is unavailable.')
+          const state = activeKernel.getState()
+          return {
+            projectKey: state.activeProjectKey,
+            sessionKey: state.activeSessionKey
           }
-          await assertRemoteKernelCommandPolicy(command, {
-            kernel: activeKernel
-          })
         },
-        dispatchCommand: async (command) => {
-          const activeKernel = kernel
-          if (activeKernel === null) {
-            throw new Error('Workbench kernel is unavailable.')
-          }
-          const result = await dispatchTerminalKernelCommand(command, {
-            kernel: activeKernel,
-            projectStore,
-            assertCurrentPolicy: () => assertRemoteKernelCommandPolicy(command, {
-              kernel: activeKernel
-            })
-          })
-          if (command.type !== 'kernel.activate-project') return result
-          await activeKernel.refreshWorkspaceMetadata(command.projectKey)
-          return activeKernel.acknowledge()
-        }
+        assertCommandPolicy: assertRemoteCommandPolicy,
+        dispatchCommand: (command, assertCurrentBoundary) =>
+          dispatchRemoteCommand(command, assertCurrentBoundary)
       }
     })
     console.info(
-      `[Pi GUI] Remote gateway listening on ${remoteConfig.bindHost}:${remoteConfig.port}`
+      `[Pi GUI] Desktop Host gateway listening on ` +
+      `${desktopHostConfig.bindHost}:${desktopHostConfig.port}`
     )
   }
 
@@ -473,7 +607,7 @@ async function startApplication(): Promise<void> {
     sender: IpcMainInvokeEvent['sender']
   ): StaticSessionPreviewOwner => {
     const previous = staticSessionPreviewOwner
-    if (previous !== null) releaseStaticSessionPreviewOwner(previous, true)
+    if (previous !== null) releaseStaticSessionPreviewOwner(previous, false)
     const owner: StaticSessionPreviewOwner = {
       requestId,
       sender,
@@ -489,12 +623,37 @@ async function startApplication(): Promise<void> {
   ipcMain.handle(GIT_COMMAND_CHANNEL, async (event, command: unknown) => {
     assertTrustedIpcSender(event, rendererTarget)
     if (!isGitCommand(command)) throw new Error('Unsupported Git command.')
-    return await gitController.dispatch(command)
+    // Read-only prepare/history may follow Renderer navigation abort.
+    // Mutations (including branch-sync execute) stay bound only to their own timeout once queued.
+    if (
+      command.type !== 'git.list-history' &&
+      command.type !== 'git.get-history-detail' &&
+      command.type !== 'git.get-history-file-diff' &&
+      command.type !== 'git.prepare-branch-sync'
+    ) {
+      return await gitController.dispatch(command)
+    }
+    const controller = new AbortController()
+    const abort = (): void => controller.abort()
+    event.sender.once('destroyed', abort)
+    event.sender.once('render-process-gone', abort)
+    event.sender.once('did-start-navigation', abort)
+    if (event.sender.isDestroyed()) controller.abort()
+    try {
+      return await gitController.dispatch(command, controller.signal)
+    } finally {
+      event.sender.removeListener('destroyed', abort)
+      event.sender.removeListener('render-process-gone', abort)
+      event.sender.removeListener('did-start-navigation', abort)
+    }
   })
 
   ipcMain.handle(
     REMOTE_ADMIN_COMMAND_CHANNEL,
-    async (event, command: unknown): Promise<RemoteAccessStatus | RemotePairingCode> => {
+    async (
+      event,
+      command: unknown
+    ): Promise<RemoteAccessStatus | DesktopHostAccessStatus | RemotePairingCode | TailscaleRemoteStatus> => {
       assertTrustedIpcSender(event, rendererTarget)
       if (!isRemoteAdminCommand(command)) {
         throw new Error('Unsupported remote admin command.')
@@ -639,6 +798,13 @@ async function startApplication(): Promise<void> {
         kernel.cancelSessionPreview(command.requestId)
         if (owner !== null) releaseStaticSessionPreviewOwner(owner, false)
         return
+      }
+      case 'kernel.load-earlier-session-preview': {
+        const projectPath = kernel.getActiveProjectPath()
+        return kernel.loadEarlierSessionPreview(
+          command.request,
+          () => projectStore.loadSessionRegistry(projectPath)
+        )
       }
       case 'kernel.preview-archived-session':
         return kernel.previewArchivedSession(command.token)
@@ -935,9 +1101,9 @@ async function startApplication(): Promise<void> {
     if (window === null || window.isDestroyed()) return false
     return window.isMaximized()
   })
-
   await startDesktopNotificationBroker(projectStore)
   await createMainWindow(rendererTarget)
+  await kernel.refreshSessionActivities()
 }
 
 const probeOnly = process.env.PI_GUI_PROBE_ONLY === '1'
@@ -997,6 +1163,7 @@ function sendKernelEvent(event: KernelEvent): void {
     window.webContents.send(KERNEL_EVENT_CHANNEL, event)
   }
   remoteGateway?.publish(event)
+  desktopHostGateway?.publish(event)
 }
 
 function forwardProviderAuthEvent(event: KernelProviderAuthEvent): void {
@@ -1072,9 +1239,153 @@ async function listSystemFonts(): Promise<string[]> {
   return fonts
 }
 
+async function startApplicationRemoteGateway(
+  config: RemoteEnabledConfig,
+  source: 'manual' | 'tailscale'
+): Promise<void> {
+  if (remoteGateway !== null) throw new Error('Remote gateway is already running.')
+  const handlers = remoteGatewayHandlers
+  if (handlers === null) throw new Error('Remote gateway handlers are unavailable.')
+  const uid = process.getuid?.()
+  if (uid === undefined) {
+    throw new Error('Remote device store ownership can only be verified when process.getuid is available.')
+  }
+  const deviceStore = await openRemoteDeviceStore({
+    path: config.deviceStorePath,
+    uid
+  })
+  const gateway = await startRemoteGateway({
+    config,
+    staticRoot: join(mainBundleDirectory, '../remote'),
+    deviceStore,
+    handlers
+  })
+  remoteDeviceStore = deviceStore
+  remoteGateway = gateway
+  remoteGatewaySource = source
+  remoteGatewayCleanupError = null
+  console.info(
+    `[Pi GUI] Remote gateway listening on ${gateway.bindHost}:${gateway.port}`
+  )
+}
+
+async function runTailscaleRemoteMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const run = tailscaleRemoteMutationDrain.then(operation, operation)
+  tailscaleRemoteMutationDrain = run.then(
+    () => undefined,
+    () => undefined
+  )
+  return await run
+}
+
+async function enableTailscaleRemote(
+  mode: Exclude<TailscaleRemoteMode, 'off'>
+): Promise<TailscaleRemoteStatus> {
+  const manager = tailscaleRemoteManager
+  if (manager === null) {
+    throw new Error('Tailscale one-click Remote is unavailable on this platform.')
+  }
+  if (remoteGatewaySource === 'manual') {
+    throw new Error('Manual Remote is already enabled; disable it before using Tailscale one-click Remote.')
+  }
+  if (remoteGatewayCleanupError !== null) {
+    throw new Error(
+      `A previous Remote gateway cleanup failed; restart Pi GUI before retrying: ${remoteGatewayCleanupError.message}`
+    )
+  }
+
+  const prepared = await manager.prepareEnable(mode)
+  if (remoteGateway === null) {
+    const token = await manager.ensureToken()
+    try {
+      await startApplicationRemoteGateway(
+        createTailscaleRemoteGatewayConfig({
+          publicOrigin: prepared.publicOrigin,
+          port: 0,
+          token,
+          tokenFile: manager.tokenFile
+        }),
+        'tailscale'
+      )
+    } catch (error) {
+      await manager.discardTokenIfUnconfigured()
+      throw error
+    }
+  }
+
+  const gateway = remoteGateway
+  if (gateway === null || remoteGatewaySource !== 'tailscale') {
+    throw new Error('Tailscale Remote gateway did not start.')
+  }
+  try {
+    return await manager.activate(prepared, gateway.port)
+  } catch (error) {
+    if (manager.getManagedConfig() === null) {
+      const cleanupErrors: unknown[] = []
+      try {
+        await gateway.stop()
+      } catch (cleanupError) {
+        remoteGatewayCleanupError = cleanupError instanceof Error
+          ? cleanupError
+          : new Error(String(cleanupError))
+        cleanupErrors.push(remoteGatewayCleanupError)
+      }
+      if (cleanupErrors.length === 0) {
+        remoteGateway = null
+        remoteGatewaySource = null
+        remoteDeviceStore = null
+        try {
+          await manager.discardTokenIfUnconfigured()
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError)
+        }
+      }
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [error, ...cleanupErrors],
+          `Tailscale Remote activation failed: ${errorMessage(error)}; ` +
+          `cleanup failed: ${cleanupErrors.map(errorMessage).join('; ')}`
+        )
+      }
+    }
+    throw error
+  }
+}
+
+async function disableTailscaleRemote(): Promise<TailscaleRemoteStatus> {
+  const manager = tailscaleRemoteManager
+  if (manager === null) {
+    throw new Error('Tailscale one-click Remote is unavailable on this platform.')
+  }
+  if (remoteGatewaySource === 'manual') {
+    throw new Error('Manual Remote is not managed by the Tailscale one-click controls.')
+  }
+  if (remoteGatewayCleanupError !== null) {
+    throw new Error(
+      `A previous Remote gateway cleanup failed; restart Pi GUI before retrying: ${remoteGatewayCleanupError.message}`
+    )
+  }
+  const managedConfig = manager.getManagedConfig()
+  if (managedConfig === null) return await manager.getStatus()
+
+  const gateway = remoteGateway
+  if (gateway === null || remoteGatewaySource !== 'tailscale') {
+    throw new Error('Managed Tailscale Remote gateway is unavailable.')
+  }
+
+  await gateway.revokeDevice()
+  await manager.disableRoute()
+  remoteGateway = null
+  remoteGatewaySource = null
+  remoteDeviceStore = null
+  await gateway.stop()
+  await manager.clearManagedFiles()
+  return await manager.getStatus()
+}
+
 async function dispatchRemoteAdminCommand(
   command: RemoteAdminCommand
-): Promise<RemoteAccessStatus | RemotePairingCode> {
+): Promise<RemoteAccessStatus | DesktopHostAccessStatus | RemotePairingCode | TailscaleRemoteStatus> {
   switch (command.type) {
     case 'remote-admin.get-status': {
       const gateway = remoteGateway
@@ -1097,6 +1408,41 @@ async function dispatchRemoteAdminCommand(
       }
       return await gateway.revokeDevice()
     }
+    case 'remote-admin.get-tailscale-status': {
+      const manager = tailscaleRemoteManager
+      if (manager === null) {
+        return {
+          installed: false,
+          backendState: null,
+          dnsName: null,
+          authUrl: null,
+          managedMode: 'off',
+          routeState: 'unavailable',
+          publicOrigin: null
+        }
+      }
+      return await manager.getStatus()
+    }
+    case 'remote-admin.enable-tailscale-funnel':
+      return await runTailscaleRemoteMutation(() => enableTailscaleRemote('funnel'))
+    case 'remote-admin.enable-tailscale-serve':
+      return await runTailscaleRemoteMutation(() => enableTailscaleRemote('serve'))
+    case 'remote-admin.disable-tailscale':
+      return await runTailscaleRemoteMutation(disableTailscaleRemote)
+    case 'remote-admin.get-desktop-host-status': {
+      const gateway = desktopHostGateway
+      return gateway === null ? { enabled: false } : gateway.getStatus()
+    }
+    case 'remote-admin.create-desktop-host-pairing-code': {
+      const gateway = desktopHostGateway
+      if (gateway === null) throw new Error('Desktop Host is disabled.')
+      return gateway.createPairingCode()
+    }
+    case 'remote-admin.revoke-desktop-host-device': {
+      const gateway = desktopHostGateway
+      if (gateway === null) throw new Error('Desktop Host is disabled.')
+      return await gateway.revokeDevice()
+    }
     default: {
       const exhaustive: never = command
       throw new Error(`Unsupported remote admin command: ${JSON.stringify(exhaustive)}`)
@@ -1106,12 +1452,17 @@ async function dispatchRemoteAdminCommand(
 
 async function stopKernel(): Promise<void> {
   await packageInstallDrain
+  await tailscaleRemoteMutationDrain
   const gateway = remoteGateway
+  const desktopGateway = desktopHostGateway
   remoteGateway = null
+  remoteGatewaySource = null
+  remoteGatewayCleanupError = null
+  remoteGatewayHandlers = null
+  desktopHostGateway = null
   remoteDeviceStore = null
-  if (gateway !== null) {
-    await gateway.stop()
-  }
+  if (gateway !== null) await gateway.stop()
+  if (desktopGateway !== null) await desktopGateway.stop()
   const activeKernel = kernel
   const activeSharedPiHost = sharedPiHost
   const projectStore = projectStoreForShutdown

@@ -109,16 +109,16 @@
 ## D-014 — 首轮语义名称使用隔离的 Pi metadata 请求
 
 - 日期：2026-07-22
-- 状态：Accepted；澄清 D-003 和 D-012 的外部 Pi Runtime 集成边界
-- 决策：新 Session 的首轮进入 `agent_settled` 且 canonical pointer 已落盘后，由 Electron Main 启动一次短生命周期的 `pi --print --no-session` 请求，使用活动 Session 的 provider/model 与 Pi 已有认证生成目的导向的名称。该请求禁用 tools、extension、skill、prompt template、theme 和项目 context，不创建或恢复 Session；结果只通过现有 typed `set_session_name` 路径写回。切换、停止、崩溃或用户手动 `/name` 时取消请求。
-- 原因：Pi 0.80.10 RPC 没有独立的标题接口；复用活动 `prompt` 会污染对话事实源，内嵌 `AgentSession` SDK 会建立第二套 provider/auth 与生命周期边界。隔离的无 Session CLI 请求可以复用 Pi 管理的认证，同时不改写对话。
-- 影响：D-003 的 Electron Main 单一 control plane 与外部 Pi RPC 集成路径保持不变；D-017 生效后，每个 Session Runtime context 各自拥有 `RuntimeHost`。D-012 的“不内嵌 AgentSession、不并行 RPC client”继续成立。Electron Main 额外拥有一个有界、可取消、仅生成 metadata 的 Pi 子进程。生成失败时 Session 保持未命名，不复制首条消息做伪语义 fallback；已有未命名 Session 在下次恢复时补生成。
+- 状态：Accepted；澄清 D-003 和 D-012 的外部 Pi Runtime 集成边界；2026-08-10 将触发点提前到首条 prompt 被接受后
+- 决策：新 Session 的首条 prompt 被主 Runtime 成功接受后，Electron Main 立即并行启动一次短生命周期的 `pi --print --no-session` 请求，只使用首条用户消息生成目的导向的名称，不等待 assistant 输出或 `agent_settled`。该请求禁用 tools、extension、skill、prompt template、theme 和项目 context，不创建或恢复 Session；结果只通过现有 typed `set_session_name` 路径写回。若 provisional Session 尚未取得 canonical pointer，命名结果继续绑定其 Runtime context，并随首次 materialize 一次性持久化。停止、崩溃、设置变更或用户手动 `/name` 时取消请求。
+- 原因：Pi RPC 没有独立的标题接口；复用活动 `prompt` 会污染对话事实源，内嵌 `AgentSession` SDK 会建立第二套 provider/auth 与生命周期边界。标题只需归纳首条用户请求，等待完整首轮既增加无意义延迟，也让独立 metadata 请求晚于可用输入。
+- 影响：D-003 的 Electron Main 单一 control plane 与外部 Pi RPC 集成路径保持不变；D-017 生效后，每个 Session Runtime context 各自拥有 `RuntimeHost`。D-012 的“不内嵌 AgentSession、不并行 RPC client”继续成立。Electron Main 额外拥有一个有界、可取消、仅生成 metadata 的 Pi 子进程；它与主回答并行但不阻塞主回答。生成失败时 Session 保持未命名且不自动重试，不复制首条消息做伪语义 fallback；已有未命名 Session 在下次恢复时补生成。
 
 ## D-015 — 自动命名模型按授权目录选择并允许用户覆盖
 
 - 日期：2026-07-22
-- 状态：Accepted；替代 D-014 中“使用活动 Session 的 provider/model”的模型选择规则；2026-07-24 修订写回所有权与候选顺序
-- 决策：自动模式只在 Pi `get_available_models` 返回的目录中、当前活动 provider 内按 `gpt-5.4-nano`、`gpt-5.4-mini`、`gpt-5.3-codex-spark`、`gpt-5.6-luna` 的顺序选择低成本模型，并使用 `--thinking off`；没有这些模型时保持未命名，不回退到活动的高成本模型。用户可在设置中选择自动、关闭或指定目录中的任一已授权 provider/model。自动命名请求归属于对应 Session 的 Runtime context：切换前台对话不得取消或丢弃已发起的命名结果，成功后仍通过 `set_session_name` 与导航指针持久化写回。
+- 状态：Accepted；替代 D-014 中“使用活动 Session 的 provider/model”的模型选择规则；2026-07-24 修订写回所有权，2026-08-10 修订候选顺序
+- 决策：自动模式只在 Pi `get_available_models` 返回的目录中、当前活动 provider 内按 `gpt-5.6-luna`、`gpt-5.4-mini`、`gpt-5.3-codex-spark` 的顺序选择低成本模型，并使用 `--thinking off`；没有这些模型时保持未命名，不回退到活动的高成本模型。用户可在设置中选择自动、关闭或指定目录中的任一已授权 provider/model。自动命名请求归属于对应 Session 的 Runtime context：切换前台对话不得取消或丢弃已发起的命名结果，成功后仍通过 `set_session_name` 与导航指针持久化写回。
 - 原因：标题生成是短文本目的归纳，不需要主对话模型的能力和 reasoning 成本；同时 OAuth 与 API key 用户可用的 provider/model 不同，不能硬编码本机 provider，也不能要求第二份凭据。多 Runtime 并行后，若仍把“保持前台 active”作为写回条件，会在用户切换对话时静默丢掉标题。
 - 影响：Pi 继续独占 OAuth token、API key 与刷新流程；GUI config v3 只保存命名模式及可选 provider/model ID，不保存认证材料。指定模型在当前目录不可用时 Fail Fast；运行期间修改设置会取消旧命名请求，失败或无低成本候选时 Session 保持未命名。
 
@@ -390,7 +390,7 @@
 
 - 日期：2026-07-27
 - 状态：Accepted；扩展现有 AppearanceSettings 的有限 token 配置方向
-- 决策：第一批新增用户级 `conversationWidth: compact | standard | wide`、`navigatorDensity: comfortable | compact` 与 `motionPreference: system | reduced | minimal`。阅读宽度通过语义化 Conversation max-width 控制，窄窗口服从可用空间；Navigator 密度只调整视觉行高、组间距与辅助信息，不改变每页 5 个 Session、分页外保留项或最小交互命中；动效偏好只能在 OS 能力之上进一步减少动效，不能覆盖 `prefers-reduced-motion` 强制恢复完整动画。
+- 决策：第一批新增用户级 `conversationWidth: compact | standard | wide`、`navigatorDensity: comfortable | compact` 与 `motionPreference: system | reduced | minimal`。阅读宽度通过语义化 Conversation max-width 控制，窄窗口服从可用空间；Navigator 密度只调整视觉行高、组间距与辅助信息，不改变 Session 列表的搜索/时间筛选/虚滚模型、活动保留项或最小交互命中；动效偏好只能在 OS 能力之上进一步减少动效，不能覆盖 `prefers-reduced-motion` 强制恢复完整动画。
 - 原因：这三项分别覆盖阅读、导航和状态变化的高频差异，同时可以落在统一 token 与有限枚举上，不需要把产品变成任意 CSS 编辑器。连续像素、颜色和布局参数会扩大验证组合并破坏响应式与无障碍边界。
 - 影响：配置需要明确 schema migration、非法值回退和首帧尽早应用。首批不加入任意 CSS、像素宽度、颜色、圆角、间距、代码字号比例、默认 Sidebar 状态、代码换行或详情宽度；后续选项必须基于真实使用反馈另行决策。
 
@@ -529,3 +529,75 @@
 - 决策：`PI_GUI_REMOTE_TOKEN_FILE` 保留为 Main 内部 `0600` 机器密钥，但不得再由手机提交、显示或人工复制。桌面通过独立 `REMOTE_ADMIN_COMMAND_CHANNEL` typed IPC（不进入 Kernel 或 Remote command allowlist）生成精确 6 位密码学随机配对码；配对码只在 Main 内存保存 keyed digest，5 分钟、一次性、重新生成替代旧码，并在 5 次错误后消耗。手机只向 `POST /api/session/pair` 提交配对码；成功后 Main 签发至少 32 字节随机 `__Host-` 设备 cookie，使用 `Secure + HttpOnly + SameSite=Strict + Path=/` 和绝对 30 天到期。当前只保存一部设备：`${PI_GUI_REMOTE_TOKEN_FILE}.device` 以严格本人 `0600`、非 symlink、有界 JSON 原子保存设备凭证 SHA-256 与 pairedAt/expiresAt，不保存原始 cookie、配对码或机器密钥；新配对、手机 logout、桌面 revoke 和到期均使旧访问及 SSE 失效。设备存储损坏或权限不安全时 Remote 启动 Fail Fast；v1 `/api/session/login` 不保留兼容 fallback。
 - 原因：64 字符高熵值适合作为机器密钥，却不适合作为手机人工输入；把它改成短固定口令会把公网入口降级为可预测密码。一次性短码只负责在已持有桌面控制权时引导首配，高熵设备 cookie 承担长期认证，桌面撤销提供明确失效点，从而同时闭合手机可用性与公网安全。
 - 影响：Remote 协议升级为 v2，旧浏览器 cookie 与 v1 token 登录不再兼容；用户在桌面“设置 → 远程访问”生成配对码并可撤销已配对手机。setup 仍只准备内部机器密钥与 env，不显示用户登录秘密；同一时刻一个交互控制端的运维约束不变。完整部署与验证见 [`remote-access.md`](remote-access.md)。
+
+## D-067 — Pi GUI 统一为 Linux Host、Desktop Client 与 Web Remote 三种角色
+
+- 日期：2026-08-21
+- 状态：Accepted；扩展 D-065/D-066 的远程产品边界，不改变当前 Web Remote v2 或 Linux Main 单一 control plane
+- 决策：Pi GUI 作为一个产品、一个仓库和一套版本化 shared contract，保留三种明确角色：Linux Desktop 同时拥有完整桌面界面和唯一 `WorkbenchKernel` / Pi Runtime Host；Windows Desktop 第一版只作为 remote-only 完整桌面客户端，通过系统 OpenSSH 的本地端口转发连接 Linux Main 的 loopback-only Desktop Gateway；现有 `src/remote` 继续作为由 Linux Host 托管的轻量 Web Remote。Windows Renderer 继续消费正常 typed preload API，由 Windows Main 持有 SSH 子进程、设备凭证、协议握手、重连和 snapshot 同步；远程模式不得探测本地 Pi、创建本地 Kernel 或把 Windows 路径当作 Linux 路径。Desktop Gateway 可复用 `KernelCommand`、`KernelEvent`、`KernelSnapshot`、revision、request ID 和 SSE+POST 编解码语义，但必须与浏览器的 Public Origin、Trusted Proxy、Secure Cookie 和静态资源入口分离；首版只监听 Linux loopback，要求显式桌面设备配对，并在协议版本不一致时 Fail Fast。
+- 原因：Web Remote 适合手机和临时浏览器访问，但把它嵌入 Windows Electron 会形成第二套桌面 UI，并把浏览器 cookie/origin 边界误用为桌面 SSH 安全边界。完整桌面 Renderer 已通过 `window.piGui` 使用 typed IPC；让 Windows Main 转发到 Linux 唯一 Kernel，可以复用现有界面与状态合同，同时由 OpenSSH 负责主机身份、用户认证、加密和 `ProxyJump`，不需要新增云端 relay、账户系统或第二 Kernel。
+- 影响：产品与版本统一不等于单一二进制或单一入口；Linux AppImage、Windows Desktop 产物和 Host 内置 Web Remote 必须从同一仓库/tag 构建。Web Remote 随 Linux Host 构建天然同步；Windows 连接时必须取得 host product/protocol/build/capability 信息，首版只接受完全一致的 Desktop Host protocol，不自动降级或兼容猜测。P4-1 Linux Host 已通过独立安全 closure并完成；P4-2 Windows remote-only client 正在实施。Windows 正式支持仍必须新增真实 Windows 构建与 Windows→SSH→Linux Host 发布 gate，在该 gate 存在前不宣称 Windows 已可用。P3-5 保持 Paused/Ready。
+
+## D-068 — 后台 Session 完成必须在当前窗口可发现
+
+- 日期：2026-08-14
+- 状态：Accepted；扩展 D-017/D-042/D-051 的多 Session 与完成通知边界，不改变 Session 事实源
+- 决策：Renderer 以 `Project/Task path + Session ID` 作为稳定 identity，观察全部 Session 的 Runtime 生命周期。未展示 Session 从 `running` 进入 `ready` 或 `crashed` 时，即使 `lastActivityAt` 没有推进，也必须进入未读状态，并在当前窗口显示不自动超时的完成通知；通知明确说明结果保留在原对话，提供“查看”动作通过既有 typed Project/Task 与 Session 激活链路返回准确目标，也允许手动关闭。打开目标后清除对应通知，窗口内最多保留最近 3 项；初始快照不把历史完成状态误报为新通知。
+- 原因：`pi-subagents` 正确地把异步完成结果写回发起它的 Session，不能广播或复制到后来选中的 Conversation；但用户切换 Session 后，原结果即使已落入 transcript 和任务详情，也可能只留下不显眼的后台状态，形成“子任务没有返回”的数据丢失错觉。仅依赖普通消息活动时间同样不足，因为 custom completion 与 Runtime 收尾不保证推进该排序事实。
+- 影响：完成结果、Subagent notice 和主 Agent 后续输出继续只存在于原 Session；Renderer 不解析 custom message 文案、不建立跨 Session 结果数据库，也不持久化第二份通知事实。该修复不新增 Main/IPC contract，不改变 `lastActivityAt` 的排序口径；Runtime 状态转换只用于窗口内未读与完成可见性。桌面系统通知及其 Main 私有 Broker 仍由 D-051 负责，窗口内通知是独立的前台可发现性保障。
+
+## D-069 — 历史 Session 浏览与 Runtime 恢复解耦
+
+- 日期：2026-08-15
+- 状态：Accepted；替代 P2 Session 切换中“点击停止 Session 即后台激活 Runtime”的规则，不改变 D-064 的冷启动恢复边界
+- 决策：用户点击 `stopped` / `crashed` 的持久化 Session 时，Renderer 立即切换可见 identity，并只执行有界、可取消的静态历史 preview；普通浏览不得调用 `activate-session` 或启动 Pi Runtime。preview 首次只投影最近 60 轮，用户向上读取时通过绑定 `previewId + Project + Session + Session ID + boundary` 的窄 typed IPC 每次前置最多 60 轮，并复用 active Conversation 的 Timeline 分页与滚动锚点交互；临时归档 preview 使用同一只读分页协议。已有 `ready` / `running` Runtime 的目标仍走即时切换。用户提交普通 prompt 或触发其他明确依赖 Runtime 的操作时，Renderer 取消同目标未完成的静态 preview，通过既有串行 ensure 泵恢复唯一 Runtime，再提交操作。应用冷启动仍恢复持久化 active Session；新 Session 的 provisional Runtime 行为不变。
+- 原因：历史阅读不需要 Agent owner。把静态 preview、完整 transcript 扫描和 Pi Runtime 启动绑定在一次点击中，会增加首屏等待、重复读取和快速浏览时无意义的进程恢复；将恢复推迟到真实执行意图后，可以让 Session 浏览先可见，同时保持 Runtime identity 与 prompt 提交的严格顺序。
+- 影响：停止或崩溃 Session 的首次 prompt 可能等待 Runtime 恢复，但点击浏览本身不再改变其 Runtime 生命周期。约 120ms settle 只合并历史 preview 目标，不再合并后台启动意图；preview 或其分页进行中出现 prompt 时，activation 优先并只启动一次，旧 preview/page 响应不得覆盖权威 Runtime 投影。新增的 detached page IPC 只服务当前 preview lease，不建立持久化缓存、fallback、跨 Session Renderer 历史缓存或第二 Conversation 事实源。
+
+## D-070 — Navigator 历史列表恢复显式分段展开
+
+- 日期：2026-08-17
+- 状态：Accepted；替代 D-049 中 Session 列表使用虚滚模型的部分，保留搜索、时间筛选、活动保留项与 Navigator density 边界
+- 决策：Project Session 与 Task 历史列表默认显示最近 6 个普通摘要。列表底部的按钮必须以“展开其余 N 个对话/任务”明确报告当前还未显示的普通摘要数量；点击一次展示当前搜索与时间筛选结果中的全部剩余摘要，完全展开后同一位置提供“收起至 6 个对话/任务”。query 变化后恢复默认收起状态；当前展示项、provisional / 非空闲 Runtime、等待回复与未读项始终作为展开窗口之外的保留项显示且不占普通 6 项额度。列表不建立内部滚动或虚拟窗口，继续使用 Navigator 自身的单一滚动区。
+- 原因：短内层滚动区移除了既有且可发现的展开入口，并在 Navigator 外层滚动内形成第二条滚动路径；分批多次点击又不能让用户预先判断还有多少历史。明确剩余数量、一次展开全部并提供对称收起，可以直接表达结果规模，同时保持 Navigator 的单一滚动与空间控制。
+- 影响：`SessionListBrowser` 继续统一 Project/Task 的搜索、过滤、保留项和展开语义；每个已挂载列表只保存 Renderer-only 的收起/展开结果数量，不进入 Kernel 或持久化。Navigator density 仍只调整视觉密度，不改变默认 6 项、剩余数量文案、键盘按钮可用性或保留项规则；Git diff 的独立虚拟化边界不受影响。
+
+## D-071 — 设置导航按五组呈现，远程访问独立成组
+
+- 日期：2026-08-23
+- 状态：Accepted；替代 D-048 中四组导航清单，并落实删除单项偏好分类
+- 决策：当前 Settings 导航按“应用：常规/外观/快捷键”“模型：模型/凭证”“远程访问：远程访问”“Agent：Subagent”“生态：Package/拓展/技能”分组。自动对话命名并入常规，删除单项偏好分类；Advisor 入口继续保持删除；Context 只有在 S24 有真实只读内容时才出现。远程访问是独立导航组，承载现有浏览器 Remote 与 Desktop Host 同一页，不并入应用组，也不拆成未接通的子页。
+- 原因：偏好页只剩自动命名，继续占一个分类会伪装成独立设置面。远程访问是本机如何被连上，既不是模型/凭证，也不是 Agent 或生态能力；用户确认它单独成组，而不是放进应用组。
+- 影响：Renderer 设置导航改为分组列表；`set-session-naming` 的错误归属改为常规页。本决定不实现导航收起、设置搜索、deep link 或作用域/来源/生效 badge；这些仍属 S21 后续阶段。`settings-redesign-preview.html` 继续只是交互参考，不是生产导航事实源。
+
+## D-072 — 已投影图片在 Timeline 内联显示
+
+- 日期：2026-08-31
+- 状态：Accepted；扩展 D-018/D-019/D-044 的图片展示方式，不改变 D-053 的 Markdown 外部资源边界
+- 决策：用户消息中的 Pi `ImageContent` 与普通工具结果中的合法图片 metadata 必须在 Timeline 直接显示内联缩略图。普通工具图片放在对应过程块之后，不因 completed process 默认折叠而隐藏；用户图片替代原有只显示名称的附件 chip。缩略图接近可视区域后才通过既有 `getMessageImage` / `getToolImage` typed API 读取 payload，点击复用同一个 loading/error/ready 灯箱。每个图片组件以 request token 和完整 Session/message 或 Session/tool/contentIndex identity 拒绝旧异步结果，identity 变化时清空 payload 并关闭 viewer。Subagent 专用工具、普通文件附件和 Markdown 本地/远程图片加载规则不变。
+- 原因：现有 Kernel 与 IPC 已经安全持有图片内容，但用户消息只显示附件名称，工具图片又藏在默认收起的技术详情中，导致 `read`、截图或图像生成工具成功返回图片后，用户仍会认为 GUI 不支持图片。直接展示已被 Pi transcript 与 Kernel metadata 授权的图片即可补全体验，不需要扩大任意路径读取或远程网络加载边界。
+- 影响：图片 base64 继续不进入 KernelState、patch、全局 store、日志或持久缓存，只在当前图片组件接近可视区域后保留于其生命周期 state；工具详情不重复挂载同一图片入口，空文本但有图片仍不显示“等待工具输出”。Renderer 新增共享内联图片与灯箱展示组件及定向回归测试，不新增 Main/IPC contract、图片下载、Markdown `<img>`、远程追踪请求或第二图片事实源。
+
+## D-073 — Extension slash command 只暴露固定 GUI 适配
+
+- 日期：2026-08-31
+- 状态：Accepted；收紧 D-013 的动态 Extension 命令目录，不改变 Prompt Template 与 Skill 的 Pi 原生展开语义
+- 决策：Pi `get_commands` 继续提供原始发现清单，但用户可见 normalized catalog 只接纳两类动态资源：Prompt Template / Skill，以及命中固定命令名、固定 Package provenance 和明确参数提示的 Extension GUI 适配。未知、TUI-only、依赖 custom renderer 或尚未适配 UI 的 Extension 命令不显示。已适配 Extension 命令通过 typed `invoke_extension_command` 直接执行，成功后才写入本地 command 回声；Prompt Template 与 Skill 继续通过 Pi prompt 展开。Extension `notify` 严格投影为有界 Timeline 状态；固定 `ask` 工具以外的 `select`、`confirm`、`input`、`editor` 请求立即取消并显示错误，命令路径中的 `custom` 直接 Fail Fast。
+- 原因：命令被 `get_commands` 发现只证明 Extension 已注册，不能证明它的 TUI 选择器、确认框、自定义组件、通知或 custom message 已有 GUI 承载。无条件展示会产生静默无效、配置已修改后等待确认、或 Runtime 永久阻塞；统一 `[arguments]` 还会隐藏真实必填参数。固定 provenance 与参数 metadata 能让目录只表达已接通能力，同时保留 Prompt/Skill 的原生动态资源价值。
+- 影响：当前固定适配覆盖 `pi-subagents` 的非交互命令和 Magic Context 不依赖 TUI custom UI 的操作命令；`/ctx-status`、`/subagents-fleet`、无参数管理器、Profile 载入确认、MCP TUI、Web curator、Goal manager、`/todos`、`/llama` 等不再进入 GUI slash 菜单。普通第三方 Extension 命令需要新增明确适配后才能显示；运行时仍保留 unsupported UI Fail Fast，防止旧 catalog、后台工具或外部 RPC 路径造成永久等待。本决定不建立通用 TUI renderer、任意 Extension UI passthrough 或插件适配 registry。
+
+## D-074 — Web Remote 默认使用 Main-owned Tailscale 一键入口
+
+- 日期：2026-08-31
+- 状态：Accepted；扩展 D-065/D-066 的受信代理部署方式，不改变 Remote v2 配对、Cookie、SSE+POST、命令 allowlist 或单一 Kernel
+- 决策：设置页“远程访问”新增 Main-owned 一键联网控制，默认主操作为 Tailscale Funnel“任意浏览器”，次操作为 Tailscale Serve“仅我的设备”。一键模式由 Main 通过固定 argv 和有界 JSON 调用系统 `tailscale` CLI，Remote Gateway 只监听持久化的动态 `127.0.0.1:<port>`，public origin 只来自当前节点 `Self.DNSName` 对应的精确 HTTPS origin，trusted proxy 固定为 loopback。Main 只占用当前节点 HTTPS 443 的根 handler；已有未知 TCP/Web/AllowFunnel 配置、DNS identity 变化或 route 内容漂移时 Fail Fast，不覆盖、不调用 `serve reset` / `funnel reset`。模式切换和停用只操作 Pi GUI 精确拥有的 handler；内部 config/token/device 文件使用 Electron userData 下严格本人 `0600` 的固定路径。现有 `PI_GUI_REMOTE_*` + Lucky 模式保留为互斥的高级手动入口，双方同时启用时拒绝启动。
+- 原因：固定 LAN 地址、反向代理和路由器映射可以满足已有私有部署，但不是移动 Web Remote 的必要前提。系统 Tailscale daemon 已能从本机建立出站 NAT traversal/relay 与 HTTPS 入口；让 Main 只管理一个严格 loopback 后端和一个可验证的 Tailscale handler，可以把用户流程收敛为一键，同时不新增 Pi GUI 云端账户、relay、daemon 或第二 control plane。
+- 影响：启用前仍要求用户安装并登录 Tailscale，并服从 Tailnet HTTPS/Funnel capability；Pi GUI 不安装 Tailscale、不保存账户凭据、不绕过官方授权。`--bg` route 由 Tailscale daemon 持久化，普通 Pi GUI 退出只停止本地 Gateway，下次启动从 managed config 恢复同一端口；显式停用会先撤销手机凭证，再移除 exact handler、停止 Gateway 并删除 managed config/token。Cloudflare、ngrok、自建 rendezvous/relay 和自动防火墙/路由器修改不在本决定范围。真实 Funnel/Serve、手机配对、SSE 和重启恢复必须在安装了 Tailscale 的 Linux 环境中另行执行发布 gate；没有该证据前只能声明代码与模拟 CLI gate 通过。
+
+## D-075 — 已适配 Extension Command 使用原生标准对话框
+
+- 日期：2026-08-31
+- 状态：Accepted；替代 D-073 中“固定 Ask 以外所有标准阻塞 UI 立即取消”的部分，保留固定 catalog、未知来源取消和 `custom()` Fail Fast
+- 决策：`select`、`confirm`、`input`、`editor` 不通过通用 TUI renderer 承载，而是只对 normalized catalog 中 provenance-checked 且显式声明对应 blocking method capability 的 Extension Slash Command 开放原生 GUI modal。Workbench 为每次命令调用生成 opaque invocation ID；Shared Runtime 通过 `AsyncLocalStorage` 只在该 handler 的异步调用链中附加 command name + invocation ID，不能使用 Session 级 ambient owner。Kernel 先保留 Ask 工具优先匹配，再核对当前 RuntimeContext 的精确 invocation、adapter method capability，严格归一化 request method、标题、消息、选项、placeholder/prefill 与长度，并绑定 Project、Session、Session ID、invocation ID、request ID 及内部 RuntimeContext。每个 RuntimeContext 同时最多一个阻塞 Command Dialog；桌面和 Web Remote 通过窄 typed respond/cancel command 回复，modal remount key 使用完整 owner identity，提交中禁止重复，错误保留同一请求，停止或崩溃清理，等待期间禁止 hibernation。没有精确 command invocation owner、没有 method capability 的已适配命令、模型工具或未知 Extension 请求继续自动取消并显示错误，任意 `ctx.ui.custom()` 继续直接失败。
+- 原因：四类标准 UI 已经是可序列化的 request/response，继续一律取消会迫使本可安全表达的命令依赖 TUI；但开放 raw request 或任意 custom Component 又会绕过命令目录、Session identity 和 Renderer 安全边界。把标准 Dialog 作为 Kernel-owned 阻塞运行态，可以复用现有 revision acknowledgement、Session 等待标记、modal 焦点/Escape 与远程命令策略，同时不建立第二事实源或 TUI 模拟器。
+- 影响：`/todos` 按固定 Magic Context provenance 恢复为无参数、notify-only 命令，且 adapter 的 blocking method capability 为空，所以即使同名 Extension 行为漂移也不能升级为确认框或输入框；当前仅 `pi-subagents /run` 家族中的 `/run` 显式允许四种标准阻塞 UI。`/subagents <agent> details` 虽然非交互，但真实输出包含 Agent/override 绝对路径与完整 system prompt，会绕过现有 Subagent 设置页的字段边界并写入 Session custom message，因此整个 `/subagents` Slash 入口继续隐藏。`/cpa-ws-status` 因当前仅有可变 local provenance、`/google-account` 因现有实现会触发 follow-up turn、`/curator` 与 `/search` 因存在配置/删除副作用，继续隐藏，等待固定 provenance、结果 schema 与 GUI 前置确认。`/ctx-status` 和 `/subagents-fleet` 仍需要上游版本化 typed snapshot/event，不能用 TUI 文本或私有数据库推断原生面板状态。

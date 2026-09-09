@@ -653,9 +653,15 @@ export async function startRemoteGateway(options: RemoteGatewayOptions): Promise
     })
   })
 
+  const address = server.address()
+  if (address === null || typeof address === 'string') {
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()))
+    throw new Error('Remote gateway did not expose a TCP port after listening.')
+  }
+
   return {
     bindHost: config.bindHost,
-    port: config.port,
+    port: address.port,
     publish,
     getStatus,
     createPairingCode,
