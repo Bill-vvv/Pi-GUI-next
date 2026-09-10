@@ -113,7 +113,7 @@ import { SharedPiHost } from './runtime/shared-pi-host.ts'
 import { generateSessionNameWithPi } from './runtime/session-name-generator.ts'
 import { errorMessage } from './utils/errors.ts'
 import { WslPipe, WSL_COMMAND_CHANNELS, wslBuildFingerprint } from './remote/wsl-pipe.ts'
-import { startWslBackend } from './remote/wsl-backend.ts'
+import { startWslBackend, mapWslAttachments, resolveWslFilePath } from './remote/wsl-backend.ts'
 import { PiProjectTrust } from './security/pi-project-trust.ts'
 import { SubagentDefinitionStore } from './subagent/subagent-definition-store.ts'
 import {
@@ -1208,7 +1208,10 @@ async function startWslApplication(distribution: string): Promise<void> {
         if (url === null) throw new Error('Link target is not allowed.')
         if (!url.startsWith('file:')) { await shell.openExternal(url); return }
       }
-      return backend.pipe.request(channel, value)
+      const command = channel === KERNEL_COMMAND_CHANNEL && isKernelCommand(value)
+        ? await mapWslAttachments(value, (path) => resolveWslFilePath(distribution, path))
+        : value
+      return backend.pipe.request(channel, command)
     })
   }
   registerWindowHandlers(rendererTarget)

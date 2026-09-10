@@ -31,6 +31,15 @@ mkdir -p "$base/app"
 tar -xf "$archive" -C "$base/app"
 cd "$base/app"
 pnpm install --frozen-lockfile
+if [ ! -x node_modules/electron/dist/electron ]; then
+  # Use a bounded system download; @electron/get can stall on this host's network.
+  command -v unzip >/dev/null
+  curl -fL --retry 2 --connect-timeout 20 --max-time 300 -o "$base/downloads/electron.zip" https://github.com/electron/electron/releases/download/v43.1.1/electron-v43.1.1-linux-x64.zip
+  expected=$(node -p "require('./node_modules/electron/checksums.json')['electron-v43.1.1-linux-x64.zip']")
+  printf '%s  %s\n' "$expected" "$base/downloads/electron.zip" | sha256sum -c -
+  unzip -q -o "$base/downloads/electron.zip" -d node_modules/electron/dist
+  printf electron > node_modules/electron/path.txt
+fi
 node -e "console.log(require('electron'))"
 cp scripts/start-wsl-host.sh "$base/start-host.sh"
 chmod 700 "$base/start-host.sh"
