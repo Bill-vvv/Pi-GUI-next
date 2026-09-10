@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -21,6 +21,11 @@ test('resolves the Pi package behind a pnpm executable shim', async (t) => {
   const shim = join(bin, 'pi')
   await mkdir(dist, { recursive: true })
   await mkdir(bin, { recursive: true })
+  if (process.platform === 'win32') {
+    const scope = join(root, 'node_modules/@earendil-works')
+    await mkdir(scope, { recursive: true })
+    await symlink(packageRoot, join(scope, 'pi-coding-agent'), 'junction')
+  }
   await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
     version: '0.83.0',
     exports: { '.': { import: './dist/index.js' } }

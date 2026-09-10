@@ -19,6 +19,7 @@ import type {
 } from './runtime-host.ts'
 import {
   checkPiVersion,
+  piLaunch,
   resolvePiExecutable,
   type ResolvePiExecutableOptions
 } from './pi-executable.ts'
@@ -49,7 +50,7 @@ import {
   type RuntimeQuiescenceQueryResult
 } from './runtime-quiescence.ts'
 
-const DEFAULT_RPC_TIMEOUT_MS = 10_000
+const DEFAULT_RPC_TIMEOUT_MS = process.platform === 'win32' ? 30_000 : 10_000
 const STOP_GRACE_MS = 1_000
 const PROBE_SESSION_NAME = 'Pi GUI S11 probe'
 const MAX_EXTENSION_COMMAND_NAME_LENGTH = 256
@@ -335,7 +336,7 @@ export class LinuxLocalRuntime implements RuntimeHost {
         ? []
         : [this.options.quiescenceExtensionPath])
     ])]
-    const child = spawn(
+    const launch = piLaunch(
       executable,
       buildPiRpcArguments(
         this.options.sessionFile,
@@ -343,13 +344,15 @@ export class LinuxLocalRuntime implements RuntimeHost {
         this.options.projectTrust,
         extensionPaths
       ),
-      {
-        cwd: this.options.cwd,
-        shell: false,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env
-      }
+      env
     )
+    const child = spawn(launch.command, launch.args, {
+      cwd: this.options.cwd,
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: launch.env,
+      windowsHide: true
+    })
     this.child = child
     this.streaming = false
     this.state = {

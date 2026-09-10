@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
 
 import type { KernelProviderTestResult } from '../../shared/kernel-contract.ts'
-import { resolvePiExecutable } from '../runtime/pi-executable.ts'
+import { resolvePiExecutable, piLaunch } from '../runtime/pi-executable.ts'
 
 const TEST_TIMEOUT_MS = 30_000
 const MAX_STDOUT_BYTES = 64 * 1024
@@ -45,7 +45,10 @@ export async function testProviderConnection(
   return new Promise<KernelProviderTestResult>((resolveResult, rejectResult) => {
     let child: ReturnType<typeof spawn>
     try {
-      child = spawn(executable, args, {
+      const launch = piLaunch(executable, args)
+      child = spawn(launch.command, launch.args, {
+        env: launch.env,
+        windowsHide: true,
         cwd: options.cwd ?? process.cwd(),
         shell: false,
         stdio: ['ignore', 'pipe', 'pipe']

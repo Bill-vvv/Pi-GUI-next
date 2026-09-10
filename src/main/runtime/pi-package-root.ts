@@ -1,5 +1,5 @@
 import { readFile, realpath } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, resolve, relative, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import {
@@ -122,5 +122,6 @@ function rootImportTarget(exportsValue: unknown): string {
 }
 
 function isWithin(root: string, candidate: string): boolean {
-  return candidate === root || candidate.startsWith(`${root}/`)
+  const path = relative(root, candidate)
+  return path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path)
 }

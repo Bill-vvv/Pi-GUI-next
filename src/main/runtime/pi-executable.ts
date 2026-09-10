@@ -1,13 +1,14 @@
-import { accessSync, constants, statSync } from 'node:fs'
+import { accessSync, constants, statSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { delimiter, join, resolve } from 'node:path'
+import { basename, dirname, extname, delimiter, join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 
 import { errorMessage } from '../utils/errors.ts'
 
 export const SUPPORTED_PI_VERSION = '0.83.0'
 
-const DEFAULT_VERSION_TIMEOUT_MS = 5_000
+// Windows may need longer to load the Pi SDK on a cold filesystem cache.
+const DEFAULT_VERSION_TIMEOUT_MS = process.platform === 'win32' ? 30_000 : 5_000
 const MAX_STDERR_BYTES = 4_096
 const MAX_STDOUT_BYTES = 4_096
 
@@ -31,7 +32,7 @@ export function resolvePiExecutable(options: ResolvePiExecutableOptions = {}): s
 
     const executable = resolve(options.explicitPath)
     assertExplicitExecutable(executable)
-    return executable
+    return resolveWindowsPiEntry(executable)
   }
 
   const pathValue = options.path ?? process.env.PATH ?? ''
@@ -41,18 +42,38 @@ export function resolvePiExecutable(options: ResolvePiExecutableOptions = {}): s
       continue
     }
 
-    const candidate = resolve(join(directory, 'pi'))
-    if (isExecutableFile(candidate)) {
-      return candidate
+    for (const name of process.platform === 'win32' ? ['pi.exe', 'pi.cmd', 'pi'] : ['pi']) {
+      const candidate = resolve(join(directory, name))
+      if (isExecutableFile(candidate)) return resolveWindowsPiEntry(candidate)
     }
   }
 
   const userLocalExecutable = resolve(options.homeDir ?? homedir(), '.local/bin/pi')
   if (isExecutableFile(userLocalExecutable)) {
-    return userLocalExecutable
+    return resolveWindowsPiEntry(userLocalExecutable)
   }
 
   throw new Error('Pi was not found in the current PATH or ~/.local/bin. Provide the path to the Pi executable and try again.')
+}
+
+// npm and pnpm Windows shims are shell scripts, not spawnable executables.
+// Resolve their known package layout without evaluating any shell text.
+function resolveWindowsPiEntry(executable: string): string {
+  if (process.platform !== 'win32' || !['pi', 'pi.cmd', 'pi.ps1'].includes(basename(executable).toLowerCase())) {
+    return executable
+  }
+  const directory = dirname(executable)
+  const modules = basename(directory) === '.bin' ? dirname(directory) : join(directory, 'node_modules')
+  const entry = join(modules, '@earendil-works/pi-coding-agent/dist/cli.js')
+  assertExplicitExecutable(entry)
+  return realpathSync(entry)
+}
+
+export function piLaunch(executable: string, args: readonly string[], env: NodeJS.ProcessEnv = process.env) {
+  if (process.platform === 'win32' && ['.js', '.mjs', '.cjs'].includes(extname(executable).toLowerCase())) {
+    return { command: process.execPath, args: [executable, ...args], env: { ...env, ELECTRON_RUN_AS_NODE: '1' } }
+  }
+  return { command: executable, args: [...args], env }
 }
 
 export async function checkPiVersion(options: CheckPiVersionOptions): Promise<string> {
@@ -66,7 +87,10 @@ export async function checkPiVersion(options: CheckPiVersionOptions): Promise<st
     let child: ReturnType<typeof spawn>
 
     try {
-      child = spawn(options.executable, ['--version'], {
+      const launch = piLaunch(options.executable, ['--version'])
+      child = spawn(launch.command, launch.args, {
+        env: launch.env,
+        windowsHide: true,
         cwd: options.cwd,
         shell: false,
         stdio: ['ignore', 'pipe', 'pipe']

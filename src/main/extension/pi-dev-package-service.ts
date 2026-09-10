@@ -11,7 +11,7 @@ import type {
   KernelPiDevCatalog,
   KernelPiDevPackage
 } from '../../shared/kernel-contract.ts'
-import { resolvePiExecutable } from '../runtime/pi-executable.ts'
+import { resolvePiExecutable, piLaunch } from '../runtime/pi-executable.ts'
 import { resolvePiAgentDir } from './pi-extension-store.ts'
 
 const CATALOG_URL = 'https://pi.dev/packages'
@@ -583,10 +583,12 @@ async function runPiCommand(
   options: PiDevCommandOptions
 ): Promise<void> {
   await new Promise<void>((resolveCommand, rejectCommand) => {
-    const child = spawn(executable, [...args], {
+    const launch = piLaunch(executable, args, options.env)
+    const child = spawn(launch.command, launch.args, {
       cwd: options.cwd,
       shell: options.shell,
-      env: options.env,
+      env: launch.env,
+      windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe']
     })
     let outputBytes = 0

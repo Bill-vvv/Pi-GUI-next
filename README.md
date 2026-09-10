@@ -20,6 +20,15 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
+Windows 源码启动（已通过本地离线 Pi RPC 探针；部分桌面功能仍以 Linux 为准）：
+
+```powershell
+cd D:\Projects\pi-gui-next
+fnm exec --using 26.4.0 cmd /c pnpm dev
+```
+
+通过 pnpm 启动会使用项目锁定的 Pi 0.83.0。Windows 的 npm/pnpm shim 会解析到实际的 `dist/cli.js`，由 Node 执行；Electron 子进程使用 Node 模式，不经过 shell。Windows 冷启动的版本检查和 RPC 超时为 30 秒。系统字体枚举、桌面通知等 Linux 专用功能尚未完成 Windows 适配。
+
 启动时，Electron Main 会先检查 Pi 版本并执行离线、无 session 的 `get_state` 探针。默认从当前 `PATH` 解析 `pi`；需要显式指定时使用：
 
 ```bash
