@@ -5,6 +5,7 @@ import type {
 } from '../../../../shared/kernel-contract'
 import { Select, type SelectOptionGroup } from '../../components/Select'
 import { SettingsPageHeading } from './SettingsPageHeading'
+import { SettingsSwitch } from './SettingsSwitch'
 import { SettingsRowError, useSettingsRowSave } from './useSettingsRowSave'
 
 export function GeneralSettings({
@@ -107,14 +108,12 @@ export function GeneralSettings({
               </p>
               <SettingsRowError message={errorFor('auto-continue')} />
             </div>
-            <div className="settings-row-control settings-checkbox-control">
-              <input
+            <div className="settings-row-control settings-switch-control">
+              <SettingsSwitch
                 id="general-auto-continue-interrupted-tasks"
-                type="checkbox"
                 checked={general.autoContinueInterruptedTasks}
                 disabled={busy}
-                onChange={(event) => {
-                  const autoContinueInterruptedTasks = event.currentTarget.checked
+                onCheckedChange={(autoContinueInterruptedTasks) => {
                   save('auto-continue', () => onSetGeneral({
                     ...general,
                     autoContinueInterruptedTasks
@@ -164,26 +163,19 @@ export function GeneralSettings({
         <div className="settings-group-card">
           <div className="settings-row">
             <div className="settings-row-copy">
-              <h4>双击边框最大化</h4>
+              <label htmlFor="general-double-click-border-maximize">双击边框最大化</label>
               <p>双击窗口四周边框时切换最大化。独占全屏请用 F11</p>
               <SettingsRowError message={errorFor('double-click-maximize')} />
             </div>
-            <div className="settings-row-control">
-              <Select
+            <div className="settings-row-control settings-switch-control">
+              <SettingsSwitch
                 id="general-double-click-border-maximize"
-                value={general.doubleClickBorderMaximize === false ? 'off' : 'on'}
-                groups={[{
-                  options: [
-                    { value: 'on', label: '开启' },
-                    { value: 'off', label: '关闭' }
-                  ]
-                }]}
+                checked={general.doubleClickBorderMaximize !== false}
                 disabled={busy}
-                onValueChange={(value) => {
-                  if (value !== 'on' && value !== 'off') return
+                onCheckedChange={(doubleClickBorderMaximize) => {
                   save('double-click-maximize', () => onSetGeneral({
                     ...general,
-                    doubleClickBorderMaximize: value === 'on'
+                    doubleClickBorderMaximize
                   }))
                 }}
               />
@@ -210,14 +202,12 @@ export function GeneralSettings({
               </p>
               <SettingsRowError message={errorFor('fast-extension-loading')} />
             </div>
-            <div className="settings-row-control settings-checkbox-control">
-              <input
+            <div className="settings-row-control settings-switch-control">
+              <SettingsSwitch
                 id="general-fast-extension-loading"
-                type="checkbox"
                 checked={general.fastExtensionLoading}
                 disabled={busy}
-                onChange={(event) => {
-                  const fastExtensionLoading = event.currentTarget.checked
+                onCheckedChange={(fastExtensionLoading) => {
                   save('fast-extension-loading', () => onSetGeneral({
                     ...general,
                     fastExtensionLoading

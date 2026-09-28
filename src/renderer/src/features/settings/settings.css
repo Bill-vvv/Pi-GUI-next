@@ -296,7 +296,7 @@
   width: min(280px, 52%);
 }
 
-.settings-prefs .settings-checkbox-control,
+.settings-prefs .settings-switch-control,
 .settings-prefs .shortcut-settings-actions,
 .settings-prefs .remote-access-actions {
   width: auto;
@@ -452,25 +452,71 @@
   flex: 0 0 auto;
 }
 
-.settings-checkbox-control {
+.settings-switch-control {
   display: flex;
   justify-content: flex-end;
 }
 
-.settings-checkbox-control input {
+.settings-switch {
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 20px;
   margin: 0;
-  accent-color: var(--color-accent-primary);
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-input);
   cursor: pointer;
+  appearance: none;
+  transition:
+    background-color var(--motion-duration-control) var(--motion-easing-standard),
+    border-color var(--motion-duration-control) var(--motion-easing-standard);
 }
 
-.settings-checkbox-control input:focus-visible {
+.settings-switch::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  transition:
+    transform var(--motion-duration-control) var(--motion-easing-standard),
+    background-color var(--motion-duration-control) var(--motion-easing-standard);
+}
+
+.settings-switch:hover:not(:disabled) {
+  border-color: var(--color-border-hover);
+}
+
+.settings-switch:checked {
+  border-color: var(--color-accent-primary);
+  background: var(--color-accent-primary);
+}
+
+/* The app background reads as a cut-out knob on every accent colour. */
+.settings-switch:checked::before {
+  background: var(--color-bg-app);
+  transform: translateX(14px);
+}
+
+.settings-switch:focus-visible {
   outline: 2px solid var(--color-border-focus);
   outline-offset: 2px;
 }
 
-.settings-checkbox-control input:disabled {
+.settings-switch:disabled {
   cursor: default;
   opacity: 0.55;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-switch,
+  .settings-switch::before {
+    transition: none;
+  }
 }
 
 .settings-card p {
@@ -958,11 +1004,6 @@
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-}
-
-.settings-subagent-package-select {
-  width: 132px;
-  min-width: 0;
 }
 
 .settings-subagent-actions button:hover:not(:disabled) {
