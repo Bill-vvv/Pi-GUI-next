@@ -9,6 +9,9 @@ import { findUniqueInstalledPackage } from './installed-package-selection'
 import { SettingsSwitch } from './SettingsSwitch'
 import { useSettingsConfirm } from './SettingsConfirmDialog'
 
+/** Installation and enablement as read from Pi's package list. */
+export type AdaptedPackageState = 'loading' | 'not-installed' | 'enabled' | 'disabled' | 'error'
+
 type AdaptedExtensionPackageControlProps = {
   heading: string
   idPrefix: string
@@ -22,6 +25,8 @@ type AdaptedExtensionPackageControlProps = {
   onInstallPiDevPackage: (name: string) => Promise<void>
   onSetEnabled: (enabled: boolean) => Promise<void>
   onOpenExternal: (url: string) => Promise<void>
+  /** Lets the owning page follow the same package read instead of listing packages again. */
+  onStateChange?: (state: AdaptedPackageState) => void
 }
 
 export function AdaptedExtensionPackageControl({
@@ -36,10 +41,12 @@ export function AdaptedExtensionPackageControl({
   onListPiPackages,
   onInstallPiDevPackage,
   onSetEnabled,
-  onOpenExternal
+  onOpenExternal,
+  onStateChange
 }: AdaptedExtensionPackageControlProps): React.JSX.Element {
   const [installedPackage, setInstalledPackage] = useState<KernelInstalledPackage | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [acting, setActing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { confirm, confirmDialog } = useSettingsConfirm()
@@ -62,9 +69,11 @@ export function AdaptedExtensionPackageControl({
       if (requestRevision.current !== revision) return
       const pkg = findUniqueInstalledPackage(packages, packageName)
       setInstalledPackage(pkg)
+      setLoadFailed(false)
     } catch (loadError) {
       if (requestRevision.current !== revision) return
       setInstalledPackage(null)
+      setLoadFailed(true)
       setError(`读取失败：${errorMessage(loadError)}`)
     } finally {
       if (requestRevision.current === revision) setLoading(false)
@@ -125,6 +134,16 @@ export function AdaptedExtensionPackageControl({
       ? packageInstallError === null ? '未安装' : '安装失败'
       : installedPackage.extensionEnabled ? '已开启' : '已关闭'
   const displayedError = error ?? packageInstallError
+  const packageState: AdaptedPackageState = loading
+    ? 'loading'
+    : loadFailed
+      ? 'error'
+      : installedPackage === null
+        ? 'not-installed'
+        : installedPackage.extensionEnabled ? 'enabled' : 'disabled'
+  useEffect(() => {
+    onStateChange?.(packageState)
+  }, [onStateChange, packageState])
 
   return (
     <section className="settings-group settings-group-inline" aria-labelledby={headingId}>

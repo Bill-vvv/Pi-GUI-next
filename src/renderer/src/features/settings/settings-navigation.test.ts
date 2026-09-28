@@ -163,3 +163,16 @@ test('immediate on/off settings use the switch control', async () => {
     assert.doesNotMatch(source, /type="checkbox"/u)
   }
 })
+
+test('pi-subagents install and enablement live on the Subagent page (D-100)', async () => {
+  const [subagent, extensions] = await Promise.all([
+    readFile(new URL('./SubagentSettings.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('./ExtensionSettings.tsx', import.meta.url), 'utf8')
+  ])
+  assert.match(subagent, /<AdaptedExtensionPackageControl[\s\S]*?packageName=\{SUBAGENT_PACKAGE_NAME\}/u)
+  assert.match(subagent, /onStateChange=\{setPackageState\}/u)
+  assert.doesNotMatch(subagent, /findUniqueInstalledPackage/u)
+  assert.doesNotMatch(subagent, /“拓展”/u)
+  assert.doesNotMatch(extensions, /SUBAGENT_PACKAGE_NAME|onSetSubagentEnabled/u)
+  assert.match(extensions, /MAGIC_CONTEXT_PACKAGE_NAME/u)
+})
