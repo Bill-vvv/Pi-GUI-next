@@ -5,6 +5,7 @@ import type {
 } from '../../../../shared/kernel-contract'
 import { Select, type SelectOptionGroup } from '../../components/Select'
 import { SettingsPageHeading } from './SettingsPageHeading'
+import { SettingsRowError, useSettingsRowSave } from './useSettingsRowSave'
 
 export function GeneralSettings({
   general,
@@ -25,6 +26,7 @@ export function GeneralSettings({
   onSetGeneral: (settings: GeneralSettingsValue) => Promise<void>
   onSetSessionNaming: (settings: SessionNamingSettings) => Promise<void>
 }): React.JSX.Element {
+  const { save, errorFor } = useSettingsRowSave()
   const namingValue = sessionNamingValue(sessionNaming)
   const selectedNamingModel = sessionNaming.mode === 'model' ? sessionNaming : null
   const selectedNamingModelAvailable = selectedNamingModel === null || availableModels.some(
@@ -71,6 +73,7 @@ export function GeneralSettings({
             <div className="settings-row-copy">
               <h4>启动后显示</h4>
               <p>打开应用时，是否自动回到上次使用的项目和对话</p>
+              <SettingsRowError message={errorFor('startup')} />
             </div>
             <div className="settings-row-control">
               <Select
@@ -85,10 +88,10 @@ export function GeneralSettings({
                 disabled={busy}
                 onValueChange={(startupWorkspaceRestore) => {
                   if (startupWorkspaceRestore !== 'restore' && startupWorkspaceRestore !== 'none') return
-                  void onSetGeneral({
+                  save('startup', () => onSetGeneral({
                     ...general,
                     startupWorkspaceRestore
-                  }).catch(() => undefined)
+                  }))
                 }}
               />
             </div>
@@ -102,6 +105,7 @@ export function GeneralSettings({
                 正常退出时精确记录所有仍在运行的已保存对话，下次启动在后台逐个恢复并发送一次继续指令，且不改变前台选择。
                 默认关闭；可能重新触发模型和工具，不适用于崩溃或强制结束进程。
               </p>
+              <SettingsRowError message={errorFor('auto-continue')} />
             </div>
             <div className="settings-row-control settings-checkbox-control">
               <input
@@ -110,10 +114,11 @@ export function GeneralSettings({
                 checked={general.autoContinueInterruptedTasks}
                 disabled={busy}
                 onChange={(event) => {
-                  void onSetGeneral({
+                  const autoContinueInterruptedTasks = event.currentTarget.checked
+                  save('auto-continue', () => onSetGeneral({
                     ...general,
-                    autoContinueInterruptedTasks: event.currentTarget.checked
-                  }).catch(() => undefined)
+                    autoContinueInterruptedTasks
+                  }))
                 }}
               />
             </div>
@@ -131,6 +136,7 @@ export function GeneralSettings({
             <div className="settings-row-copy">
               <label htmlFor="session-naming-mode">自动对话命名</label>
               <p>认证由 Pi 管理；自动模式只使用当前已授权 Provider 中的低成本模型</p>
+              <SettingsRowError message={errorFor('session-naming')} />
             </div>
             <div className="settings-row-control">
               <Select
@@ -140,7 +146,7 @@ export function GeneralSettings({
                 disabled={busy}
                 onValueChange={(value) => {
                   const settings = resolveSessionNaming(value, availableModels)
-                  if (settings !== null) void onSetSessionNaming(settings).catch(() => undefined)
+                  if (settings !== null) save('session-naming', () => onSetSessionNaming(settings))
                 }}
               />
             </div>
@@ -160,6 +166,7 @@ export function GeneralSettings({
             <div className="settings-row-copy">
               <h4>双击边框最大化</h4>
               <p>双击窗口四周边框时切换最大化。独占全屏请用 F11</p>
+              <SettingsRowError message={errorFor('double-click-maximize')} />
             </div>
             <div className="settings-row-control">
               <Select
@@ -174,10 +181,10 @@ export function GeneralSettings({
                 disabled={busy}
                 onValueChange={(value) => {
                   if (value !== 'on' && value !== 'off') return
-                  void onSetGeneral({
+                  save('double-click-maximize', () => onSetGeneral({
                     ...general,
                     doubleClickBorderMaximize: value === 'on'
-                  }).catch(() => undefined)
+                  }))
                 }}
               />
             </div>
@@ -201,6 +208,7 @@ export function GeneralSettings({
                 已编译 JS 优先使用原生导入，多个拓展并行导入；factory
                 仍按原顺序执行。仅影响新建或显式重载的会话。
               </p>
+              <SettingsRowError message={errorFor('fast-extension-loading')} />
             </div>
             <div className="settings-row-control settings-checkbox-control">
               <input
@@ -209,10 +217,11 @@ export function GeneralSettings({
                 checked={general.fastExtensionLoading}
                 disabled={busy}
                 onChange={(event) => {
-                  void onSetGeneral({
+                  const fastExtensionLoading = event.currentTarget.checked
+                  save('fast-extension-loading', () => onSetGeneral({
                     ...general,
-                    fastExtensionLoading: event.currentTarget.checked
-                  }).catch(() => undefined)
+                    fastExtensionLoading
+                  }))
                 }}
               />
             </div>
