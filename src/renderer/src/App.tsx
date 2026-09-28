@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { submitPromptDraft } from './features/composer/prompt-attachments'
+import type { PromptDraftAttachment } from '../../shared/desktop-attachment-contract'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   COPY_LAST_ANSWER_COMMAND_ID,
@@ -6,15 +8,10 @@ import {
   FORK_SESSION_COMMAND_ID,
   type AppearanceSettings,
   type GeneralSettings,
-  type KernelArchiveReceipt,
   type KernelConversationPageRequest,
-  type KernelForkCandidate,
   type KernelMutationAck,
   type KernelPiPackageInstallJob,
   type KernelProjectTrustChoice,
-  type KernelPromptAttachment,
-  type KernelSessionPreview,
-  type KernelSessionPreviewPageRequest,
   type KernelState,
   type SessionNamingSettings,
   type SubagentSettings,
@@ -22,6 +19,10 @@ import {
   type ThinkingLevel
 } from '../../shared/kernel-contract'
 import { Workbench } from './composition/Workbench'
+import { ConnectHostPanel } from './features/desktop-client/ConnectHostPanel'
+import { workbenchClientSurface } from './features/desktop-client/workbench-client-surface'
+import type { DesktopClientStatus } from '../../shared/desktop-client-contract'
+import { withDesktopPreferences, type DesktopPreferences } from '../../shared/desktop-settings-contract'
 import {
   workbenchGlobalActionErrorOwner,
   workbenchOp,
@@ -41,7 +42,8 @@ import {
 } from './features/session/background-session-completion'
 import { awaitMutationAck as awaitKernelMutationAck } from './kernel/await-mutation-ack'
 import { applyStatePatches } from './kernel/kernel-state-patches'
-import { mergeEarlierSessionPreviewPage } from './kernel/conversation-page-merge'
+import { useSessionArchive } from './features/session/use-session-archive'
+import { useSessionFork } from './features/session/use-session-fork'
 import {
   DEFAULT_RESYNC_TIMEOUT_MS,
   KernelRevisionBarrier
@@ -51,37 +53,18 @@ import { unknownErrorMessage as errorMessage } from './unknown-error-message'
 /** Dwell before reading the last selected stopped historical Session. */
 const SESSION_RUNTIME_SETTLE_MS = 120
 
-type ArchiveNotification = {
-  receipt: KernelArchiveReceipt
-  expiresAt: number
-  pending: 'undo' | 'preview' | null
-}
-
-type ArchivedSessionPreview = {
-  preview: KernelSessionPreview
-  expiresAt: number
-}
-
 export function App(): React.JSX.Element {
-  const [kernelState, setKernelState] = useState<KernelState | null>(null)
+  const [hostState, setKernelState] = useState<KernelState | null>(null)
+  const [desktopPreferences, setDesktopPreferences] = useState<DesktopPreferences | null>(null)
+  const kernelState = useMemo(() => hostState === null || desktopPreferences === null ? hostState : withDesktopPreferences(hostState, desktopPreferences), [hostState, desktopPreferences])
+  const appearance = desktopPreferences?.appearance ?? hostState?.appearance
   const [ipcError, setIpcError] = useState<string | null>(null)
   const [actionFailure, setActionFailure] = useState<WorkbenchActionFailure | null>(null)
   const [pendingAction, setPendingAction] = useState<WorkbenchOperation | null>(null)
-  const [archivedSessionPreview, setArchivedSessionPreview] =
-    useState<ArchivedSessionPreview | null>(null)
-  const archivedSessionPreviewRef = useRef<ArchivedSessionPreview | null>(null)
-  const [archiveNotifications, setArchiveNotifications] =
-    useState<ArchiveNotification[]>([])
   const [backgroundSessionNotifications, setBackgroundSessionNotifications] =
     useState<readonly BackgroundSessionNotification[]>([])
   const [openingBackgroundSessionIdentity, setOpeningBackgroundSessionIdentity] =
     useState<string | null>(null)
-  const [forkDialogOpen, setForkDialogOpen] = useState(false)
-  const [forkCandidates, setForkCandidates] = useState<KernelForkCandidate[]>([])
-  const [forkCandidatesLoading, setForkCandidatesLoading] = useState(false)
-  const [forkError, setForkError] = useState<string | null>(null)
-  const [forkSubmitting, setForkSubmitting] = useState(false)
-  const [forkPreferredUserText, setForkPreferredUserText] = useState<string | null>(null)
   const [composerDraftRequest, setComposerDraftRequest] =
     useState<ComposerDraftRequest | null>(null)
   const [compactionNotice, setCompactionNotice] = useState<'cancelled' | 'failed' | null>(null)
@@ -90,6 +73,8 @@ export function App(): React.JSX.Element {
   const [packageInstallJobs, setPackageInstallJobs] = useState<KernelPiPackageInstallJob[]>([])
   const [completedAction, setCompletedAction] = useState<WorkbenchCompletedAction | null>(null)
   const [connectionAttempt, setConnectionAttempt] = useState(0)
+  const [desktopClientStatus, setDesktopClientStatus] = useState<DesktopClientStatus | null>(null)
+  const [desktopClientBusy, setDesktopClientBusy] = useState(false)
   const kernelStateRef = useRef<KernelState | null>(null)
   const revisionBarrierRef = useRef<KernelRevisionBarrier | null>(null)
   const pendingActionRef = useRef<WorkbenchOperation | null>(null)
@@ -98,13 +83,7 @@ export function App(): React.JSX.Element {
   )
   const coldStartHandledRef = useRef(false)
   const actionPresentationRevision = useRef(0)
-  const forkRequestRevision = useRef(0)
   const composerDraftRevision = useRef(0)
-
-  function updateArchivedSessionPreview(preview: ArchivedSessionPreview | null): void {
-    archivedSessionPreviewRef.current = preview
-    setArchivedSessionPreview(preview)
-  }
 
   async function awaitMutationAck<T extends KernelMutationAck>(
     operation: () => Promise<T>
@@ -177,7 +156,36 @@ export function App(): React.JSX.Element {
       : { owner: 'header', message: errorMessage(error) }),
     onCompletedAction: (action, succeeded) =>
       setCompletedAction({ action: workbenchOp(action), succeeded }),
-    onClearArchivedPreview: () => updateArchivedSessionPreview(null)
+    onClearArchivedPreview: () => clearArchivedSessionPreview()
+  })
+  const {
+    archiveNotifications, archivedSessionPreview, archiveSession, clearArchivedSessionPreview,
+    loadEarlierArchivedPreview, undoArchive, previewArchivedSession
+  } = useSessionArchive({
+    operations: { mutation: runActionResult, read: runPlainAction },
+    waitForRuntimeEnsureIdle,
+    onArchived: (sessionKey) => {
+      const target = getSessionViewTarget()
+      if (target?.kind === 'session' && target.sessionKey === sessionKey) clearSessionView()
+    },
+    onPreviewOpened: clearSessionView
+  })
+  const {
+    forkDialogOpen, forkCandidates, forkCandidatesLoading, forkError, forkSubmitting,
+    forkPreferredUserText, openForkDialog, closeForkDialog, loadForkCandidates, forkSession
+  } = useSessionFork({
+    getKernelState: () => kernelStateRef.current,
+    getSessionViewTarget,
+    ensureSessionRuntime,
+    runMutation: runActionResult,
+    onOpenError: (error) => setActionFailure(error === null
+      ? null : { owner: 'header', message: errorMessage(error) }),
+    onCompletedAction: setCompletedAction,
+    onForked: (draft) => {
+      clearSessionView()
+      composerDraftRevision.current += 1
+      setComposerDraftRequest({ id: composerDraftRevision.current, text: draft })
+    }
   })
   const displayedSessionKey = sessionViewTarget?.kind === 'new'
     ? null
@@ -246,64 +254,104 @@ export function App(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
-    if (archiveNotifications.length === 0) return
-    const nextExpiry = Math.min(...archiveNotifications.map(({ expiresAt }) => expiresAt))
-    const timeout = window.setTimeout(() => {
-      const now = Date.now()
-      setArchiveNotifications((current) =>
-        current.filter(({ expiresAt }) => expiresAt > now)
-      )
-    }, Math.max(0, nextExpiry - Date.now()))
-    return () => window.clearTimeout(timeout)
-  }, [archiveNotifications])
-
-  useEffect(() => {
-    if (archivedSessionPreview === null) return
-    const timeout = window.setTimeout(() => {
-      updateArchivedSessionPreview(null)
-    }, Math.max(0, archivedSessionPreview.expiresAt - Date.now()))
-    return () => window.clearTimeout(timeout)
-  }, [archivedSessionPreview])
-
-  useEffect(() => {
     const rootStyle = document.documentElement.style
-    applySelectedFont(rootStyle, '--font-ui-selected', kernelState?.appearance.uiFontFamily ?? null)
-    applySelectedFont(rootStyle, '--font-code-selected', kernelState?.appearance.codeFontFamily ?? null)
-    const textSize = kernelState?.appearance.textSize ?? 'default'
+    applySelectedFont(rootStyle, '--font-ui-selected', appearance?.uiFontFamily ?? null)
+    applySelectedFont(rootStyle, '--font-code-selected', appearance?.codeFontFamily ?? null)
+    const textSize = appearance?.textSize ?? 'default'
     rootStyle.setProperty('--text-root', textSize === 'small' ? '14px' : textSize === 'large' ? '16px' : '15px')
-  }, [kernelState?.appearance])
+  }, [appearance])
 
   useEffect(() => {
     const root = document.documentElement
-    root.dataset.accent = kernelState?.appearance.accentColor ?? 'amber'
+    root.dataset.accent = appearance?.accentColor ?? 'amber'
     root.style.setProperty(
       '--surface-transparency',
-      `${kernelState?.appearance.surfaceTransparency ?? 20}%`
+      `${appearance?.surfaceTransparency ?? 20}%`
     )
-  }, [kernelState?.appearance.accentColor, kernelState?.appearance.surfaceTransparency])
+  }, [appearance?.accentColor, appearance?.surfaceTransparency])
 
   useEffect(() => {
-    const preference = kernelState?.appearance.theme ?? 'system'
+    const preference = appearance?.theme ?? 'system'
     const systemTheme = window.matchMedia('(prefers-color-scheme: light)')
     const applyTheme = (): void => {
-      document.documentElement.dataset.theme = preference === 'system'
+      const theme = preference === 'system'
         ? systemTheme.matches ? 'light' : 'dark'
         : preference
+      document.documentElement.dataset.theme = theme
+      // Electron titleBarOverlay requires #RRGGBB; keep these aligned with tokens.
+      void window.piGui.setWindowChrome(
+        theme === 'light'
+          ? { color: '#f4f4f2', symbolColor: '#20201e' }
+          : { color: '#1b1b1a', symbolColor: '#f1eee8' }
+      ).catch(() => undefined)
     }
 
     applyTheme()
     if (preference !== 'system') return
     systemTheme.addEventListener('change', applyTheme)
     return () => systemTheme.removeEventListener('change', applyTheme)
-  }, [kernelState?.appearance.theme])
+  }, [appearance?.theme])
+
+  useEffect(() => {
+    const desktop = window.piDesktopClient
+    if (!desktop?.getPreferences) return
+    let active = true
+    void desktop.getPreferences(hostState === null ? undefined : { appearance: hostState.appearance, shortcuts: hostState.shortcuts, doubleClickBorderMaximize: hostState.general.doubleClickBorderMaximize }).then(
+      (preferences) => { if (active) setDesktopPreferences(preferences) },
+      (error) => { if (active) setIpcError(errorMessage(error)) }
+    )
+    return () => { active = false }
+    // Preferences are device-owned; initialize once on connection, not on every Host patch.
+  }, [hostState === null, connectionAttempt])
+
+  useEffect(() => {
+    const desktop = window.piDesktopClient
+    if (desktop === undefined) {
+      setDesktopClientStatus({ mode: 'local' })
+      return
+    }
+    let active = true
+    const unsubscribe = desktop.subscribeStatus((status) => {
+      if (!active) return
+      setDesktopClientStatus(status)
+      if (status.mode === 'windows-remote' && status.phase !== 'connected') {
+        desktop.setControlIdentity(null)
+        kernelStateRef.current = null
+        setKernelState(null)
+        coldStartHandledRef.current = false
+      }
+    })
+    void desktop.getStatus().then(
+      (status) => {
+        if (active) setDesktopClientStatus(status)
+      },
+      (error: unknown) => {
+        if (active) setIpcError(errorMessage(error))
+      }
+    )
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [])
 
   useEffect(() => {
     let active = true
     let unsubscribe = (): void => undefined
 
+    const waitingForDesktopHost = desktopClientStatus === null ||
+      (desktopClientStatus.mode === 'windows-remote' && desktopClientStatus.phase !== 'connected')
+    if (waitingForDesktopHost) {
+      return
+    }
+
     const barrier = new KernelRevisionBarrier({
       applyState: (state, meta) => {
         if (!active) return
+        window.piDesktopClient?.setControlIdentity({
+          projectKey: state.activeProjectKey,
+          sessionKey: state.activeSessionKey
+        })
         kernelStateRef.current = state
         setKernelState(state)
         reconcileKernelState(state, meta.initializing)
@@ -385,7 +433,7 @@ export function App(): React.JSX.Element {
       barrier.dispose()
       unsubscribe()
     }
-  }, [connectionAttempt])
+  }, [connectionAttempt, desktopClientStatus])
 
   useEffect(() => {
     if (coldStartHandledRef.current || kernelState === null) return
@@ -490,104 +538,6 @@ export function App(): React.JSX.Element {
     }
   }
 
-  function closeForkDialog(): void {
-    forkRequestRevision.current += 1
-    setForkDialogOpen(false)
-    setForkCandidates([])
-    setForkCandidatesLoading(false)
-    setForkError(null)
-    setForkSubmitting(false)
-    setForkPreferredUserText(null)
-  }
-
-  async function loadForkCandidates(): Promise<void> {
-    const requestRevision = forkRequestRevision.current + 1
-    forkRequestRevision.current = requestRevision
-    setForkCandidatesLoading(true)
-    setForkError(null)
-    try {
-      const candidates = await window.piGui.listForkCandidates()
-      if (forkRequestRevision.current !== requestRevision) return
-      setForkCandidates(candidates)
-    } catch (error) {
-      if (forkRequestRevision.current !== requestRevision) return
-      setForkCandidates([])
-      setForkError(errorMessage(error))
-    } finally {
-      if (forkRequestRevision.current === requestRevision) setForkCandidatesLoading(false)
-    }
-  }
-
-  async function openForkDialog(preferredUserText?: string): Promise<void> {
-    const viewTarget = getSessionViewTarget()
-    try {
-      if (viewTarget?.kind === 'session') {
-        await ensureSessionRuntime(viewTarget.sessionKey, 'immediate')
-      }
-    } catch (error) {
-      setActionFailure({ owner: 'header', message: errorMessage(error) })
-      throw error
-    }
-
-    const state = kernelStateRef.current
-    if (
-      state === null ||
-      state.activeSessionKey === null ||
-      state.runtime.status !== 'ready' ||
-      !state.session.settled ||
-      getSessionViewTarget() !== null
-    ) {
-      const error = new Error('当前对话暂时不能分叉。')
-      setActionFailure({ owner: 'header', message: error.message })
-      throw error
-    }
-    setActionFailure(null)
-    setForkPreferredUserText(
-      preferredUserText !== undefined && preferredUserText.trim().length > 0
-        ? preferredUserText
-        : null
-    )
-    setForkDialogOpen(true)
-    setForkCandidates([])
-    void loadForkCandidates()
-  }
-
-  async function forkSession(entryId: string): Promise<void> {
-    if (forkSubmitting || !forkCandidates.some((candidate) => candidate.entryId === entryId)) return
-    if (pendingActionRef.current !== null) throw new Error('Another action is already running.')
-    const action = workbenchOp('fork-session')
-    setCompletedAction(null)
-    pendingActionRef.current = action
-    setPendingAction(action)
-    setForkSubmitting(true)
-    setForkError(null)
-    setActionFailure(null)
-    try {
-      const result = await awaitMutationAck(() => window.piGui.forkSession(entryId))
-      if (result.cancelled) {
-        closeForkDialog()
-        return
-      }
-      // Domain draft is safe once the ack revision has been applied to Kernel state.
-      clearSessionView()
-      composerDraftRevision.current += 1
-      setComposerDraftRequest({
-        id: composerDraftRevision.current,
-        text: result.draft
-      })
-      closeForkDialog()
-      setCompletedAction({ action, succeeded: true })
-    } catch (error) {
-      setForkError(errorMessage(error))
-      setCompletedAction({ action, succeeded: false })
-      throw error
-    } finally {
-      pendingActionRef.current = null
-      setPendingAction(null)
-      setForkSubmitting(false)
-    }
-  }
-
   async function exportSession(): Promise<void> {
     if (pendingActionRef.current !== null) throw new Error('Another action is already running.')
     const action = workbenchOp('export-session')
@@ -647,35 +597,7 @@ export function App(): React.JSX.Element {
   }
 
   async function loadEarlierConversation(): Promise<void> {
-    const archived = archivedSessionPreviewRef.current
-    if (archived !== null) {
-      const firstEntry = archived.preview.conversation.entries[0]
-      if (
-        archived.expiresAt <= Date.now() ||
-        archived.preview.conversation.startIndex <= 0 ||
-        firstEntry === undefined
-      ) {
-        throw new Error('当前归档预览没有可加载的更早内容。')
-      }
-      const request: KernelSessionPreviewPageRequest = {
-        previewId: archived.preview.previewId,
-        projectKey: archived.preview.projectKey,
-        sessionKey: archived.preview.sessionKey,
-        sessionId: archived.preview.sessionId,
-        beforeIndex: archived.preview.conversation.startIndex,
-        beforeEntryId: firstEntry.id
-      }
-      const page = await window.piGui.loadEarlierSessionPreview(request)
-      const current = archivedSessionPreviewRef.current
-      if (current === null || current.expiresAt <= Date.now()) {
-        throw new Error('Archived Session preview page response is stale.')
-      }
-      updateArchivedSessionPreview({
-        ...current,
-        preview: mergeEarlierSessionPreviewPage(current.preview, request, page)
-      })
-      return
-    }
+    if (await loadEarlierArchivedPreview()) return
     if (getSessionViewTarget()?.kind === 'session') {
       await loadEarlierStaticSessionPreview()
       return
@@ -786,54 +708,6 @@ export function App(): React.JSX.Element {
     await runAction(workbenchOp('invoke-command'), () => window.piGui.invokeCommand(commandId, argument))
   }
 
-  async function archiveSession(sessionKey: string): Promise<void> {
-    if (pendingActionRef.current !== null) throw new Error('Another action is already running.')
-    const action = workbenchOp('archive-session')
-    pendingActionRef.current = action
-    setPendingAction(action)
-    setActionFailure(null)
-    updateArchivedSessionPreview(null)
-    let succeeded = false
-    try {
-      await waitForRuntimeEnsureIdle()
-      const result = await awaitMutationAck(() => window.piGui.archiveSession(sessionKey))
-      const expiresAt = Date.now() + result.receipt.durationMs
-      setArchiveNotifications((current) => [
-        ...current.filter(({ receipt }) => receipt.token !== result.receipt.token),
-        { receipt: result.receipt, expiresAt, pending: null }
-      ])
-      const viewTarget = getSessionViewTarget()
-      if (viewTarget?.kind === 'session' && viewTarget.sessionKey === sessionKey) {
-        clearSessionView()
-      }
-      succeeded = true
-    } catch (error) {
-      setActionFailure(actionFailureFor(action, error))
-      throw error
-    } finally {
-      setCompletedAction({ action, succeeded })
-      pendingActionRef.current = null
-      setPendingAction(null)
-    }
-  }
-
-  function setArchiveNotificationPending(
-    token: string,
-    pending: ArchiveNotification['pending']
-  ): void {
-    setArchiveNotifications((current) => current.map((notification) =>
-      notification.receipt.token === token
-        ? { ...notification, pending }
-        : notification
-    ))
-  }
-
-  function removeArchiveNotification(token: string): void {
-    setArchiveNotifications((current) =>
-      current.filter(({ receipt }) => receipt.token !== token)
-    )
-  }
-
   function removeBackgroundSessionNotification(identity: string): void {
     setBackgroundSessionNotifications((current) =>
       current.filter((notification) => notification.identity !== identity)
@@ -846,7 +720,7 @@ export function App(): React.JSX.Element {
     if (pendingActionRef.current !== null || openingBackgroundSessionIdentity !== null) return
     setOpeningBackgroundSessionIdentity(notification.identity)
     setActionFailure(null)
-    updateArchivedSessionPreview(null)
+    clearArchivedSessionPreview()
     try {
       await waitForRuntimeEnsureIdle()
       if (kernelStateRef.current?.activeProjectKey !== notification.projectKey) {
@@ -883,54 +757,6 @@ export function App(): React.JSX.Element {
     }
   }
 
-  async function undoArchive(notification: ArchiveNotification): Promise<void> {
-    const { token } = notification.receipt
-    if (notification.expiresAt <= Date.now() || notification.pending !== null) {
-      removeArchiveNotification(token)
-      return
-    }
-    setArchiveNotificationPending(token, 'undo')
-    setActionFailure(null)
-    try {
-      await waitForRuntimeEnsureIdle()
-      await awaitMutationAck(() => window.piGui.undoArchiveSession(token))
-      removeArchiveNotification(token)
-      setCompletedAction({ action: workbenchOp('undo-archive-session'), succeeded: true })
-    } catch (error) {
-      removeArchiveNotification(token)
-      const action = workbenchOp('undo-archive-session')
-      setActionFailure(actionFailureFor(action, error))
-      setCompletedAction({ action, succeeded: false })
-    }
-  }
-
-  async function previewArchivedSession(notification: ArchiveNotification): Promise<void> {
-    const { token } = notification.receipt
-    if (notification.expiresAt <= Date.now() || notification.pending !== null) {
-      removeArchiveNotification(token)
-      return
-    }
-    setArchiveNotificationPending(token, 'preview')
-    setActionFailure(null)
-    try {
-      const preview = await window.piGui.previewArchivedSession(token)
-      removeArchiveNotification(token)
-      clearSessionView()
-      if (notification.expiresAt > Date.now()) {
-        updateArchivedSessionPreview({
-          preview,
-          expiresAt: notification.expiresAt
-        })
-      }
-      setCompletedAction({ action: workbenchOp('preview-archived-session'), succeeded: true })
-    } catch (error) {
-      removeArchiveNotification(token)
-      const action = workbenchOp('preview-archived-session')
-      setActionFailure(actionFailureFor(action, error))
-      setCompletedAction({ action, succeeded: false })
-    }
-  }
-
   async function resolveProjectTrust(
     requestId: string,
     choice: KernelProjectTrustChoice
@@ -941,8 +767,47 @@ export function App(): React.JSX.Element {
     )
   }
 
+  async function saveGeneralSettings(settings: GeneralSettings): Promise<void> {
+    if (!window.piDesktopClient?.setPreferences || hostState === null) return runAction(workbenchOp('set-general'), () => window.piGui.setGeneral(settings))
+    await runPlainAction(workbenchOp('set-general'), async () => {
+      const shared = { ...settings, doubleClickBorderMaximize: hostState.general.doubleClickBorderMaximize }
+      if (JSON.stringify(shared) !== JSON.stringify(hostState.general)) await awaitMutationAck(() => window.piGui.setGeneral(shared))
+      setDesktopPreferences(await window.piDesktopClient!.setPreferences({ doubleClickBorderMaximize: settings.doubleClickBorderMaximize }))
+    })
+  }
+
   async function setShortcuts(settings: ShortcutSettings): Promise<void> {
-    await runAction(workbenchOp('set-shortcuts'), () => window.piGui.setShortcuts(settings))
+    if (!window.piDesktopClient?.setPreferences) return runAction(workbenchOp('set-shortcuts'), () => window.piGui.setShortcuts(settings))
+    await runPlainAction(workbenchOp('set-shortcuts'), async () => {
+      setDesktopPreferences(await window.piDesktopClient!.setPreferences({ shortcuts: settings }))
+    })
+  }
+
+  if (
+    desktopClientStatus?.mode === 'windows-remote' &&
+    desktopClientStatus.phase !== 'connected'
+  ) {
+    return (
+      <ConnectHostPanel
+        status={desktopClientStatus}
+        busy={desktopClientBusy || desktopClientStatus.phase === 'connecting'}
+        error={ipcError}
+        onConnect={async (request) => {
+          const desktop = window.piDesktopClient
+          if (desktop === undefined) throw new Error('Desktop client API is unavailable.')
+          setDesktopClientBusy(true)
+          setIpcError(null)
+          try {
+            await desktop.connect(request)
+            const status = await desktop.getStatus()
+            setDesktopClientStatus(status)
+            setConnectionAttempt((attempt) => attempt + 1)
+          } finally {
+            setDesktopClientBusy(false)
+          }
+        }}
+      />
+    )
   }
 
   if (kernelState === null) {
@@ -1040,14 +905,14 @@ export function App(): React.JSX.Element {
               <button
                 type="button"
                 disabled={notification.pending !== null}
-                onClick={() => void undoArchive(notification)}
+                onClick={() => void undoArchive(notification.receipt.token).catch(() => undefined)}
               >
                 {notification.pending === 'undo' ? '撤销中…' : '撤销'}
               </button>
               <button
                 type="button"
                 disabled={notification.pending !== null}
-                onClick={() => void previewArchivedSession(notification)}
+                onClick={() => void previewArchivedSession(notification.receipt.token).catch(() => undefined)}
               >
                 {notification.pending === 'preview' ? '读取中…' : '临时查看'}
               </button>
@@ -1081,6 +946,7 @@ export function App(): React.JSX.Element {
   return (
     <Workbench
       state={kernelState}
+      clientSurface={workbenchClientSurface(desktopClientStatus)}
       sessionPreview={sessionPreview}
       archivedSessionPreview={archivedSessionPreview?.preview ?? null}
       composerDraftRequest={composerDraftRequest}
@@ -1110,13 +976,28 @@ export function App(): React.JSX.Element {
       forkError={forkError}
       forkSubmitting={forkSubmitting}
       forkPreferredUserText={forkPreferredUserText}
-      onAddProject={async () => {
-        updateArchivedSessionPreview(null)
+      onDisconnectHost={desktopClientStatus?.mode === 'windows-remote'
+        ? async () => {
+            const desktop = window.piDesktopClient
+            if (desktop === undefined) throw new Error('Desktop client API is unavailable.')
+            await desktop.disconnect()
+          }
+        : undefined}
+      connectedHostAlias={desktopClientStatus?.mode === 'windows-remote' ? desktopClientStatus.lastHost?.sshHostAlias : undefined}
+      onRevokeHostPairing={desktopClientStatus?.mode === 'windows-remote' && desktopClientStatus.lastHost !== null
+        ? async () => {
+            const desktop = window.piDesktopClient
+            if (desktop === undefined) throw new Error('Desktop client API is unavailable.')
+            await desktop.revokePairing(desktopClientStatus.lastHost!)
+          }
+        : undefined}
+      onAddProject={async (projectPath) => {
+        clearArchivedSessionPreview()
         await waitForRuntimeEnsureIdle()
-        await runAction(workbenchOp('add-project'), () => window.piGui.addProject())
+        await runAction(workbenchOp('add-project'), () => window.piGui.addProject(projectPath))
       }}
       onActivateProject={async (projectKey) => {
-        updateArchivedSessionPreview(null)
+        clearArchivedSessionPreview()
         await waitForRuntimeEnsureIdle()
         await runAction(
           workbenchOp('activate-project'),
@@ -1126,13 +1007,13 @@ export function App(): React.JSX.Element {
         requestWorkspaceMetadataRefresh(projectKey)
       }}
       onCreateTask={async () => {
-        updateArchivedSessionPreview(null)
+        clearArchivedSessionPreview()
         await waitForRuntimeEnsureIdle()
         await runAction(workbenchOp('create-task'), () => window.piGui.createTask())
         await startSession()
       }}
       onActivateTask={async (taskKey, sessionKey) => {
-        updateArchivedSessionPreview(null)
+        clearArchivedSessionPreview()
         await waitForRuntimeEnsureIdle()
         await runAction(
           workbenchOp('activate-task'),
@@ -1152,7 +1033,7 @@ export function App(): React.JSX.Element {
       onEnsureSessionRuntime={ensureSessionRuntime}
       onSelectSession={selectSession}
       onClearSessionPreview={clearSessionView}
-      onClearArchivedSessionPreview={() => updateArchivedSessionPreview(null)}
+      onClearArchivedSessionPreview={() => clearArchivedSessionPreview()}
       onOpenForkDialog={openForkDialog}
       onCloseForkDialog={closeForkDialog}
       onRetryForkCandidates={() => void loadForkCandidates()}
@@ -1254,24 +1135,24 @@ export function App(): React.JSX.Element {
       }}
       onPrompt={(
         message,
-        attachments?: KernelPromptAttachment[],
+        attachments?: PromptDraftAttachment[],
         expectedSessionKey?: string
       ) => runAction(
         workbenchOp('prompt'),
-        () => window.piGui.prompt(message, attachments, expectedSessionKey),
+        () => submitPromptDraft('prompt', message, attachments, expectedSessionKey),
         false
       )}
       onNavigateHistoryPrompt={navigateHistoryPrompt}
-      onSteer={(message, attachments?: KernelPromptAttachment[]) =>
+      onSteer={(message, attachments?: PromptDraftAttachment[]) =>
         runAction(
           workbenchOp('steer'),
-          () => window.piGui.steer(message, attachments),
+          () => submitPromptDraft('steer', message, attachments),
           false
         )}
-      onFollowUp={(message, attachments?: KernelPromptAttachment[]) =>
+      onFollowUp={(message, attachments?: PromptDraftAttachment[]) =>
         runAction(
           workbenchOp('follow-up'),
-          () => window.piGui.followUp(message, attachments),
+          () => submitPromptDraft('follow-up', message, attachments),
           false
         )}
       onInvokeCommand={invokeCommand}
@@ -1301,7 +1182,7 @@ export function App(): React.JSX.Element {
         )
       }
       onSetGeneral={(settings: GeneralSettings) =>
-        runAction(workbenchOp('set-general'), () => window.piGui.setGeneral(settings))
+        saveGeneralSettings(settings)
       }
       onSetSubagentEnabled={(enabled) =>
         runPlainAction(
@@ -1319,7 +1200,9 @@ export function App(): React.JSX.Element {
         runAction(workbenchOp('set-subagent'), () => window.piGui.setSubagent(settings))
       }
       onSetAppearance={(settings: AppearanceSettings) =>
-        runAction(workbenchOp('set-appearance'), () => window.piGui.setAppearance(settings))
+        window.piDesktopClient?.setPreferences
+          ? runPlainAction(workbenchOp('set-appearance'), async () => { setDesktopPreferences(await window.piDesktopClient!.setPreferences({ appearance: settings })) })
+          : runAction(workbenchOp('set-appearance'), () => window.piGui.setAppearance(settings))
       }
       onSetShortcuts={setShortcuts}
     />

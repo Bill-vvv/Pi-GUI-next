@@ -2,20 +2,20 @@ import { isAbsolute } from 'node:path'
 
 import {
   KERNEL_PROVIDER_APIS,
-  ADVISOR_TOOL_NAMES,
-  type AppearanceSettings,
-  type GeneralSettings,
   type KernelCommand,
-  type KernelAdvisorDefinitionInput,
   type KernelAskAnswer,
   type KernelPromptAttachment,
   type KernelProjectTrustChoice,
   type KernelProviderInput,
   type KernelSubagentDefinitionInput,
-  type SessionNamingSettings,
-  type SubagentSettings,
   type ThinkingLevel
 } from '../../shared/kernel-contract.ts'
+import {
+  isAppearanceSettings,
+  isSubagentSettings,
+  isSessionNamingSettings,
+  isGeneralSettingsUpdate
+} from '../../shared/workbench-settings.ts'
 import { isShortcutSettings } from '../../shared/shortcut-settings.ts'
 import { isRecord } from '../utils/guards.ts'
 
@@ -28,23 +28,37 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
     value.type === 'kernel.get-runtime-memory-diagnostics' ||
     value.type === 'kernel.get-last-assistant-final-answer' ||
     value.type === 'kernel.list-system-fonts' ||
-    value.type === 'kernel.add-project' ||
     value.type === 'kernel.create-task' ||
     value.type === 'kernel.start-session' ||
     value.type === 'kernel.reload-session' ||
     value.type === 'kernel.list-fork-candidates' ||
-    value.type === 'kernel.export-session' ||
-    value.type === 'kernel.select-prompt-attachments' ||
     value.type === 'kernel.abort' ||
     value.type === 'kernel.list-providers' ||
     value.type === 'kernel.list-provider-credentials' ||
     value.type === 'kernel.list-pi-packages' ||
     value.type === 'kernel.list-pi-package-install-jobs' ||
-    value.type === 'kernel.list-advisor-definitions' ||
     value.type === 'kernel.list-subagent-definitions' ||
     value.type === 'kernel.update-pi-packages'
   ) {
     return Object.keys(value).length === 1
+  }
+  if (value.type === 'kernel.add-project') {
+    if (Object.keys(value).length === 1) return true
+    return isLinuxAbsolutePath(value.projectPath) && Object.keys(value).length === 2
+  }
+  if (value.type === 'kernel.list-project-directories') {
+    return Object.keys(value).length === 1 ||
+      (Object.keys(value).length === 2 && isLinuxAbsolutePath(value.directoryPath))
+  }
+  if (value.type === 'kernel.select-prompt-attachments') {
+    if (Object.keys(value).length === 1) return true
+    return Array.isArray(value.filePaths) &&
+      value.filePaths.every((path) => isLinuxAbsolutePath(path)) &&
+      Object.keys(value).length === 2
+  }
+  if (value.type === 'kernel.export-session') {
+    if (Object.keys(value).length === 1) return true
+    return isLinuxAbsolutePath(value.filePath) && Object.keys(value).length === 2
   }
   if (value.type === 'kernel.activate-project') {
     return typeof value.projectKey === 'string' && Object.keys(value).length === 2
@@ -132,7 +146,9 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
     return isStringArray(value.projectKeys) && Object.keys(value).length === 2
   }
   if (value.type === 'kernel.install-extension') {
-    return (value.kind === 'file' || value.kind === 'directory') && Object.keys(value).length === 2
+    if (!(value.kind === 'file' || value.kind === 'directory')) return false
+    if (Object.keys(value).length === 2) return true
+    return isLinuxAbsolutePath(value.path) && Object.keys(value).length === 3
   }
   if (value.type === 'kernel.remove-extension') {
     return typeof value.path === 'string' && Object.keys(value).length === 2
@@ -152,22 +168,12 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
   if (
     value.type === 'kernel.set-openai-fast-mode' ||
     value.type === 'kernel.set-subagent-enabled' ||
-    value.type === 'kernel.set-magic-context-enabled' ||
-    value.type === 'kernel.set-advisor-system-enabled' ||
-    value.type === 'kernel.set-advisor-extension-enabled'
+    value.type === 'kernel.set-magic-context-enabled'
   ) {
     return typeof value.enabled === 'boolean' && Object.keys(value).length === 2
   }
   if (value.type === 'kernel.save-subagent-definition') {
     return isSubagentDefinitionInput(value.definition) && Object.keys(value).length === 2
-  }
-  if (value.type === 'kernel.save-advisor-definition') {
-    return isAdvisorDefinitionInput(value.definition) && Object.keys(value).length === 2
-  }
-  if (value.type === 'kernel.remove-advisor-definition') {
-    return isAdvisorSlug(value.slug) &&
-      (value.scope === 'user' || value.scope === 'project') &&
-      Object.keys(value).length === 3
   }
   if (value.type === 'kernel.set-subagent-definition-enabled') {
     return isSubagentDefinitionId(value.id) &&
@@ -292,7 +298,7 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
     return isAppearanceSettings(value.settings) && Object.keys(value).length === 2
   }
   if (value.type === 'kernel.set-general') {
-    return isGeneralSettings(value.settings) && Object.keys(value).length === 2
+    return isGeneralSettingsUpdate(value.settings) && Object.keys(value).length === 2
   }
   if (value.type === 'kernel.set-subagent') {
     return isSubagentSettings(value.settings) && Object.keys(value).length === 2
@@ -452,18 +458,6 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0
 }
 
-function isAppearanceSettings(value: unknown): value is AppearanceSettings {
-  return isRecord(value) &&
-    Object.keys(value).length === 7 &&
-    isAppearanceTheme(value.theme) &&
-    isAppearanceAccentColor(value.accentColor) &&
-    isSurfaceTransparency(value.surfaceTransparency) &&
-    isTextSize(value.textSize) &&
-    isTokenCountFormat(value.tokenCountFormat) &&
-    isOptionalFontFamily(value.uiFontFamily) &&
-    isOptionalFontFamily(value.codeFontFamily)
-}
-
 function isProviderInput(value: unknown): value is KernelProviderInput {
   return isRecord(value) &&
     Object.keys(value).length === 8 &&
@@ -569,22 +563,6 @@ function isNonNegativeFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
 
-function isGeneralSettings(value: unknown): value is GeneralSettings {
-  return isRecord(value) &&
-    Object.keys(value).length === 4 &&
-    (value.startupWorkspaceRestore === 'restore' || value.startupWorkspaceRestore === 'none') &&
-    typeof value.doubleClickBorderMaximize === 'boolean' &&
-    typeof value.fastExtensionLoading === 'boolean' &&
-    typeof value.autoContinueInterruptedTasks === 'boolean' &&
-    (!value.autoContinueInterruptedTasks || value.startupWorkspaceRestore === 'restore')
-}
-
-function isSubagentSettings(value: unknown): value is SubagentSettings {
-  return isRecord(value) &&
-    Object.keys(value).length === 1 &&
-    (value.maxDepth === 1 || value.maxDepth === 2 || value.maxDepth === 3)
-}
-
 function isSubagentDefinitionInput(value: unknown): value is KernelSubagentDefinitionInput {
   return isRecord(value) &&
     Object.keys(value).length === 18 &&
@@ -618,35 +596,6 @@ function isSubagentDefinitionInput(value: unknown): value is KernelSubagentDefin
     )
 }
 
-function isAdvisorDefinitionInput(value: unknown): value is KernelAdvisorDefinitionInput {
-  return isRecord(value) &&
-    Object.keys(value).length === 8 &&
-    (value.originalSlug === null || isAdvisorSlug(value.originalSlug)) &&
-    (value.scope === 'user' || value.scope === 'project') &&
-    isSingleLineText(value.name, 128, false) &&
-    value.name.trim() === value.name &&
-    typeof value.enabled === 'boolean' &&
-    (value.model === null || (
-      isSingleLineText(value.model, 256, false) &&
-      value.model.trim() === value.model
-    )) &&
-    (value.thinking === null || isThinkingLevel(value.thinking)) &&
-    Array.isArray(value.tools) &&
-    value.tools.every((tool) =>
-      typeof tool === 'string' && (ADVISOR_TOOL_NAMES as readonly string[]).includes(tool)
-    ) &&
-    new Set(value.tools).size === value.tools.length &&
-    typeof value.instructions === 'string' &&
-    value.instructions.length <= 100_000 &&
-    !value.instructions.includes('\0')
-}
-
-function isAdvisorSlug(value: unknown): value is string {
-  return typeof value === 'string' &&
-    value.length <= 128 &&
-    /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(value)
-}
-
 function isSubagentDefinitionId(value: unknown): value is string {
   return typeof value === 'string' &&
     /^(?:builtin|user|project):[A-Za-z0-9_-]+$/u.test(value)
@@ -675,45 +624,11 @@ function isBoundedNonNegativeInteger(value: unknown, max: number): value is numb
   return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= max
 }
 
-function isAppearanceTheme(value: unknown): value is AppearanceSettings['theme'] {
-  return value === 'system' || value === 'dark' || value === 'light'
-}
-
-function isAppearanceAccentColor(value: unknown): value is AppearanceSettings['accentColor'] {
-  return value === 'amber' ||
-    value === 'blue' ||
-    value === 'green' ||
-    value === 'purple' ||
-    value === 'rose'
-}
-
-function isSurfaceTransparency(value: unknown): value is AppearanceSettings['surfaceTransparency'] {
-  return value === 0 || value === 10 || value === 20 || value === 30 || value === 40
-}
-
-function isTextSize(value: unknown): value is AppearanceSettings['textSize'] {
-  return value === 'small' || value === 'default' || value === 'large'
-}
-
-function isTokenCountFormat(value: unknown): value is AppearanceSettings['tokenCountFormat'] {
-  return value === 'full' || value === 'compact'
-}
-
-function isOptionalFontFamily(value: unknown): value is string | null {
-  return value === null || (typeof value === 'string' && value.trim().length > 0)
-}
-
-function isSessionNamingSettings(value: unknown): value is SessionNamingSettings {
-  if (!isRecord(value) || typeof value.mode !== 'string') return false
-  if (value.mode === 'auto' || value.mode === 'off') {
-    return Object.keys(value).length === 1
-  }
-  return value.mode === 'model' &&
-    Object.keys(value).length === 3 &&
-    typeof value.provider === 'string' &&
-    value.provider.trim().length > 0 &&
-    typeof value.modelId === 'string' &&
-    value.modelId.trim().length > 0
+function isLinuxAbsolutePath(value: unknown): value is string {
+  return typeof value === 'string' &&
+    value.startsWith('/') &&
+    value.length <= 4096 &&
+    !/[\r\n\0]/u.test(value)
 }
 
 function isTaskKey(value: unknown): value is string {

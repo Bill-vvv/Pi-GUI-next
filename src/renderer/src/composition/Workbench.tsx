@@ -1,3 +1,4 @@
+import type { PromptDraftAttachment } from '../../../shared/desktop-attachment-contract'
 import {
   useCallback,
   useEffect,
@@ -7,6 +8,8 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode
 } from 'react'
+import { RemoteProjectPicker } from '../features/project/RemoteProjectPicker'
+import { HostConnectionActions } from '../features/desktop-client/HostConnectionActions'
 
 import type {
   AppearanceSettings,
@@ -21,7 +24,6 @@ import type {
   KernelPiPackageInstallJob,
   KernelPiDevCatalog,
   KernelProjectTrustChoice,
-  KernelPromptAttachment,
   KernelProjectPathSearchResult,
   KernelProviderAuthEvent,
   KernelProviderAuthType,
@@ -76,6 +78,7 @@ import {
 } from '../features/project/TaskNavigator'
 import { SessionForkDialog } from '../features/session/SessionForkDialog'
 import { SettingsPanel } from '../features/settings/SettingsPanel'
+import { DesktopEnvironmentPanel } from '../features/desktop-client/DesktopEnvironmentPanel'
 import { SettingsNavigation } from '../features/settings/SettingsNavigation'
 import { useSettingsWorkspace } from '../features/settings/settings-workspace'
 import { Timeline } from '../features/chat/Timeline'
@@ -92,6 +95,7 @@ import {
 } from '../features/chat/subagent-task-detail-model'
 import { ExtensionDialog } from '../features/extensions/ExtensionDialog'
 import { GitChangesPanel } from '../features/git/GitChangesPanel'
+import type { WorkbenchClientSurface } from '../features/desktop-client/workbench-client-surface'
 import { ProjectTrustDialog } from '../features/trust/ProjectTrustDialog'
 import { RIGHT_SIDEBAR_ID, RightSidebar } from './RightSidebar'
 import { reconcileRightSidebarActiveTab } from './right-sidebar-model'
@@ -101,6 +105,12 @@ import {
   isToolDisplayDensity,
   type ToolDisplayDensity
 } from '../tool-display-density'
+import {
+  MODEL_VISIBILITY_STORAGE_KEY,
+  modelVisibilityKey,
+  parseHiddenModelKeys,
+  serializeHiddenModelKeys
+} from '../model-visibility'
 import { currentTurnTodos } from '../todo-state'
 import {
   isWorkbenchAction,
@@ -120,6 +130,7 @@ const EDITABLE_TARGET_SHORTCUTS = new Set(
 
 type WorkbenchProps = {
   state: KernelState
+  clientSurface: WorkbenchClientSurface
   sessionPreview: KernelSessionPreview | null
   archivedSessionPreview: KernelSessionPreview | null
   composerDraftRequest: ComposerDraftRequest | null
@@ -140,7 +151,10 @@ type WorkbenchProps = {
   forkError: string | null
   forkSubmitting: boolean
   forkPreferredUserText: string | null
-  onAddProject: () => Promise<void>
+  onDisconnectHost?: () => Promise<void>
+  onRevokeHostPairing?: () => Promise<void>
+  connectedHostAlias?: string
+  onAddProject: (projectPath?: string) => Promise<void>
   onActivateProject: (projectKey: string) => Promise<void>
   onCreateTask: () => Promise<void>
   onActivateTask: (taskKey: string, sessionKey: string) => Promise<void>
@@ -212,7 +226,7 @@ type WorkbenchProps = {
   onGetDesktopHostStatus: () => Promise<DesktopHostAccessStatus>
   onCreateDesktopHostPairingCode: () => Promise<RemotePairingCode>
   onRevokeDesktopHostDevice: () => Promise<DesktopHostAccessStatus>
-  onSelectPromptAttachments: () => Promise<KernelPromptAttachment[]>
+  onSelectPromptAttachments: () => Promise<PromptDraftAttachment[]>
   onSearchProjectPaths: (query: string) => Promise<KernelProjectPathSearchResult>
   onSubmitAsk: (
     sessionKey: string,
@@ -227,12 +241,12 @@ type WorkbenchProps = {
   onCancelExtensionDialog: (request: KernelExtensionDialogRequest) => Promise<void>
   onPrompt: (
     message: string,
-    attachments?: KernelPromptAttachment[],
+    attachments?: PromptDraftAttachment[],
     expectedSessionKey?: string
   ) => Promise<void>
   onNavigateHistoryPrompt: (sessionKey: string, messageId: string) => Promise<void>
-  onSteer: (message: string, attachments?: KernelPromptAttachment[]) => Promise<void>
-  onFollowUp: (message: string, attachments?: KernelPromptAttachment[]) => Promise<void>
+  onSteer: (message: string, attachments?: PromptDraftAttachment[]) => Promise<void>
+  onFollowUp: (message: string, attachments?: PromptDraftAttachment[]) => Promise<void>
   onInvokeCommand: (commandId: string, argument: string) => Promise<void>
   onAbort: () => Promise<void>
   onSetModel: (
@@ -263,6 +277,7 @@ type WorkbenchProps = {
 
 export function Workbench({
   state,
+  clientSurface,
   sessionPreview,
   archivedSessionPreview,
   composerDraftRequest,
@@ -283,6 +298,9 @@ export function Workbench({
   forkError,
   forkSubmitting,
   forkPreferredUserText,
+  onDisconnectHost,
+  onRevokeHostPairing,
+  connectedHostAlias,
   onAddProject,
   onActivateProject,
   onCreateTask,
@@ -368,6 +386,8 @@ export function Workbench({
     () => window.matchMedia('(max-width: 700px)').matches
   )
   const [projectNavigatorExpanded, setProjectNavigatorExpanded] = useState(true)
+  const [remoteProjectPickerOpen, setRemoteProjectPickerOpen] = useState(false)
+  useEffect(() => { setRemoteProjectPickerOpen(false) }, [state.activeProjectKey, state.activeSessionKey])
   const [taskNavigatorExpanded, setTaskNavigatorExpanded] = useState(true)
   const [projectListQuery, setProjectListQuery] = useState<SessionListQuery>(EMPTY_SESSION_LIST_QUERY)
   const [taskListQuery, setTaskListQuery] = useState<SessionListQuery>(EMPTY_SESSION_LIST_QUERY)
@@ -403,6 +423,9 @@ export function Workbench({
     const stored = window.localStorage.getItem(TOOL_DISPLAY_DENSITY_STORAGE_KEY)
     return isToolDisplayDensity(stored) ? stored : DEFAULT_TOOL_DISPLAY_DENSITY
   })
+  const [hiddenModelKeys, setHiddenModelKeys] = useState<ReadonlySet<string>>(() => (
+    parseHiddenModelKeys(window.localStorage.getItem(MODEL_VISIBILITY_STORAGE_KEY))
+  ))
   const [pinnedProjectKeys, setPinnedProjectKeys] = useState<Set<string>>(() => {
     try {
       const stored: unknown = JSON.parse(
@@ -680,7 +703,8 @@ export function Workbench({
   const selectedSubagentTaskKey = reconciledSubagentTaskSelection === null
     ? null
     : subagentTaskSelectionKey(reconciledSubagentTaskSelection)
-  const gitSidebarAvailable = rightSidebarActivated && normalProjectActive && !settingsOpen
+  const gitSidebarAvailable =
+    clientSurface.git && rightSidebarActivated && normalProjectActive && !settingsOpen
   const rightSidebarTabIds: Array<'git' | 'subagent'> = [
     ...(gitSidebarAvailable ? ['git' as const] : []),
     ...(selectedSubagentTask !== null ? ['subagent' as const] : [])
@@ -786,8 +810,12 @@ export function Workbench({
   const canUseCompletedTurnActions =
     canUseSettledSessionActions || canUseStaticPreviewActions
   const canForkSession =
+    clientSurface.forkSession &&
     canUseCompletedTurnActions && activeWorkspace?.workspaceKind !== 'task'
-  const canExportSession = canUseStaticPreviewActions || (
+  const canEditHistoryPrompt =
+    clientSurface.historyPromptEdit &&
+    canUseCompletedTurnActions && activeWorkspace?.workspaceKind !== 'task'
+  const canExportSession = clientSurface.exportSession && (canUseStaticPreviewActions || (
     !viewingArchivedSession &&
     sessionPreview === null &&
     !viewingInactiveSession &&
@@ -797,7 +825,7 @@ export function Workbench({
     runtime.status !== 'running' &&
     runtime.status !== 'stopping' &&
     state.session.settled
-  )
+  ))
   const canCopyLastAnswer = canUseCompletedTurnActions
   const settingsState = activeWorkspace?.workspaceKind === 'task'
     ? { ...state, activeProjectKey: null }
@@ -837,7 +865,7 @@ export function Workbench({
     : null
   const promptInDisplayedSession = async (
     message: string,
-    attachments?: KernelPromptAttachment[]
+    attachments?: PromptDraftAttachment[]
   ): Promise<void> => {
     if (viewingArchivedSession) throw new Error('Archived session previews are read-only.')
     if (viewingNewSession) await onWaitForSessionStart()
@@ -897,6 +925,7 @@ export function Workbench({
   }
   const dispatchShortcutAction = (actionId: ShortcutActionId): boolean => {
     if (actionId === 'open-settings') {
+      if (!clientSurface.settings) return false
       invalidateRightSidebarFocusRestoration()
       if (viewingArchivedSession) onClearArchivedSessionPreview()
       setSidebarCollapsed(false)
@@ -905,6 +934,7 @@ export function Workbench({
     }
     if (actionId === 'new-session') {
       if (interactionBusy || (navigatorKind === 'project' && !canStartSession)) return false
+      if (navigatorKind === 'task' && !clientSurface.createTask) return false
       if (settingsOpen && !requestCloseSettings()) return false
       invalidateRightSidebarFocusRestoration()
       void (navigatorKind === 'task' ? onCreateTask() : onStartSession()).catch(() => undefined)
@@ -951,6 +981,7 @@ export function Workbench({
       return true
     }
     if (actionId === 'archive-session') {
+      if (!clientSurface.archiveSession) return false
       if (
         interactionBusy ||
         viewingArchivedSession ||
@@ -1005,6 +1036,7 @@ export function Workbench({
   }
   return (
     <main className={`app-shell${sidebarCollapsed ? ' left-sidebar-collapsed' : ''}${settingsOpen ? ' settings-open' : ''}${rightSidebarOpen ? ' right-sidebar-open' : ''}`}>
+      <div className="window-drag-region" aria-hidden="true" />
       {doubleClickBorderMaximize ? (
         <div className="window-edge-hit-layer" aria-hidden="true">
           <div className="window-edge-hit top" onDoubleClick={handleWindowEdgeDoubleClick} />
@@ -1017,6 +1049,7 @@ export function Workbench({
         <div className={`sidebar-content${settingsOpen ? ' settings-sidebar-content' : ''}`}>
           {settingsOpen ? (
             <SettingsNavigation
+              clientOnly={!clientSurface.hostSettings}
               section={settingsSection}
               onSectionChange={(section) => {
                 invalidateRightSidebarFocusRestoration()
@@ -1053,6 +1086,7 @@ export function Workbench({
             }}
             onOpenSession={openSession}
             onArchiveSession={onArchiveSession}
+            archiveAvailable={clientSurface.archiveSession}
           />
           <WorkspaceNavigatorGroup
             hidden={settingsOpen}
@@ -1070,7 +1104,10 @@ export function Workbench({
             searchPlaceholder="搜索对话"
             queryResultNoun="对话"
             onToggle={() => setProjectNavigatorExpanded((current) => !current)}
-            onAdd={onAddProject}
+            onAdd={clientSurface.addProject ? async () => {
+              if (clientSurface.remoteProjectSelection) setRemoteProjectPickerOpen(true)
+              else await onAddProject()
+            } : undefined}
           >
             <ProjectNavigator
               hidden={settingsOpen || !projectNavigatorExpanded}
@@ -1105,11 +1142,12 @@ export function Workbench({
               }}
               onOpenSession={openSession}
               onArchiveSession={onArchiveSession}
+              archiveAvailable={clientSurface.archiveSession}
               onReorderProjects={onReorderProjects}
             />
           </WorkspaceNavigatorGroup>
           <WorkspaceNavigatorGroup
-            hidden={settingsOpen}
+            hidden={settingsOpen || !clientSurface.tasks}
             kind="task"
             contentId="task-navigator-panel"
             label="任务"
@@ -1127,10 +1165,12 @@ export function Workbench({
             searchPlaceholder="搜索任务"
             queryResultNoun="任务"
             onToggle={() => setTaskNavigatorExpanded((current) => !current)}
-            onAdd={() => {
-              invalidateRightSidebarFocusRestoration()
-              return onCreateTask()
-            }}
+            onAdd={clientSurface.createTask
+              ? () => {
+                  invalidateRightSidebarFocusRestoration()
+                  return onCreateTask()
+                }
+              : undefined}
           >
             <TaskNavigator
               hidden={settingsOpen || !taskNavigatorExpanded}
@@ -1155,6 +1195,7 @@ export function Workbench({
               }}
               onOpenSession={openSession}
               onArchiveSession={onArchiveSession}
+              archiveAvailable={clientSurface.archiveSession}
             />
           </WorkspaceNavigatorGroup>
         </div>
@@ -1168,20 +1209,26 @@ export function Workbench({
               label="收起侧边栏"
               onClick={() => setSidebarCollapsed(true)}
             />
-            <IconButton
-              ref={settingsButtonRef}
-              className="sidebar-settings-toggle"
-              icon="settings"
-              iconSize="lg"
-              label="设置"
-              aria-pressed={false}
-              onClick={() => {
-                invalidateRightSidebarFocusRestoration()
-                if (viewingArchivedSession) onClearArchivedSessionPreview()
-                setSidebarCollapsed(false)
-                openSettings()
-              }}
-            />
+            {clientSurface.settings ? (
+              <IconButton
+                ref={settingsButtonRef}
+                className="sidebar-settings-toggle"
+                icon="settings"
+                iconSize="lg"
+                label="设置"
+                aria-pressed={false}
+                onClick={() => {
+                  invalidateRightSidebarFocusRestoration()
+                  if (viewingArchivedSession) onClearArchivedSessionPreview()
+                  setSidebarCollapsed(false)
+                  openSettings()
+                }}
+              />
+            ) : null}
+            {clientSurface.disconnectHost && onDisconnectHost !== undefined ? (
+              <HostConnectionActions key={connectedHostAlias} hostAlias={connectedHostAlias ?? 'Host'}
+                onDisconnect={onDisconnectHost} onRevokePairing={onRevokeHostPairing} />
+            ) : null}
           </footer>
         )}
       </aside>
@@ -1205,6 +1252,8 @@ export function Workbench({
         ) : null}
         {settingsOpen ? (
           <SettingsPanel
+            clientOnly={!clientSurface.hostSettings}
+            environmentPanel={<DesktopEnvironmentPanel disabled={busy} />}
             state={settingsState}
             busy={busy}
             section={settingsSection}
@@ -1266,6 +1315,15 @@ export function Workbench({
             onSetToolDisplayDensity={(density) => {
               setToolDisplayDensity(density)
               window.localStorage.setItem(TOOL_DISPLAY_DENSITY_STORAGE_KEY, density)
+            }}
+            hiddenModelKeys={hiddenModelKeys}
+            onSetModelVisible={(provider, modelId, visible) => {
+              const key = modelVisibilityKey(provider, modelId)
+              const next = new Set(hiddenModelKeys)
+              if (visible) next.delete(key)
+              else next.add(key)
+              setHiddenModelKeys(next)
+              window.localStorage.setItem(MODEL_VISIBILITY_STORAGE_KEY, serializeHiddenModelKeys(next))
             }}
             onDirtyChange={onDirtyChange}
             onActiveOperationChange={onActiveOperationChange}
@@ -1360,7 +1418,7 @@ export function Workbench({
           canCopyAnswers={canCopyLastAnswer}
           canExportSession={canExportSession}
           canForkSession={canForkSession}
-          canEditHistoryPrompt={canForkSession}
+          canEditHistoryPrompt={canEditHistoryPrompt}
           hasEarlierConversation={hasEarlierDisplayedConversation}
           conversationActionBusy={busy}
           conversationActionStatus={conversationActionStatus}
@@ -1413,6 +1471,16 @@ export function Workbench({
           completedAction={completedAction}
           todos={displayedTodos}
           onSelectPromptAttachments={onSelectPromptAttachments}
+          attachmentsAvailable={clientSurface.attachments}
+          remoteAttachments={clientSurface.remoteAttachments}
+          onPrepareRemoteAttachments={async () => {
+            if (viewingArchivedSession) throw new Error('归档预览不能添加附件。')
+            if (viewingNewSession) await onWaitForSessionStart()
+            else if (viewedSessionKey !== null) await onActivateSession(viewedSessionKey)
+          }}
+          slashCommandsAvailable={clientSurface.slashCommands}
+          extensionCommandsOnly={clientSurface.extensionCommandsOnly}
+          projectPathMentionsAvailable={clientSurface.projectPathMentions}
           onSearchProjectPaths={onSearchProjectPaths}
           onStartSession={onStartSession}
           onActivateSession={onActivateSession}
@@ -1429,6 +1497,7 @@ export function Workbench({
           onAbort={onAbort}
           globalEscapeAbortEnabled={!rightSidebarOpen}
           onSetModel={(provider, modelId) => onSetModel(provider, modelId, 'conversation')}
+          hiddenModelKeys={hiddenModelKeys}
           onSetThinkingLevel={onSetThinkingLevel}
           onSetOpenAiFastMode={onSetOpenAiFastMode}
           onMeasuredHeightChange={handleComposerMeasuredHeightChange}
@@ -1444,7 +1513,9 @@ export function Workbench({
             ...(gitSidebarAvailable ? [{
               id: 'git',
               label: 'Git',
-              content: <GitChangesPanel projectKey={activeProject.path} />
+              content: <GitChangesPanel
+                key={clientSurface.disconnectHost ? `${activeProject.path}:${state.activeSessionKey}` : activeProject.path}
+                projectKey={activeProject.path} readOnly={clientSurface.gitReadOnly} remote={clientSurface.disconnectHost} />
             }] : []),
             ...(selectedSubagentTask === null ? [] : [{
               id: 'subagent',
@@ -1483,10 +1554,18 @@ export function Workbench({
             state.extensionDialog.requestId
           ].join('\u0000')}
           request={state.extensionDialog}
+          unavailableReason={clientSurface.extensionDialogs ? null : '当前 Host 不支持远程回应扩展对话框，请更新 Host 后重新连接。'}
           onRespond={onRespondExtensionDialog}
           onCancel={onCancelExtensionDialog}
         />
       )}
+
+      {remoteProjectPickerOpen && clientSurface.remoteProjectSelection ? (
+        <RemoteProjectPicker
+          onClose={() => setRemoteProjectPickerOpen(false)}
+          onSelect={onAddProject}
+        />
+      ) : null}
 
       {state.projectTrustRequest === null ? null : (
         <ProjectTrustDialog
@@ -1495,7 +1574,7 @@ export function Workbench({
           onResolve={onResolveProjectTrust}
         />
       )}
-      {forkDialogOpen ? (
+      {forkDialogOpen && clientSurface.forkSession ? (
         <SessionForkDialog
           candidates={forkCandidates}
           loading={forkCandidatesLoading}
@@ -1527,7 +1606,7 @@ type WorkspaceNavigatorGroupProps = {
   searchPlaceholder: string
   queryResultNoun: string
   onToggle: () => void
-  onAdd: () => Promise<void>
+  onAdd?: () => Promise<void>
   children: ReactNode
 }
 
@@ -1587,14 +1666,16 @@ function WorkspaceNavigatorGroup({
             searchPlaceholder={searchPlaceholder}
             resultNoun={queryResultNoun}
           />
-          <IconButton
-            className="workspace-navigator-group-add"
-            icon="plus"
-            label={addLabel}
-            aria-busy={addBusy ? true : undefined}
-            disabled={addDisabled}
-            onClick={() => void onAdd().catch(() => undefined)}
-          />
+          {onAdd === undefined ? null : (
+            <IconButton
+              className="workspace-navigator-group-add"
+              icon="plus"
+              label={addLabel}
+              aria-busy={addBusy ? true : undefined}
+              disabled={addDisabled}
+              onClick={() => void onAdd().catch(() => undefined)}
+            />
+          )}
         </div>
       </div>
       {children}

@@ -1,11 +1,14 @@
 import type { ProjectStore } from '../project/project-store.ts'
 import type { RemoteKernelCommand } from '../../shared/remote-contract.ts'
+import type { DesktopHostKernelCommand } from '../../shared/desktop-host-contract.ts'
 import type { WorkbenchKernel } from './workbench-kernel.ts'
+import { listProjectDirectories } from '../project/project-directory-service.ts'
 
 export type TerminalKernelCommandContext = {
   kernel: WorkbenchKernel
   projectStore: ProjectStore
   assertCurrentPolicy?: () => Promise<void>
+  pickProjectDirectory?: () => Promise<string | null>
 }
 
 /**
@@ -13,12 +16,36 @@ export type TerminalKernelCommandContext = {
  * Local IPC and the remote gateway both invoke this for those command types.
  */
 export async function dispatchTerminalKernelCommand(
-  command: RemoteKernelCommand,
+  command: RemoteKernelCommand | DesktopHostKernelCommand,
   context: TerminalKernelCommandContext
 ): Promise<unknown> {
   const { kernel, projectStore } = context
   await context.assertCurrentPolicy?.()
   switch (command.type) {
+    case 'kernel.list-project-directories': {
+      const listing = await listProjectDirectories(command.directoryPath)
+      await context.assertCurrentPolicy?.()
+      return listing
+    }
+    case 'kernel.add-project': {
+      const selected = command.projectPath ?? await context.pickProjectDirectory?.()
+      if (selected === null) return kernel.acknowledge()
+      if (selected === undefined) throw new Error('Project selection requires an explicit Host directory.')
+      const path = await projectStore.validateProjectPath(selected)
+      if (context.assertCurrentPolicy !== undefined && path !== selected) {
+        throw new Error('Selected Host directory changed; browse it again before adding the Project.')
+      }
+      const registry = await projectStore.loadSessionRegistry(path)
+      // Loading the registry may yield to another controller/navigation action.
+      await context.assertCurrentPolicy?.()
+      if (await projectStore.validateProjectPath(path) !== path) throw new Error('Selected project directory changed during registration.')
+      await context.assertCurrentPolicy?.()
+      await kernel.addProject(path, registry)
+      return kernel.acknowledge()
+    }
+    case 'kernel.resolve-project-trust':
+      await kernel.resolveProjectTrust(command.requestId, command.choice)
+      return kernel.acknowledge()
     case 'kernel.get-state':
       return kernel.getSnapshot()
     case 'kernel.activate-project': {
@@ -98,6 +125,9 @@ export async function dispatchTerminalKernelCommand(
       )
     case 'kernel.submit-ask':
       await kernel.submitAsk(command.sessionKey, command.toolCallId, command.answers)
+      return kernel.acknowledge()
+    case 'kernel.invoke-command':
+      await kernel.invokeCommand(command.commandId, command.argument)
       return kernel.acknowledge()
     case 'kernel.cancel-ask':
       await kernel.cancelAsk(command.sessionKey, command.toolCallId)
