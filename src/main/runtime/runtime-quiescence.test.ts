@@ -40,14 +40,14 @@ test('buildQuiescencePrompt and command filter stay aligned', () => {
       sourceInfo: { source: 'quiescence', scope: 'temporary', origin: 'top-level' }
     },
     {
-      name: 'advisor',
+      name: 'todos',
       description: 'visible',
       source: 'extension',
-      sourceInfo: { source: 'advisor', scope: 'user', origin: 'package' }
+      sourceInfo: { source: 'npm:@cortexkit/pi-magic-context', scope: 'user', origin: 'package' }
     }
   ])
   assert.equal(catalog.some((command) => command.name === QUIESCENCE_COMMAND_NAME), false)
-  assert.equal(catalog.some((command) => command.name === 'advisor'), true)
+  assert.equal(catalog.some((command) => command.name === 'todos'), true)
 })
 
 test('resolveRuntimeQuiescenceExtensionPath finds the source extension', () => {
