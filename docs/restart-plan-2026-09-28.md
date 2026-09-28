@@ -50,7 +50,7 @@ flowchart TD
 | 任务 | 初始状态 | 依赖 | 交付物 |
 | --- | --- | --- | --- |
 | 0 基线与接口 | Ready | 无 | 可恢复工作快照、明确的接口与文件归属 |
-| 0b Pi Runtime 子进程 | Pending | 0 完成 | 按 D-094 迁出 Shared Pi Host；按 D-098 删除旧 RPC 链路，并把 `smoke:pi` 改为启动子进程；按 D-099 加入子进程通信上限，并先接入子进程相关日志；提供对应的定向验证证据 |
+| 0b Pi Runtime 子进程 | 本地完成，待合并（分支 `codex/pi-runtime-subprocess`，证据 `release/evidence/pi-runtime-subprocess-20260929/`） | 0 完成 | 按 D-094 迁出 Shared Pi Host；按 D-098 删除旧 RPC 链路，并把 `smoke:pi` 改为启动子进程；按 D-099 加入子进程通信上限，并先接入子进程相关日志；提供对应的定向验证证据 |
 | A / B / C | Pending | 0、0b 完成 | 三份互不覆盖的实现及必要定向证据 |
 | 1 集成 | Pending | A、B、C 完成 | 同一源码候选，Main/preload/Renderer/Host 全部接通 |
 | 2A / 2B / 2C | Pending | 1 完成 | 平台与包验证、准确的操作文档和验收差项 |

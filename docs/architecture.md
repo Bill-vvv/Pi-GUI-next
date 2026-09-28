@@ -7,8 +7,10 @@ Electron Renderer
     -> typed preload IPC
 Workbench Kernel (Electron Main)
     -> RuntimeContext[projectPath, sessionFile]
-       -> SharedPiRuntime（实现 RuntimeHost）
-SharedPiHost（Linux Main 中一个共享 owner）
+       -> PiRuntimeProcessHost 的 Runtime 句柄（实现 RuntimeHost）
+          -> Node IPC（纯数据命令、结果与事件）
+Pi Runtime 子进程（所有 Session 共用一个；out/main/pi-runtime-host.js）
+    -> SharedPiHost / SharedPiRuntime
     -> SharedPiAgentSession / Pi 0.83.0 SDK（每 Session 独立 driver）
     -> pi-gui-task-notify / bounded local request
 DesktopNotificationBroker（Electron Main）
@@ -31,7 +33,7 @@ Main remote http listener
     -> same Workbench Kernel (no second Kernel / no WebSocket)
 ```
 
-Linux Electron Main 是唯一 control plane；当前会话执行主路径是进程内 `SharedPiHost`，多个 Session 拥有独立 Runtime handle、driver 与 canonical session file，但共享 Main 进程。逻辑 Session 隔离不等于操作系统进程隔离，Main 崩溃会影响全部会话。该现状由 D-078 明确取代旧 RPC 主路径假设；本轮不改变运行实现，也不将源码验证视为发布验收。可选的私有远程呈现面（默认关闭）在同一 Main/Kernel 上提供 SSE + JSON POST，详见 [`remote-access.md`](remote-access.md)；默认入口由 Main 通过窄 RemoteAdmin IPC 管理系统 Tailscale Funnel/Serve，并让 Gateway 只监听 loopback，手动 Lucky 环境变量模式继续作为互斥的高级入口。两种入口都不是第二 control plane，也不把 electron-vite 开发服务器对外暴露。
+Linux Electron Main 是唯一 control plane；会话执行主路径是 Main 按需启动的一个 Pi Runtime 子进程，其中运行未改动的 `SharedPiHost`（D-094）。多个 Session 拥有独立 Runtime handle、driver 与 canonical session file，但共用这个子进程：一个会话出问题仍可能影响其他会话，但不再波及 UI、Git、远程网关和通知。子进程退出时，其全部 Runtime 进入既有崩溃状态，进行中的 prompt 与工具调用不重放；下一次需要 Runtime 时才重新启动子进程，2 分钟内最多启动 3 次。每次启动带新编号，旧编号的事件丢弃、命令拒绝。可选的私有远程呈现面（默认关闭）在同一 Main/Kernel 上提供 SSE + JSON POST，详见 [`remote-access.md`](remote-access.md)；默认入口由 Main 通过窄 RemoteAdmin IPC 管理系统 Tailscale Funnel/Serve，并让 Gateway 只监听 loopback，手动 Lucky 环境变量模式继续作为互斥的高级入口。两种入口都不是第二 control plane，也不把 electron-vite 开发服务器对外暴露。
 
 统一远程产品拓扑如下；P4-1 已实现 Linux loopback Desktop Gateway，P4-2 已接通 Windows remote-only Main/preload、Credential Manager、断线重连与 capability gating；P4-3 已打出并安装 Windows 包，真实 SSH gate 由用户暂缓，完成前不能宣称 Windows 已受支持：
 
@@ -53,7 +55,7 @@ Windows Desktop 是完整桌面客户端，不嵌入 `src/remote/RemoteApp.tsx`�
 
 WSL Desktop Client 通过自己拥有的 `wsl.exe` 双向 stdio 管道进入与本地 IPC 相同的业务 handler。Windows Main 拥有文件对话框、系统字体、通知呈现与窗口聚焦；Linux Host 保留 Kernel、项目和 Session 激活校验。源码与平台依赖隔离、构建清单、更新切换和命令观察身份见 [cross-platform-development.md](cross-platform-development.md) 与 D-076。
 
-启动时的 `probePiRpc` 仍使用 `LinuxLocalRuntime → PiRpcClient → pi --mode rpc` 验证外部 Pi executable/version/protocol；metadata 命名与 Provider 连通性测试也继续使用各自有界的 Pi 子进程。RPC 探针通过不证明进程内 SDK 会话已可用。`LinuxLocalRuntime` 及其 RPC 客户端保留探针与回归用途，不作为当前 Session 的可选执行后端，也没有自动降级路径。
+`pnpm smoke:pi`（`PI_GUI_PROBE_ONLY=1`）启动真实的 Pi Runtime 子进程，用临时 agent 目录和离线模式创建一个 Session，读取命令列表后停止，报告 Pi 版本、命令数与子进程 PID，不触碰用户的 Pi 会话与设置。旧的外部 RPC 链路（`LinuxLocalRuntime`、`PiRpcClient`）已删除（D-098）；Pi 数据类型与规范化函数保留在 `pi-rpc/pi-rpc-data.ts`。metadata 命名与 Provider 连通性测试继续使用各自有界的 Pi 子进程。子进程没有自动降级到 Main 进程内运行的路径。
 
 R3 的远程目录选择通过独立 typed 目录 DTO 返回有界元数据；Desktop-only policy 将目录浏览、显式路径注册及项目信任答复与 Web Remote 的命令集合隔离。项目注册与本地 IPC 共用 `dispatchTerminalKernelCommand`、`ProjectStore` 和 `WorkbenchKernel`；异步目录验证/registry 读取后重复检查观察身份，Renderer 不另建项目事实源。范围与边界见 [`desktop-host.md`](desktop-host.md#远程项目选择r3) 和 D-079。
 
@@ -72,18 +74,19 @@ R8 的 SSH 主机发现属于 Windows Main 本机连接配置；无参数的 `de
 | Electron Renderer | 展示 normalized state；发出 typed command | 子进程、文件系统、raw Pi event |
 | Preload | 暴露窄的 typed IPC API | 业务状态、Pi 协议 |
 | Workbench Kernel | Project、按 Session 隔离的 Runtime context、Conversation 投影与状态转换 | Linux spawn 细节、JSONL framing |
+| PiRuntimeProcessHost | Main 侧：按需启动、编号与重启次数上限、请求上限、分阶段停机、把子进程退出转为各 Runtime 的崩溃事件 | Pi SDK、Session 逻辑、任务重放 |
+| Pi Runtime 子进程服务 | 子进程侧：把请求转给 SharedPiHost，转发事件，限制未发送的积压，记录未捕获异常后继续运行 | Kernel 状态、工作区选择 |
 | SharedPiHost / SharedPiRuntime | 共享 Host 的 Runtime 集合、canonical session file 唯一发布、精确 handle 释放与生命周期适配 | 工作区选择、Renderer 状态、第二份 Session 持久化 |
 | SharedPiAgentSession | Pi SDK Session/services、命令执行、Extension 绑定与事件转换 | Kernel revision、导航和跨 Session 调度 |
 | SharedPiProcessEnvironment | async-context 范围的环境值与代理安装/释放 | 独立 OS 进程、任意全局变量或原生资源隔离 |
-| LinuxLocalRuntime | 外部 RPC 探针的 executable、cwd、spawn、signal、退出语义 | 当前 Session 主路径、renderer 状态 |
-| PiRpcClient | 外部 RPC 的 LF JSONL framing、correlation 与事件接收；Main 内部继续复用其类型契约 | GUI identity、Shared Session 的实际传输、重启策略 |
+| pi-rpc-data | Pi Session 数据类型、条目与树的规范化投影 | 进程、传输或生命周期 |
 | Kernel state encoding | 快照防御性复制、Conversation entry 差量编码 | Runtime 生命周期、revision 分配、窗口选择或事件发送 |
 | Runtime Session state | 会话字段边界、同步 Runtime／Pi 事件状态转换 | 工作区选择、共享设置、持久化、进程命令或事件发送 |
 | DesktopNotificationBroker | 私有 Unix socket、桌面通知动作和已注册 Session 激活 | Conversation 内容、通用远程控制或任意路径打开 |
 | Web Remote Gateway | 静态 Remote、配对 Cookie、SSE、allowlisted JSON command 与受信代理校验 | Tailscale 账户、Lucky 配置、第二 Kernel 或任意 Main API |
 | Tailscale Remote Manager | 探测系统 Tailscale、管理 Pi GUI 精确拥有的 HTTPS 443 根 handler、持久化 loopback port/origin/token | 安装 Tailscale、保存账户凭据、覆盖未知 Serve/Funnel 配置或自建 relay |
 
-Linux Main 统一拥有 Shared Pi Host 和另行启动的 Pi 子进程。Renderer 不启动进程、不读取 Pi stdout，也不解析 raw Pi event。多个 Runtime 可并发运行，但每个 Runtime 只绑定一个 Pi Session；Renderer 同一时间只投影当前选中的 Session，后台状态通过 Session summary 展示。
+Linux Main 统一拥有 Pi Runtime 子进程和另行启动的 Pi 子进程；Extension 的 stdout/stderr 只作为日志转发到 Main 的 stderr，关键生命周期事件写入各进程日志目录下的 `main.jsonl` 与 `pi-runtime.jsonl`（D-099）。Renderer 不启动进程、不读取 Pi stdout，也不解析 raw Pi event。多个 Runtime 可并发运行，但每个 Runtime 只绑定一个 Pi Session；Renderer 同一时间只投影当前选中的 Session，后台状态通过 Session summary 展示。
 
 `RuntimeContext` 唯一持有 Runtime 订阅、启动提交标记、provisional identity／提交任务／settled 标记，以及自动命名的 pending／operation；Kernel 的活动 Runtime 由 `activeContext` 推导。Context 的 `state` 使用 `RuntimeSessionState`，只保存 Session identity、命令、模型、Advisor、对话框、Runtime 状态、Session 与 Conversation 这 8 个字段，不保留完整 `KernelState`、共享设置或其他 Project 的导航数据。命令和导航提交通过 `captureActiveContext` 登记会话字段与项目索引；`loadContext` 只将会话字段投影到当前工作区，共享设置和工作区状态保持当前值。Kernel 的 `stopAllRequested` 是停止全部会话时的独立启动门禁，不与单个 Context 的 `stopRequested` 相互覆盖。
 
