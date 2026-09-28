@@ -34,16 +34,12 @@ button {
   color: var(--color-text-primary);
   cursor: pointer;
   padding: 0.6rem 0.8rem;
-  transition: border-color var(--motion-duration-control) var(--motion-easing-standard), background var(--motion-duration-control) var(--motion-easing-standard), color var(--motion-duration-control) var(--motion-easing-standard), opacity var(--motion-duration-control) var(--motion-easing-standard), transform var(--motion-duration-control) var(--motion-easing-standard);
+  transition: border-color var(--motion-duration-control) var(--motion-easing-standard), background var(--motion-duration-control) var(--motion-easing-standard), color var(--motion-duration-control) var(--motion-easing-standard), opacity var(--motion-duration-control) var(--motion-easing-standard);
 }
 
 button:hover:not(:disabled) {
   border-color: var(--color-border-hover);
   background: var(--color-surface-hover);
-}
-
-button:active:not(:disabled) {
-  transform: translateY(1px);
 }
 
 button:disabled {

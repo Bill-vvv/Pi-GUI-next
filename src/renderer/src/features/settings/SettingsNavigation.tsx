@@ -67,10 +67,12 @@ const SETTINGS_NAV_GROUPS: ReadonlyArray<{
 
 export function SettingsNavigation({
   section,
+  clientOnly = false,
   onSectionChange,
   onBack
 }: {
   section: SettingsSection
+  clientOnly?: boolean
   onSectionChange: (section: SettingsSection) => void
   onBack: () => void
 }): React.JSX.Element {
@@ -83,7 +85,7 @@ export function SettingsNavigation({
         onClick={onBack}
       />
       <nav className="settings-nav" aria-label="设置分类">
-        {SETTINGS_NAV_GROUPS.map((group) => {
+        {SETTINGS_NAV_GROUPS.filter((group) => !clientOnly || group.id === 'app').map((group) => {
           const headingId = `settings-nav-${group.id}`
           return (
             <div

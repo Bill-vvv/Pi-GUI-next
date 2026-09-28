@@ -43,6 +43,7 @@ import {
   isProcessEntry,
   LiveTurn,
   splitTurn,
+  ThinkingDisclosureContext,
   ThinkingStatus,
   TimelineSessionKeyContext,
   turnFinalAnswerText,
@@ -184,6 +185,7 @@ export function Timeline({
   const revealScrollHeightRef = useRef<number | null>(null)
   const observedRunRef = useRef<{ startedAt: number; turnId: string | null } | null>(null)
   const observedThinkingStartsRef = useRef(new Map<string, number>())
+  const thinkingDisclosuresRef = useRef(new Map<string, boolean>())
   const historyPromptTextareaRef = useRef<HTMLTextAreaElement>(null)
   const [completedTurnWindow, setCompletedTurnWindow] = useState(COMPLETED_TURN_WINDOW_SIZE)
   const [earlierConversationLoading, setEarlierConversationLoading] = useState(false)
@@ -749,6 +751,7 @@ export function Timeline({
 
   return (
     <TimelineSessionKeyContext.Provider value={sessionKey}>
+    <ThinkingDisclosureContext.Provider value={thinkingDisclosuresRef.current}>
     <AskToolInteractionContext.Provider value={askToolInteraction}>
     <SubagentTaskInteractionContext.Provider value={subagentTaskInteraction}>
     <div className="conversation-shell" ref={shellRef}>
@@ -1034,6 +1037,7 @@ export function Timeline({
     </div>
     </SubagentTaskInteractionContext.Provider>
     </AskToolInteractionContext.Provider>
+    </ThinkingDisclosureContext.Provider>
     </TimelineSessionKeyContext.Provider>
   )
 }

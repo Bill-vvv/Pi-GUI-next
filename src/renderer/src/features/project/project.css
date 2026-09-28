@@ -307,6 +307,10 @@
   animation-delay: -900ms;
 }
 
+.project-select[aria-expanded='true'] .project-activity-trace > span {
+  animation: none;
+}
+
 .project-initial {
   display: none;
 }
@@ -942,6 +946,11 @@
 .session-action-slot:focus-within .session-awaiting-indicator,
 .session-action-slot:focus-within .session-lifecycle-indicator {
   opacity: 0;
+}
+
+.session-action-slot:hover:has(.session-row-actions .icon-button:not(:disabled)) .session-spinner-visual,
+.session-action-slot:focus-within .session-spinner-visual {
+  animation-play-state: paused;
 }
 
 .session-action-slot:hover .session-row-actions .icon-button:not(:disabled),

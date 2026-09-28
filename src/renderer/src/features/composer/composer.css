@@ -782,7 +782,6 @@
   padding: 0.4rem 0.5rem 0.28rem;
 }
 
-.model-picker-thinking-list,
 .model-picker-model-list {
   display: grid;
   min-height: 0;
@@ -791,18 +790,158 @@
   padding: 0.28rem;
 }
 
-.model-picker-thinking-list .picker-option {
-  padding-block: 0.4rem;
+.model-picker-thinking-slider {
+  padding: 0.35rem 0.5rem 0.55rem;
 }
 
-.model-picker-thinking-list .model-picker-option-copy {
+.model-picker-thinking-value {
   display: flex;
   align-items: baseline;
-  gap: 0.45rem;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 1.6rem;
+  color: var(--color-text-primary);
+  font-size: var(--text-control);
+  font-weight: var(--weight-medium);
+  line-height: var(--line-control);
 }
 
-.model-picker-thinking-list .model-picker-option-meta {
-  white-space: nowrap;
+.model-picker-thinking-status {
+  color: var(--color-text-muted);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-normal);
+}
+
+.model-picker-thinking-control {
+  position: relative;
+  height: 36px;
+}
+
+.model-picker-thinking-rail {
+  position: absolute;
+  inset: 16px 10px auto;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--color-border);
+  pointer-events: none;
+}
+
+.model-picker-thinking-fill {
+  width: var(--thinking-progress);
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-text-primary);
+  transition: width var(--motion-duration-fast) var(--motion-easing-layout);
+}
+
+.model-picker-thinking-tick {
+  position: absolute;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  transform: translate(-50%, -50%);
+  transition: background var(--motion-duration-fast) var(--motion-easing-standard);
+}
+
+.model-picker-thinking-tick[data-active='true'] {
+  background: var(--color-text-primary);
+}
+
+.model-picker-thinking-thumb {
+  position: absolute;
+  top: 50%;
+  left: var(--thinking-progress);
+  width: 20px;
+  height: 20px;
+  border: 3px solid var(--color-surface-popover);
+  border-radius: 50%;
+  background: var(--color-text-primary);
+  transform: translate(-50%, -50%);
+  transition: left var(--motion-duration-fast) var(--motion-easing-layout), scale var(--motion-duration-fast) var(--motion-easing-standard);
+}
+
+.model-picker-thinking-control:has(input:active) .model-picker-thinking-thumb {
+  scale: 1.12;
+}
+
+.model-picker-thinking-control[data-unset='true'] .model-picker-thinking-thumb {
+  visibility: hidden;
+}
+
+.model-picker-thinking-control[data-disabled='true'] {
+  opacity: 0.5;
+}
+
+.model-picker-thinking-input {
+  appearance: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.model-picker-thinking-input:disabled {
+  cursor: not-allowed;
+}
+
+.model-picker-thinking-input::-webkit-slider-runnable-track {
+  height: 20px;
+  background: transparent;
+}
+
+.model-picker-thinking-input::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.model-picker-thinking-input::-moz-range-track {
+  background: transparent;
+}
+
+.model-picker-thinking-input::-moz-range-progress {
+  background: transparent;
+}
+
+.model-picker-thinking-input::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.model-picker-thinking-labels {
+  display: flex;
+  justify-content: space-between;
+  color: var(--color-text-muted);
+  font-size: var(--text-caption);
+  line-height: var(--line-caption);
+}
+
+.model-picker-thinking-labels span[data-selected='true'] {
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+.model-picker-thinking-error {
+  margin: 0.5rem 0 0;
+  color: var(--color-error-text);
+  font-size: var(--text-caption);
+  line-height: var(--line-caption);
+  overflow-wrap: anywhere;
 }
 
 .model-picker-model-button {
@@ -1085,6 +1224,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .model-picker-thinking-fill,
+  .model-picker-thinking-tick,
+  .model-picker-thinking-thumb,
   .composer-todo-panel,
   .composer-todo-chevron,
   .composer-todo-body {
@@ -1107,4 +1249,14 @@
     max-height: 120px;
     padding: 0.5rem 0.68rem;
   }
+}
+
+.composer-attachment-upload {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  color: var(--color-text-muted);
+  font-size: var(--text-meta);
+  line-height: var(--line-meta);
 }

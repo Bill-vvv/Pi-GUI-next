@@ -169,3 +169,22 @@ test('animated activity keeps text, ARIA, shape, or color semantics when motion 
   assert.match(navigator, /className="project-activity-summary"[\s\S]*?role="status"[\s\S]*?aria-label=\{`有 \$\{busySessionCount\} 个对话进行中`\}/)
   assert.match(navigator, /className=\{`session-lifecycle-indicator \$\{status\}`\}[\s\S]*?role="status"[\s\S]*?aria-label=\{label\}/)
 })
+
+test('button baseline keeps controls stationary and selection highlights track input immediately', () => {
+  const styles = read('styles.css')
+  assert.doesNotMatch(styles, /button:active[^}]*transform:/)
+  assert.doesNotMatch(rule(styles, 'button'), /\btransform\b/)
+  assert.match(
+    rule(read('components/selection-control.css'), ':is(.select-control-option, .font-select-option)'),
+    /transition: none;/
+  )
+})
+
+test('tooltip entrance is a short fade without directional movement', () => {
+  const tooltip = read('components/tooltip.css')
+  const keyframes = tooltip.slice(tooltip.indexOf('@keyframes app-tooltip-in'), tooltip.indexOf('@media'))
+  assert.match(keyframes, /opacity: 0;/)
+  assert.match(keyframes, /opacity: 1;/)
+  assert.doesNotMatch(keyframes, /transform|translate|scale/)
+  assert.match(tooltip, /@media \(prefers-reduced-motion: reduce\)[\s\S]*animation: none;[\s\S]*opacity: 1;/)
+})

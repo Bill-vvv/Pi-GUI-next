@@ -1,21 +1,14 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { after, test } from 'node:test'
+import { test } from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { createServer } from 'vite'
+import { createSsrTestServer } from '../../test-support/create-ssr-test-server.ts'
 
 import type { KernelSessionSummary } from '../../../../shared/kernel-contract.ts'
 import type { TaskItem } from './TaskNavigator.tsx'
 
-const vite = await createServer({
-  configFile: false,
-  root: new URL('../../../../../', import.meta.url).pathname,
-  appType: 'custom',
-  logLevel: 'error',
-  server: { middlewareMode: true }
-})
-after(async () => vite.close())
+const vite = await createSsrTestServer()
 
 const taskNavigatorModule = await vite.ssrLoadModule(
   '/src/renderer/src/features/project/TaskNavigator.tsx'
@@ -171,7 +164,7 @@ test('Task Navigator delegates task creation to the parent disclosure group', ()
 
 test('Task Composer disables Project-only path and generic Session creation capabilities', () => {
   assert.match(composerSource, /const taskWorkspace = activeWorkspace\?\.workspaceKind === 'task'/)
-  assert.match(composerSource, /const projectPathFeaturesAvailable = !taskWorkspace/)
+  assert.match(composerSource, /const projectPathFeaturesAvailable = projectPathMentionsAvailable && !taskWorkspace/)
   assert.match(composerSource, /!taskWorkspace &&[\s\S]*!busy/)
 })
 

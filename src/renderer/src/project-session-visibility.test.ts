@@ -21,6 +21,60 @@ const projectCssSource = readFileSync(
   'utf8'
 )
 
+test('expanded Projects keep a readable busy summary with a static activity trace', () => {
+  const navigatorSource = readFileSync(
+    new URL('./features/project/ProjectNavigator.tsx', import.meta.url),
+    'utf8'
+  )
+  assert.match(navigatorSource, /const expanded = expandedProjectKeys\.has\(project\.path\)/)
+  assert.match(navigatorSource, /aria-expanded=\{expanded\}/)
+  assert.match(
+    navigatorSource,
+    /busySessionCount > 0 \? \([\s\S]*?className="project-activity-summary"[\s\S]*?role="status"[\s\S]*?aria-label=\{`有 \$\{busySessionCount\} 个对话进行中`\}[\s\S]*?className="project-activity-count" aria-hidden="true">\s*\{busySessionCount\}/
+  )
+  const traceRule = projectCssSource.match(/\.project-activity-trace > span \{[^}]+\}/)?.[0]
+  const expandedRule = projectCssSource.match(
+    /\.project-select\[aria-expanded='true'\] \.project-activity-trace > span \{[^}]+\}/
+  )?.[0]
+  assert.ok(traceRule)
+  assert.match(traceRule, /animation: project-activity-trace [^;]+ infinite;/)
+  assert.ok(expandedRule)
+  assert.match(expandedRule, /animation: none;/)
+  assert.doesNotMatch(expandedRule, /display:|visibility:|opacity:/)
+})
+
+test('hidden Session spinners pause under the same hover and focus conditions as their indicators', () => {
+  const pauseRule = projectCssSource.match(/([^{}]+)\{\s*animation-play-state: paused;\s*\}/)
+  const hiddenRule = projectCssSource.match(/([^{}]*\.session-lifecycle-indicator) \{\s*opacity: 0;\s*\}/)
+  assert.ok(pauseRule)
+  assert.ok(hiddenRule)
+  const hiddenSpinnerSelectors = hiddenRule[1].split(',')
+    .map((selector) => selector.trim())
+    .filter((selector) => selector.endsWith('.session-lifecycle-indicator'))
+    .map((selector) => selector.replace('.session-lifecycle-indicator', '.session-spinner-visual'))
+  assert.deepEqual(pauseRule[1].split(',').map((selector) => selector.trim()), hiddenSpinnerSelectors)
+  assert.equal(hiddenSpinnerSelectors.length, 2)
+  assert.match(pauseRule[1], /:hover:has\(\.session-row-actions \.icon-button:not\(:disabled\)\)/)
+  assert.match(pauseRule[1], /:focus-within/)
+  const spinnerRule = projectCssSource.match(/\.session-spinner-visual \{[^}]+\}/)?.[0]
+  assert.ok(spinnerRule)
+  assert.match(spinnerRule, /animation: session-orbit-turn [^;]+ infinite;/)
+  assert.doesNotMatch(spinnerRule, /animation-play-state: paused/)
+
+  for (const owner of ['ProjectNavigator', 'TaskNavigator', 'PinnedSessionNavigator']) {
+    const source = readFileSync(new URL(`./features/project/${owner}.tsx`, import.meta.url), 'utf8')
+    assert.match(source, /className="session-action-slot"[\s\S]*?<SessionSpinner[\s\S]*?className="session-row-actions"/)
+    assert.match(source, /awaitingUserInput \? \([\s\S]*?session-awaiting-indicator[\s\S]*?\) : lifecycleLabel !== null \? \(\s*<SessionSpinner/)
+  }
+})
+
+test('reduced motion keeps both Project traces and Session spinners static', () => {
+  assert.match(
+    projectCssSource,
+    /@media \(prefers-reduced-motion: reduce\) \{\s*\.project-activity-trace > span,\s*\.session-spinner-visual \{\s*animation: none;\s*transform: none;/
+  )
+})
+
 test('session list search is case-insensitive title substring match on the same list', () => {
   const items = [
     { key: 'a', title: 'VPN 配置', lastActivityAt: 100 },

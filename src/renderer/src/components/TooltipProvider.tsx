@@ -12,6 +12,7 @@ import { createPortal } from 'react-dom'
 import './tooltip.css'
 
 const TOOLTIP_SHOW_DELAY_MS = 360
+const TOOLTIP_SKIP_DELAY_WINDOW_MS = 800
 const TOOLTIP_GAP_PX = 9
 const VIEWPORT_MARGIN_PX = 8
 
@@ -46,6 +47,12 @@ export function TooltipProvider({ children }: { children: ReactNode }): React.JS
   const [position, setPosition] = useState<TooltipPosition | null>(null)
 
   useEffect(() => {
+    let hoverWarmUntil = 0
+    const targetObserver = new MutationObserver(() => {
+      if (activeRef.current !== null && !activeRef.current.target.isConnected) hideTooltip()
+    })
+    let activeFromPointer = false
+
     const clearShowTimer = (): void => {
       if (showTimerRef.current !== null) {
         window.clearTimeout(showTimerRef.current)
@@ -54,9 +61,16 @@ export function TooltipProvider({ children }: { children: ReactNode }): React.JS
       pendingTargetRef.current = null
     }
 
-    const hideTooltip = (target?: HTMLElement): void => {
+    const hideTooltip = (target?: HTMLElement, continueHover = false): void => {
       if (target !== undefined && activeRef.current?.target !== target) return
+      targetObserver.disconnect()
+      if (continueHover && activeFromPointer && activeRef.current !== null) {
+        hoverWarmUntil = performance.now() + TOOLTIP_SKIP_DELAY_WINDOW_MS
+      } else {
+        hoverWarmUntil = 0
+      }
       clearShowTimer()
+      activeFromPointer = false
       activeRef.current = null
       setActive(null)
       setPosition(null)
@@ -69,6 +83,11 @@ export function TooltipProvider({ children }: { children: ReactNode }): React.JS
         activeRef.current?.target === target &&
         activeRef.current.content === content
       ) return
+      if (!immediate && pendingTargetRef.current === target) return
+
+      const skipDelay = immediate ||
+        (activeFromPointer && activeRef.current?.target.isConnected === true) ||
+        performance.now() < hoverWarmUntil
 
       clearShowTimer()
       pendingTargetRef.current = target
@@ -85,11 +104,13 @@ export function TooltipProvider({ children }: { children: ReactNode }): React.JS
         pendingTargetRef.current = null
         showTimerRef.current = null
         activeRef.current = next
+        activeFromPointer = !immediate
+        targetObserver.observe(document.body, { childList: true, subtree: true })
         setPosition(null)
         setActive(next)
       }
 
-      if (immediate) activate()
+      if (skipDelay) activate()
       else showTimerRef.current = window.setTimeout(activate, TOOLTIP_SHOW_DELAY_MS)
     }
 
@@ -103,11 +124,13 @@ export function TooltipProvider({ children }: { children: ReactNode }): React.JS
       if (target === null) return
       if (event.relatedTarget instanceof Node && target.contains(event.relatedTarget)) return
       if (pendingTargetRef.current === target) clearShowTimer()
-      hideTooltip(target)
+      hideTooltip(target, true)
     }
 
     const handleFocusIn = (event: FocusEvent): void => {
       const target = tooltipTarget(event.target)
+      hoverWarmUntil = 0
+      activeFromPointer = false
       if (target !== null) showTooltip(target, true)
     }
 
@@ -119,7 +142,12 @@ export function TooltipProvider({ children }: { children: ReactNode }): React.JS
     }
 
     const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape' || activeRef.current === null) return
+      if (event.key !== 'Escape') return
+      hoverWarmUntil = 0
+      if (activeRef.current === null) {
+        clearShowTimer()
+        return
+      }
       event.preventDefault()
       event.stopPropagation()
       hideTooltip()
@@ -136,6 +164,7 @@ export function TooltipProvider({ children }: { children: ReactNode }): React.JS
     window.addEventListener('scroll', handleViewportChange, true)
 
     return () => {
+      targetObserver.disconnect()
       clearShowTimer()
       document.removeEventListener('pointerover', handlePointerOver, true)
       document.removeEventListener('pointerout', handlePointerOut, true)
