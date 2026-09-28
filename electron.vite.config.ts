@@ -21,6 +21,7 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve('src/main/index.ts'),
+          'desktop-host-cli': resolve('scripts/desktop-host.mjs'),
           'pi-capability-inventory-worker': resolve('src/main/extension/pi-capability-inventory-worker.ts')
         },
         output: {
