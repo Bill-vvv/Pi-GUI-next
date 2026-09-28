@@ -14,6 +14,7 @@ import {
 import { Select } from '../../components/Select'
 import { formatTokenCount } from '../../usage-formatters'
 import { hasUnsavedSettingsDraft } from './settings-workspace'
+import { useSettingsConfirm } from './SettingsConfirmDialog'
 import './provider-settings.css'
 
 type ProviderSettingsProps = {
@@ -89,6 +90,7 @@ export function ProviderSettings({
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [expandedModelKey, setExpandedModelKey] = useState<string | null>(null)
+  const { confirm, confirmDialog } = useSettingsConfirm()
   const controlsDisabled = busy || action !== null
   const dirty = hasUnsavedSettingsDraft(draft, baseline)
 
@@ -168,8 +170,14 @@ export function ProviderSettings({
       .finally(() => setAction(null))
   }
 
-  function handleRemove(provider: KernelProviderConfig): void {
-    if (controlsDisabled || !window.confirm(`删除 Provider「${provider.id}」？`)) return
+  async function handleRemove(provider: KernelProviderConfig): Promise<void> {
+    if (controlsDisabled) return
+    if (!(await confirm({
+      title: `删除 Provider「${provider.id}」？`,
+      description: '将从 Pi 的自定义模型配置中移除此 Provider 及其模型。',
+      confirmLabel: '删除',
+      danger: true
+    }))) return
     setAction(`remove:${provider.id}`)
     setError(null)
     setMessage(`正在删除 Provider「${provider.id}」…`)
@@ -333,7 +341,7 @@ export function ProviderSettings({
                     <button type="button" disabled={controlsDisabled || draft !== null} onClick={() => startEdit(provider)}>
                       编辑
                     </button>
-                    <button type="button" disabled={controlsDisabled || draft !== null} onClick={() => handleRemove(provider)}>
+                    <button type="button" disabled={controlsDisabled || draft !== null} onClick={() => void handleRemove(provider)}>
                       {action === `remove:${provider.id}` ? '删除中…' : '删除'}
                     </button>
                   </div>
@@ -427,6 +435,7 @@ export function ProviderSettings({
           })}
         </div>
       )}
+      {confirmDialog}
     </section>
   )
 }

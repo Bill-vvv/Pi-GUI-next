@@ -7,6 +7,7 @@ import type {
 import { Select } from '../../components/Select'
 import { unknownErrorMessage as errorMessage } from '../../unknown-error-message'
 import { findUniqueInstalledPackage } from './installed-package-selection'
+import { useSettingsConfirm } from './SettingsConfirmDialog'
 
 type AdaptedExtensionPackageControlProps = {
   heading: string
@@ -41,6 +42,7 @@ export function AdaptedExtensionPackageControl({
   const [loading, setLoading] = useState(true)
   const [acting, setActing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const { confirm, confirmDialog } = useSettingsConfirm()
   const requestRevision = useRef(0)
 
   useEffect(() => {
@@ -70,9 +72,11 @@ export function AdaptedExtensionPackageControl({
   }
 
   async function installPackage(): Promise<void> {
-    if (!window.confirm(
-      `安装 Package「${packageName}」？第三方 Package 会以当前用户的完整系统权限运行，请先审查源码。`
-    )) return
+    if (!(await confirm({
+      title: `安装 Package「${packageName}」？`,
+      description: '第三方 Package 会以当前用户的完整系统权限运行，请先审查源码。',
+      confirmLabel: '安装'
+    }))) return
     setActing(true)
     setError(null)
     try {
@@ -192,6 +196,7 @@ export function AdaptedExtensionPackageControl({
         )}
       </div>
       <p className="settings-feedback settings-feedback-inset">{notice}</p>
+      {confirmDialog}
     </section>
   )
 }

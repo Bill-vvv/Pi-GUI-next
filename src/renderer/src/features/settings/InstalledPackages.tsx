@@ -6,6 +6,7 @@ import {
   isWorkbenchAction,
   type WorkbenchOperation
 } from '../../workbench-actions'
+import { useSettingsConfirm } from './SettingsConfirmDialog'
 
 type InstalledPackagesProps = {
   busy: boolean
@@ -29,6 +30,7 @@ export function InstalledPackages({
   const [packages, setPackages] = useState<KernelInstalledPackage[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [actingSource, setActingSource] = useState<string | null>(null)
+  const { confirm, confirmDialog } = useSettingsConfirm()
   const requestRevision = useRef(0)
 
   useEffect(() => {
@@ -63,7 +65,12 @@ export function InstalledPackages({
   }
 
   async function removePackage(source: string): Promise<void> {
-    if (!window.confirm(`卸载 Package「${source}」？其中启用的所有资源都会一并移除。`)) return
+    if (!(await confirm({
+      title: `卸载 Package「${source}」？`,
+      description: '其中启用的所有资源都会一并移除。',
+      confirmLabel: '卸载',
+      danger: true
+    }))) return
     setActingSource(source)
     setError(null)
     try {
@@ -146,6 +153,7 @@ export function InstalledPackages({
           </div>
         )}
       </div>
+      {confirmDialog}
     </section>
   )
 }

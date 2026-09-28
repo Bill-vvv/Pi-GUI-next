@@ -17,6 +17,10 @@ const credentialsSource = await readFile(
   new URL('./features/settings/CredentialsPanel.tsx', import.meta.url),
   'utf8'
 )
+const settingsConfirmSource = await readFile(
+  new URL('./features/settings/SettingsConfirmDialog.tsx', import.meta.url),
+  'utf8'
+)
 const timelineTurnsSource = await readFile(
   new URL('./features/chat/TimelineTurns.tsx', import.meta.url),
   'utf8'
@@ -67,6 +71,7 @@ test('all current modal surfaces use the shared behavior hook without local key 
   assert.match(sessionForkSource, /useModalDialog\(\{/)
   assert.match(projectTrustSource, /useModalDialog\(\{/)
   assert.match(credentialsSource, /useModalDialog\(\{/)
+  assert.match(settingsConfirmSource, /useModalDialog\(\{/)
   assert.equal([...timelineTurnsSource.matchAll(/useModalDialog\(\{/g)].length, 1)
   assert.match(timelineTurnsSource, /function InlineImageAttachment\b/)
 
@@ -74,6 +79,7 @@ test('all current modal surfaces use the shared behavior hook without local key 
     sessionForkSource,
     projectTrustSource,
     credentialsSource,
+    settingsConfirmSource,
     timelineTurnsSource
   ]) {
     assert.doesNotMatch(source, /document\.addEventListener\('keydown'/)
