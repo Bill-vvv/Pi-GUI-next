@@ -1,6 +1,6 @@
 ---
 name: pi-gui-frontend
-description: Apply and maintain the Pi GUI frontend guidelines when implementing or reviewing changes to src/renderer, frontend documentation, Renderer dependencies or validation scripts, or this skill in /home/vvv/Projects/pi-gui-next. Do not use for backend-only work.
+description: Apply and maintain the Pi GUI frontend guidelines when implementing or reviewing changes to src/renderer, frontend documentation, Renderer dependencies or validation scripts, or this skill in /mnt/d/Projects/pi-gui-next. Do not use for backend-only work.
 ---
 
 # Pi GUI Frontend
@@ -9,7 +9,7 @@ Apply the project's current frontend language and ownership boundaries without c
 
 ## Establish the current boundary
 
-1. Confirm the repository root is `/home/vvv/Projects/pi-gui-next`.
+1. Confirm the repository root is `/mnt/d/Projects/pi-gui-next`.
 2. Inspect `git status --short` before editing and preserve unrelated dirty work.
 3. Read `docs/frontend-guidelines.md` completely.
 4. Read only the additional source needed for the task:
