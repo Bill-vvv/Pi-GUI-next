@@ -56,10 +56,7 @@ export type WorkbenchCompletedAction = {
 }
 
 export type WorkbenchSettingsActionSection =
-  | 'general'
-  | 'appearance'
   | 'models'
-  | 'extensions'
   | 'subagent'
 
 export type WorkbenchActionErrorOwner =
@@ -143,12 +140,14 @@ const WORKBENCH_ACTION_PRESENTATION = {
   'invoke-command': LOCAL,
   'set-thinking-level': TIMELINE,
   'set-openai-fast-mode': TIMELINE,
-  'set-general': { ...HEADER, errorOwner: 'general' },
-  'set-appearance': { ...HEADER, errorOwner: 'appearance' },
-  'set-session-naming': { ...HEADER, errorOwner: 'general' },
+  // Immediate-apply settings rows and adapted extension switches report
+  // failures next to the control that started the save.
+  'set-general': LOCAL,
+  'set-appearance': LOCAL,
+  'set-session-naming': LOCAL,
   'set-subagent': { ...HEADER, errorOwner: 'subagent' },
-  'set-subagent-enabled': { ...HEADER, errorOwner: 'subagent' },
-  'set-magic-context-enabled': { ...HEADER, errorOwner: 'extensions' },
+  'set-subagent-enabled': LOCAL,
+  'set-magic-context-enabled': LOCAL,
   'set-shortcuts': LOCAL,
   'install-extension': EXTENSION,
   'remove-extension': EXTENSION,

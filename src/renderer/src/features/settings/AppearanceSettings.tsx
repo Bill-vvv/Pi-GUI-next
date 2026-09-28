@@ -3,6 +3,7 @@ import { FontSelect } from '../../components/FontSelect'
 import { Select, type SelectOptionGroup } from '../../components/Select'
 import { type ToolDisplayDensity } from '../../tool-display-density'
 import { SettingsPageHeading } from './SettingsPageHeading'
+import { SettingsRowError, useSettingsRowSave } from './useSettingsRowSave'
 
 const TEXT_SIZE_OPTION_GROUPS: SelectOptionGroup[] = [{
   options: [
@@ -50,6 +51,14 @@ export function AppearanceSettings({
   onSetAppearance: (settings: AppearanceSettingsValue) => Promise<void>
   onSetToolDisplayDensity: (density: ToolDisplayDensity) => void
 }): React.JSX.Element {
+  const { save, errorFor } = useSettingsRowSave()
+  const saveAppearance = (
+    rowId: string,
+    patch: Partial<AppearanceSettingsValue>
+  ): void => {
+    save(rowId, () => onSetAppearance({ ...appearance, ...patch }))
+  }
+
   return (
     <>
       <SettingsPageHeading title="外观" />
@@ -68,12 +77,7 @@ export function AppearanceSettings({
                 className="settings-theme-cube"
                 aria-pressed={appearance.theme === cube.value}
                 disabled={busy}
-                onClick={() => {
-                  void onSetAppearance({
-                    ...appearance,
-                    theme: cube.value
-                  }).catch(() => undefined)
-                }}
+                onClick={() => saveAppearance('theme', { theme: cube.value })}
               >
                 <ThemeCubeIcon theme={cube.value} />
                 {cube.label}
@@ -81,6 +85,7 @@ export function AppearanceSettings({
             ))}
           </div>
           <p className="settings-theme-caption">{appearanceThemeDescription(appearance.theme)}</p>
+          <SettingsRowError message={errorFor('theme')} />
         </div>
       </section>
 
@@ -94,6 +99,7 @@ export function AppearanceSettings({
             <div className="settings-row-copy">
               <h4>强调色</h4>
               <p>用于链接、选中状态与重点提示</p>
+              <SettingsRowError message={errorFor('accent')} />
             </div>
             <div className="settings-row-control settings-theme-control">
               <Select
@@ -103,10 +109,7 @@ export function AppearanceSettings({
                 disabled={busy}
                 onValueChange={(value) => {
                   if (!isAppearanceAccentColor(value)) return
-                  void onSetAppearance({
-                    ...appearance,
-                    accentColor: value
-                  }).catch(() => undefined)
+                  saveAppearance('accent', { accentColor: value })
                 }}
               />
             </div>
@@ -115,6 +118,7 @@ export function AppearanceSettings({
             <div className="settings-row-copy">
               <h4>面板透明度</h4>
               <p>调整侧栏、复合面板与 Composer 面板的通透程度</p>
+              <SettingsRowError message={errorFor('transparency')} />
             </div>
             <div className="settings-row-control settings-theme-control">
               <Select
@@ -125,10 +129,7 @@ export function AppearanceSettings({
                 onValueChange={(value) => {
                   const surfaceTransparency = Number(value)
                   if (!isSurfaceTransparency(surfaceTransparency)) return
-                  void onSetAppearance({
-                    ...appearance,
-                    surfaceTransparency
-                  }).catch(() => undefined)
+                  saveAppearance('transparency', { surfaceTransparency })
                 }}
               />
             </div>
@@ -146,6 +147,7 @@ export function AppearanceSettings({
             <div className="settings-row-copy">
               <h4>Token 数量</h4>
               <p>选择完整数字，或使用 k、m、b 单位缩写</p>
+              <SettingsRowError message={errorFor('token-format')} />
             </div>
             <div className="settings-row-control settings-theme-control">
               <Select
@@ -155,10 +157,7 @@ export function AppearanceSettings({
                 disabled={busy}
                 onValueChange={(value) => {
                   if (!isTokenCountFormat(value)) return
-                  void onSetAppearance({
-                    ...appearance,
-                    tokenCountFormat: value
-                  }).catch(() => undefined)
+                  saveAppearance('token-format', { tokenCountFormat: value })
                 }}
               />
             </div>
@@ -205,6 +204,7 @@ export function AppearanceSettings({
             <div className="settings-row-copy">
               <h4>字号大小</h4>
               <p>调整界面与对话文字的大小</p>
+              <SettingsRowError message={errorFor('text-size')} />
             </div>
             <div className="settings-row-control settings-theme-control">
               <Select
@@ -214,10 +214,7 @@ export function AppearanceSettings({
                 disabled={busy}
                 onValueChange={(value) => {
                   if (!isAppearanceTextSize(value)) return
-                  void onSetAppearance({
-                    ...appearance,
-                    textSize: value
-                  }).catch(() => undefined)
+                  saveAppearance('text-size', { textSize: value })
                 }}
               />
             </div>
@@ -227,6 +224,7 @@ export function AppearanceSettings({
             <div className="settings-row-copy">
               <h4>界面字体</h4>
               <p>用于界面与对话文字</p>
+              <SettingsRowError message={errorFor('ui-font')} />
             </div>
             <div className="settings-row-control settings-font-control">
               <FontSelect
@@ -236,12 +234,7 @@ export function AppearanceSettings({
                 defaultLabel="系统字体"
                 previewKind="ui"
                 disabled={busy || systemFonts === null}
-                onValueChange={(family) => {
-                  void onSetAppearance({
-                    ...appearance,
-                    uiFontFamily: family
-                  }).catch(() => undefined)
-                }}
+                onValueChange={(family) => saveAppearance('ui-font', { uiFontFamily: family })}
               />
             </div>
           </div>
@@ -250,6 +243,7 @@ export function AppearanceSettings({
             <div className="settings-row-copy">
               <h4>代码字体</h4>
               <p>用于代码、命令与文件路径</p>
+              <SettingsRowError message={errorFor('code-font')} />
             </div>
             <div className="settings-row-control settings-font-control">
               <FontSelect
@@ -259,12 +253,7 @@ export function AppearanceSettings({
                 defaultLabel="系统等宽字体"
                 previewKind="code"
                 disabled={busy || systemFonts === null}
-                onValueChange={(family) => {
-                  void onSetAppearance({
-                    ...appearance,
-                    codeFontFamily: family
-                  }).catch(() => undefined)
-                }}
+                onValueChange={(family) => saveAppearance('code-font', { codeFontFamily: family })}
               />
             </div>
           </div>

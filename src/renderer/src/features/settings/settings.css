@@ -139,11 +139,11 @@
   overflow-wrap: anywhere;
 }
 
-.settings-feedback-error {
+.settings-feedback.settings-feedback-error {
   color: var(--color-status-error);
 }
 
-.settings-feedback-success {
+.settings-feedback.settings-feedback-success {
   color: var(--color-status-success);
 }
 
@@ -361,6 +361,10 @@
   color: var(--color-text-muted);
   font-size: var(--text-meta);
   line-height: var(--line-meta);
+}
+
+.settings-theme-caption + .settings-feedback {
+  margin-top: 4px;
 }
 
 .settings-density-block {
