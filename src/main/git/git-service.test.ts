@@ -3,6 +3,7 @@ import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, readlink, rename, rm, stat, symlink, truncate, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { Socket } from 'node:net'
 import { join } from 'node:path'
 import test from 'node:test'
 import { promisify } from 'node:util'
@@ -10,6 +11,7 @@ import { promisify } from 'node:util'
 import { GitService } from './git-service.ts'
 import {
   GIT_HISTORY_MESSAGE_MAX_UTF8_BYTES,
+  GIT_FILE_READ_MAX_BYTES,
   GIT_REPOSITORY_RELATIVE_PATH_MAX_UTF8_BYTES
 } from '../../shared/git-contract.ts'
 import type { GitFileMutationRequest, GitRepositoryState } from '../../shared/git-contract.ts'
@@ -107,6 +109,62 @@ function requireRepositoryRoot(state: GitRepositoryState): string {
   if (state.repositoryRoot === null) assert.fail('Expected a repository root.')
   return state.repositoryRoot
 }
+
+test('full file review returns current worktree text with context and rejects unsupported or stale reads', async (t) => {
+  const root = await createRepository(t)
+  await commitFile(root, '中文 file.txt', 'unchanged context\nbefore\ntail context\n')
+  await writeFile(join(root, '中文 file.txt'), 'unchanged context\nstaged\ntail context\n')
+  await git(root, ['add', '.'])
+  await writeFile(join(root, '中文 file.txt'), 'unchanged context\n工作区\ntail context\n')
+  const service = new GitService(root)
+  const state = await service.refresh()
+  const { kind: _kind, ...request } = diffRequest(state, 'working', '中文 file.txt')
+  const index = await readFile(join(root, '.git/index'))
+  const result = await service.readFile(request)
+  assert.equal(result.state, 'ready')
+  assert.equal(result.text, 'unchanged context\n工作区\ntail context\n')
+  assert.equal(result.byteCount, Buffer.byteLength(result.text!))
+  assert.equal(result.statusRevision, state.statusRevision)
+  await writeFile(join(root, '中文 file.txt'), 'changed again\n')
+  assert.equal((await service.readFile(request)).error?.code, 'stale')
+  await writeFile(join(root, 'binary'), Buffer.from([0, 1]))
+  await writeFile(join(root, 'invalid-utf8'), Buffer.from([0xff, 0xfe]))
+  await writeFile(join(root, 'over'), 'x'.repeat(GIT_FILE_READ_MAX_BYTES + 1))
+  await writeFile(join(root, 'limit'), 'x'.repeat(GIT_FILE_READ_MAX_BYTES))
+  await writeFile(join(root, 'empty'), '')
+  for (const [path, expected] of [['binary', 'binary'], ['invalid-utf8', 'binary'], ['over', 'oversized'],
+    ['limit', 'ready'], ['empty', 'ready'], ['not-in-list', 'error'], ['.git/config', 'error']] as const) {
+    const current = await service.refresh()
+    const read = await service.readFile({ ...request, path, expectedStatusRevision: current.statusRevision })
+    assert.equal(read.state, expected, path)
+    if (expected !== 'ready') assert.equal(read.text, null)
+    if (path === '.git/config') assert.equal(read.error?.code, 'stale', 'Existing unlisted files must not become a generic file API')
+  }
+  await rm(join(root, '中文 file.txt'))
+  const removed = await service.refresh()
+  const missing = await service.readFile({ ...request, expectedStatusRevision: removed.statusRevision })
+  assert.equal(missing.text, null)
+  assert.equal(missing.error?.code, 'stale')
+  assert.deepEqual(await readFile(join(root, '.git/index')), index)
+})
+
+test('file review discards text when the repository changes before the read completes', async (t) => {
+  const root = await createRepository(t)
+  await writeFile(join(root, 'file'), 'old private response\n')
+  const service = new GitService(root)
+  const state = await service.refresh()
+  const refresh = service.refresh.bind(service)
+  let calls = 0
+  service.refresh = async (...args) => {
+    if (++calls === 2) await writeFile(join(root, 'file'), 'new current response\n')
+    return refresh(...args)
+  }
+  const { kind: _kind, ...request } = diffRequest(state, 'working', 'file')
+  const result = await service.readFile(request)
+  assert.equal(result.text, null)
+  assert.equal(result.error?.code, 'stale')
+  assert.ok(!JSON.stringify(result).includes('private response'))
+})
 
 test('reports non-repositories without fabricating Git identity', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-gui-non-repo-'))
@@ -1074,6 +1132,40 @@ test('propagates command-specific failures after discovery instead of projecting
   assert.equal(detached.detached, true)
 })
 
+test('preserves delayed Git stderr when a hash input stream is destroyed before child close', async (t) => {
+  const root = await createRepository(t, 'pi-gui-destroyed-hash-input-')
+  await commitFile(root, 'tracked.txt', 'base\n')
+  const content = Buffer.from('unique-destroyed-hash-input-fixture\n')
+  await writeFile(join(root, 'tracked.txt'), content)
+  const bin = await mkdtemp(join(tmpdir(), 'pi-gui-delayed-hash-error-'))
+  t.after(() => rm(bin, { recursive: true, force: true }))
+  const gitPath = (await execFileAsync('sh', ['-c', 'command -v git'], { encoding: 'utf8' })).stdout.trim()
+  const wrapper = join(bin, 'git')
+  await writeFile(wrapper, [
+    '#!/bin/sh',
+    'if [ "$1" = "hash-object" ]; then',
+    '  sleep 0.05',
+    '  echo "fatal: delayed hash command failure" >&2',
+    '  exit 2',
+    'fi',
+    `exec '${gitPath}' "$@"`
+  ].join('\n'))
+  await chmod(wrapper, 0o755)
+  const originalWrite = Socket.prototype._write
+  let injected = 0
+  // Inject only this fixture's stdin failure; the Git child and delayed stderr are real.
+  t.mock.method(Socket.prototype, '_write', function (this: Socket, ...[chunk, encoding, callback]: Parameters<Socket['_write']>) {
+    if (Buffer.isBuffer(chunk) && chunk.equals(content)) {
+      injected += 1
+      queueMicrotask(() => callback(Object.assign(new Error('Hash input was destroyed.'), { code: 'ERR_STREAM_DESTROYED' })))
+      return
+    }
+    originalWrite.call(this, chunk, encoding, callback)
+  })
+  await assert.rejects(new GitService(root, { gitBinary: wrapper }).refresh(), /delayed hash command failure/)
+  assert.ok(injected > 0, 'the hash stdin failure must precede the real command diagnostic')
+})
+
 test('bounds per-file Git hashing with a fixed worker pool for a large status set', async (t) => {
   const root = await createRepository(t, 'pi-gui-hash-pool-')
   for (let index = 0; index < 120; index += 1) {
@@ -1239,6 +1331,54 @@ async function createRemotePair(t: test.TestContext): Promise<{ root: string; re
   await git(root, ['push', '-u', 'origin', 'main'])
   return { root, remote }
 }
+
+test('remote authority is rechecked inside the Git queue immediately before index and commit writes', async (t) => {
+  const root = await createRepository(t)
+  await commitFile(root, 'file.txt', 'before\n')
+  await writeFile(join(root, 'file.txt'), 'staged\n')
+  const service = new GitService(root)
+  const state = await service.refresh()
+  let checks = 0
+  const staged = await service.mutateFile(mutation(state, 'stage', 'file.txt'), undefined, async () => {
+    if (++checks === 2) throw new Error('Controller was revoked during the final identity read')
+  })
+  assert.equal(checks, 2)
+  assert.equal(staged.ok, false)
+  assert.equal(await git(root, ['show', ':file.txt']), 'before\n')
+  await git(root, ['add', 'file.txt'])
+  const preview = await service.prepareCommit()
+  assert.ok(preview.ok)
+  checks = 0
+  const committed = await service.executeCommit({ mode: 'commit', message: 'must not commit',
+    snapshot: preview.preview.snapshot, expectedPushTarget: preview.preview.pushTarget }, undefined, async () => {
+    if (++checks === 2) throw new Error('Controller was revoked during the final commit preflight')
+  })
+  assert.equal(checks, 2)
+  assert.equal(committed.commit.status, 'failed')
+  assert.equal((await git(root, ['rev-list', '--count', 'HEAD'])).trim(), '1')
+  assert.equal(await git(root, ['show', ':file.txt']), 'staged\n')
+})
+
+test('remote commit rejects a changed index while its authority check is awaiting', async (t) => {
+  const root = await createRepository(t)
+  await commitFile(root, 'file.txt', 'before\n')
+  await writeFile(join(root, 'file.txt'), 'confirmed\n')
+  await git(root, ['add', 'file.txt'])
+  const service = new GitService(root)
+  const preview = await service.prepareCommit()
+  assert.ok(preview.ok)
+  let changed = false
+  const result = await service.executeCommit({ mode: 'commit', message: 'must not include external changes',
+    snapshot: preview.preview.snapshot, expectedPushTarget: preview.preview.pushTarget }, undefined, async () => {
+    if (changed) return
+    changed = true
+    await writeFile(join(root, 'file.txt'), 'external\n')
+    await git(root, ['add', 'file.txt'])
+  })
+  assert.equal(result.commit.status, 'failed')
+  if (result.commit.status === 'failed') assert.equal(result.commit.error.code, 'stale')
+  assert.equal((await git(root, ['rev-list', '--count', 'HEAD'])).trim(), '1')
+})
 
 test('prepareCommit reports accurate staged count, structured upstream, and deterministic message', async (t) => {
   const { root } = await createRemotePair(t)
@@ -2109,6 +2249,35 @@ test('prepareBranchSync keeps a true remote-tracking truncation sentinel beside 
   assert.equal(prepared.remoteTrackingBranches.length, 200)
   assert.equal(prepared.remoteTrackingBranchesTruncated, true)
   assert.ok(!prepared.remoteTrackingBranches.some((entry) => entry.name === 'origin/HEAD'))
+})
+
+test('remote-tracking enumeration bounds symbolic refs and works without start-after', async (t) => {
+  const root = await createRepository(t, 'pi-gui-git-243-')
+  await commitFile(root, 'tracked.txt', 'base\n')
+  const head = (await git(root, ['rev-parse', 'HEAD'])).trim()
+  await git(root, ['update-ref', 'refs/remotes/origin/z-branch', head])
+  const refs = join(root, '.git/refs/remotes/origin')
+  for (let index = 0; index < 300; index += 1) {
+    await writeFile(join(refs, `alias-${String(index).padStart(3, '0')}`), 'ref: refs/remotes/origin/z-branch\n')
+  }
+  const bin = await mkdtemp(join(tmpdir(), 'pi-gui-git-243-bin-'))
+  t.after(() => rm(bin, { recursive: true, force: true }))
+  const executable = (await execFileAsync('sh', ['-c', 'command -v git'], { encoding: 'utf8' })).stdout.trim()
+  const wrapper = join(bin, 'git')
+  await writeFile(wrapper, `#!/bin/sh\nfor arg in "$@"; do case "$arg" in --start-after=*) exit 129;; esac; done\nexec '${executable}' "$@"\n`, { mode: 0o700 })
+  let prepared = await new GitService(root, { gitBinary: wrapper }).prepareBranchSync()
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+  assert.deepEqual(prepared.remoteTrackingBranches.map((branch) => branch.name), ['origin/z-branch'])
+  assert.equal(prepared.remoteTrackingBranchesTruncated, false)
+  for (let index = 300; index < 513; index += 1) {
+    await writeFile(join(refs, `alias-${String(index).padStart(3, '0')}`), 'ref: refs/remotes/origin/z-branch\n')
+  }
+  prepared = await new GitService(root, { gitBinary: wrapper }).prepareBranchSync()
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+  assert.deepEqual(prepared.remoteTrackingBranches, [])
+  assert.equal(prepared.remoteTrackingBranchesTruncated, true)
 })
 
 test('prepareBranchSync preserves slash remote names and rejects dirty create/switch/pull gates', async (t) => {

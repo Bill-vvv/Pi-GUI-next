@@ -1,3 +1,4 @@
+import { readRepositoryFile, GitFileReadError, gitFileReadFailure } from './git-file-reader.ts'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { constants as fsConstants } from 'node:fs'
@@ -40,6 +41,8 @@ import type {
   GitDiffLine,
   GitDiffRequest,
   GitDiffResult,
+  GitFileReadRequest,
+  GitFileReadResult,
   GitErrorCode,
   GitErrorDto,
   GitFastForwardStep,
@@ -80,8 +83,7 @@ const GIT_HISTORY_READ_ENV = { GIT_GRAFT_FILE: '/dev/null', GIT_NO_REPLACE_OBJEC
 const GIT_BRANCH_SYNC_READ_ENV = { GIT_GRAFT_FILE: '/dev/null', GIT_NO_REPLACE_OBJECTS: '1' } as const
 const GIT_NETWORK_ENV = { GIT_TERMINAL_PROMPT: '0' } as const
 const GIT_HISTORY_STREAM_STDERR_MAX_BYTES = 64 * 1024
-const GIT_REMOTE_TRACKING_SCAN_PAGE_SIZE = 64
-const GIT_REMOTE_TRACKING_SCAN_MAX_PAGES = 8
+const GIT_REMOTE_TRACKING_SCAN_MAX = 512
 
 export type GitServiceOptions = {
   gitBinary?: string
@@ -155,6 +157,7 @@ type HashChild = {
   stdout: Buffer[]
   stderr: Buffer[]
   outputBytes: number
+  inputError: Error | null
   result: Promise<{ code: number | null; error: Error | null }>
 }
 
@@ -323,6 +326,30 @@ export class GitService {
       truncated,
       refreshedAt: Date.now(),
       lastError: null
+    }
+  }
+
+  async readFile(request: GitFileReadRequest): Promise<GitFileReadResult> {
+    const failure = (error: GitErrorDto): GitFileReadResult => gitFileReadFailure(request.path, error)
+    try {
+      const before = await this.refresh()
+      if (before.kind === 'trust-required') return failure(trustRequiredError())
+      if (before.kind !== 'repository' || before.repositoryRoot === null) return failure(errorDto('not-repository', 'Project is not a Git repository.'))
+      const path = validateRepositoryPath(request.path, before.repositoryRoot)
+      const stale = staleError({ ...request, kind: 'working' }, before)
+      if (stale) return failure(stale)
+      if (!before.files.some((file) => file.path === path)) return failure(errorDto('stale', 'File is absent from the current bounded changes list.'))
+      const bytes = await readRepositoryFile(before.repositoryRoot, path)
+      let text: string
+      try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes) } catch {
+        return { ...failure(errorDto('unsupported', 'Non-UTF-8 files cannot be displayed.')), state: 'binary' }
+      }
+      if (bytes.includes(0)) return { ...failure(errorDto('unsupported', 'Binary files cannot be displayed.')), state: 'binary' }
+      const after = await this.refresh()
+      if (!sameRepositoryIdentity(before, after)) return failure(errorDto('stale', 'Repository changed while reading the file.'))
+      return { path, state: 'ready', text, byteCount: bytes.byteLength, statusRevision: before.statusRevision, error: null }
+    } catch (error) {
+      return failure(error instanceof GitFileReadError ? errorDto(error.code, error.message) : toErrorDto(error))
     }
   }
 
@@ -650,7 +677,7 @@ export class GitService {
     }
   }
 
-  async mutateFile(request: GitFileMutationRequest, signal?: AbortSignal): Promise<GitMutationResult> {
+  async mutateFile(request: GitFileMutationRequest, signal?: AbortSignal, assertCurrentBoundary?: () => Promise<void>): Promise<GitMutationResult> {
     let discovered: GitRepositoryState
     try {
       discovered = await this.refresh(signal)
@@ -697,7 +724,9 @@ export class GitService {
         if (stale !== null) throw new GitRunError(stale)
         const statusFile = latest.files.find((file) => file.path === path)!
         const pathspecs = validatedPathspecsForStatusFile(path, statusFile, latest.repositoryRoot)
+        await assertCurrentBoundary?.()
         const before = await this.assertImmediateMutationIdentity(request, latest.repositoryRoot, path, signal)
+        await assertCurrentBoundary?.()
         assertNotAborted(signal)
         if (request.action === 'stage') {
           // A pure worktree rename still has the old path in the index, so both validated sides
@@ -858,7 +887,8 @@ export class GitService {
 
   async executeCommit(
     request: GitCommitExecutionRequest,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    assertCurrentBoundary?: () => Promise<void>
   ): Promise<GitCommitExecutionResult> {
     const mode = request.mode
     let discovered: GitRepositoryState
@@ -889,6 +919,12 @@ export class GitService {
         const stagedPaths = await this.readStagedPaths(latest.repositoryRoot!, signal)
         if (stagedPaths.length === 0) {
           throw new GitRunError(errorDto('unsupported', 'There are no staged changes to commit.'))
+        }
+        if (assertCurrentBoundary !== undefined) {
+          await assertCurrentBoundary()
+          latest = await this.refresh(signal)
+          assertCommitAdmission(latest, request)
+          await assertCurrentBoundary()
         }
         assertNotAborted(signal)
         confirmed = snapshotFromState(latest)
@@ -1277,70 +1313,34 @@ export class GitService {
     entries: Array<{ name: string; headOid: string | null }>
     truncated: boolean
   }> {
+    // A bounded prefix works on Git 2.43 as well as newer hosts. One extra raw
+    // record proves scan truncation even when symbolic refs consume the budget.
+    const text = await this.runRaw(repositoryRoot, [
+      'for-each-ref',
+      `--count=${GIT_REMOTE_TRACKING_SCAN_MAX + 1}`,
+      '--format=%(refname)%00%(refname:short)%00%(objectname)%00%(symref)',
+      'refs/remotes/'
+    ], { signal, maxOutputBytes: 4 * 1024 * 1024, env: { ...GIT_BRANCH_SYNC_READ_ENV } })
+    const records = splitNonEmptyLines(text)
     const entries: Array<{ name: string; headOid: string | null }> = []
-    let startAfter = 'refs/remotes/'
-    let exhausted = false
-
-    for (
-      let page = 0;
-      page < GIT_REMOTE_TRACKING_SCAN_MAX_PAGES && entries.length <= GIT_REMOTE_TRACKING_LIST_MAX;
-      page += 1
-    ) {
-      const text = await this.runRaw(
-        repositoryRoot,
-        [
-          'for-each-ref',
-          `--count=${GIT_REMOTE_TRACKING_SCAN_PAGE_SIZE}`,
-          `--start-after=${startAfter}`,
-          '--format=%(refname)%00%(refname:short)%00%(objectname)%00%(symref)'
-        ],
-        {
-          signal,
-          maxOutputBytes: 512 * 1024,
-          env: { ...GIT_BRANCH_SYNC_READ_ENV }
-        }
-      )
-      const records = splitNonEmptyLines(text)
-      if (records.length === 0) {
-        exhausted = true
-        break
+    for (const line of records.slice(0, GIT_REMOTE_TRACKING_SCAN_MAX)) {
+      const parts = line.split('\0')
+      if (parts.length !== 4) throw new GitRunError(errorDto('git-error', 'Git returned an invalid remote-tracking branch record.'))
+      const [refname, name, headOid, symref] = parts as [string, string, string, string]
+      if (!refname.startsWith('refs/remotes/') || !isGitRefName(refname)) {
+        throw new GitRunError(errorDto('unsupported', 'Remote-tracking ref name is unsafe.'))
       }
-      for (const line of records) {
-        const parts = line.split('\0')
-        if (parts.length !== 4) {
-          throw new GitRunError(errorDto('git-error', 'Git returned an invalid remote-tracking branch record.'))
-        }
-        const refname = parts[0]!
-        const name = parts[1]!
-        const headOid = parts[2]!.trim()
-        const symref = parts[3]!.trim()
-        if (!refname.startsWith('refs/remotes/')) {
-          exhausted = true
-          break
-        }
-        if (!isGitRefName(refname)) {
-          throw new GitRunError(errorDto('unsupported', 'Remote-tracking ref name is unsafe.'))
-        }
-        startAfter = refname
-        if (symref.length > 0) continue
-        if (!isGitRefName(name)) {
-          throw new GitRunError(errorDto('unsupported', 'Remote-tracking branch name is unsafe.'))
-        }
-        if (headOid.length > 0 && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(headOid)) {
-          throw new GitRunError(errorDto('git-error', 'Git returned an invalid remote-tracking branch identity.'))
-        }
-        entries.push({ name, headOid: headOid.length === 0 ? null : headOid })
-        if (entries.length > GIT_REMOTE_TRACKING_LIST_MAX) break
+      if (symref.length > 0) continue
+      if (!isGitRefName(name)) throw new GitRunError(errorDto('unsupported', 'Remote-tracking branch name is unsafe.'))
+      if (headOid.length > 0 && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(headOid)) {
+        throw new GitRunError(errorDto('git-error', 'Git returned an invalid remote-tracking branch identity.'))
       }
-      if (exhausted || records.length < GIT_REMOTE_TRACKING_SCAN_PAGE_SIZE) {
-        exhausted = true
-        break
-      }
+      entries.push({ name, headOid: headOid.length === 0 ? null : headOid })
+      if (entries.length > GIT_REMOTE_TRACKING_LIST_MAX) break
     }
-
     return {
       entries,
-      truncated: entries.length > GIT_REMOTE_TRACKING_LIST_MAX || !exhausted
+      truncated: entries.length > GIT_REMOTE_TRACKING_LIST_MAX || records.length > GIT_REMOTE_TRACKING_SCAN_MAX
     }
   }
 
@@ -2997,6 +2997,11 @@ export class GitService {
     assertNotAborted(signal)
     const children: HashChild[] = []
     let failure: GitRunError | null = null
+    let inputFailed = false
+    const observeInput = <T>(operation: Promise<T>): Promise<T> => operation.catch((error) => {
+      inputFailed = true
+      throw error
+    })
     const stop = (error: GitRunError): void => {
       if (failure !== null) return
       failure = error
@@ -3020,6 +3025,7 @@ export class GitService {
           stdout: [],
           stderr: [],
           outputBytes: 0,
+          inputError: null,
           result: Promise.resolve({ code: null, error: null })
         }
         children.push(child)
@@ -3031,6 +3037,7 @@ export class GitService {
           }
           target.push(chunk)
         }
+        childProcess.stdin.once('error', (error) => { child.inputError = error })
         childProcess.stdout.on('data', (chunk: Buffer) => countOutput(child.stdout, chunk))
         childProcess.stderr.on('data', (chunk: Buffer) => countOutput(child.stderr, chunk))
         child.result = new Promise((resolveResult) => {
@@ -3039,11 +3046,11 @@ export class GitService {
             spawnError = error
           })
           childProcess.once('close', (code) => {
-            if (failure === null && (spawnError !== null || code !== 0)) {
+            if (failure === null && (spawnError !== null || code !== 0 || child.inputError !== null)) {
               const stderr = Buffer.concat(child.stderr).toString('utf8')
               stop(new GitRunError(errorDto(
                 'git-error',
-                boundedGitMessage(spawnError ?? new Error(stderr || `Git hashing exited ${code ?? 'without a status'}.`)),
+                boundedGitMessage(spawnError ?? (stderr ? new Error(stderr) : child.inputError ?? new Error(`Git hashing exited ${code ?? 'without a status'}.`))),
                 stderr.length
               )))
             }
@@ -3054,11 +3061,11 @@ export class GitService {
 
       await produceInput(async (chunk) => {
         if (failure !== null) throw failure
-        await Promise.all(children.map((child) => writeHashChunk(child.process, chunk)))
+        await observeInput(Promise.all(children.map((child) => writeHashChunk(child.process, chunk))))
         if (failure !== null) throw failure
       })
       if (failure !== null) throw failure
-      await Promise.all(children.map((child) => endHashInput(child.process)))
+      await observeInput(Promise.all(children.map((child) => endHashInput(child.process))))
       await Promise.all(children.map((child) => child.result))
       if (failure !== null) throw failure
       return children.map((child) => {
@@ -3069,6 +3076,13 @@ export class GitService {
         return oid
       })
     } catch (error) {
+      if (inputFailed) {
+        // Any rejected stdin write/end may precede stderr/close, including stream
+        // destruction errors. Classify by the IO owner rather than one OS error code.
+        // The existing timeout still bounds a child that never exits.
+        for (const child of children) child.process.stdin.destroy()
+        await Promise.all(children.map((child) => child.result))
+      }
       if (failure === null) stop(error instanceof GitRunError ? error : new GitRunError(toErrorDto(error)))
       await Promise.all(children.map((child) => child.result))
       throw failure
@@ -3474,6 +3488,9 @@ function staleMutationError(
   const statusFile = state.files.find((file) => file.path === path)
   if (statusFile === undefined || statusFile.fingerprint !== request.expectedFileFingerprint) {
     return errorDto('stale', 'Requested file is missing or changed in the current bounded Git status projection.')
+  }
+  if (statusFile.conflicted || statusFile.state === 'conflicted') {
+    return errorDto('unsupported', 'Resolve merge conflicts before staging or unstaging this file.')
   }
   if (
     state.repositoryRoot !== request.expectedRepositoryRoot ||

@@ -1,4 +1,5 @@
 import { isAbsolute, relative, sep } from 'node:path'
+import { gitFileReadFailure } from './git-file-reader.ts'
 
 import type {
   GitBranchSyncExecutionRequest,
@@ -7,6 +8,7 @@ import type {
   GitBranchSyncPrepareResponse,
   GitBranchSyncPrepareResult,
   GitCommand,
+  GitFileReadResponse,
   GitCommandResponse,
   GitCommitExecutionRequest,
   GitCommitExecutionResponse,
@@ -41,6 +43,7 @@ export type GitCapabilityService = Pick<
   GitService,
   | 'refreshSafe'
   | 'getDiff'
+  | 'readFile'
   | 'mutateFile'
   | 'prepareCommit'
   | 'executeCommit'
@@ -100,23 +103,25 @@ export class GitCapabilityController {
     this.createService = createService
   }
 
+  async dispatch(commandValue: Extract<GitCommand, { type: 'git.read-file' }>, signal?: AbortSignal, assertCurrentBoundary?: () => Promise<void>): Promise<GitFileReadResponse>
   async dispatch(
     commandValue: Extract<GitCommand, { type: 'git.refresh' | 'git.authorize-ancestor-repository' }>,
-    signal?: AbortSignal
+    signal?: AbortSignal, assertCurrentBoundary?: () => Promise<void>
   ): Promise<GitRefreshResponse>
-  async dispatch(commandValue: Extract<GitCommand, { type: 'git.get-diff' }>, signal?: AbortSignal): Promise<GitDiffResponse>
-  async dispatch(commandValue: Extract<GitCommand, { type: 'git.mutate-file' }>, signal?: AbortSignal): Promise<GitMutationResponse>
-  async dispatch(commandValue: Extract<GitCommand, { type: 'git.prepare-commit' }>, signal?: AbortSignal): Promise<GitCommitPreviewResponse>
-  async dispatch(commandValue: Extract<GitCommand, { type: 'git.execute-commit' }>, signal?: AbortSignal): Promise<GitCommitExecutionResponse>
-  async dispatch(commandValue: Extract<GitCommand, { type: 'git.list-history' }>, signal?: AbortSignal): Promise<GitHistoryListResponse>
-  async dispatch(commandValue: Extract<GitCommand, { type: 'git.get-history-detail' }>, signal?: AbortSignal): Promise<GitHistoryDetailResponse>
-  async dispatch(commandValue: Extract<GitCommand, { type: 'git.get-history-file-diff' }>, signal?: AbortSignal): Promise<GitHistoryFileDiffResponse>
-  async dispatch(commandValue: Extract<GitCommand, { type: 'git.prepare-branch-sync' }>, signal?: AbortSignal): Promise<GitBranchSyncPrepareResponse>
-  async dispatch(commandValue: Extract<GitCommand, { type: 'git.execute-branch-sync' }>, signal?: AbortSignal): Promise<GitBranchSyncExecutionResponse>
-  async dispatch(commandValue: unknown, signal?: AbortSignal): Promise<GitCommandResponse>
-  async dispatch(commandValue: unknown, signal?: AbortSignal): Promise<GitCommandResponse> {
+  async dispatch(commandValue: Extract<GitCommand, { type: 'git.get-diff' }>, signal?: AbortSignal, assertCurrentBoundary?: () => Promise<void>): Promise<GitDiffResponse>
+  async dispatch(commandValue: Extract<GitCommand, { type: 'git.mutate-file' }>, signal?: AbortSignal, assertCurrentBoundary?: () => Promise<void>): Promise<GitMutationResponse>
+  async dispatch(commandValue: Extract<GitCommand, { type: 'git.prepare-commit' }>, signal?: AbortSignal, assertCurrentBoundary?: () => Promise<void>): Promise<GitCommitPreviewResponse>
+  async dispatch(commandValue: Extract<GitCommand, { type: 'git.execute-commit' }>, signal?: AbortSignal, assertCurrentBoundary?: () => Promise<void>): Promise<GitCommitExecutionResponse>
+  async dispatch(commandValue: Extract<GitCommand, { type: 'git.list-history' }>, signal?: AbortSignal, assertCurrentBoundary?: () => Promise<void>): Promise<GitHistoryListResponse>
+  async dispatch(commandValue: Extract<GitCommand, { type: 'git.get-history-detail' }>, signal?: AbortSignal, assertCurrentBoundary?: () => Promise<void>): Promise<GitHistoryDetailResponse>
+  async dispatch(commandValue: Extract<GitCommand, { type: 'git.get-history-file-diff' }>, signal?: AbortSignal, assertCurrentBoundary?: () => Promise<void>): Promise<GitHistoryFileDiffResponse>
+  async dispatch(commandValue: Extract<GitCommand, { type: 'git.prepare-branch-sync' }>, signal?: AbortSignal, assertCurrentBoundary?: () => Promise<void>): Promise<GitBranchSyncPrepareResponse>
+  async dispatch(commandValue: Extract<GitCommand, { type: 'git.execute-branch-sync' }>, signal?: AbortSignal, assertCurrentBoundary?: () => Promise<void>): Promise<GitBranchSyncExecutionResponse>
+  async dispatch(commandValue: unknown, signal?: AbortSignal, assertCurrentBoundary?: () => Promise<void>): Promise<GitCommandResponse>
+  async dispatch(commandValue: unknown, signal?: AbortSignal, assertCurrentBoundary?: () => Promise<void>): Promise<GitCommandResponse> {
     if (!isGitCommand(commandValue)) throw new Error('Invalid Git command.')
     const command: GitCommand = commandValue
+    await assertCurrentBoundary?.()
     let canonicalProjectPath: string
     try {
       canonicalProjectPath = await this.resolveActiveRegisteredProject(command.projectKey)
@@ -126,6 +131,7 @@ export class GitCapabilityController {
     }
 
     return await this.runProjectOperation(canonicalProjectPath, async () => {
+      await assertCurrentBoundary?.()
       try {
         switch (command.type) {
           case 'git.refresh':
@@ -135,16 +141,31 @@ export class GitCapabilityController {
               command.projectKey,
               canonicalProjectPath,
               command.repositoryRoot,
-              command.expectedStatusRevision
+              command.expectedStatusRevision,
+              assertCurrentBoundary
             )
+          case 'git.read-file': {
+            const preflight = await this.refreshEntry(canonicalProjectPath)
+            if (!preflight.ok) return this.projectFailure(command, preflight.error)
+            if (preflight.state.kind !== 'repository') {
+              return this.projectFailure(command, preflight.state.kind === 'trust-required'
+                ? trustRequiredError() : fixedError('not-repository', 'Project is not a Git repository.'))
+            }
+            await assertCurrentBoundary?.()
+            const entry = this.services.get(canonicalProjectPath)
+            if (!entry) return this.projectFailure(command, fixedError('git-error', 'Git repository service is unavailable.'))
+            const result = await entry.service.readFile(command.request)
+            if (result.state === 'trust-required') await this.refreshEntry(canonicalProjectPath)
+            return { projectKey: command.projectKey, result }
+          }
           case 'git.get-diff':
             return await this.getDiff(command.projectKey, canonicalProjectPath, command.request)
           case 'git.mutate-file':
-            return await this.mutateFile(command.projectKey, canonicalProjectPath, command.request)
+            return await this.mutateFile(command.projectKey, canonicalProjectPath, command.request, signal, assertCurrentBoundary)
           case 'git.prepare-commit':
             return await this.prepareCommit(command.projectKey, canonicalProjectPath)
           case 'git.execute-commit':
-            return await this.executeCommit(command.projectKey, canonicalProjectPath, command.request)
+            return await this.executeCommit(command.projectKey, canonicalProjectPath, command.request, signal, assertCurrentBoundary)
           case 'git.list-history':
             return await this.listHistory(command.projectKey, canonicalProjectPath, command.request, signal)
           case 'git.get-history-detail':
@@ -188,7 +209,8 @@ export class GitCapabilityController {
     projectKey: string,
     canonicalProjectPath: string,
     repositoryRoot: string,
-    expectedStatusRevision: string
+    expectedStatusRevision: string,
+    assertCurrentBoundary?: () => Promise<void>
   ): Promise<GitRefreshResponse> {
     const challenge = this.trustChallenges.get(canonicalProjectPath)
     if (
@@ -207,6 +229,7 @@ export class GitCapabilityController {
 
     const unauthorizedService = this.createService(canonicalProjectPath)
     const fresh = await unauthorizedService.refreshSafe()
+    await assertCurrentBoundary?.()
     if (
       !fresh.ok ||
       !isExactTrustChallenge(fresh.state, canonicalProjectPath, repositoryRoot, expectedStatusRevision)
@@ -225,6 +248,7 @@ export class GitCapabilityController {
       authorizedRepositoryRoot: repositoryRoot
     })
     const authorized = await authorizedService.refreshSafe()
+    await assertCurrentBoundary?.()
     if (
       !authorized.ok ||
       !isValidStateIdentity(authorized.state, canonicalProjectPath, repositoryRoot) ||
@@ -281,7 +305,9 @@ export class GitCapabilityController {
   private async mutateFile(
     projectKey: string,
     canonicalProjectPath: string,
-    request: GitFileMutationRequest
+    request: GitFileMutationRequest,
+    signal?: AbortSignal,
+    assertCurrentBoundary?: () => Promise<void>
   ): Promise<GitMutationResponse> {
     const preflight = await this.refreshEntry(canonicalProjectPath)
     if (!preflight.ok) {
@@ -301,7 +327,7 @@ export class GitCapabilityController {
         result: mutationFailure(request, fixedError('git-error', 'Git repository service is unavailable.'), preflight.state)
       }
     }
-    const result = await entry.service.mutateFile(request)
+    const result = await entry.service.mutateFile(request, signal, assertCurrentBoundary)
     if (!result.ok && result.error.code === 'trust-required') {
       await this.refreshEntry(canonicalProjectPath)
     }
@@ -536,7 +562,9 @@ export class GitCapabilityController {
   private async executeCommit(
     projectKey: string,
     canonicalProjectPath: string,
-    request: GitCommitExecutionRequest
+    request: GitCommitExecutionRequest,
+    signal?: AbortSignal,
+    assertCurrentBoundary?: () => Promise<void>
   ): Promise<GitCommitExecutionResponse> {
     const preflight = await this.refreshEntry(canonicalProjectPath)
     if (!preflight.ok) {
@@ -566,7 +594,7 @@ export class GitCapabilityController {
         )
       }
     }
-    const result = await entry.service.executeCommit(request)
+    const result = await entry.service.executeCommit(request, signal, assertCurrentBoundary)
     if (
       result.commit.status === 'failed' && result.commit.error.code === 'trust-required' ||
       result.push?.status === 'failed' && result.push.error.code === 'trust-required'
@@ -631,6 +659,9 @@ export class GitCapabilityController {
   }
 
   private projectFailure(command: GitCommand, error: GitErrorDto): GitCommandResponse {
+    if (command.type === 'git.read-file') {
+      return { projectKey: command.projectKey, result: gitFileReadFailure(command.request.path, error) }
+    }
     if (command.type === 'git.get-diff') {
       return { projectKey: command.projectKey, result: diffFailure(command.request, error) }
     }

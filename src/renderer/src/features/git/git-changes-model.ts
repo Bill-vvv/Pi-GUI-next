@@ -12,6 +12,11 @@ import type {
 } from '../../../../shared/git-contract'
 
 export type GitFileAction = 'stage' | 'unstage'
+
+export function gitMutationOperationKey(path: string, action: GitFileAction): string {
+  return `${action}\u0000${path}`
+}
+
 export type GitChangeScope = 'all' | 'unstaged' | 'staged'
 export type GitDiffRenderRow =
   | {
