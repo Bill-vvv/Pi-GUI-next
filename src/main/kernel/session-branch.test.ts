@@ -5,7 +5,7 @@ import type {
   KernelConversationEntry,
   KernelForkCandidate
 } from '../../shared/kernel-contract.ts'
-import type { PiRpcSessionEntry } from '../pi-rpc/pi-rpc-client.ts'
+import type { PiRpcSessionEntry } from '../pi-rpc/pi-rpc-data.ts'
 import {
   forkCandidatesOnActivePath,
   resolveVisiblePromptCandidate,

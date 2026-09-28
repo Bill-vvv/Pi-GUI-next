@@ -5,7 +5,7 @@ import {
   isInternalOpenAiFastModeCommandName,
   parseOpenAiFastModeEntryData
 } from '../../../extensions/pi-gui-openai-fast-mode/src/protocol.mjs'
-import type { PiRpcSessionEntry } from '../pi-rpc/pi-rpc-client.ts'
+import type { PiRpcSessionEntry } from '../pi-rpc/pi-rpc-data.ts'
 
 export {
   OPENAI_FAST_MODE_COMMAND_NAME,

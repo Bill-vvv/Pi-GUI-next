@@ -12,7 +12,7 @@ import type {
   PiRpcSessionState,
   PiRpcSlashCommand,
   PiRpcTreeResult
-} from '../pi-rpc/pi-rpc-client.ts'
+} from '../pi-rpc/pi-rpc-data.ts'
 import type {
   RuntimeHibernateLeaseResult,
   RuntimeQuiescenceQueryResult

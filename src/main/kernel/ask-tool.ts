@@ -3,7 +3,7 @@ import type {
   KernelAskOption,
   KernelAskQuestion
 } from '../../shared/kernel-contract.ts'
-import type { PiRpcEvent } from '../pi-rpc/pi-rpc-client.ts'
+import type { PiRpcEvent } from '../pi-rpc/pi-rpc-data.ts'
 import { isRecord } from '../utils/guards.ts'
 
 const MAX_QUESTIONS = 8

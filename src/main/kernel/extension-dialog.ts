@@ -1,5 +1,5 @@
 import type { KernelExtensionDialogRequest } from '../../shared/kernel-contract.ts'
-import type { PiRpcEvent } from '../pi-rpc/pi-rpc-client.ts'
+import type { PiRpcEvent } from '../pi-rpc/pi-rpc-data.ts'
 
 const MAX_REQUEST_ID_CHARS = 256
 const MAX_COMMAND_NAME_CHARS = 256

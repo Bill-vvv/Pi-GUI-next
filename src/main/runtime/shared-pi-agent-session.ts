@@ -32,7 +32,7 @@ import {
   type PiRpcSessionStats,
   type PiRpcSlashCommand,
   type PiRpcTreeResult
-} from '../pi-rpc/pi-rpc-client.ts'
+} from '../pi-rpc/pi-rpc-data.ts'
 import { errorMessage } from '../utils/errors.ts'
 import {
   HISTORY_NAVIGATION_COMMAND_DESCRIPTION,

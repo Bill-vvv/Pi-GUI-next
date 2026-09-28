@@ -10,7 +10,7 @@ import type {
   PiRpcAvailableModel,
   PiRpcSessionState,
   PiRpcSessionStats
-} from '../pi-rpc/pi-rpc-client.ts'
+} from '../pi-rpc/pi-rpc-data.ts'
 
 export function toKernelSession(
   state: PiRpcSessionState,

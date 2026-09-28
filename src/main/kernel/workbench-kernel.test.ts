@@ -27,7 +27,7 @@ import type {
   PiRpcSessionState,
   PiRpcSessionStats,
   PiRpcSlashCommand
-} from '../pi-rpc/pi-rpc-client.ts'
+} from '../pi-rpc/pi-rpc-data.ts'
 import {
   COPY_LAST_ANSWER_COMMAND_ID,
   DEFAULT_SUBAGENT_SETTINGS,
@@ -13535,6 +13535,44 @@ test('getRuntimeMemoryDiagnostics samples managed runtimes without mutating stat
   assert.equal(payload.includes(backgroundPointer.sessionFile), false)
   assert.equal(payload.includes('/tmp/project'), false)
   assert.equal(payload.includes('Active session'), false)
+})
+
+test('getRuntimeMemoryDiagnostics reports the shared Runtime process once, never per Session', async () => {
+  const pids: Array<number | null> = [777, 777, null, 800, 801]
+  const memoryReads: number[] = []
+  const kernel = new WorkbenchKernel(
+    () => new FakeRuntimeHost(),
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(),
+      now: () => 1_700_000_000_000,
+      readSharedRuntimeHostPid: () => pids.shift() ?? null,
+      readProcessMemory: async (pid) => {
+        memoryReads.push(pid)
+        return { ok: true, memory: { rssBytes: pid * 1024, pssBytes: pid * 512 } }
+      }
+    }
+  )
+
+  assert.deepEqual(await kernel.getRuntimeMemoryDiagnostics(), {
+    sampledAt: 1_700_000_000_000,
+    runtimes: [],
+    sharedHost: { rootPid: 777, rssBytes: 777 * 1024, pssBytes: 777 * 512, sampledAt: 1_700_000_000_000, unavailableReason: null }
+  })
+  assert.deepEqual((await kernel.getRuntimeMemoryDiagnostics()).sharedHost, {
+    rootPid: null, rssBytes: null, pssBytes: null, sampledAt: 1_700_000_000_000, unavailableReason: 'pid-unavailable'
+  })
+  assert.deepEqual((await kernel.getRuntimeMemoryDiagnostics()).sharedHost, {
+    rootPid: 801, rssBytes: null, pssBytes: null, sampledAt: 1_700_000_000_000, unavailableReason: 'ownership-changed'
+  })
+  assert.deepEqual(memoryReads, [777, 800])
+
+  const withoutSharedHost = new WorkbenchKernel(
+    () => new FakeRuntimeHost(),
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  assert.equal('sharedHost' in await withoutSharedHost.getRuntimeMemoryDiagnostics(), false)
 })
 
 test('getRuntimeMemoryDiagnostics emits pre-identity provisional runtimes', async () => {

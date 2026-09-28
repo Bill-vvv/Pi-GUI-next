@@ -4,7 +4,7 @@ import {
   FORK_SESSION_COMMAND_ID,
   type KernelCommandDescriptor
 } from '../../shared/kernel-contract.ts'
-import type { PiRpcSlashCommand } from '../pi-rpc/pi-rpc-client.ts'
+import type { PiRpcSlashCommand } from '../pi-rpc/pi-rpc-data.ts'
 import { isInternalHistoryNavigationCommandName } from '../runtime/history-navigation.ts'
 import { isInternalOpenAiFastModeCommandName } from '../runtime/openai-fast-mode.ts'
 import { isInternalQuiescenceCommandName } from '../runtime/runtime-quiescence.ts'

@@ -84,11 +84,25 @@ export type KernelRuntimeMemorySample = {
   unavailableReason: KernelRuntimeMemoryUnavailableReason | null
 }
 
+/**
+ * On-demand memory sample for the one Pi Runtime process shared by every Session (D-094).
+ * It is never divided among or attributed to individual Sessions.
+ */
+export type KernelSharedRuntimeHostMemorySample = {
+  rootPid: number | null
+  rssBytes: number | null
+  pssBytes: number | null
+  sampledAt: number
+  unavailableReason: KernelRuntimeMemoryUnavailableReason | null
+}
+
 /** Bounded on-demand snapshot across every managed RuntimeContext. */
 export type KernelRuntimeMemoryDiagnostics = {
   /** Unix epoch milliseconds for the overall request. */
   sampledAt: number
   runtimes: KernelRuntimeMemorySample[]
+  /** Present when Sessions run in the shared Pi Runtime process. */
+  sharedHost?: KernelSharedRuntimeHostMemorySample
 }
 
 export type KernelNavigatorKind = 'project' | 'task'

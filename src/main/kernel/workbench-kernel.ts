@@ -25,6 +25,7 @@ import type {
   KernelPromptAttachment,
   KernelProjectTrustChoice,
   KernelRuntimeMemoryDiagnostics,
+  KernelSharedRuntimeHostMemorySample,
   KernelRuntimeMemorySample,
   KernelRuntimeMemoryUnavailableReason,
   KernelSessionSummary,
@@ -73,7 +74,7 @@ import {
 import type {
   PiRpcEvent,
   PiRpcSessionStats
-} from '../pi-rpc/pi-rpc-client.ts'
+} from '../pi-rpc/pi-rpc-data.ts'
 import {
   extractProjectedMessageImage,
   findUserMessageForImageLookup,
@@ -289,6 +290,11 @@ export type WorkbenchKernelOptions = {
    * Defaults to Linux `/proc/<pid>/smaps_rollup` root-only sampling.
    */
   readProcessMemory?: (pid: number) => Promise<LinuxProcessMemoryReadResult>
+  /**
+   * PID of the process shared by every Runtime (D-094). Sampled once as a shared record,
+   * never attributed to a single Session.
+   */
+  readSharedRuntimeHostPid?: () => number | null
 }
 
 type ProvisionalSession = {
@@ -570,6 +576,7 @@ export class WorkbenchKernel {
     }
     this.now = options.now ?? Date.now
     this.readProcessMemory = options.readProcessMemory ?? readLinuxProcessMemoryBytes
+    this.readSharedRuntimeHostPid = options.readSharedRuntimeHostPid
     this.state = {
       ...initialKernelState(
         projectRegistry,
@@ -625,6 +632,7 @@ export class WorkbenchKernel {
   private readonly projectTrust: ProjectTrustController
   private readonly now: () => number
   private readonly readProcessMemory: (pid: number) => Promise<LinuxProcessMemoryReadResult>
+  private readonly readSharedRuntimeHostPid: (() => number | null) | undefined
 
   getActiveProjectPath(): string {
     return configuredProject(this.state).path
@@ -965,7 +973,24 @@ export class WorkbenchKernel {
       return left.runtimeId.localeCompare(right.runtimeId)
     })
 
-    return { sampledAt, runtimes }
+    if (this.readSharedRuntimeHostPid === undefined) return { sampledAt, runtimes }
+    return { sampledAt, runtimes, sharedHost: await this.sampleSharedRuntimeHost(sampledAt) }
+  }
+
+  private async sampleSharedRuntimeHost(sampledAt: number): Promise<KernelSharedRuntimeHostMemorySample> {
+    const readPid = this.readSharedRuntimeHostPid!
+    const rootPid = readPid()
+    if (rootPid === null) {
+      return { rootPid: null, rssBytes: null, pssBytes: null, sampledAt, unavailableReason: 'pid-unavailable' }
+    }
+    const memory = await this.readProcessMemory(rootPid)
+    const currentPid = readPid()
+    if (currentPid !== rootPid) {
+      return { rootPid: currentPid, rssBytes: null, pssBytes: null, sampledAt, unavailableReason: 'ownership-changed' }
+    }
+    return memory.ok
+      ? { rootPid, rssBytes: memory.memory.rssBytes, pssBytes: memory.memory.pssBytes, sampledAt, unavailableReason: null }
+      : { rootPid, rssBytes: null, pssBytes: null, sampledAt, unavailableReason: memory.reason }
   }
 
   subscribe(listener: (event: KernelEvent) => void): () => void {

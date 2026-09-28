@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { VERSION } from '@earendil-works/pi-coding-agent'
 
 import type { SubagentSettings } from '../../shared/kernel-contract.ts'
-import type { PiRpcEvent, PiRpcExtensionEvent, PiRpcExtensionInventory } from '../pi-rpc/pi-rpc-client.ts'
+import type { PiRpcEvent, PiRpcExtensionEvent, PiRpcExtensionInventory } from '../pi-rpc/pi-rpc-data.ts'
 import { errorMessage } from '../utils/errors.ts'
 import {
   LEASE_COMMAND_NAME,
