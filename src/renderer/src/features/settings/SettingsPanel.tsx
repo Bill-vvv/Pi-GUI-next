@@ -120,7 +120,10 @@ type SettingsPanelProps = {
   toolDisplayDensity: ToolDisplayDensity
   onSetToolDisplayDensity: (density: ToolDisplayDensity) => void
   hiddenModelKeys: ReadonlySet<string>
-  onSetModelVisible: (provider: string, modelId: string, visible: boolean) => void
+  onSetModelsVisible: (
+    models: ReadonlyArray<{ provider: string; modelId: string }>,
+    visible: boolean
+  ) => void
   onDirtyChange: (dirty: boolean) => void
   onActiveOperationChange: (active: boolean) => void
 }
@@ -185,7 +188,7 @@ export function SettingsPanel({
   toolDisplayDensity,
   onSetToolDisplayDensity,
   hiddenModelKeys,
-  onSetModelVisible,
+  onSetModelsVisible,
   onDirtyChange,
   onActiveOperationChange
 }: SettingsPanelProps): React.JSX.Element {
@@ -252,7 +255,7 @@ export function SettingsPanel({
           busy={busy}
           hiddenModelKeys={hiddenModelKeys}
           onSetModel={onSetModel}
-          onSetModelVisible={onSetModelVisible}
+          onSetModelsVisible={onSetModelsVisible}
         />
 
         {section === 'credentials' ? (

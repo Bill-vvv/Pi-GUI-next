@@ -107,9 +107,9 @@ import {
 } from '../tool-display-density'
 import {
   MODEL_VISIBILITY_STORAGE_KEY,
-  modelVisibilityKey,
   parseHiddenModelKeys,
-  serializeHiddenModelKeys
+  serializeHiddenModelKeys,
+  withModelsVisible
 } from '../model-visibility'
 import { currentTurnTodos } from '../todo-state'
 import {
@@ -1317,11 +1317,8 @@ export function Workbench({
               window.localStorage.setItem(TOOL_DISPLAY_DENSITY_STORAGE_KEY, density)
             }}
             hiddenModelKeys={hiddenModelKeys}
-            onSetModelVisible={(provider, modelId, visible) => {
-              const key = modelVisibilityKey(provider, modelId)
-              const next = new Set(hiddenModelKeys)
-              if (visible) next.delete(key)
-              else next.add(key)
+            onSetModelsVisible={(models, visible) => {
+              const next = withModelsVisible(hiddenModelKeys, models, visible)
               setHiddenModelKeys(next)
               window.localStorage.setItem(MODEL_VISIBILITY_STORAGE_KEY, serializeHiddenModelKeys(next))
             }}
