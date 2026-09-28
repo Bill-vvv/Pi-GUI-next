@@ -7,6 +7,7 @@ import type {
 import { Select } from '../../components/Select'
 import { modelVisibilityKey } from '../../model-visibility'
 import { SettingsPageHeading } from './SettingsPageHeading'
+import { SettingsSwitch } from './SettingsSwitch'
 
 type ModelSettingsProps = {
   active: boolean
@@ -150,13 +151,12 @@ export function ModelSettings({
                       </label>
                       {model.name === model.id ? null : <p><code>{model.id}</code></p>}
                     </div>
-                    <div className="settings-row-control settings-checkbox-control">
-                      <input
+                    <div className="settings-row-control settings-switch-control">
+                      <SettingsSwitch
                         id={inputId}
-                        type="checkbox"
                         checked={!hiddenModelKeys.has(modelVisibilityKey(provider, model.id))}
-                        onChange={(event) => {
-                          onSetModelVisible(provider, model.id, event.currentTarget.checked)
+                        onCheckedChange={(visible) => {
+                          onSetModelVisible(provider, model.id, visible)
                         }}
                       />
                     </div>

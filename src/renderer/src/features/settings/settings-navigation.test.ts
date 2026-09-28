@@ -145,3 +145,21 @@ test('settings pages confirm through the in-app dialog, not window.confirm', asy
   assert.match(dialog, /aria-modal="true"/u)
   assert.match(dialog, /dismissDisabled: busy/u)
 })
+
+test('immediate on/off settings use the switch control', async () => {
+  const [general, models, adapted, control] = await Promise.all([
+    readFile(new URL('./GeneralSettings.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('./ModelSettings.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('./AdaptedExtensionPackageControl.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('./SettingsSwitch.tsx', import.meta.url), 'utf8')
+  ])
+  assert.match(control, /role="switch"/u)
+  assert.match(control, /type="checkbox"/u)
+  assert.equal([...general.matchAll(/<SettingsSwitch/gu)].length, 3)
+  assert.match(models, /<SettingsSwitch/u)
+  assert.match(adapted, /<SettingsSwitch/u)
+  for (const source of [general, models, adapted]) {
+    assert.doesNotMatch(source, /value: 'on'|value: 'enabled'/u)
+    assert.doesNotMatch(source, /type="checkbox"/u)
+  }
+})

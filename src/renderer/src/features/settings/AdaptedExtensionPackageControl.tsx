@@ -4,9 +4,9 @@ import type {
   KernelInstalledPackage,
   KernelPiPackageInstallJob
 } from '../../../../shared/kernel-contract'
-import { Select } from '../../components/Select'
 import { unknownErrorMessage as errorMessage } from '../../unknown-error-message'
 import { findUniqueInstalledPackage } from './installed-package-selection'
+import { SettingsSwitch } from './SettingsSwitch'
 import { useSettingsConfirm } from './SettingsConfirmDialog'
 
 type AdaptedExtensionPackageControlProps = {
@@ -168,24 +168,13 @@ export function AdaptedExtensionPackageControl({
                 {acting || packageInstalling ? '后台安装中…' : '安装'}
               </button>
             ) : (
-              <div className="settings-subagent-package-select">
-                <Select
-                  id={`${idPrefix}-enabled`}
-                  value={installedPackage.extensionEnabled ? 'enabled' : 'disabled'}
-                  groups={[{
-                    options: [
-                      { value: 'enabled', label: '开启' },
-                      { value: 'disabled', label: '关闭' }
-                    ]
-                  }]}
-                  disabled={busy || acting || loading}
-                  onValueChange={(value) => {
-                    if (value === 'enabled' || value === 'disabled') {
-                      void setEnabled(value === 'enabled')
-                    }
-                  }}
-                />
-              </div>
+              <SettingsSwitch
+                id={`${idPrefix}-enabled`}
+                label={`启用 ${packageName}`}
+                checked={installedPackage.extensionEnabled}
+                disabled={busy || acting || loading}
+                onCheckedChange={(enabled) => void setEnabled(enabled)}
+              />
             )}
           </div>
         </div>
