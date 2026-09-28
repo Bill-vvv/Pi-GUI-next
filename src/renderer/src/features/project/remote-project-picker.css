@@ -1,0 +1,68 @@
+.remote-project-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: color-mix(in srgb, var(--color-bg-app) 72%, transparent);
+}
+
+.remote-project-picker {
+  display: grid;
+  gap: 12px;
+  width: min(36rem, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid var(--color-border-panel);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface-popover);
+  box-shadow: var(--shadow-popover);
+  color: var(--color-text-primary);
+  font-size: var(--text-body-sm);
+  line-height: var(--line-body-sm);
+}
+
+.remote-project-picker h2 {
+  margin: 0 0 8px;
+  font-size: var(--text-section-title);
+  line-height: var(--line-heading);
+}
+
+.remote-project-picker p { margin: 0; overflow-wrap: anywhere; }
+.remote-project-picker code { font-family: var(--font-code); }
+.remote-project-picker form { display: grid; gap: 6px; }
+.remote-project-picker-path { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.remote-project-picker input { min-width: 0; font-family: var(--font-code); }
+.remote-project-picker nav, .remote-project-picker footer { display: flex; flex-wrap: wrap; gap: 8px; }
+.remote-project-picker footer { justify-content: flex-end; }
+.remote-project-picker ul { list-style: none; padding: 0; margin: 0; max-height: 18rem; overflow: auto; }
+.remote-project-picker li button { display: flex; width: 100%; gap: 12px; justify-content: space-between; text-align: left; }
+.remote-project-picker li span { overflow-wrap: anywhere; min-width: 0; }
+.remote-project-picker small { color: var(--color-text-muted); flex-shrink: 0; font-size: var(--text-caption); }
+.remote-project-picker-error { color: var(--color-status-error); }
+
+.remote-project-picker input, .remote-project-picker button {
+  padding: 8px 12px;
+  min-height: 36px;
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-input);
+  color: var(--color-text-primary);
+  font-size: var(--text-control);
+  line-height: var(--line-control);
+}
+.remote-project-picker button:hover:not(:disabled) { background: var(--color-surface-hover); }
+.remote-project-picker input:focus-visible, .remote-project-picker button:focus-visible {
+  outline: 2px solid var(--color-focus-outline);
+  outline-offset: 2px;
+}
+.remote-project-picker button:disabled, .remote-project-picker input:disabled {
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+@media (max-width: 32rem) {
+  .remote-project-picker { padding: 12px; }
+}
