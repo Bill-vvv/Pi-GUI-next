@@ -15,6 +15,21 @@ export function parseHiddenModelKeys(raw: string | null): ReadonlySet<string> {
   }
 }
 
+/** Returns the hidden-key set after showing or hiding every listed model at once. */
+export function withModelsVisible(
+  hiddenKeys: ReadonlySet<string>,
+  models: ReadonlyArray<{ provider: string; modelId: string }>,
+  visible: boolean
+): ReadonlySet<string> {
+  const next = new Set(hiddenKeys)
+  for (const { provider, modelId } of models) {
+    const key = modelVisibilityKey(provider, modelId)
+    if (visible) next.delete(key)
+    else next.add(key)
+  }
+  return next
+}
+
 export function serializeHiddenModelKeys(keys: ReadonlySet<string>): string {
   return JSON.stringify([...keys].sort())
 }

@@ -17,7 +17,10 @@ type ModelSettingsProps = {
   busy: boolean
   hiddenModelKeys: ReadonlySet<string>
   onSetModel: (provider: string, modelId: string) => Promise<void>
-  onSetModelVisible: (provider: string, modelId: string, visible: boolean) => void
+  onSetModelsVisible: (
+    models: ReadonlyArray<{ provider: string; modelId: string }>,
+    visible: boolean
+  ) => void
 }
 
 export function ModelSettings({
@@ -28,7 +31,7 @@ export function ModelSettings({
   busy,
   hiddenModelKeys,
   onSetModel,
-  onSetModelVisible
+  onSetModelsVisible
 }: ModelSettingsProps): React.JSX.Element | null {
   const [selectedProvider, setSelectedProvider] = useState(
     currentModel?.provider ?? availableModels[0]?.provider ?? ''
@@ -138,33 +141,53 @@ export function ModelSettings({
             <p className="settings-feedback">
               启动会话后，可选择哪些模型出现在 Composer 菜单中。关闭不会从 Provider 删除模型。
             </p>
-          ) : groupedProviderModels(availableModels).map(([provider, models]) => (
-            <div className="settings-model-visibility-group" key={provider}>
-              <h4 className="settings-model-visibility-provider">{provider}</h4>
-              {models.map((model) => {
-                const inputId = modelVisibilityInputId(provider, model.id)
-                return (
-                  <div className="settings-row" key={modelVisibilityKey(provider, model.id)}>
-                    <div className="settings-row-copy">
-                      <label htmlFor={inputId}>
-                        {model.name}
-                      </label>
-                      {model.name === model.id ? null : <p><code>{model.id}</code></p>}
+          ) : groupedProviderModels(availableModels).map(([provider, models]) => {
+            const allVisible = models.every(
+              (model) => !hiddenModelKeys.has(modelVisibilityKey(provider, model.id))
+            )
+            return (
+              <div className="settings-model-visibility-group" key={provider}>
+                <div className="settings-model-visibility-heading">
+                  <h4 className="settings-model-visibility-provider">{provider}</h4>
+                  {models.length < 2 ? null : (
+                    <button
+                      type="button"
+                      className="settings-link-button"
+                      aria-label={`${allVisible ? '隐藏' : '显示'} ${provider} 的全部模型`}
+                      onClick={() => onSetModelsVisible(
+                        models.map((model) => ({ provider, modelId: model.id })),
+                        !allVisible
+                      )}
+                    >
+                      {allVisible ? '全部隐藏' : '全部显示'}
+                    </button>
+                  )}
+                </div>
+                {models.map((model) => {
+                  const inputId = modelVisibilityInputId(provider, model.id)
+                  return (
+                    <div className="settings-row" key={modelVisibilityKey(provider, model.id)}>
+                      <div className="settings-row-copy">
+                        <label htmlFor={inputId}>
+                          {model.name}
+                        </label>
+                        {model.name === model.id ? null : <p><code>{model.id}</code></p>}
+                      </div>
+                      <div className="settings-row-control settings-switch-control">
+                        <SettingsSwitch
+                          id={inputId}
+                          checked={!hiddenModelKeys.has(modelVisibilityKey(provider, model.id))}
+                          onCheckedChange={(visible) => {
+                            onSetModelsVisible([{ provider, modelId: model.id }], visible)
+                          }}
+                        />
+                      </div>
                     </div>
-                    <div className="settings-row-control settings-switch-control">
-                      <SettingsSwitch
-                        id={inputId}
-                        checked={!hiddenModelKeys.has(modelVisibilityKey(provider, model.id))}
-                        onCheckedChange={(visible) => {
-                          onSetModelVisible(provider, model.id, visible)
-                        }}
-                      />
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          ))}
+                  )
+                })}
+              </div>
+            )
+          })}
         </div>
       </section>
     </>
