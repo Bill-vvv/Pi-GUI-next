@@ -42,7 +42,7 @@ export async function startWslBackend(options: {
   if (!options.launcherPath.startsWith('/') || /[\u0000-\u001f\u007f]/u.test(options.launcherPath)) {
     throw new Error('WSL launcher must be an absolute Linux path.')
   }
-  const child = spawn('wsl.exe', ['--distribution', options.distribution, '--exec', options.launcherPath], {
+  const child = spawn('wsl.exe', ['--distribution', options.distribution, '--exec', '/bin/sh', options.launcherPath], {
     shell: false,
     windowsHide: true,
     stdio: ['pipe', 'pipe', 'pipe']
@@ -57,7 +57,8 @@ export async function startWslBackend(options: {
     output: child.stdin,
     fingerprint: options.fingerprint,
     expectedPlatform: 'linux',
-    onEvent: options.onEvent
+    onEvent: options.onEvent,
+    onIgnoredLine: (line) => options.onDiagnostic(Buffer.from(`${line}\n`))
   })
   child.once('error', () => pipe.close())
   let closing: Promise<void> | null = null

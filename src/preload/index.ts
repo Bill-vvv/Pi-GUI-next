@@ -9,6 +9,7 @@ import {
   WINDOW_IS_FULLSCREEN_CHANNEL,
   WINDOW_IS_MAXIMIZED_CHANNEL,
   WINDOW_MAXIMIZED_CHANGED_CHANNEL,
+  WINDOW_SET_CHROME_CHANNEL,
   WINDOW_TOGGLE_FULLSCREEN_CHANNEL,
   WINDOW_TOGGLE_MAXIMIZE_CHANNEL,
   type KernelApi,
@@ -679,6 +680,7 @@ const kernelApi: KernelApi = {
   },
   toggleMaximize: () => ipcRenderer.invoke(WINDOW_TOGGLE_MAXIMIZE_CHANNEL) as Promise<boolean>,
   isMaximized: () => ipcRenderer.invoke(WINDOW_IS_MAXIMIZED_CHANNEL) as Promise<boolean>,
+  setWindowChrome: (chrome) => ipcRenderer.invoke(WINDOW_SET_CHROME_CHANNEL, chrome) as Promise<void>,
   subscribeMaximized: (listener) => {
     const handleMaximizedChange = (_event: IpcRendererEvent, maximized: boolean): void => {
       listener(maximized)

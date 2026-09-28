@@ -41,6 +41,10 @@ if [ ! -x node_modules/electron/dist/electron ]; then
   printf electron > node_modules/electron/path.txt
 fi
 node -e "console.log(require('electron'))"
+if [ "${2:-preserve}" = import ]; then
+  node scripts/import-wsl-sessions.mjs
+fi
+chmod +x node_modules/@earendil-works/pi-coding-agent/dist/cli.js
 cp scripts/start-wsl-host.sh "$base/start-host.sh"
 chmod 700 "$base/start-host.sh"
 echo "WSL backend ready: $base/start-host.sh"

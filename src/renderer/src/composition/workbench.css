@@ -1,6 +1,8 @@
 .app-shell {
   --sidebar-width: 332px;
   --app-panel-gap: 0px;
+  --window-chrome-top: 0px;
+  --window-chrome-caption-width: 0px;
   /* Keep hit strips inside shell padding so they do not steal content clicks. */
   --window-edge-hit-x: min(10px, var(--app-shell-padding));
   --window-edge-hit-top: min(12px, var(--app-shell-padding));
@@ -17,8 +19,28 @@
   position: relative;
   isolation: isolate;
   background: var(--color-bg-app);
-  padding: var(--app-shell-padding);
+  padding: calc(var(--app-shell-padding) + var(--window-chrome-top)) var(--app-shell-padding) var(--app-shell-padding);
   /* Column changes alter Timeline width, so they commit without an interpolated reflow. */
+}
+
+:root[data-window-chrome='overlay'] .app-shell {
+  --window-chrome-top: 36px;
+  --window-chrome-caption-width: 138px;
+}
+
+.window-drag-region {
+  display: none;
+}
+
+:root[data-window-chrome='overlay'] .window-drag-region {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: var(--window-chrome-caption-width);
+  height: var(--window-chrome-top);
+  z-index: 45;
+  -webkit-app-region: drag;
 }
 
 /* Dedicated client-area edge strips. OS chrome is outside the web view, so

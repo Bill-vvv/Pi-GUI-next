@@ -28,7 +28,6 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
     value.type === 'kernel.get-runtime-memory-diagnostics' ||
     value.type === 'kernel.get-last-assistant-final-answer' ||
     value.type === 'kernel.list-system-fonts' ||
-    value.type === 'kernel.add-project' ||
     value.type === 'kernel.create-task' ||
     value.type === 'kernel.start-session' ||
     value.type === 'kernel.reload-session' ||
@@ -45,6 +44,11 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
     value.type === 'kernel.update-pi-packages'
   ) {
     return Object.keys(value).length === 1
+  }
+  if (value.type === 'kernel.add-project') {
+    return value.path === undefined
+      ? Object.keys(value).length === 1
+      : typeof value.path === 'string' && value.path.length > 0 && Object.keys(value).length === 2
   }
   if (value.type === 'kernel.activate-project') {
     return typeof value.projectKey === 'string' && Object.keys(value).length === 2

@@ -6,6 +6,7 @@ import test from 'node:test'
 
 import {
   buildSystemSshTunnelArgs,
+  resolveSystemSshExecutable,
   startSystemSshTunnel
 } from './system-ssh-tunnel.ts'
 import type { WindowsRemoteHostConfig } from './windows-remote-host-config.ts'
@@ -63,6 +64,7 @@ test('system SSH tunnel reports bounded unexpected termination and explicit stop
   const first = createFakeChild()
   const tunnel = await startSystemSshTunnel({
     config,
+    sshExecutable: 'ssh',
     verifyUnauthenticatedDesktopHost,
     inspectSsh: async () => 'hostname pi-linux\n',
     spawnSsh(command, commandArgs, options) {
@@ -88,6 +90,7 @@ test('system SSH tunnel reports bounded unexpected termination and explicit stop
   const second = createFakeChild()
   const stoppedTunnel = await startSystemSshTunnel({
     config,
+    sshExecutable: 'ssh',
     verifyUnauthenticatedDesktopHost,
     inspectSsh: async () => 'hostname pi-linux\n',
     spawnSsh: () => second.child
@@ -103,6 +106,7 @@ test('system SSH tunnel rejects forwarding rules inherited from the user alias',
   await assert.rejects(
     () => startSystemSshTunnel({
       config,
+      sshExecutable: 'ssh',
       verifyUnauthenticatedDesktopHost,
       inspectSsh: async () => [
         'hostname pi-linux',
@@ -125,6 +129,7 @@ test('system SSH tunnel rejects process spawn failure instead of returning a dea
   await assert.rejects(
     () => startSystemSshTunnel({
       config,
+      sshExecutable: 'ssh',
       verifyUnauthenticatedDesktopHost,
       inspectSsh: async () => 'hostname pi-linux\n',
       spawnSsh: () => failed.child
@@ -137,6 +142,7 @@ test('system SSH tunnel stop fails within its explicit bound when the process re
   const hanging = createFakeChild({ exitOnKill: false })
   const tunnel = await startSystemSshTunnel({
     config,
+    sshExecutable: 'ssh',
     verifyUnauthenticatedDesktopHost,
     inspectSsh: async () => 'hostname pi-linux\n',
     spawnSsh: () => hanging.child,
@@ -146,6 +152,22 @@ test('system SSH tunnel stop fails within its explicit bound when the process re
   assert.equal(hanging.killCount, 1)
   hanging.emitter.emit('exit', null, 'SIGTERM')
   await tunnel.termination
+})
+
+test('Windows SSH uses System32 OpenSSH and refuses PATH lookup', async () => {
+  assert.equal(await resolveSystemSshExecutable('linux', {}), 'ssh')
+  await assert.rejects(
+    () => resolveSystemSshExecutable('win32', {}),
+    /requires SystemRoot/
+  )
+  await assert.rejects(
+    () => resolveSystemSshExecutable('win32', { SystemRoot: 'D:\\missing-windows' }),
+    /System OpenSSH was not found/
+  )
+  const executable = await resolveSystemSshExecutable('win32', {
+    SystemRoot: process.env.SystemRoot ?? 'C:\\Windows'
+  })
+  assert.match(executable.replaceAll('/', '\\'), /\\System32\\OpenSSH\\ssh\.exe$/u)
 })
 
 function createFakeChild(options: {

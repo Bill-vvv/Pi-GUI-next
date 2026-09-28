@@ -1436,6 +1436,7 @@ export function createPreviewKernelApi(): KernelApi {
     toggleMaximize: async () => false,
     isMaximized: async () => false,
     subscribeMaximized: () => () => undefined,
+    setWindowChrome: async () => undefined,
     subscribeProviderAuth: () => () => undefined,
     subscribe: (listener) => {
       listeners.add(listener)

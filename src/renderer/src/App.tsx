@@ -286,9 +286,15 @@ export function App(): React.JSX.Element {
     const preference = kernelState?.appearance.theme ?? 'system'
     const systemTheme = window.matchMedia('(prefers-color-scheme: light)')
     const applyTheme = (): void => {
-      document.documentElement.dataset.theme = preference === 'system'
+      const theme = preference === 'system'
         ? systemTheme.matches ? 'light' : 'dark'
         : preference
+      document.documentElement.dataset.theme = theme
+      void window.piGui.setWindowChrome(
+        theme === 'light'
+          ? { color: '#f4f4f2', symbolColor: '#20201e' }
+          : { color: '#1b1b1a', symbolColor: '#f1eee8' }
+      ).catch(() => undefined)
     }
 
     applyTheme()

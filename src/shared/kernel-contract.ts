@@ -8,6 +8,12 @@ export const WINDOW_FULLSCREEN_CHANGED_CHANNEL = 'pi-gui:window.fullscreen-chang
 export const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = 'pi-gui:window.toggle-maximize'
 export const WINDOW_IS_MAXIMIZED_CHANNEL = 'pi-gui:window.is-maximized'
 export const WINDOW_MAXIMIZED_CHANGED_CHANNEL = 'pi-gui:window.maximized-changed'
+export const WINDOW_SET_CHROME_CHANNEL = 'pi-gui:window.set-chrome'
+export const WINDOW_CHROME_HEIGHT = 36
+export type WindowChrome = {
+  color: string
+  symbolColor: string
+}
 
 import type { ShortcutSettings } from './shortcut-settings'
 export type { ShortcutActionId, ShortcutBinding, ShortcutSettings } from './shortcut-settings'
@@ -1063,7 +1069,7 @@ export type KernelCommand =
   | { type: 'kernel.get-state' }
   | { type: 'kernel.get-runtime-memory-diagnostics' }
   | { type: 'kernel.list-system-fonts' }
-  | { type: 'kernel.add-project' }
+  | { type: 'kernel.add-project'; path?: string }
   | { type: 'kernel.activate-project'; projectKey: string }
   | { type: 'kernel.refresh-workspace-metadata'; workspaceKey: string }
   | { type: 'kernel.select-navigator'; kind: KernelNavigatorKind }
@@ -1377,6 +1383,7 @@ export type KernelApi = {
   toggleMaximize: () => Promise<boolean>
   isMaximized: () => Promise<boolean>
   subscribeMaximized: (listener: (maximized: boolean) => void) => () => void
+  setWindowChrome: (chrome: WindowChrome) => Promise<void>
   subscribeProviderAuth: (listener: (event: KernelProviderAuthEvent) => void) => () => void
   subscribe: (listener: (event: KernelEvent) => void) => () => void
 }

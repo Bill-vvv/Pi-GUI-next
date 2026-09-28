@@ -44,6 +44,9 @@ class RendererErrorBoundary extends Component<
 document.documentElement.dataset.theme = window.matchMedia('(prefers-color-scheme: light)').matches
   ? 'light'
   : 'dark'
+if (navigator.userAgent.includes('Windows')) {
+  document.documentElement.dataset.windowChrome = 'overlay'
+}
 
 async function bootstrap(): Promise<void> {
   const previewRequested = new URLSearchParams(window.location.search).get('preview') === '1'

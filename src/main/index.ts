@@ -25,9 +25,12 @@ import {
   WINDOW_IS_FULLSCREEN_CHANNEL,
   WINDOW_IS_MAXIMIZED_CHANNEL,
   WINDOW_MAXIMIZED_CHANGED_CHANNEL,
+  WINDOW_CHROME_HEIGHT,
+  WINDOW_SET_CHROME_CHANNEL,
   WINDOW_TOGGLE_FULLSCREEN_CHANNEL,
   WINDOW_TOGGLE_MAXIMIZE_CHANNEL,
   SUBAGENT_PACKAGE_NAME,
+  isKernelSnapshot,
   type KernelEvent,
   type KernelPiPackageInstallJob,
   type KernelProviderAuthEvent
@@ -130,6 +133,10 @@ if (wslHostMode) {
   // Stdout is exclusively the private parent pipe in Host mode.
   console.log = console.error
   console.info = console.error
+  app.commandLine.appendSwitch('no-sandbox')
+  app.commandLine.appendSwitch('disable-gpu')
+  app.commandLine.appendSwitch('disable-dev-shm-usage')
+  app.commandLine.appendSwitch('disable-logging')
 }
 if (wslDistribution !== undefined) {
   if (process.platform !== 'win32') throw new Error('WSL Client requires Windows.')
@@ -222,6 +229,17 @@ async function createMainWindow(rendererTarget: RendererTarget): Promise<void> {
     minWidth: 720,
     minHeight: 560,
     autoHideMenuBar: true,
+    backgroundColor: '#1b1b1a',
+    ...(process.platform === 'win32'
+      ? {
+          titleBarStyle: 'hidden' as const,
+          titleBarOverlay: {
+            color: '#1b1b1a',
+            symbolColor: '#f1eee8',
+            height: WINDOW_CHROME_HEIGHT
+          }
+        }
+      : {}),
     webPreferences: {
       preload: join(mainBundleDirectory, '../preload/index.cjs'),
       contextIsolation: true,
@@ -717,11 +735,16 @@ async function startApplication(): Promise<void> {
       case 'kernel.list-system-fonts':
         return listSystemFonts()
       case 'kernel.add-project': {
-        const selection = mainWindow === null
-          ? await dialog.showOpenDialog({ properties: ['openDirectory'] })
-          : await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
-        const selectedPath = selection.filePaths[0]
-        if (selection.canceled || selectedPath === undefined) return kernel.acknowledge()
+        let selectedPath = command.path
+        if (selectedPath === undefined) {
+          const selection = mainWindow === null
+            ? await dialog.showOpenDialog({ properties: ['openDirectory'] })
+            : await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
+          selectedPath = selection.filePaths[0]
+          if (selection.canceled || selectedPath === undefined) return kernel.acknowledge()
+        } else if (!selectedPath.startsWith('/') || /[\u0000-\u001f\u007f]/u.test(selectedPath)) {
+          throw new Error('Project path must be an absolute Linux path.')
+        }
         const projectPath = await projectStore.validateProjectPath(selectedPath)
         await kernel.addProject(projectPath, await projectStore.loadSessionRegistry(projectPath))
         return kernel.acknowledge()
@@ -1161,6 +1184,31 @@ function registerWindowHandlers(rendererTarget: RendererTarget): void {
     if (window === null || window.isDestroyed()) return false
     return window.isMaximized()
   })
+  ipcMain.handle(WINDOW_SET_CHROME_CHANNEL, (event, value: unknown) => {
+    assertTrustedIpcSender(event, rendererTarget)
+    if (
+      value === null ||
+      typeof value !== 'object' ||
+      !('color' in value) ||
+      !('symbolColor' in value) ||
+      typeof value.color !== 'string' ||
+      typeof value.symbolColor !== 'string' ||
+      !/^#[0-9a-f]{6}$/iu.test(value.color) ||
+      !/^#[0-9a-f]{6}$/iu.test(value.symbolColor)
+    ) {
+      throw new Error('Window chrome colors must be #RRGGBB.')
+    }
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (window === null || window.isDestroyed()) return
+    window.setBackgroundColor(value.color)
+    if (process.platform === 'win32') {
+      window.setTitleBarOverlay({
+        color: value.color,
+        symbolColor: value.symbolColor,
+        height: WINDOW_CHROME_HEIGHT
+      })
+    }
+  })
 }
 
 async function startWslApplication(distribution: string): Promise<void> {
@@ -1190,6 +1238,8 @@ async function startWslApplication(distribution: string): Promise<void> {
     throw new Error(`${errorMessage(error)} See ${join(app.getPath('logs'), 'wsl-backend.log')}`)
   }
   const backend = wslBackend
+  const peer = await backend.pipe.ready
+  const wslProjectPickerRoot = `\\\\wsl.localhost\\${distribution}${peer.home.replaceAll('/', '\\')}\\projects`
   void backend.pipe.closed.then((error) => {
     log.end()
     if (allowQuit || shutdownPromise !== null) return
@@ -1207,6 +1257,25 @@ async function startWslApplication(distribution: string): Promise<void> {
         const url = normalizeOpenTarget(value)
         if (url === null) throw new Error('Link target is not allowed.')
         if (!url.startsWith('file:')) { await shell.openExternal(url); return }
+      }
+      if (channel === KERNEL_COMMAND_CHANNEL && isKernelCommand(value) && value.type === 'kernel.add-project') {
+        if (value.path !== undefined) throw new Error('Add a project by choosing its folder.')
+        const window = BrowserWindow.fromWebContents(event.sender)
+        if (window === null || window.isDestroyed()) throw new Error('Main window is unavailable.')
+        const selection = await dialog.showOpenDialog(window, {
+          title: '选择 WSL 项目',
+          defaultPath: wslProjectPickerRoot,
+          properties: ['openDirectory']
+        })
+        if (selection.canceled || selection.filePaths[0] === undefined) {
+          const snapshot = await backend.pipe.request(KERNEL_COMMAND_CHANNEL, { type: 'kernel.get-state' })
+          if (!isKernelSnapshot(snapshot)) throw new Error('Invalid kernel snapshot.')
+          return { revision: snapshot.revision }
+        }
+        return backend.pipe.request(channel, {
+          type: 'kernel.add-project',
+          path: await resolveWslFilePath(distribution, selection.filePaths[0])
+        })
       }
       const command = channel === KERNEL_COMMAND_CHANNEL && isKernelCommand(value)
         ? await mapWslAttachments(value, (path) => resolveWslFilePath(distribution, path))

@@ -4,6 +4,9 @@ import {
   type ChildProcess,
   type SpawnOptions
 } from 'node:child_process'
+import { constants } from 'node:fs'
+import { access } from 'node:fs/promises'
+import { join } from 'node:path'
 
 import type { WindowsRemoteHostConfig } from './windows-remote-host-config.ts'
 
@@ -35,8 +38,27 @@ export type StartSystemSshTunnelOptions = {
   verifyUnauthenticatedDesktopHost: VerifyUnauthenticatedDesktopHost
   inspectSsh?: InspectSsh
   spawnSsh?: SpawnSsh
+  sshExecutable?: string
   startupTimeoutMs?: number
   stopTimeoutMs?: number
+}
+
+export async function resolveSystemSshExecutable(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<string> {
+  if (platform !== 'win32') return 'ssh'
+  const systemRoot = env.SystemRoot
+  if (typeof systemRoot !== 'string' || systemRoot.length === 0) {
+    throw new Error('Windows OpenSSH requires SystemRoot.')
+  }
+  const executable = join(systemRoot, 'System32', 'OpenSSH', 'ssh.exe')
+  try {
+    await access(executable, constants.F_OK)
+  } catch {
+    throw new Error(`System OpenSSH was not found at ${executable}.`)
+  }
+  return executable
 }
 
 const MAX_SSH_STDERR_CHARS = 8 * 1024
@@ -82,7 +104,8 @@ export function buildSystemSshTunnelArgs(config: WindowsRemoteHostConfig): strin
 export async function startSystemSshTunnel(
   options: StartSystemSshTunnelOptions
 ): Promise<SystemSshTunnel> {
-  const inspectSsh = options.inspectSsh ?? inspectSystemSshConfiguration
+  const sshExecutable = options.sshExecutable ?? await resolveSystemSshExecutable()
+  const inspectSsh = options.inspectSsh ?? ((alias) => inspectSystemSshConfiguration(alias, sshExecutable))
   const resolvedConfig = await inspectSsh(options.config.sshHostAlias)
   assertNoConfiguredForwardings(resolvedConfig)
 
@@ -98,7 +121,7 @@ export async function startSystemSshTunnel(
   )
 
   const spawnSsh = options.spawnSsh ?? spawn
-  const child = spawnSsh('ssh', buildSystemSshTunnelArgs(options.config), {
+  const child = spawnSsh(sshExecutable, buildSystemSshTunnelArgs(options.config), {
     windowsHide: true,
     stdio: ['ignore', 'ignore', 'pipe']
   })
@@ -217,9 +240,12 @@ export async function startSystemSshTunnel(
   }
 }
 
-async function inspectSystemSshConfiguration(sshHostAlias: string): Promise<string> {
+async function inspectSystemSshConfiguration(
+  sshHostAlias: string,
+  sshExecutable: string
+): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    execFile('ssh', ['-G', sshHostAlias], {
+    execFile(sshExecutable, ['-G', sshHostAlias], {
       windowsHide: true,
       encoding: 'utf8',
       maxBuffer: MAX_SSH_CONFIG_BYTES,

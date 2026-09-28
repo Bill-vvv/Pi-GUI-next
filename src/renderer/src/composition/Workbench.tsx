@@ -1005,6 +1005,7 @@ export function Workbench({
   }
   return (
     <main className={`app-shell${sidebarCollapsed ? ' left-sidebar-collapsed' : ''}${settingsOpen ? ' settings-open' : ''}${rightSidebarOpen ? ' right-sidebar-open' : ''}`}>
+      <div className="window-drag-region" aria-hidden="true" />
       {doubleClickBorderMaximize ? (
         <div className="window-edge-hit-layer" aria-hidden="true">
           <div className="window-edge-hit top" onDoubleClick={handleWindowEdgeDoubleClick} />

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createWriteStream } from 'node:fs'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { startWslBackend, resolveWslFilePath } from '../src/main/remote/wsl-backend.ts'
@@ -29,7 +29,9 @@ try {
   assert.ok(Array.isArray(fonts) && fonts.length > 0)
   const mapped = await resolveWslFilePath(distribution, root)
   assert.ok(mapped.startsWith('/'))
-  console.log(JSON.stringify({ connected: true, distribution, platform: info.platform, home: info.home, revision: state.revision, projects: state.projects.length, fonts: fonts.length, mappedProjectPath: mapped }))
+  const result = { connected: true, distribution, platform: info.platform, home: info.home, revision: state.revision, projects: state.state.projects.length, fonts: fonts.length, mappedProjectPath: mapped }
+  await writeFile(resolve(root, 'release/evidence/wsl-verification.json'), `${JSON.stringify(result, null, 2)}\n`)
+  console.log(JSON.stringify(result))
 } finally {
   await backend?.close()
   log.end()

@@ -1,4 +1,4 @@
-param([string]$Distribution = 'Ubuntu-24.04', [switch]$SkipBuild)
+param([string]$Distribution = 'Ubuntu-24.04', [switch]$SkipBuild, [switch]$ImportSessions)
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Push-Location -LiteralPath $projectRoot
@@ -8,7 +8,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Pi GUI build failed.' }
     }
     $archive = Join-Path $env:TEMP 'pi-gui-next-wsl.tar'
-    & tar -cf $archive --exclude=node_modules --exclude=.git -C $projectRoot package.json pnpm-lock.yaml pnpm-workspace.yaml out extensions scripts
+    & tar -cf $archive --exclude=node_modules --exclude=.git -C $projectRoot package.json pnpm-lock.yaml pnpm-workspace.yaml out extensions scripts src
     if ($LASTEXITCODE -ne 0) { throw 'Could not create WSL backend archive.' }
     $linuxArchive = & wsl.exe -d $Distribution --exec wslpath -a -u $archive
     if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the WSL archive path.' }
@@ -16,7 +16,7 @@ try {
     $linuxScript = & wsl.exe -d $Distribution --exec wslpath -a -u (Join-Path $PSScriptRoot 'setup-wsl-host.sh')
     if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the WSL setup path.' }
     $linuxScript = $linuxScript.Trim()
-    & wsl.exe -d $Distribution --exec sh $linuxScript $linuxArchive
+    & wsl.exe -d $Distribution --exec sh $linuxScript $linuxArchive $(if ($ImportSessions) { 'import' } else { 'preserve' })
     if ($LASTEXITCODE -ne 0) { throw 'WSL backend setup failed.' }
 } finally {
     Pop-Location

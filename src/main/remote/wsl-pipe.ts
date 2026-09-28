@@ -33,6 +33,7 @@ type WslPipeOptions = {
   requestTimeoutMs?: number
   dispatch?(channel: string, value: unknown): unknown | Promise<unknown>
   onEvent?(channel: string, value: unknown): void
+  onIgnoredLine?(line: string): void
 }
 
 /** A private, owned wsl.exe stdio pipe. This is not a network or SSH endpoint. */
@@ -103,8 +104,12 @@ export class WslPipe {
       const line = this.buffer.slice(0, newline).replace(/\r$/u, '')
       this.buffer = this.buffer.slice(newline + 1)
       if (line.length === 0) continue // Electron may emit an initial blank line.
+      if (!line.startsWith(PREFIX)) {
+        this.options.onIgnoredLine?.(line)
+        continue
+      }
       try {
-        if (!line.startsWith(PREFIX) || Buffer.byteLength(line) > MAX_FRAME_BYTES) throw new Error('Invalid WSL frame.')
+        if (Buffer.byteLength(line) > MAX_FRAME_BYTES) throw new Error('WSL frame exceeds the size limit.')
         this.receive(JSON.parse(line.slice(PREFIX.length)))
       } catch (error) {
         this.finish(error instanceof Error ? error : new Error('Invalid WSL frame.'))

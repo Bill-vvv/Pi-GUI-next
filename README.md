@@ -27,6 +27,16 @@ cd D:\Projects\pi-gui-next
 fnm exec --using 26.4.0 cmd /c pnpm dev
 ```
 
+Windows 界面连接 WSL2 中的 Pi（项目、会话和 Pi 都在 WSL 内；首次先 setup）：
+
+```powershell
+cd D:\Projects\pi-gui-next
+powershell -ExecutionPolicy Bypass -File .\scripts\setup-wsl.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\start-wsl.ps1
+```
+
+首次 setup 可加 `-ImportSessions`，在 GUI 项目列表为空时登记 WSL 已有的 Pi 项目与会话；只写 GUI 索引，不改原始 JSONL 会话。更新后端前请关闭 WSL 窗口。WSL 模式使用独立安装的 Pi 0.83.0，沿用 WSL 用户的 `~/.pi/agent` 配置，Windows 全局 Pi 不参与运行。
+
 通过 pnpm 启动会使用项目锁定的 Pi 0.83.0。Windows 的 npm/pnpm shim 会解析到实际的 `dist/cli.js`，由 Node 执行；Electron 子进程使用 Node 模式，不经过 shell。Windows 冷启动的版本检查和 RPC 超时为 30 秒。系统字体枚举、桌面通知等 Linux 专用功能尚未完成 Windows 适配。
 
 启动时，Electron Main 会先检查 Pi 版本并执行离线、无 session 的 `get_state` 探针。默认从当前 `PATH` 解析 `pi`；需要显式指定时使用：
