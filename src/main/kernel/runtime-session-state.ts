@@ -3,7 +3,7 @@ import type {
   KernelState,
   RuntimeStatus
 } from '../../shared/kernel-contract.ts'
-import type { PiRpcEvent } from '../pi-rpc/pi-rpc-client.ts'
+import type { PiRpcEvent } from '../pi-rpc/pi-rpc-data.ts'
 import { stripPromptFileBlocks } from '../prompt/prompt-attachments.ts'
 import type { RuntimeHostEvent, RuntimeHostState } from '../runtime/runtime-host.ts'
 import { projectPiEvent } from './conversation-projection.ts'

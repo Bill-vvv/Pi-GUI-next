@@ -119,9 +119,10 @@ import {
   readSessionTranscriptGeneration
 } from './project/session-transcript-tail.ts'
 import { readSessionActivityAt, readSessionMessages } from './project/session-transcript.ts'
-import { probePiRpc } from './runtime/linux-local-runtime.ts'
 import { resolvePiExecutable } from './runtime/pi-executable.ts'
-import { SharedPiHost } from './runtime/shared-pi-host.ts'
+import { PiRuntimeProcessHost } from './runtime/pi-runtime-process-host.ts'
+import { probePiRuntimeProcess } from './runtime/pi-runtime-probe.ts'
+import { createJsonlLogger } from './utils/jsonl-log.ts'
 import { generateSessionNameWithPi } from './runtime/session-name-generator.ts'
 import { errorMessage } from './utils/errors.ts'
 import { WslPipe, WSL_COMMAND_CHANNELS, wslBuildFingerprint } from './remote/wsl-pipe.ts'
@@ -155,6 +156,7 @@ import {
 } from './security/renderer-security.ts'
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
+const piRuntimeEntryPath = join(mainBundleDirectory, 'pi-runtime-host.js')
 const wslHostMode = process.env.PI_GUI_WSL_HOST === '1'
 let wslDistribution = process.env.PI_GUI_WSL_DISTRO
 let currentDesktopEnvironment: DesktopEnvironment | null = null
@@ -203,7 +205,7 @@ let kernel: WorkbenchKernel | null = null
 let projectStoreForShutdown: ProjectStore | null = null
 let providerAuth: PiProviderAuth | null = null
 let desktopNotificationBroker: DesktopNotificationBroker | null = null
-let sharedPiHost: SharedPiHost | null = null
+let sharedPiHost: PiRuntimeProcessHost | null = null
 let remoteGateway: RemoteGateway | null = null
 let remoteGatewaySource: 'manual' | 'tailscale' | null = null
 let remoteGatewayCleanupError: Error | null = null
@@ -355,14 +357,19 @@ async function startApplication(): Promise<void> {
     return
   }
   if (process.env.PI_GUI_PROBE_ONLY === '1') {
-    const result = await probePiRpc({
-      cwd: process.cwd(),
-      explicitExecutable: process.env.PI_GUI_PI_EXECUTABLE,
-      noSession: true
+    const extensionPaths = resolveRuntimeExtensionPaths({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath
+    })
+    const result = await probePiRuntimeProcess({
+      entryPath: piRuntimeEntryPath,
+      extensionPaths,
+      quiescenceExtensionPath: extensionPaths[0]!,
+      piExecutable: resolvePiExecutable({ explicitPath: process.env.PI_GUI_PI_EXECUTABLE })
     })
     console.info(
-      `[Pi GUI] Pi RPC runtime ready: version=${result.version} ` +
-      `commands=${result.commandCount} session-name-event=${result.sessionNameEventObserved}`
+      `[Pi GUI] Pi Runtime process ready: version=${result.version} ` +
+      `commands=${result.commandCount} pid=${result.pid}`
     )
     allowQuit = true
     app.quit()
@@ -504,7 +511,12 @@ async function startApplication(): Promise<void> {
     resourcesPath: process.resourcesPath
   })
   const quiescenceExtensionPath = runtimeExtensionPaths[0]!
-  const runtimeHost = new SharedPiHost()
+  const logDirectory = app.getPath('logs')
+  const runtimeHost = new PiRuntimeProcessHost({
+    entryPath: piRuntimeEntryPath,
+    logDirectory,
+    logger: createJsonlLogger({ directory: logDirectory, name: 'main' })
+  })
   sharedPiHost = runtimeHost
   kernel = new WorkbenchKernel(
     (project, launchOptions) =>
@@ -572,6 +584,7 @@ async function startApplication(): Promise<void> {
       persistSubagent: (settings) => projectStore.saveSubagent(settings),
       shortcuts,
       persistShortcuts: (settings) => projectStore.saveShortcuts(settings),
+      readSharedRuntimeHostPid: () => runtimeHost.getPid(),
       generateSessionName: async (request) => {
         try {
           return await generateSessionNameWithPi({ ...request, executable: piExecutable })

@@ -10,7 +10,7 @@ import type {
   KernelToolEntry,
   KernelToolImageAttachment
 } from '../../shared/kernel-contract.ts'
-import type { PiRpcEvent, PiRpcSessionEntry } from '../pi-rpc/pi-rpc-client.ts'
+import type { PiRpcEvent, PiRpcSessionEntry } from '../pi-rpc/pi-rpc-data.ts'
 import { projectPromptDisplay } from '../prompt/prompt-attachments.ts'
 import { isRecord } from '../utils/guards.ts'
 import {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import type { PiRpcSessionEntry } from '../pi-rpc/pi-rpc-client.ts'
+import type { PiRpcSessionEntry } from '../pi-rpc/pi-rpc-data.ts'
 import {
   OPENAI_FAST_MODE_ENTRY_TYPE,
   openAiFastModeFromSessionEntries

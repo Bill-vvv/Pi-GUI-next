@@ -3,7 +3,7 @@ import type {
   KernelForkCandidate,
   KernelMessageEntry
 } from '../../shared/kernel-contract.ts'
-import type { PiRpcSessionEntry } from '../pi-rpc/pi-rpc-client.ts'
+import type { PiRpcSessionEntry } from '../pi-rpc/pi-rpc-data.ts'
 
 export function forkCandidatesOnActivePath(
   entries: PiRpcSessionEntry[],

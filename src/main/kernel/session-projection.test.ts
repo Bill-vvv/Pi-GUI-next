@@ -5,7 +5,7 @@ import type { KernelConversationEntry, KernelSessionUsage } from '../../shared/k
 import type {
   PiRpcAvailableModel,
   PiRpcSessionStats
-} from '../pi-rpc/pi-rpc-client.ts'
+} from '../pi-rpc/pi-rpc-data.ts'
 import {
   mergeConversationEntries,
   toAvailableKernelModel,

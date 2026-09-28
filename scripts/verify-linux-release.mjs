@@ -2548,6 +2548,7 @@ async function readLinuxProcessMemory(pid, rootPid) {
     else if (argv.includes('--type=utility')) role = 'utility'
     else if (argv.includes('--type=zygote')) role = 'zygote'
     else if (pid === rootPid) role = 'app-root'
+    else if (argv.includes('pi-runtime-host.js')) role = 'pi-runtime-host'
     else if (comm.includes('pi-gui') || argv.includes('pi-gui-next')) role = 'electron-main'
     return {
       pid,
@@ -2634,7 +2635,8 @@ function memoryDiagnosticsReport() {
     )
     maxima.piPssBytes = Math.max(
       maxima.piPssBytes,
-      (sample.roles['pi-runtime']?.pssBytes ?? 0) + (sample.roles['pi-child']?.pssBytes ?? 0)
+      (sample.roles['pi-runtime-host']?.pssBytes ?? 0) +
+        (sample.roles['pi-runtime']?.pssBytes ?? 0) + (sample.roles['pi-child']?.pssBytes ?? 0)
     )
     maxima.rendererHeapUsedBytes = Math.max(
       maxima.rendererHeapUsedBytes,

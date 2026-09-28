@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { createGzip } from 'node:zlib'
 
-import type { PiRpcEvent } from '../pi-rpc/pi-rpc-client.ts'
+import type { PiRpcEvent } from '../pi-rpc/pi-rpc-data.ts'
 import type { RuntimeHost } from './runtime-host.ts'
 import { SharedPiHost } from './shared-pi-host.ts'
 

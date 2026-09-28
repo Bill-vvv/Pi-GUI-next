@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import type { PiRpcExtensionInventory } from '../pi-rpc/pi-rpc-client.ts'
+import type { PiRpcExtensionInventory } from '../pi-rpc/pi-rpc-data.ts'
 import type { RuntimeCommand, RuntimeCommandResult } from './runtime-host.ts'
 import {
   SharedPiHost,
