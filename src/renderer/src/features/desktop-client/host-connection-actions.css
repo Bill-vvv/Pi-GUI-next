@@ -1,0 +1,44 @@
+/* Same modal layer as the existing Workbench dialogs, above its content/popovers. */
+.host-connection-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: color-mix(in srgb, var(--color-bg-app) 72%, transparent);
+}
+
+.host-connection-dialog {
+  display: grid;
+  gap: 16px;
+  width: min(28rem, 100%);
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  padding: 20px;
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface-popover);
+  color: var(--color-text-primary);
+  font-size: var(--text-body-sm);
+  line-height: var(--line-body-sm);
+  overflow-wrap: anywhere;
+}
+
+.host-connection-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.host-connection-dialog h2 { margin: 0; font-size: var(--text-section-title); line-height: var(--line-heading); }
+.host-connection-dialog p { margin: 8px 0 0; color: var(--color-text-soft); }
+.host-connection-dialog button {
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-input);
+  color: var(--color-text-primary);
+  font-size: var(--text-control);
+  line-height: var(--line-control);
+}
+.host-connection-dialog .host-connection-error { color: var(--color-status-error); }
+.host-connection-dialog button:hover:not(:disabled) { background: var(--color-surface-hover); border-color: var(--color-border-hover); }
+.host-connection-dialog button:focus-visible { outline: 2px solid var(--color-focus-outline); outline-offset: 2px; }
+.host-connection-dialog button:disabled { color: var(--color-text-muted); cursor: not-allowed; }

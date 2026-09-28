@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { desktopPairingId } from './desktop-device-binding.ts'
 import { createServer } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -171,7 +172,7 @@ test('Desktop Host exposes a loopback handshake and one-time bearer pairing with
       protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
       productVersion: '0.0.1',
       buildCommit: 'abcdef1',
-      authenticated: false,
+      authenticated: false, pairingId: null,
       capabilities: { kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES }
     })
 
@@ -188,6 +189,11 @@ test('Desktop Host exposes a loopback handshake and one-time bearer pairing with
     })
     assert.equal(authenticated.status, 200)
     assert.equal((authenticated.value as { authenticated: boolean }).authenticated, true)
+    const publicIdentity = (authenticated.value as { pairingId: string }).pairingId
+    assert.equal(publicIdentity, desktopPairingId(credential))
+    assert.notEqual(publicIdentity, hashRemoteDeviceCredential(credential))
+    assert.equal(JSON.stringify(authenticated.value).includes(credential), false)
+    assert.equal(JSON.stringify(authenticated.value).includes(MACHINE_SECRET), false)
 
     const staticResponse = await jsonRequest(baseUrl, '/')
     assert.equal(staticResponse.status, 404)
@@ -443,6 +449,7 @@ test('Desktop Host publishes typed events and revocation closes the controller a
         headers: { Authorization: `Bearer ${credential}` }
       })
       assert.equal((session.value as { authenticated: boolean }).authenticated, false)
+      assert.equal((session.value as { pairingId: string | null }).pairingId, null)
     } finally {
       events.abort()
       await events.reader.cancel().catch(() => undefined)
@@ -591,7 +598,7 @@ test('Desktop Host rejects protocol mismatch, disallowed commands, bad credentia
           protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
           requestId: 'request-forbidden',
           expectedIdentity: CONTROL_IDENTITY,
-          command: { type: 'kernel.add-project' }
+          command: { type: 'kernel.create-task' }
         })
       })
       assert.equal(forbidden.status, 403)

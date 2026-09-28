@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import http from 'node:http'
+import https from 'node:https'
 import test from 'node:test'
 
 import { SharedPiProcessEnvironment } from './shared-pi-process-environment.ts'
@@ -44,16 +46,28 @@ test('scoped Pi environment isolates concurrent async Session views and writes',
   }
 })
 
-test('scoped Pi environment restores the original process.env object after the final owner', () => {
+test('scoped Pi environment and HTTP agents remain installed until the final owner', () => {
   const original = process.env
+  const originalHttp = http.globalAgent
+  const originalHttps = https.globalAgent
   const first = new SharedPiProcessEnvironment()
   const proxy = process.env
+  const sharedHttp = http.globalAgent
+  const sharedHttps = https.globalAgent
   const second = new SharedPiProcessEnvironment()
 
   assert.notEqual(proxy, original)
+  assert.notEqual(sharedHttp, originalHttp)
+  assert.notEqual(sharedHttps, originalHttps)
   assert.equal(process.env, proxy)
+  assert.equal(http.globalAgent, sharedHttp)
+  assert.equal(https.globalAgent, sharedHttps)
   first.dispose()
   assert.equal(process.env, proxy)
+  assert.equal(http.globalAgent, sharedHttp)
+  assert.equal(https.globalAgent, sharedHttps)
   second.dispose()
   assert.equal(process.env, original)
+  assert.equal(http.globalAgent, originalHttp)
+  assert.equal(https.globalAgent, originalHttps)
 })

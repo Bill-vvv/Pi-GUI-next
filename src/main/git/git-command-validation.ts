@@ -1,4 +1,5 @@
-import { isAbsolute, normalize } from 'node:path'
+// Git commands always refer to the Linux Host, including when validated on Windows.
+import { isAbsolute, normalize } from 'node:path/posix'
 
 import {
   GIT_BRANCH_ID_MAX_UTF8_BYTES,
@@ -39,6 +40,11 @@ export function isGitCommand(value: unknown): value is GitCommand {
       isCanonicalAbsolutePath(value.projectKey) &&
       isCanonicalAbsolutePath(value.repositoryRoot) &&
       matches(SHA256, value.expectedStatusRevision)
+  }
+  if (value.type === 'git.read-file') {
+    return hasExactKeys(value, ['type', 'projectKey', 'request']) &&
+      isCanonicalAbsolutePath(value.projectKey) && isRecord(value.request) &&
+      !Object.hasOwn(value.request, 'kind') && isGitDiffRequest({ ...value.request, kind: 'working' })
   }
   if (value.type === 'git.get-diff') {
     return hasExactKeys(value, ['type', 'projectKey', 'request']) &&

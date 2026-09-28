@@ -1,16 +1,9 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { after, test } from 'node:test'
-import { createServer } from 'vite'
+import { test } from 'node:test'
+import { createSsrTestServer } from '../../test-support/create-ssr-test-server.ts'
 
-const vite = await createServer({
-  configFile: false,
-  root: new URL('../../../../../', import.meta.url).pathname,
-  appType: 'custom',
-  optimizeDeps: { noDiscovery: true },
-  server: { middlewareMode: true, hmr: false }
-})
-after(() => vite.close())
+const vite = await createSsrTestServer()
 
 const module = await vite.ssrLoadModule(
   '/src/renderer/src/features/git/GitCommitDialog.tsx'
@@ -125,7 +118,8 @@ test('modal reuses useModalDialog, ARIA contract, backdrop dismiss and busy gate
   assert.match(source, /event\.target !== event\.currentTarget/)
   assert.match(source, /if \(busy \|\| event\.target !== event\.currentTarget\) return/)
   assert.match(source, /onCancel\(\)/)
-  assert.match(source, /disabled=\{busy \|\| commitSucceeded\}/)
+  assert.match(source, /disabled=\{busy \|\| commitSucceeded \|\| commitUncertain\}/)
+  assert.match(source, /result\?\.commit\.status === 'unknown'/)
   assert.match(source, /commitSucceeded: boolean/)
   assert.match(source, /result\?\.commit\.status === 'succeeded'/)
   assert.match(source, /gitCommitActionDisabled\('commit'/)

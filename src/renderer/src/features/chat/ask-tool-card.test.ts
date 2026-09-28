@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
-import { after, test } from 'node:test'
+import { test } from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { createServer } from 'vite'
+import { createSsrTestServer } from '../../test-support/create-ssr-test-server.ts'
 
 import type {
   KernelAskQuestion,
@@ -10,14 +10,7 @@ import type {
   KernelToolEntry
 } from '../../../../shared/kernel-contract.ts'
 
-const vite = await createServer({
-  configFile: false,
-  root: new URL('../../../../../', import.meta.url).pathname,
-  appType: 'custom',
-  logLevel: 'error',
-  server: { middlewareMode: true, hmr: false }
-})
-after(async () => vite.close())
+const vite = await createSsrTestServer()
 
 const askCardModule = await vite.ssrLoadModule(
   '/src/renderer/src/features/chat/AskToolCard.tsx'

@@ -6,6 +6,9 @@
   "desktopName": "io.pi-gui.next.desktop",
   "type": "module",
   "main": "./out/main/index.js",
+  "desktopHost": {
+    "deviceStoreVersions": [1]
+  },
   "engines": {
     "node": "26.4.0",
     "pnpm": "11.9.0"
@@ -15,13 +18,16 @@
     "dev": "node -e \"require('electron')\" && electron-vite dev",
     "preview:browser": "vite --config vite.browser-preview.config.ts",
     "typecheck": "tsc --noEmit",
-    "test:core": "node --test scripts/memory-event-metrics.test.mjs src/main/advisor/*.test.ts src/main/export/*.test.ts src/main/extension/*.test.ts src/main/git/*.test.ts src/main/pi-rpc/*.test.ts src/main/runtime/*.test.ts src/main/kernel/*.test.ts src/main/notification/*.test.ts src/main/project/*.test.ts src/main/provider/*.test.ts src/main/remote/*.test.ts src/main/security/*.test.ts src/main/subagent/*.test.ts src/renderer/src/*.test.ts src/renderer/src/composition/*.test.ts src/renderer/src/features/chat/*.test.ts src/renderer/src/features/composer/*.test.ts src/renderer/src/features/git/*.test.ts src/renderer/src/features/project/*.test.ts src/renderer/src/features/settings/*.test.ts src/remote/*.test.ts src/shared/*.test.ts extensions/pi-gui-runtime-quiescence/tests/*.test.mjs extensions/pi-gui-history-navigation/tests/*.test.ts extensions/pi-gui-multi-advisor/tests/quiescence-provider.test.mjs extensions/pi-gui-task-notify/tests/quiescence-provider.test.mjs extensions/pi-gui-ask/tests/quiescence-provider.test.mjs extensions/pi-gui-openai-fast-mode/tests/*.test.ts",
+    "test:core": "node --test scripts/memory-event-metrics.test.mjs src/main/build-identity.test.ts src/main/desktop/*.test.ts src/preload/*.test.ts scripts/wsl-deployment.test.mjs scripts/workspace-cache.test.mjs src/main/export/*.test.ts src/main/extension/*.test.ts src/main/git/*.test.ts src/main/pi-rpc/*.test.ts src/main/runtime/*.test.ts src/main/kernel/*.test.ts src/main/notification/*.test.ts src/main/project/*.test.ts src/main/provider/*.test.ts src/main/remote/*.test.ts src/main/security/*.test.ts src/main/subagent/*.test.ts src/renderer/src/*.test.ts src/renderer/src/composition/*.test.ts src/renderer/src/features/chat/*.test.ts src/renderer/src/features/composer/*.test.ts src/renderer/src/features/desktop-client/*.test.ts src/renderer/src/features/extensions/*.test.ts src/renderer/src/features/git/*.test.ts src/renderer/src/features/project/*.test.ts src/renderer/src/features/settings/*.test.ts src/remote/*.test.ts src/shared/*.test.ts extensions/pi-gui-runtime-quiescence/tests/*.test.mjs extensions/pi-gui-history-navigation/tests/*.test.ts extensions/pi-gui-multi-advisor/tests/quiescence-provider.test.mjs extensions/pi-gui-task-notify/tests/quiescence-provider.test.mjs extensions/pi-gui-ask/tests/quiescence-provider.test.mjs extensions/pi-gui-openai-fast-mode/tests/*.test.ts",
     "bench:markdown": "node scripts/benchmark-streaming-markdown.ts",
     "smoke:pi": "pnpm build && PI_GUI_PROBE_ONLY=1 electron .",
     "build:remote": "vite build --config vite.remote.config.ts",
-    "build": "electron-vite build && vite build --config vite.remote.config.ts",
+    "build": "node scripts/build.mjs",
     "package:linux": "pnpm build && electron-builder --linux AppImage --x64 --publish never",
-    "verify:linux": "node scripts/verify-linux-release.mjs"
+    "package:win": "pnpm build && electron-builder --win nsis --x64 --publish never",
+    "package:win:wsl": "node scripts/package-win-wsl.mjs",
+    "verify:linux": "node scripts/verify-linux-release.mjs",
+    "test:platform": "node --test src/main/build-identity.test.ts src/main/runtime/pi-executable.test.ts src/main/desktop/*.test.ts src/preload/*.test.ts scripts/wsl-deployment.test.mjs scripts/workspace-cache.test.mjs src/main/remote/wsl*.test.ts src/main/remote/windows-remote*.test.ts src/main/remote/system-ssh-tunnel.test.ts src/main/remote/desktop-host-client.test.ts src/main/remote/desktop-device-credential-store.test.ts src/renderer/src/features/desktop-client/*.test.ts"
   },
   "build": {
     "appId": "io.pi-gui.next",
@@ -88,6 +94,24 @@
       "executableName": "pi-gui-next",
       "artifactName": "pi-gui-next-${version}-${arch}.${ext}",
       "syncDesktopName": true
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "executableName": "pi-gui-next",
+      "artifactName": "pi-gui-next-${version}-win-${arch}-setup.${ext}",
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false
     }
   },
   "dependencies": {

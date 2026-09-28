@@ -37,6 +37,7 @@ App / composition
 
 - `App.tsx`、`composition/` 和入口负责装配、顶层状态投影及跨 feature 协调，不承载可下沉的 feature 业务实现。
 - `features/<domain>/` 拥有领域 UI、局部状态和仅供该功能使用的样式/纯逻辑；feature 可以依赖 `components/` 和 renderer 共享纯工具。
+- Session 归档凭证／预览／分页和分叉候选／提交分别由 Session feature 的两个 workflow hooks 拥有；`App` 继续统一 mutation acknowledgement、操作互斥和跨 feature 草稿／导航装配。具体边界见 `architecture.md`，不在 feature 新建状态同步或后端事实源。
 - `components/` 只放无领域事实、可跨功能复用的 UI 原语；不得反向依赖 `features/` 或 `App`。
 - `tokens.css` 只拥有跨功能稳定的语义视觉值；`styles.css` 只拥有 HTML/应用级基础排版、原生控件最低交互基线和全局 reduced-motion 兜底。领域布局、状态与局部变体由对应 feature CSS 拥有，不得借全局 selector 隐式改变其他 feature。
 - renderer 共享纯工具不得依赖具体 feature。跨层引用必须保持上述方向，禁止为绕过边界建立循环依赖。
@@ -50,6 +51,8 @@ App / composition
 - Pi credential/provider auth 由 Pi 管理；Pi 官方配置是自定义 Provider/Model 的事实源。Renderer 不回读或持久化密钥。
 - 旧 Multi-Advisor 的安装、启停和 roster 控制面已退出当前产品；Renderer 不再展示对应设置或
   已适配拓展入口。既有 Session 中合法的历史 advisory 仍由 Main strict projector 归一化并只读展示。
+- Windows SSH 命令的目标由 Renderer 已应用的权威状态决定：revision barrier 的 `applyState` 同步更新 preload 的观察身份；preload 提交时捕获身份，Main 不以刚读取的 Host 状态替换。断线时清空身份，获取并应用新 snapshot 后再开放操作。
+- Desktop 外观、字体选择、快捷键和边框双击行为通过 `piDesktopClient` 读写本机偏好；Host 的旧值只参与首次迁移。`App` 保留原始 Host snapshot/revision/control identity，仅在传入视图时覆盖本机显示偏好；连接页也独立读取已存偏好。SSH Settings 只开放应用组和窗口行为，不因此开放 Host 管理命令。运行环境面板由 composition 传给 Settings，避免 settings 与 desktop-client feature 反向依赖。
 - 所有跨进程操作必须是窄的 typed IPC：明确命令、明确 payload、明确返回和错误。动态 slash command 必须先存在于当前 normalized catalog；禁止“执行任意命令”、任意路径读取或 raw RPC passthrough。
 - UI 只展示真实能力和真实状态。没有后端能力时隐藏入口或显示明确空态，不伪造队列重排、百分比、剩余时间、阶段、成功结果或可用命令。
 - 未知 schema、未知 command、非法 identity、非前缀增量 patch、无效路径或不支持状态应 Fail Fast，保留明确错误；不得静默 fallback、新建 ghost Session 或把旧 Conversation 标成新目标。
@@ -79,7 +82,7 @@ App / composition
 
 ### 4.3 颜色、圆角、空间与动效
 
-- 颜色按语义使用：app/background、surface/input/popover/tooltip、text primary/body/soft/muted、border/focus/divider、hover/list state、status/error/warning、accent。禁止把某个深浅主题的十六进制值直接写进 feature。
+- 颜色按语义使用：app/background、surface/input/popover/tooltip、text primary/body/soft/muted、border/focus/divider、hover/list state、status/error/warning、accent。禁止把某个深浅主题的十六进制值直接写进 feature。Electron `titleBarOverlay` 必须使用与 `--color-bg-app` / `--color-text-primary` 对齐的 `#RRGGBB`，不得改用 CSS 变量。
 - 主题、accent 和面板透明度只通过根节点属性及统一 token 改变；透明度作用于表面层，不降低正文和整个窗口的不透明度。
 - 有表面语义的圆角使用 `--radius-sm`、`--radius-tooltip`、`--radius-control`、`--radius-popover`、`--radius-panel`、`--radius-composer`、`--radius-pill`；按对象语义选择，不因局部观感增加相邻新值。`0`、`inherit`、圆形 `50%`、mask/SVG/进度环等纯几何值可以保留直接值；其他例外必须由 owner 附近的注释解释，不能静默绕开 token。
 - 当前没有全局 spacing scale。跨 feature 稳定的壳层间距可进入 token；单个 feature 的网格、文字间隙、命中区和响应式几何继续由 owner CSS 直接表达。相同数字不自动代表相同语义，不得为了消灭数字而建立无意义的 `--space-*` 序列。
@@ -89,6 +92,7 @@ App / composition
 ### 4.4 全局基线与 feature 覆盖
 
 - 原生 `button`、`input`、`textarea` 优先；`styles.css` 只提供字体继承、最低可辨识 hover/focus-visible/disabled 及基础表面，不定义产品级 button variant。
+- 按钮基线不提供全局按压位移；菜单、导航和选择控件保持原位，以颜色、背景或边框反馈交互。共享选择器的活动选项即时更新高亮，避免快速鼠标扫选或键盘移动时留下过渡拖尾。
 - feature 可以覆盖尺寸、布局和语义颜色，但不得重新发明焦点可见性、disabled 禁止动作、reduced-motion 或相同 portal 关闭协议。重复的是行为协议时优先抽无领域 hook；重复的只是外观且仍属同一 feature 时先合并 feature-local selector。
 - 公共组件 CSS 与组件同目录；feature CSS 不得按公共组件内部 DOM 结构做跨目录覆盖。确需扩展时通过组件现有 props/className 边界，并由调用方拥有外层布局。
 
@@ -111,7 +115,7 @@ App / composition
 | `IconButton` | 无文字图标按钮；强制 `label`，写入 `aria-label` 和 `data-tooltip`，并通过 `iconSize` 透传三档图标尺寸，默认 `type="button"`。有常驻文字或复杂内容时使用普通 button。 |
 | `Select` | 已知有限选项的共享 listbox；支持分组、禁用、选中态、可选的单行次级详情及其语义色调、外点关闭以及 Arrow/Home/End/Enter/Space/Escape/Tab。次级详情必须同时提供文字，不能只靠颜色表达；模型级联菜单、slash 命令菜单等不同语义不得强塞进它。 |
 | `FontSelect` | 系统字体专用的可搜索 listbox，支持 UI/code 预览、不可用当前值和键盘选择；不是通用 searchable select。 |
-| `TooltipProvider` | 顶层统一 tooltip：读取 `data-tooltip`，hover 延迟、focus 立即显示，自动视口避让，Escape/滚动/缩放关闭，通过 portal 渲染并维护 `aria-describedby`。tooltip 只放补充说明，不能承载完成任务所必需的信息或操作。 |
+| `TooltipProvider` | 顶层统一 tooltip：读取 `data-tooltip`，首次 hover 等待 360ms，已显示的指针提示离开后 800ms 内连续查看其他目标可跳过等待；focus 立即显示但不启动指针连续查看。离开立即关闭，Escape（含待显示提示）、滚动和缩放清除等待与连续查看状态；自动视口避让，使用短淡入，通过 portal 渲染并维护 `aria-describedby`。tooltip 只放补充说明，不承载完成任务所必需的信息或操作。 |
 | `useViewportPopoverPosition` | 为 portal popover 计算 fixed 定位、视口边距、上下翻转或左右级联、限宽限高，并监听 viewport resize、scroll 和触发器尺寸变化；它只解决定位，不替调用方实现焦点、外点、Escape、ARIA 或选择语义。 |
 | `useModalDialog` | 管理当前最上层 modal 的初始焦点、可见可聚焦项、Tab/Shift+Tab 环、Escape、busy 时关闭阻断和关闭后的焦点恢复。调用方继续拥有 portal、dialog label/description、`aria-busy`、可聚焦 root、backdrop 点击策略、视觉壳与领域异步状态。 |
 
@@ -142,18 +146,22 @@ App / composition
 当前 Workbench 使用四区：`Navigator / Header / Timeline / Composer`。
 
 - Navigator 顶层同时展示“项目”和“任务”两个独立 disclosure 分组：每次 Renderer 生命周期开始时都默认展开，可分别收起且互不联动，展开状态不持久化也不进入 Kernel；两组按项目在上、任务在下共享现有单一滚动区。分组标题以 `aria-expanded` / `aria-controls` 控制本组显隐，独立 `＋` 分别添加 Project 与创建 Task；当前类别只保留活动强调和真实运行数量，不恢复 Tab 式切换。Navigator 继续展示 Project 与所属 Session、选择态、真实运行摘要和已接通的行内操作。Project 可作为 Renderer 本地导航偏好置顶，并在项目组内保持在普通 Project 之前；Project Conversation 与独立 Task Session 也可置顶，置顶后从原分组列表移出，按置顶操作顺序统一显示在“项目 / 任务”两组之外的 Navigator 最上方，不受 Project 拖拽顺序、Project 内 Session 活动排序或 Task 排序影响。Project 行负责 Project 选择与该 Project 的新建 Session；Session 行打开对应 Conversation。点击新建后尚未提交任何 prompt 的空 provisional Session 只作为工作区 identity 存在，不显示、不计入 Project Session 数量；首条 prompt 被 Runtime 接受后，同一 provisional identity 才进入 Navigator。每个 Project / Task 的历史列表共用同一搜索、时间筛选与分段展开结果集：默认显示最近 6 个普通摘要，底部按钮明确显示其余摘要数量并一次展开全部，展开后可收起至默认 6 个，不建立列表内层滚动。搜索与时间筛选入口放在「项目」「任务」分组标题 action slot（与 ＋ 同级），默认悬浮/焦点时显示：搜索图标打开标题搜索 popover，筛选图标打开时间范围菜单（全部 / 今天 / 本周 / 更早）；启用后图标保持 active，可用关闭图标一键清除。分组级 query 作用于该组内所有展开列表，列表本身不再常驻搜索条；query 变化时恢复默认展开数量。列表只消费 Session 摘要，未展开的 Project 不挂载其 Session 行。当前展示项、provisional / 非空闲 Runtime、等待回复与未读项在筛选后仍作为展开窗口之外的保留项显示，不占普通 6 项额度，避免活动项被滤掉后不可达。Header 展示当前 Project、Session、Runtime 和进入正常布局流的诊断。
+- Navigator 的项目活动汇总在项目收起时保留三段循环标记，展开时改为静态标记并保留真实运行数量与可访问状态；Project、Task 与置顶会话的旋转状态在被行内操作 hover/focus 隐藏时暂停，重新可见后继续，不改变等待回复优先级或 reduced-motion 静态表现。
 - Timeline 是可滚动正文区；Header 和 Composer 不得以未计入布局的浮层遮住消息。活动 run 与 settled 工作过程保持同一 turn group。紧凑工作过程的单行状态以及活动 ThinkingStep 标题，在没有更高优先级的活动工具或 commentary 时，优先显示最新一条非空 thinking 摘要的最后一个语义行，并去除整行 Markdown 包裹；只有确实没有可用摘要时才回退“正在思考/正在继续”。标准工作过程保留 commentary / 非摘要 thinking 主阅读线，并把相邻主阅读段之间连续发生的普通工具调用合并为一条可展开汇总：读取与修改按不同文件路径计数，bash 按调用计数，运行中批次原地增长，失败在汇总中显式可见；下一段主阅读内容或 Ask、Subagent、协调工具会封口当前批次并保持独立展示。工具汇总正文与主阅读内容保持同一左边线，并采用编辑式叙事层级：动作词使用较清晰的次级正文色，文件名、数量等目标使用更轻的元信息色；同类文件不超过 2 个且 basename 无冲突时直接列名，更多时回退数量。运行状态直接由“正在读取/修改/运行/调用”表达，成功后不常驻勾选或“完成”文字，失败只在右侧保留明确数量且不添加独立失败标点，disclosure 箭头仅在 hover、focus 或展开时显现。普通工具批次只有一个 entry 时继续保留稳定的外层汇总 identity，但展开后直接显示该工具的输入、输出或错误，不再嵌套一条相同工具标题；没有真实详情时不显示 disclosure。Renderer 将同一 turn 中连续的 thinking entry 合为一个视觉阶段，任何 commentary、tool、Ask、Subagent、协调或其他非-thinking 过程项都会封口；底层 Kernel entry identity 与顺序保持不变。若 error 或其他 content entry 将活动 run 切成多个过程 chunk，后续 chunk 出现新的 thinking 后，活动 Timeline 只保留最新含 thinking chunk 的 thinking；更早 thinking 仍留在事实投影，并在 run settled 后的“已处理”展开中按原始顺序恢复，跨 chunk 的工具、commentary 与错误内容不得随之隐藏。活动阶段标题使用最新摘要的最后一个语义行，展开正文按原顺序连接并移除标题所消费的那一行；完成阶段仅有一个非空源码行的短思考直接显示正文，多行或多段内容才保留一个“思考” disclosure。组耗时只在每条 thinking 都有现场观测时显示，并取重叠观测中的最长跨度而不是相加。完成态 disclosure 左侧固定显示“已处理”，右侧显示本轮真实耗时；Renderer 现场计时不可用时使用 canonical turn transcript 时间跨度，不静默省略时间。长对话滚动时，Timeline 只根据顶部阅读轮次更新 Prompt 导航轨高亮，不在 Header 下粘着用户 prompt。Navigator 完全展开时，Timeline 左缘可显示 Prompt 导航轨：短标记与真实用户轮次一一对应，默认只显示以当前阅读轮次为中心、最多 7 条的局部窗口；首次悬浮延迟后，轨道扩为连续命中带，滚轮与键盘可跨窗口浏览其余 Prompt，点击后定位，离轨收起后重新围绕当前阅读轮次。当前标记与邻近标记保持固定线高和矩形端点，宽度使用有界离散层级并只在相邻层级间按整数像素插值，同轨切换立即响应，短暂离轨延迟收起以避免斜向挑选时意外隐身；窄窗口和折叠 Navigator 下不显示。
+- 思考阶段 disclosure 的显式展开／收起选择绑定当前显示组的 thinking entry identities，保留到当前 Timeline 生命周期结束，不被阶段活动状态变化覆盖；分组合并或显示成员变化后，从组内成员恢复明确选择，有冲突时以对话顺序最后一个有明确记录的成员为准。整轮完成重建“已处理”过程时，仅包含最终解析为用户明确展开阶段的过程默认保持展开，用户仍可自行收起外层。未操作或仅自动展开的阶段沿用默认折叠行为；切换 Conversation 清空选择，不持久化、不改变单行思考直接展示或跨 chunk 的既有隐藏规则。
 - `pi-subagents` 的前台运行作为当前 turn 的专用工具过程展示：Subagent 一旦进入唤起或运行状态，其任务胶囊必须直接出现在 Timeline，不能藏在“思考”或通用工具详情 disclosure 内；默认以每个参与者一个紧凑、可聚焦的任务胶囊呈现摘要，整体状态放在同一行；胶囊选择只由“当前展示 Conversation identity + Subagent toolCallId + participant.index”定位。点击后打开 composition-owned 的共享右侧模块栏；当前真实顶层 Tab 为按实际可用性出现的“Git”和“子任务”，`SubagentTaskDetail` 继续拥有任务标题、状态、活动、结果、输出引用与运行摘要，不把领域实现搬进 composition。Session Header 的一级入口只代表通用右侧栏壳层，使用与左侧栏镜像的展开/收起图标与 `aria-expanded`，不得把 Git 或其他领域模块图标提升为壳层入口；模块只在栏内作为真实 Tab 出现。宽窗口中右侧栏占据真实第三列并保留 Conversation，支持有界指针/键盘调宽、收起与关闭；较窄窗口沿用同一模块栏 contract 替换主工作区并提供“返回对话”，不维护第二条 Subagent 专用布局。右侧栏 API 可承载多个已接通的具体 Tab，但当前不显示 Browser、Terminal 或其他占位模块，也不建立 registry。详情按状态组织：运行中以当前活动为主，完成态直接显示结果或输出文件，失败态优先显示错误，暂停态显示已有输出与最后活动；不得保留无意义的完成态“当前活动”或重复 completion envelope。实际模型、input/output/cache read/cache write token、费用、轮次、工具数与耗时随归一化 patch 原地刷新；任务胶囊在实际模型已报告时于主标签后显示模型 ID 的最后一段，完整 provider/model 保留在 tooltip 与运行摘要，未报告时不显示模型占位且不从配置猜测。后台 completion 协议完全未提供模型、usage 或执行统计时不渲染空的“运行摘要”分区，任一实际摘要字段存在时才展示该分区并将其余缺失项标为“尚未报告”，不以 0 或配置值冒充实际消耗。合法 file-only output reference 只显示 basename、Agent、大小和行数，并可由用户显式打开；GUI 不读取文件正文。关闭、返回和 Escape 尝试恢复胶囊焦点；Project/Session/新对话/归档预览 identity 变化、目标消失或设置页打开时关闭旧详情。Renderer 不解析 `details` JSON，不读取 child transcript 或普通 artifact，也不建立任务数据库或运行控制。后台启动保留真实 async identity；普通 completion custom message 在 Timeline 只形成轻量、可点击的完成任务胶囊，胶囊继续使用通知协议中的原始 Agent 名称而不是“后台任务结果”等通用文案；正文不渲染结果预览，点击后用同一任务详情阅读归一化结果。`subagent list/status`、`subagent_wait` 以及 supervisor/intercom 的 pending/status/list 属于主 Agent 内部发现或轮询，不占用 Timeline，也不得用多行普通工具状态代替任务胶囊。控制、转向、暂停、停止、回复和 Watchdog 警告仍以独立通知显示；结构化 supervisor request 属于主 Agent 内部协作状态，同一 run participant 的具体 request 替代泛化 attention，成功 reply 仍原地更新为已处理，但 pending/handled 均不渲染到 Timeline；若确需用户决策，由主 Agent 在普通 Assistant 对话中提出。只有 completion guard 与 Watchdog blocker 使用 alert；Main 只按固定协议归一化详情与协调 identity，Renderer 不按 Markdown 文案反推状态或关联原 run。
 - Git Changes 采用紧凑的单列表投影：默认范围为 `Uncommitted` 且所有文件 diff 默认折叠；每个文件独立展开/折叠并可同时保留多个展开项，列表标题区提供真实“全部折叠”控制。顶部范围选择只提供现有 status DTO 能精确表达的 `Uncommitted / Unstaged / Staged`，mixed 文件可进入 unstaged 与 staged 投影，但同一列表中不得重复。选择 unstaged 或 staged 后，diff 与 Stage/Unstage 操作必须收窄到该投影对应的一侧；切换范围、Project 或刷新状态会关闭旧 diff。文件行使用明确 disclosure 与紧凑图标操作，冲突说明不为每个文件重复占据常驻高度。diff hunk 前和 hunk 间由 canonical old/new range 精确显示 `N unmodified lines` 折叠条，不显示 raw `@@` header；当前 DTO 未携带被省略的源码文本或文件尾总行数，因此折叠条不得伪装成可展开内容。若后续增加按需上下文，必须通过有界、stale-safe 的 Git Main/IPC request 获取。现有 DTO 未提供 repository 总增删行、Last Turn 或 Branch Commits 时不得扫描全部 diff、猜测统计或显示不可用占位项。Git diff 性能使用“有界数据预取而非隐藏 DOM 预渲染”：pointer/focus 意图经过短延迟只预取 exact Project/repository/status/file/kind snapshot 对应的 typed DTO，同 key 请求 single-flight，只有稳定展示结果进入最多 8 条、估算 8 MiB 的 LRU；Project identity 变化清空缓存，trust/not-repository/stale 或 repository identity 变化强制刷新且不缓存。最多同时展开 8 个文件；单个 diff 不超过 300 个 render row 时直接挂载，超过阈值时由 feature-local `@tanstack/react-virtual` 只挂载可视窗口和 overscan，固定 32px 行高并根据全量 row model 建立稳定水平宽度。大型 diff 必须同时提供完整文本模式与“复制全部”，避免虚拟 DOM 破坏连续阅读和完整复制；这一路径只服务 Git viewer，不改变 D-010 的 Timeline 60-turn 有界挂载决策。
+- Git 文件行的“全文”通过窄 typed request 读取当前有界变更列表中的工作区 UTF-8 文本，最多 256 KiB；弹窗明确区分当前文件与 staged diff。正文按纯文本展示并保留完整阅读/复制，不作为 HTML 或 Markdown 执行，不进入全局缓存。使用 `useModalDialog` 管理焦点、Tab、Escape 和恢复；读取中仍可关闭，旧 snapshot、Project/远程 Session/模式变化和断线后的响应不得重新显示。
+- Git 的异步流程由 feature-local 的 repository／changes／history／branches hooks 拥有；`GitChangesPanel` 装配现有纯 UI，Project key 变化时整体重建局部生命周期。仓库状态只有一个发布入口，其他流程不得另存一份可写仓库事实；历史分页与 diff 的旧响应在提交前核对权威身份。具体 owner 见 `architecture.md` 的 Git Renderer 职责。
 - 既有 Session 中的 Advisor advisory 作为对应 turn 内的只读审查卡展示名称、严重度、正文
   和 guidance；blocker 可以使用更强错误语义，但不得遮盖或替代 Assistant 最终回答。
   Renderer 不解析 advisory XML，也不提供新的 Advisor 控制入口。
 - 已完成 turn 的复制、导出与分叉操作使用常驻同高的内联操作槽；默认只隐藏图标绘制和指针命中，悬停 turn 或键盘聚焦按钮时显现，不得因操作行挂载/卸载推动后续 Timeline 内容。操作反馈归属于发起操作的 turn，并在槽内单行省略，不能因 hover 转移或换行改变槽高；无 turn 来源的快捷键反馈使用时间线末尾的稳定位置。只为当前真实可用的操作预留槽，不补假能力。
-- Composer 是底部输入与命令面，支持普通 prompt、运行中 follow-up/steer、slash、附件和 abort 的现有语义。已选历史 Session 的 Runtime 尚未启动或正在启动时，Composer 可先接受一条普通 prompt；提交会取消同目标未完成的静态历史 preview，复用或启动该精确 Session 的唯一 Runtime，准备完成后再发送。slash 命令仍等待目标 Runtime 的命令目录可用。GUI / typed Pi RPC 命令成功后在 Timeline 显示本地-only 的 command 回声（不写进 Pi session）；Prompt Template 与 Skill 仍经 Pi prompt 展开进入对话事实源。Extension 命令只有存在固定、provenance-checked 的 GUI 适配时才进入目录，并通过 typed Extension command 路径直接执行；TUI-only 或未知 Extension 命令不得显示。普通 Extension `notify` 投影为受控 Timeline 状态。固定 Ask 工具继续附着在 Timeline 工具卡；只有当前已适配 Slash Command 的精确 invocation owner 且 adapter 明确允许对应 blocking method 时，`select`、`confirm`、`input`、`editor` 请求才进入 identity-bound 原生 modal，并由桌面与 Web Remote 通过窄 typed command 回复。Shared Runtime 用 command-scoped async context 附加 opaque invocation ID，禁止依赖 Session 级 ambient command name；请求绑定 Project、Session、Session ID、invocation ID 与 request ID，modal key 覆盖完整 owner identity，提交中禁止重复操作，切换后只在其所属 Session 重新显示，停止、崩溃或失效时清理。无 blocking capability 的已适配命令、未知命令、模型工具或其他非命令来源的阻塞 UI 仍立即取消并显示错误，`custom()` 继续 Fail Fast；GUI 不远程渲染任意 TUI Component。
+- Composer 是底部输入与命令面，支持普通 prompt、运行中 follow-up/steer、slash、附件和 abort 的现有语义。模型菜单只列出设置中勾选显示的模型；当前已选模型即使被隐藏仍保留在菜单中。已选历史 Session 的 Runtime 尚未启动或正在启动时，Composer 可先接受一条普通 prompt；提交会取消同目标未完成的静态历史 preview，复用或启动该精确 Session 的唯一 Runtime，准备完成后再发送。slash 命令仍等待目标 Runtime 的命令目录可用。GUI / typed Pi RPC 命令成功后在 Timeline 显示本地-only 的 command 回声（不写进 Pi session）；Prompt Template 与 Skill 仍经 Pi prompt 展开进入对话事实源。Extension 命令只有存在固定、provenance-checked 的 GUI 适配时才进入目录，并通过 typed Extension command 路径直接执行；TUI-only 或未知 Extension 命令不得显示。普通 Extension `notify` 投影为受控 Timeline 状态。固定 Ask 工具继续附着在 Timeline 工具卡；只有当前已适配 Slash Command 的精确 invocation owner 且 adapter 明确允许对应 blocking method 时，`select`、`confirm`、`input`、`editor` 请求才进入 identity-bound 原生 modal，并由桌面与 Web Remote 通过窄 typed command 回复。Shared Runtime 用 command-scoped async context 附加 opaque invocation ID，禁止依赖 Session 级 ambient command name；请求绑定 Project、Session、Session ID、invocation ID 与 request ID，modal key 覆盖完整 owner identity，提交中禁止重复操作，切换后只在其所属 Session 重新显示，停止、崩溃或失效时清理。无 blocking capability 的已适配命令、未知命令、模型工具或其他非命令来源的阻塞 UI 仍立即取消并显示错误，`custom()` 继续 Fail Fast；GUI 不远程渲染任意 TUI Component。
 - 当前用户轮次存在合法 `todowrite` 列表时，Composer 上方显示比输入框更窄的轻量任务托盘；工具 leaf name 对 `.`、`:`、`/` namespace 分隔保持一致识别，不能因 provider 命名形式退回普通 Timeline 工具卡；标题栏默认收起，用户可按需展开或再次收起，收起态保留完成数、当前步骤和真实状态。新用户轮次、空列表或 Conversation identity 变化时不得沿用旧任务；专用托盘出现后 Timeline 不重复显示普通 `todowrite` 工具卡。托盘高度必须由现有 Composer 测量进入 Timeline clearance，窄窗口占满可用宽度，并保留 disclosure ARIA、键盘焦点和 reduced-motion 行为。
 - Composer、队列面板和其他底部层的实际高度必须参与动态 clearance；通过测量后的 reserved space/offset 让 Timeline 末尾始终可见，不能依赖固定输入框高度猜测。
 - 窄窗口优先保持主任务可用：Navigator 可按现有入口折叠；主区不得横向溢出；popover 依据 viewport 翻转并限宽限高；长标题、路径和选择值使用可控换行或 ellipsis。
-- 设置页沿用 Navigator + 内容区结构。设置导航按「应用 / 模型 / 远程访问 / Agent / 生态」分组；自动对话命名在常规页，不保留单项偏好分类。窄窗口 icon rail 隐藏分组标题，改用分隔线保持分组。常规、外观、快捷键与远程访问偏好行使用更紧的分割线节奏；主题用三块预览选择，工作过程密度用可点击预览砖作为控件。其他设置行在宽窗口仍是左侧标签/说明、右侧紧凑控件；凭证、Package、拓展、技能使用同一资源行：名称、一行真实状态、就近动作。窄窗口改为上下排列，控件占可用宽度。只重排已接通设置，不补无后端语义的占位选项。影响自动执行或外部副作用的调试开关必须默认关闭，并在同一设置行明确正常退出/异常退出、一次性语义和重复副作用风险；依赖另一项设置时必须真实 disabled，而不是保存一个当前不会生效的隐藏组合。
+- 设置页沿用 Navigator + 内容区结构。设置导航按「应用 / 模型 / 远程访问 / Agent / 生态」分组；自动对话命名在常规页，不保留单项偏好分类。模型页可开关 Composer 模型菜单中的显示；隐藏名单只保存在 Renderer 本机，不改变 Pi 目录或 Kernel `availableModels`。当前已选模型即使被隐藏仍留在菜单中。窄窗口 icon rail 隐藏分组标题，改用分隔线保持分组。常规、外观、快捷键与远程访问偏好行使用更紧的分割线节奏；主题用三块预览选择，工作过程密度用可点击预览砖作为控件。其他设置行在宽窗口仍是左侧标签/说明、右侧紧凑控件；凭证、Package、拓展、技能使用同一资源行：名称、一行真实状态、就近动作。窄窗口改为上下排列，控件占可用宽度。只重排已接通设置，不补无后端语义的占位选项。影响自动执行或外部副作用的调试开关必须默认关闭，并在同一设置行明确正常退出/异常退出、一次性语义和重复副作用风险；依赖另一项设置时必须真实 disabled，而不是保存一个当前不会生效的隐藏组合。
 
 ## 7. 交互与可访问性
 
@@ -172,6 +180,14 @@ App / composition
 - popover/menu 的 z-index 只解决与相邻已知层的关系；不得用任意更大的数字掩盖 portal、窗口边缘命中层或嵌套菜单问题。新增层必须说明它位于普通内容、Composer/Header、hover preview、级联菜单、modal 中的哪一层。
 - tooltip 支持 hover 与 focus、使用 `role="tooltip"`/`aria-describedby`，并可用 Escape 关闭；按钮的 `aria-label` 不能由 tooltip 代替。
 
+- SSH Workbench 的 Extension 命令入口要求调用、回应和取消能力齐全，只展示 Host 当前已适配的 Extension 目录。Ask 与扩展对话框使用同步 pending guard 阻止连续点击；缺少扩展回应能力时明确说明并禁用动作。异步命令完成后只更新发起 Session 的输入框草稿，切换和断线后的迟到回应不得恢复旧 modal 或覆盖新任务。
+
+- SSH Git 写界面仅提供暂存、取消暂存与普通提交，保留同一预览确认流程；远程 Session 变化重建面板。提交响应丢失必须显示结果未确认，禁用原确认框的再次提交并引导刷新检查；不能显示为已失败或声称推送未执行。
+
+- SSH 连接页按需读取本机配置中的候选别名；选择器复用共享 Select，来源和诊断由 desktop-client feature 展示。读取/刷新不能覆盖手填内容或自动连接，连接开始和卸载后丢弃迟到结果；发现结果不能标为连接检查通过。
+
+- Host 检查复用连接页输入，检查期间固定目标并保留取消入口；配对码不是检查前置条件。逐项结果与清理失败留在原处，修改任一目标参数清除旧结果；通过不能表述为已认证或已连接。取消绑定检查编号，卸载丢弃旧响应，正式连接和检查互斥。
+
 ### 7.3 响应式与动效
 
 - 当前结构断点以真实布局责任为准：`1280px` 以上可显示 Subagent 第三列；`700px` 及以下进入紧凑 Workbench/Navigator/Composer；`620px`、`500px`、`32rem` 等只用于对应表单或 modal 的局部重排。CSS custom property 不能用于 media query，不建立不可执行的“断点 token”。
@@ -184,7 +200,8 @@ App / composition
 
 - 正文与 thinking 使用同一无 raw HTML 的 CommonMark/GFM + math 管线；`$...$`、`$$...$$`、`\\(...\\)`、`\\[...\\]` 与 `math` code fence 由本地 KaTeX 渲染，KaTeX `trust` 固定关闭，CSS/字体随应用打包，不加载远程脚本或样式。任何长度的 streaming 与 settled 都保持同一 Markdown/数学 renderer，不建立完成态专用路径或纯文本 fallback；块级公式在窄窗口内允许自身横向滚动。
 - Markdown 图片不自动加载远程内容。链接只由用户点击触发并经过受信 IPC sender 校验：`http:`、`https:`、`mailto:` 交给系统外部 URL handler；Linux 绝对路径与无远程 host 的 `file:` URL 交给 Main 使用 `shell.openPath` 打开。Renderer 不直接导航、不读取目标文件，也不接受相对路径或其他 URL scheme。
-- 普通附件采用交互式 TUI 的 `@路径` 引用，GUI 不读取、复制或经 IPC/RPC 发送全文；Agent 通过 Pi 原生 `read` 按需读取。图片使用 Pi RPC 原生 `ImageContent`，遵守当前 2000×2000 与 4.5 MiB base64 边界。
+- 本地/WSL 普通附件采用交互式 TUI 的 `@路径` 引用，GUI 不读取、复制或经 IPC/RPC 发送全文；Agent 通过 Pi 原生 `read` 按需读取。图片使用 Pi RPC 原生 `ImageContent`，遵守当前 2000×2000 与 4.5 MiB base64 边界。
+- SSH 附件草稿只持有 Host 返回的上传编号、名称、类型及大小，不能把 Windows 路径当作远程附件。选择、拖放/粘贴、取消与移除共用输入框生命周期；上传必须有真实等待状态、错误和取消入口，导航/卸载后不得添加旧任务的返回结果。普通文件经 Host 存储后仍由 Agent 按路径读取，图片在 Host 归一化后以原生 ImageContent 提交；不把正文/base64 放进 KernelState 或全局缓存。
 - 用户消息图片与普通工具结果图片必须在 Timeline 直接显示内联缩略图；普通工具图片位于对应过程块之后，不能因 completed process 默认折叠而隐藏。缩略图只在接近可视区域后调用现有 `getMessageImage` 或 `getToolImage(sessionKey, toolCallId, contentIndex)`，并共用同一灯箱语义（loading/error/ready、Escape、外点关闭、Tab/focus restoration）。每次异步读取必须以 request token 联同完整图片 identity 核对完成结果；identity 变化要清空组件 payload、关闭 viewer，dialog title 必须使用唯一 id。Subagent 专用工具不使用该通用图片 UI。Renderer 不得按路径读取图片，也不得把 base64 写入 KernelState、全局 store 或持久缓存；Markdown 图片仍不得自动加载本地或远程 URL。
 - Renderer 不接受任意路径读取。系统选择由 Main 返回明确路径；拖放使用 Electron `webUtils.getPathForFile`；剪贴板/DOM File 只处理用户显式提供的内容。KernelState 与历史投影只含附件摘要，不含文件正文或图片 base64。
 
@@ -230,3 +247,7 @@ git diff --check
 评审 touched CSS 时额外核对：是否新增可映射到现有 token 的 raw color/radius/motion，是否复制了已有 focus/disabled/portal 协议，是否在 feature 外覆盖公共组件内部结构。仓库中尚存的历史直接值属于后续清理清单，不能成为新增偏离的理由，也不把一次功能修改扩大成无关的全库重绘。
 
 按风险补充已有定向测试即可；公共交互原语变更应覆盖其键盘/ARIA contract 或至少覆盖可纯函数化的行为。除非变更本身需要真实运行证据或用户明确要求，不要求启动应用或截图。
+
+### SSH 多主机配置界面
+
+连接页的主机列表、编辑草稿和本机删除确认由 desktop-client feature 拥有；列表、选中配置、凭证可用状态和 revision 来自 Main。选择或保存后的权威 revision 清除旧配对码、旧检查结果和确认；未保存的编辑不能直接连接。存储操作期间禁用连接/检查/编辑，部分失败提供明确重试入口；删除配置和忘记本机凭证不得表述为远端撤销。共享 Select 的内部样式、焦点与键盘协议保持由组件拥有，见 `desktop-host.md` 的 R10 边界。

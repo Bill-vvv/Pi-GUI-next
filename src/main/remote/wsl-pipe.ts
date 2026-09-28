@@ -1,5 +1,6 @@
-import { createHash, randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { dirname, resolve, join } from 'node:path'
+import { BUILD_IDENTITY_FILE_NAME, readBuildIdentityFile, verifyBuildArtifacts } from '../build-identity.ts'
 import { homedir } from 'node:os'
 import { StringDecoder } from 'node:string_decoder'
 import type { Readable, Writable } from 'node:stream'
@@ -7,18 +8,22 @@ import type { Readable, Writable } from 'node:stream'
 import { KERNEL_COMMAND_CHANNEL, KERNEL_EVENT_CHANNEL, OPEN_EXTERNAL_CHANNEL, PROVIDER_AUTH_EVENT_CHANNEL } from '../../shared/kernel-contract.ts'
 import { GIT_COMMAND_CHANNEL } from '../../shared/git-contract.ts'
 import { REMOTE_ADMIN_COMMAND_CHANNEL } from '../../shared/remote-admin-contract.ts'
+import { WSL_DESKTOP_CHANNEL } from './wsl-desktop.ts'
 
 export const WSL_COMMAND_CHANNELS = [KERNEL_COMMAND_CHANNEL, GIT_COMMAND_CHANNEL, REMOTE_ADMIN_COMMAND_CHANNEL, OPEN_EXTERNAL_CHANNEL] as const
 const EVENT_CHANNELS = new Set([KERNEL_EVENT_CHANNEL, PROVIDER_AUTH_EVENT_CHANNEL])
-const COMMAND_CHANNELS = new Set<string>(WSL_COMMAND_CHANNELS)
+const COMMAND_CHANNELS = new Set<string>([...WSL_COMMAND_CHANNELS, WSL_DESKTOP_CHANNEL])
 const PREFIX = '@pi-gui-wsl@'
 const VERSION = 1
 const MAX_FRAME_BYTES = 32 * 1024 * 1024
 const MAX_PENDING = 64
 const ID_PATTERN = /^[0-9a-f-]{36}$/u
 
-export function wslBuildFingerprint(mainFile: string): string {
-  return createHash('sha256').update(readFileSync(mainFile)).digest('hex')
+export function wslBuildFingerprint(mainFile: string, resourcesRoot?: string): string {
+  const identity = readBuildIdentityFile(join(dirname(mainFile), BUILD_IDENTITY_FILE_NAME))
+  if (identity === null) throw new Error('WSL build manifest is missing. Build and run WSL setup again.')
+  verifyBuildArtifacts(resolve(dirname(mainFile), '../..'), identity, resourcesRoot)
+  return identity.artifactDigest
 }
 
 export type WslPeerInfo = { platform: string; pid: number; home: string }

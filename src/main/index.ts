@@ -1,16 +1,19 @@
+import { DesktopAttachmentStore, DesktopAttachmentError } from './remote/desktop-attachment-store.ts'
+import { WindowsAttachmentUploader } from './remote/windows-attachment-uploader.ts'
+import { DESKTOP_ATTACHMENT_CHANNEL, isDesktopAttachmentClientCommand, DESKTOP_ATTACHMENT_COMMAND_TYPES } from '../shared/desktop-attachment-contract.ts'
 import {
   app,
   BrowserWindow,
   dialog,
   ipcMain,
   net,
+  Notification,
   shell,
   type IpcMainInvokeEvent,
   type OpenDialogOptions
 } from 'electron'
-import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { createWriteStream } from 'node:fs'
+import { createWriteStream, existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -25,15 +28,25 @@ import {
   WINDOW_IS_FULLSCREEN_CHANNEL,
   WINDOW_IS_MAXIMIZED_CHANNEL,
   WINDOW_MAXIMIZED_CHANGED_CHANNEL,
+  WINDOW_CHROME_HEIGHT,
+  WINDOW_SET_CHROME_CHANNEL,
   WINDOW_TOGGLE_FULLSCREEN_CHANNEL,
   WINDOW_TOGGLE_MAXIMIZE_CHANNEL,
   SUBAGENT_PACKAGE_NAME,
+  type KernelCommand,
   type KernelEvent,
+  type KernelExtensionSelectionKind,
   type KernelPiPackageInstallJob,
   type KernelProviderAuthEvent
 } from '../shared/kernel-contract.ts'
 import { GIT_COMMAND_CHANNEL } from '../shared/git-contract.ts'
-import type { DesktopHostControlIdentity } from '../shared/desktop-host-contract.ts'
+import { isDesktopHostKernelCommand, type DesktopHostControlIdentity } from '../shared/desktop-host-contract.ts'
+import {
+  DESKTOP_CLIENT_COMMAND_CHANNEL,
+  DESKTOP_CLIENT_STATUS_CHANNEL,
+  isDesktopClientCommand,
+  type DesktopClientStatus
+} from '../shared/desktop-client-contract.ts'
 import {
   REMOTE_ADMIN_COMMAND_CHANNEL,
   isRemoteAdminCommand,
@@ -49,7 +62,6 @@ import {
   type RemoteKernelCommand
 } from '../shared/remote-contract.ts'
 import { normalizeOpenTarget } from '../shared/external-url.ts'
-import { AdvisorDefinitionStore } from './advisor/advisor-definition-store.ts'
 import { PiExtensionStore } from './extension/pi-extension-store.ts'
 import { PiDevPackageService } from './extension/pi-dev-package-service.ts'
 import { resolveRuntimeExtensionPaths } from './runtime/runtime-quiescence.ts'
@@ -69,7 +81,7 @@ import {
   AUTO_HIBERNATE_SWEEP_INTERVAL_MS,
   WorkbenchKernel
 } from './kernel/workbench-kernel.ts'
-import { assertRemoteKernelCommandPolicy } from './remote/remote-command-policy.ts'
+import { assertRemoteKernelCommandPolicy, assertDesktopHostKernelCommandPolicy } from './remote/remote-command-policy.ts'
 import { loadDesktopHostConfig } from './remote/desktop-host-config.ts'
 import {
   startDesktopHostGateway,
@@ -113,8 +125,28 @@ import { SharedPiHost } from './runtime/shared-pi-host.ts'
 import { generateSessionNameWithPi } from './runtime/session-name-generator.ts'
 import { errorMessage } from './utils/errors.ts'
 import { WslPipe, WSL_COMMAND_CHANNELS, wslBuildFingerprint } from './remote/wsl-pipe.ts'
-import { startWslBackend, mapWslAttachments, resolveWslFilePath } from './remote/wsl-backend.ts'
+import { WSL_DESKTOP_CHANNEL, createWslDesktopClient, createWslNotificationPresenter } from './remote/wsl-desktop.ts'
+import { listSystemFonts } from './desktop/system-fonts.ts'
+import { createElectronNotifications } from './desktop/electron-notifications.ts'
+import { createDesktopSettingsStore } from './desktop/desktop-settings-store.ts'
+import { isDesktopEnvironment, type DesktopEnvironment } from '../shared/desktop-settings-contract.ts'
+import {
+  startWslBackend,
+  linuxFileUrlToWindowsPath,
+  mapWslAttachments,
+  resolveWslFilePath,
+  resolveInstalledWslLauncher
+} from './remote/wsl-backend.ts'
+import { createFileDesktopClientHostConfigStore } from './remote/desktop-client-host-config-store.ts'
+import { discoverSystemSshHosts } from './remote/ssh-host-discovery.ts'
+import { createWindowsCredentialManagerStore, desktopHostProfileCredentialTarget } from './remote/desktop-device-credential-store.ts'
+import { createFileDesktopHostProfileStore } from './remote/desktop-host-profile-store.ts'
+import { createWindowsRemoteHostManager, type WindowsRemoteHostManager } from './remote/windows-remote-host-manager.ts'
 import { PiProjectTrust } from './security/pi-project-trust.ts'
+import {
+  BUILD_IDENTITY_FILE_NAME,
+  resolveBuildCommit
+} from './build-identity.ts'
 import { SubagentDefinitionStore } from './subagent/subagent-definition-store.ts'
 import {
   isAllowedRendererUrl,
@@ -124,7 +156,10 @@ import {
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 const wslHostMode = process.env.PI_GUI_WSL_HOST === '1'
-const wslDistribution = process.env.PI_GUI_WSL_DISTRO
+let wslDistribution = process.env.PI_GUI_WSL_DISTRO
+let currentDesktopEnvironment: DesktopEnvironment | null = null
+let switchingEnvironment = false
+const desktopSettings = createDesktopSettingsStore(join(app.getPath('appData'), 'pi-gui-next-desktop', 'settings.json'))
 if (wslHostMode) {
   if (process.platform !== 'linux' || wslDistribution !== undefined) throw new Error('WSL Host requires Linux and cannot also be a client.')
   // Stdout is exclusively the private parent pipe in Host mode.
@@ -137,7 +172,14 @@ if (wslDistribution !== undefined) {
 }
 let wslHostPipe: WslPipe | null = null
 let wslBackend: Awaited<ReturnType<typeof startWslBackend>> | null = null
+let windowsRemoteSession: WindowsRemoteHostManager | null = null
+let clientNotifications: ReturnType<typeof createElectronNotifications> | null = null
+const wslNotificationPresenter = wslHostMode ? createWslNotificationPresenter((command) => {
+  if (wslHostPipe === null) throw new Error('WSL desktop is not connected.')
+  return wslHostPipe.request(WSL_DESKTOP_CHANNEL, command)
+}) : null
 const backendHandlers = new Map<string, (value: unknown) => unknown | Promise<unknown>>()
+let activeBackendRequests = 0
 
 function registerBackendHandler(
   channel: string,
@@ -149,7 +191,11 @@ function registerBackendHandler(
     assertTrustedIpcSender(event, rendererTarget)
     return handler(event, value)
   })
-  backendHandlers.set(channel, (value) => handler(null, value))
+  backendHandlers.set(channel, async (value) => {
+    if (switchingEnvironment) throw new Error('Desktop environment is restarting.')
+    activeBackendRequests += 1
+    try { return await handler(null, value) } finally { activeBackendRequests -= 1 }
+  })
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -164,6 +210,7 @@ let remoteGatewayCleanupError: Error | null = null
 let remoteGatewayHandlers: RemoteGatewayHandlers | null = null
 let tailscaleRemoteManager: TailscaleRemoteManager | null = null
 let desktopHostGateway: DesktopHostGateway | null = null
+let desktopAttachmentStore: DesktopAttachmentStore | null = null
 let remoteDeviceStore: RemoteDeviceStore | null = null
 let shutdownPromise: Promise<void> | null = null
 let autoHibernateTimer: ReturnType<typeof setInterval> | null = null
@@ -222,6 +269,17 @@ async function createMainWindow(rendererTarget: RendererTarget): Promise<void> {
     minWidth: 720,
     minHeight: 560,
     autoHideMenuBar: true,
+    backgroundColor: '#1b1b1a',
+    ...(process.platform === 'win32'
+      ? {
+          titleBarStyle: 'hidden' as const,
+          titleBarOverlay: {
+            color: '#1b1b1a',
+            symbolColor: '#f1eee8',
+            height: WINDOW_CHROME_HEIGHT
+          }
+        }
+      : {}),
     webPreferences: {
       preload: join(mainBundleDirectory, '../preload/index.cjs'),
       contextIsolation: true,
@@ -275,8 +333,25 @@ async function createMainWindow(rendererTarget: RendererTarget): Promise<void> {
 }
 
 async function startApplication(): Promise<void> {
-  if (wslDistribution !== undefined) {
-    await startWslApplication(wslDistribution)
+  if (process.platform === 'win32') app.setAppUserModelId(app.isPackaged ? 'io.pi-gui.next' : process.execPath)
+  if (process.platform === 'win32' && process.env.PI_GUI_PROBE_ONLY !== '1') {
+    const argument = process.argv.find((value) => value.startsWith('--pi-gui-environment='))
+    const selected: unknown = argument !== undefined
+      ? JSON.parse(decodeURIComponent(argument.slice('--pi-gui-environment='.length)))
+      : wslDistribution !== undefined ? { mode: 'wsl', distribution: wslDistribution }
+      : (await desktopSettings.load()).environment ?? (
+        app.isPackaged && existsSync(join(process.resourcesPath, 'wsl/backend.tar'))
+          ? { mode: 'wsl', distribution: 'Ubuntu-24.04' } : { mode: 'ssh' }
+      )
+    if (!isDesktopEnvironment(selected)) throw new Error('Invalid desktop environment selection.')
+    currentDesktopEnvironment = selected
+    wslDistribution = selected.mode === 'wsl' ? selected.distribution : undefined
+    if (selected.mode === 'wsl') {
+      app.setPath('userData', join(app.getPath('appData'), 'pi-gui-next-wsl-client'))
+      process.env.PI_GUI_WSL_LAUNCHER ??= await resolveInstalledWslLauncher(selected.distribution)
+      await startWslApplication(selected.distribution)
+    } else await startWindowsRemoteApplication()
+    await desktopSettings.setEnvironment(selected)
     return
   }
   if (process.env.PI_GUI_PROBE_ONLY === '1') {
@@ -379,7 +454,6 @@ async function startApplication(): Promise<void> {
   }
   packageInstallDrain = packageInstallQueue
   const subagentDefinitionStore = new SubagentDefinitionStore()
-  const advisorDefinitionStore = new AdvisorDefinitionStore()
   const projectTrust = new PiProjectTrust({
     explicitExecutable: process.env.PI_GUI_PI_EXECUTABLE
   })
@@ -583,6 +657,10 @@ async function startApplication(): Promise<void> {
     await tailscaleRemoteManager.activate(prepared, managedTailscaleConfig.port)
   }
 
+  const gitController = new GitCapabilityController(
+    createActiveRegisteredGitProjectResolver(kernel, projectStore)
+  )
+
   const desktopHostConfig = await loadDesktopHostConfig(process.env)
   if (desktopHostConfig.enabled) {
     const uid = process.getuid?.()
@@ -595,10 +673,20 @@ async function startApplication(): Promise<void> {
       path: desktopHostConfig.deviceStorePath,
       uid
     })
+    const attachmentStore = new DesktopAttachmentStore({
+      root: join(app.getPath('userData'), 'desktop-attachments'),
+      materialize: (path) => readPromptAttachments([path])
+    })
+    await attachmentStore.start()
+    desktopAttachmentStore = attachmentStore
     desktopHostGateway = await startDesktopHostGateway({
       config: desktopHostConfig,
       productVersion: app.getVersion(),
-      buildCommit: process.env.PI_GUI_BUILD_COMMIT ?? null,
+      buildCommit: await resolveBuildCommit({
+        identityFilePath: join(mainBundleDirectory, BUILD_IDENTITY_FILE_NAME),
+        ...(!app.isPackaged && process.env.NODE_ENV_ELECTRON_VITE === 'development' ? { developmentRoot: join(mainBundleDirectory, '../..') } : {}),
+        ...(app.isPackaged ? { resourcesRoot: process.resourcesPath } : {})
+      }),
       deviceStore: desktopHostDeviceStore,
       handlers: {
         getControlIdentity: (): DesktopHostControlIdentity => {
@@ -610,9 +698,48 @@ async function startApplication(): Promise<void> {
             sessionKey: state.activeSessionKey
           }
         },
-        assertCommandPolicy: assertRemoteCommandPolicy,
-        dispatchCommand: (command, assertCurrentBoundary) =>
-          dispatchRemoteCommand(command, assertCurrentBoundary)
+        dispatchGitCommand: (command, boundary) => gitController.dispatch(command, undefined, boundary),
+        dispatchAttachmentCommand: async (command, owner, boundary) => {
+          const activeKernel = kernel
+          if (activeKernel === null) throw new Error('Workbench kernel is unavailable.')
+          const assertAttachmentBoundary = async (): Promise<void> => {
+            await boundary()
+            const state = activeKernel.getState()
+            if (!state.projects.some((project) => project.path === owner.projectKey && project.workspaceKind !== 'task')) {
+              throw new DesktopAttachmentError('Attachments require an active registered Project.')
+            }
+            await assertDesktopHostKernelCommandPolicy({ type: 'kernel.steer', message: '' }, { kernel: activeKernel })
+          }
+          return attachmentStore.dispatch(command, owner, assertAttachmentBoundary, async (submission, assertCurrentBoundary) => {
+            if (!isKernelCommand(submission) || (submission.type !== 'kernel.prompt' && submission.type !== 'kernel.steer' && submission.type !== 'kernel.follow-up')) {
+              throw new DesktopAttachmentError('Invalid materialized attachment submission.')
+            }
+            const { attachments: _attachments, ...policyCommand } = submission
+            return dispatchTerminalKernelCommand(submission, {
+              kernel: activeKernel, projectStore,
+              assertCurrentPolicy: async () => {
+                await assertCurrentBoundary()
+                await assertDesktopHostKernelCommandPolicy(policyCommand, { kernel: activeKernel })
+              }
+            })
+          })
+        },
+        assertCommandPolicy: async (command) => {
+          if (kernel === null) throw new Error('Workbench kernel is unavailable.')
+          await assertDesktopHostKernelCommandPolicy(command, { kernel })
+        },
+        dispatchCommand: async (command, assertCurrentBoundary) => {
+          if (isRemoteKernelCommand(command)) return dispatchRemoteCommand(command, assertCurrentBoundary)
+          const activeKernel = kernel
+          if (activeKernel === null) throw new Error('Workbench kernel is unavailable.')
+          return dispatchTerminalKernelCommand(command, {
+            kernel: activeKernel, projectStore,
+            assertCurrentPolicy: async () => {
+              await assertCurrentBoundary?.()
+              await assertDesktopHostKernelCommandPolicy(command, { kernel: activeKernel })
+            }
+          })
+        }
       }
     })
     console.info(
@@ -621,9 +748,7 @@ async function startApplication(): Promise<void> {
     )
   }
 
-  const gitController = new GitCapabilityController(
-    createActiveRegisteredGitProjectResolver(kernel, projectStore)
-  )
+
 
   type StaticSessionPreviewOwner = {
     requestId: string
@@ -708,24 +833,14 @@ async function startApplication(): Promise<void> {
     if (kernel === null) {
       throw new Error('Workbench kernel is unavailable.')
     }
-    if (isRemoteKernelCommand(command)) {
-      return await dispatchTerminalKernelCommand(command, { kernel, projectStore })
+    if (isRemoteKernelCommand(command) || isDesktopHostKernelCommand(command)) {
+      return await dispatchTerminalKernelCommand(command, { kernel, projectStore, pickProjectDirectory: pickOpenDirectory })
     }
     switch (command.type) {
       case 'kernel.get-runtime-memory-diagnostics':
         return kernel.getRuntimeMemoryDiagnostics()
       case 'kernel.list-system-fonts':
         return listSystemFonts()
-      case 'kernel.add-project': {
-        const selection = mainWindow === null
-          ? await dialog.showOpenDialog({ properties: ['openDirectory'] })
-          : await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
-        const selectedPath = selection.filePaths[0]
-        if (selection.canceled || selectedPath === undefined) return kernel.acknowledge()
-        const projectPath = await projectStore.validateProjectPath(selectedPath)
-        await kernel.addProject(projectPath, await projectStore.loadSessionRegistry(projectPath))
-        return kernel.acknowledge()
-      }
       case 'kernel.refresh-workspace-metadata':
         await kernel.refreshWorkspaceMetadata(command.workspaceKey)
         return kernel.acknowledge()
@@ -789,9 +904,6 @@ async function startApplication(): Promise<void> {
         await kernel.activateTask(task.key, await projectStore.loadSessionRegistry(task.path))
         return kernel.acknowledge()
       }
-      case 'kernel.resolve-project-trust':
-        await kernel.resolveProjectTrust(command.requestId, command.choice)
-        return kernel.acknowledge()
       case 'kernel.get-last-assistant-final-answer':
         return kernel.getLastAssistantFinalAnswer()
       case 'kernel.archive-session': {
@@ -853,22 +965,16 @@ async function startApplication(): Promise<void> {
         return { ...kernel.acknowledge(), ...result }
       }
       case 'kernel.export-session': {
+        if (command.filePath === undefined && wslHostMode) return { saved: false }
         const preparation = await kernel.prepareSessionExport()
-        const options = {
-          title: '导出会话为 HTML',
-          defaultPath: sessionExportFileName(preparation.title),
-          filters: [{ name: 'HTML', extensions: ['html'] }]
-        }
-        const selection = mainWindow === null
-          ? await dialog.showSaveDialog(options)
-          : await dialog.showSaveDialog(mainWindow, options)
-        if (selection.canceled || selection.filePath === undefined) return { saved: false }
+        const targetPath = command.filePath ?? await pickSaveHtmlPath(preparation.title)
+        if (targetPath === null) return { saved: false }
         const confirmed = await kernel.prepareSessionExport()
         if (!sameSessionExportIdentity(preparation, confirmed)) {
           throw new Error('Session export cancelled because the active session changed.')
         }
         await writeFile(
-          selection.filePath,
+          targetPath,
           createSessionExportHtml({ title: confirmed.title, messages: confirmed.messages }),
           'utf8'
         )
@@ -897,21 +1003,8 @@ async function startApplication(): Promise<void> {
         await kernel.reorderProjects(command.projectKeys)
         return kernel.acknowledge()
       case 'kernel.install-extension': {
-        const options: OpenDialogOptions = command.kind === 'file'
-          ? {
-              title: '选择 Pi Extension 文件',
-              properties: ['openFile'],
-              filters: [{ name: 'Pi Extension', extensions: ['ts', 'js'] }]
-            }
-          : {
-              title: '选择 Pi Extension 目录',
-              properties: ['openDirectory']
-            }
-        const selection = mainWindow === null
-          ? await dialog.showOpenDialog(options)
-          : await dialog.showOpenDialog(mainWindow, options)
-        const selectedPath = selection.filePaths[0]
-        if (selection.canceled || selectedPath === undefined) return kernel.acknowledge()
+        const selectedPath = command.path ?? await pickExtensionPath(command.kind)
+        if (selectedPath === null) return kernel.acknowledge()
         kernel.setExtensions(await extensionStore.install(selectedPath))
         return kernel.acknowledge()
       }
@@ -946,30 +1039,6 @@ async function startApplication(): Promise<void> {
           MAGIC_CONTEXT_PACKAGE_NAME,
           command.enabled
         )
-      case 'kernel.set-advisor-system-enabled':
-        await kernel.setAdvisorSystemEnabled(command.enabled)
-        return kernel.acknowledge()
-      case 'kernel.set-advisor-extension-enabled': {
-        const matches = (await piDevPackageService.list()).filter(({ source }) =>
-          isAdvisorPackageSource(source)
-        )
-        if (matches.length !== 1) {
-          throw new Error('Advisor package extension source must resolve uniquely.')
-        }
-        return piDevPackageService.setExtensionEnabled(matches[0]!.source, command.enabled)
-      }
-      case 'kernel.list-advisor-definitions': {
-        const projectPath = await activeProjectPath(kernel, projectStore)
-        return advisorDefinitionStore.list(projectPath)
-      }
-      case 'kernel.save-advisor-definition': {
-        const projectPath = await activeProjectPath(kernel, projectStore)
-        return advisorDefinitionStore.save(projectPath, command.definition)
-      }
-      case 'kernel.remove-advisor-definition': {
-        const projectPath = await activeProjectPath(kernel, projectStore)
-        return advisorDefinitionStore.remove(projectPath, command.slug, command.scope)
-      }
       case 'kernel.list-subagent-definitions': {
         const projectPath = await activeProjectPath(kernel, projectStore)
         return subagentDefinitionStore.list(projectPath)
@@ -1058,6 +1127,8 @@ async function startApplication(): Promise<void> {
         return credentials
       }
       case 'kernel.select-prompt-attachments': {
+        if (command.filePaths !== undefined) return readPromptAttachments(command.filePaths)
+        if (wslHostMode) return []
         const options: OpenDialogOptions = {
           title: '选择附件',
           properties: ['openFile', 'multiSelections']
@@ -1086,9 +1157,6 @@ async function startApplication(): Promise<void> {
       case 'kernel.set-shortcuts':
         await kernel.setShortcuts(command.settings)
         return kernel.acknowledge()
-      case 'kernel.invoke-command':
-        await kernel.invokeCommand(command.commandId, command.argument)
-        return kernel.acknowledge()
     }
   })
   registerBackendHandler(OPEN_EXTERNAL_CHANNEL, rendererTarget, async (_event, value: unknown) => {
@@ -1102,15 +1170,25 @@ async function startApplication(): Promise<void> {
     }
     await shell.openExternal(url)
   })
+  registerDesktopClientHandlers(rendererTarget)
   registerWindowHandlers(rendererTarget)
   await startDesktopNotificationBroker(projectStore)
   if (wslHostMode) {
     wslHostPipe = new WslPipe({
       input: process.stdin,
       output: process.stdout,
-      fingerprint: wslBuildFingerprint(fileURLToPath(import.meta.url)),
+      fingerprint: wslBuildFingerprint(fileURLToPath(import.meta.url), app.isPackaged ? process.resourcesPath : undefined),
       expectedPlatform: 'win32',
       dispatch: (channel, value) => {
+        if (channel === WSL_DESKTOP_CHANNEL && wslNotificationPresenter !== null) {
+          if (typeof value === 'object' && value !== null && 'type' in value && value.type === 'environment.prepare-restart' && Object.keys(value).length === 1) {
+            if (activeBackendRequests > 0 || activePackageInstallIds.size > 0) throw new Error('Host 仍有操作或 Package 安装正在进行，请完成后再切换运行环境。')
+            kernel!.prepareEnvironmentSwitch()
+            switchingEnvironment = true
+            return
+          }
+          return wslNotificationPresenter.dispatch(value)
+        }
         const handler = backendHandlers.get(channel)
         if (handler === undefined) throw new Error('Unsupported WSL backend command.')
         return handler(value)
@@ -1161,6 +1239,31 @@ function registerWindowHandlers(rendererTarget: RendererTarget): void {
     if (window === null || window.isDestroyed()) return false
     return window.isMaximized()
   })
+  ipcMain.handle(WINDOW_SET_CHROME_CHANNEL, (event, value: unknown) => {
+    assertTrustedIpcSender(event, rendererTarget)
+    if (
+      value === null ||
+      typeof value !== 'object' ||
+      !('color' in value) ||
+      !('symbolColor' in value) ||
+      typeof value.color !== 'string' ||
+      typeof value.symbolColor !== 'string' ||
+      !/^#[0-9a-f]{6}$/iu.test(value.color) ||
+      !/^#[0-9a-f]{6}$/iu.test(value.symbolColor)
+    ) {
+      throw new Error('Window chrome colors must be #RRGGBB.')
+    }
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (window === null || window.isDestroyed()) return
+    window.setBackgroundColor(value.color)
+    if (process.platform === 'win32') {
+      window.setTitleBarOverlay({
+        color: value.color,
+        symbolColor: value.symbolColor,
+        height: WINDOW_CHROME_HEIGHT
+      })
+    }
+  })
 }
 
 async function startWslApplication(distribution: string): Promise<void> {
@@ -1175,11 +1278,25 @@ async function startWslApplication(distribution: string): Promise<void> {
   await mkdir(app.getPath('logs'), { recursive: true })
   const log = createWriteStream(join(app.getPath('logs'), 'wsl-backend.log'), { flags: 'w', mode: 0o600 })
   log.on('error', (error) => console.error(`[Pi GUI] WSL log failed: ${error.message}`))
+  clientNotifications = createElectronNotifications(Notification)
+  const desktopDispatch = createWslDesktopClient({
+    present: clientNotifications.present,
+    focusWindow: focusMainWindow,
+    onError: (error) => console.error(`[Pi GUI] WSL desktop failed: ${errorMessage(error)}`),
+    send: (command) => {
+      if (wslBackend === null) throw new Error('WSL backend is not connected.')
+      return wslBackend.pipe.request(WSL_DESKTOP_CHANNEL, command)
+    }
+  })
   try {
     wslBackend = await startWslBackend({
+      dispatch: (channel, value) => {
+        if (channel !== WSL_DESKTOP_CHANNEL) throw new Error('Unsupported WSL client command.')
+        return desktopDispatch(value)
+      },
       distribution,
       launcherPath,
-      fingerprint: wslBuildFingerprint(fileURLToPath(import.meta.url)),
+      fingerprint: wslBuildFingerprint(fileURLToPath(import.meta.url), app.isPackaged ? process.resourcesPath : undefined),
       onDiagnostic: (chunk) => { log.write(chunk) },
       onEvent: (channel, value) => {
         if (mainWindow !== null && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, value)
@@ -1207,20 +1324,200 @@ async function startWslApplication(distribution: string): Promise<void> {
         const url = normalizeOpenTarget(value)
         if (url === null) throw new Error('Link target is not allowed.')
         if (!url.startsWith('file:')) { await shell.openExternal(url); return }
+        const error = await shell.openPath(linuxFileUrlToWindowsPath(distribution, url))
+        if (error.length > 0) throw new Error(error)
+        return
       }
+      if (channel === KERNEL_COMMAND_CHANNEL && isKernelCommand(value) && value.type === 'kernel.list-system-fonts') return listSystemFonts()
       const command = channel === KERNEL_COMMAND_CHANNEL && isKernelCommand(value)
-        ? await mapWslAttachments(value, (path) => resolveWslFilePath(distribution, path))
+        ? await mapWslAttachments(
+          await bindWslClientDialogCommand(distribution, value),
+          (path) => resolveWslFilePath(distribution, path)
+        )
         : value
       return backend.pipe.request(channel, command)
     })
   }
   registerWindowHandlers(rendererTarget)
+  registerDesktopClientHandlers(rendererTarget)
   await createMainWindow(rendererTarget)
   console.info(`[Pi GUI] WSL backend connected: ${distribution}`)
 }
 
+async function startWindowsRemoteApplication(): Promise<void> {
+  const buildCommit = await resolveBuildCommit({
+    identityFilePath: join(mainBundleDirectory, BUILD_IDENTITY_FILE_NAME),
+    ...(!app.isPackaged && process.env.NODE_ENV_ELECTRON_VITE === 'development' ? { developmentRoot: join(mainBundleDirectory, '../..') } : {}),
+    ...(app.isPackaged ? { resourcesRoot: process.resourcesPath } : {})
+  })
+  if (buildCommit === null) {
+    throw new Error(
+      'Windows remote-only client needs a verified build manifest. Run pnpm build; the source must match the Linux Host.'
+    )
+  }
+  const rendererTarget = resolveRendererTarget({
+    isPackaged: app.isPackaged,
+    electronViteMode: process.env.NODE_ENV_ELECTRON_VITE,
+    rendererUrl: process.env.ELECTRON_RENDERER_URL,
+    rendererFilePath: join(mainBundleDirectory, '../renderer/index.html')
+  })
+  const hostConfigStore = createFileDesktopClientHostConfigStore(
+    join(app.getPath('userData'), 'desktop-client-host.json')
+  )
+  const session = await createWindowsRemoteHostManager({
+    profileStore: createFileDesktopHostProfileStore(join(app.getPath('userData'), 'desktop-client-hosts.json')),
+    legacyHostStore: hostConfigStore,
+    legacyCredentialStore: createWindowsCredentialManagerStore(),
+    credentialStoreForKey: (key) => createWindowsCredentialManagerStore({ target: desktopHostProfileCredentialTarget(key) }),
+    session: { productVersion: app.getVersion(), buildCommit, onEvent: forwardKernelEvent, onStatus: sendDesktopClientStatus }
+  })
+  windowsRemoteSession = session
+  const attachmentUploader = new WindowsAttachmentUploader()
+  ipcMain.handle(DESKTOP_ATTACHMENT_CHANNEL, async (event, command: unknown, identity: unknown, connectionId: unknown) => {
+    assertTrustedIpcSender(event, rendererTarget)
+    if (!isDesktopAttachmentClientCommand(command)) throw new Error('Invalid desktop attachment request.')
+    if (command.type === 'attachment.cancel-local') { attachmentUploader.cancel(command.operationId); return null }
+    const send = session.captureDispatch(connectionId)
+    const capabilities = session.status().capabilities
+    if (!DESKTOP_ATTACHMENT_COMMAND_TYPES.every((type) => capabilities?.attachmentCommandTypes?.includes(type))) {
+      throw new Error('Desktop Host does not advertise the complete attachment workflow.')
+    }
+    if (command.type === 'attachment.select-local') {
+      return attachmentUploader.upload(command.operationId, identity, async () => {
+        const options: OpenDialogOptions = { title: '选择上传到远程任务的附件', properties: ['openFile', 'multiSelections'] }
+        const selection = mainWindow === null ? await dialog.showOpenDialog(options) : await dialog.showOpenDialog(mainWindow, options)
+        return selection.canceled ? [] : selection.filePaths
+      }, send)
+    }
+    if (command.type === 'attachment.upload-data') return attachmentUploader.upload(command.operationId, identity, async () => command.files, send)
+    return send(command, identity)
+  })
+
+  registerDesktopClientHandlers(rendererTarget)
+  ipcMain.handle(KERNEL_COMMAND_CHANNEL, async (event, command: unknown, identity: unknown, connectionId: unknown) => {
+    assertTrustedIpcSender(event, rendererTarget)
+    if (!isKernelCommand(command)) throw new Error('Unsupported kernel command.')
+    if (command.type === 'kernel.list-system-fonts') return listSystemFonts()
+    return session.dispatch(command, identity, connectionId)
+  })
+  ipcMain.handle(GIT_COMMAND_CHANNEL, (event, command: unknown, identity: unknown, connectionId: unknown) => {
+    assertTrustedIpcSender(event, rendererTarget)
+    if (!isGitCommand(command)) throw new Error('Unsupported Git command.')
+    return session.dispatch(command, identity, connectionId)
+  })
+  ipcMain.handle(REMOTE_ADMIN_COMMAND_CHANNEL, (event) => {
+    assertTrustedIpcSender(event, rendererTarget)
+    throw new Error('Desktop Host pairing and Web Remote are managed on the Linux Host.')
+  })
+  ipcMain.handle(OPEN_EXTERNAL_CHANNEL, async (_event, value: unknown) => {
+    assertTrustedIpcSender(_event, rendererTarget)
+    if (typeof value !== 'string') throw new Error('External link must be a URL string.')
+    const url = normalizeOpenTarget(value)
+    if (url === null) throw new Error('Link target is not allowed.')
+    if (url.startsWith('file:')) {
+      throw new Error('Windows remote-only client cannot open Linux file paths locally.')
+    }
+    await shell.openExternal(url)
+  })
+  registerWindowHandlers(rendererTarget)
+  await createMainWindow(rendererTarget)
+}
+
+function registerDesktopClientHandlers(rendererTarget: RendererTarget): void {
+  ipcMain.handle(DESKTOP_CLIENT_COMMAND_CHANNEL, async (event, command: unknown, connectionId: unknown) => {
+    assertTrustedIpcSender(event, rendererTarget)
+    if (!isDesktopClientCommand(command)) throw new Error('Unsupported desktop client command.')
+    const session = windowsRemoteSession
+    switch (command.type) {
+      case 'desktop-client.host-profiles.save':
+      case 'desktop-client.host-profiles.select':
+      case 'desktop-client.host-profiles.remove':
+      case 'desktop-client.host-profiles.forget':
+      case 'desktop-client.host-profiles.retry': {
+        if (session === null) throw new Error('No SSH client is available.')
+        return session.manageProfiles(command)
+      }
+      case 'desktop-client.check-host': {
+        if (session === null) throw new Error('No SSH client is available.')
+        return session.checkHost(command.operationId, command.config)
+      }
+      case 'desktop-client.cancel-host-check': {
+        if (session === null) throw new Error('No SSH client is available.')
+        return session.cancelHostCheck(command.operationId)
+      }
+      case 'desktop-client.list-ssh-hosts': {
+        if (session === null) throw new Error('No SSH client is available.')
+        return discoverSystemSshHosts()
+      }
+      case 'desktop-client.get-status': return session?.status() ?? { mode: wslDistribution === undefined ? 'local' : 'wsl' }
+      case 'desktop-client.get-environment': return { current: currentDesktopEnvironment, canSwitch: process.platform === 'win32' && process.env.NODE_ENV_ELECTRON_VITE !== 'development' }
+      case 'desktop-client.get-preferences': return command.seed === undefined ? (await desktopSettings.load()).preferences : desktopSettings.initializePreferences(command.seed)
+      case 'desktop-client.set-preferences': return desktopSettings.updatePreferences(command.patch)
+      case 'desktop-client.disconnect': {
+        if (session === null) throw new Error('No SSH client is available.')
+        await session.disconnect()
+        mainWindow?.setTitle('Pi GUI — SSH')
+        return
+      }
+      case 'desktop-client.revoke-pairing': {
+        if (session === null) throw new Error('No SSH client is available.')
+        await session.revokePairing(command.config, connectionId)
+        mainWindow?.setTitle('Pi GUI — SSH')
+        return
+      }
+      case 'desktop-client.connect': {
+        if (session === null) throw new Error('No SSH client is available.')
+        const { type: _type, ...request } = command
+        await session.connect(request)
+        mainWindow?.setTitle(`Pi GUI — SSH: ${request.sshHostAlias}`)
+        return
+      }
+      case 'desktop-client.switch-environment': {
+        if (process.platform !== 'win32' || process.env.NODE_ENV_ELECTRON_VITE === 'development') throw new Error('请通过 workspace start 或 wsl 启动生产构建后切换环境。')
+        if (session !== null && session.status().phase !== 'disconnected') throw new Error('请先断开当前 SSH Host，再切换运行环境。')
+        // Reserve this operation before its first await; a second IPC cannot race the dialog.
+        switchingEnvironment = true
+        let prepared = false
+        try {
+          if (command.environment.mode === 'wsl') {
+            await resolveInstalledWslLauncher(command.environment.distribution, wslBuildFingerprint(fileURLToPath(import.meta.url), app.isPackaged ? process.resourcesPath : undefined))
+          }
+          const confirmation = await dialog.showMessageBox({ type: 'question', message: '重启并切换运行环境？', detail: '未发送的草稿不会迁移。项目和会话继续保存在各自的 Host。', buttons: ['取消', '重启并切换'], defaultId: 0, cancelId: 0 })
+          if (confirmation.response !== 1) return
+          if (wslBackend !== null) await wslBackend.pipe.request(WSL_DESKTOP_CHANNEL, { type: 'environment.prepare-restart' })
+          prepared = true
+          shutdownPromise = stopKernel()
+          await shutdownPromise
+          delete process.env.PI_GUI_WSL_DISTRO
+          delete process.env.PI_GUI_WSL_LAUNCHER
+          const args = process.argv.slice(1).filter((value) => !value.startsWith('--pi-gui-environment='))
+          args.push(`--pi-gui-environment=${encodeURIComponent(JSON.stringify(command.environment))}`)
+          app.relaunch({ args })
+          allowQuit = true
+          app.quit()
+        } catch (error) {
+          if (prepared) {
+            console.error(`[Pi GUI] Environment switch shutdown failed: ${errorMessage(error)}`)
+            dialog.showErrorBox('运行环境切换失败', errorMessage(error))
+            app.exit(1)
+          }
+          throw error
+        } finally {
+          if (!prepared) switchingEnvironment = false
+        }
+      }
+    }
+  })
+}
+
 const probeOnly = process.env.PI_GUI_PROBE_ONLY === '1'
 const canStartApplication = probeOnly || app.requestSingleInstanceLock()
+
+if (process.platform === 'linux' && process.env.PI_GUI_DESKTOP_HOST_MANAGED === '1' && process.env.PI_GUI_DESKTOP_HOST_ENABLED === '1') {
+  // The foreground Host launcher uses the existing before-quit drain on interruption.
+  process.on('SIGINT', () => app.quit())
+  process.on('SIGTERM', () => app.quit())
+}
 
 if (!canStartApplication) {
   allowQuit = true
@@ -1280,6 +1577,13 @@ function sendKernelEvent(event: KernelEvent): void {
   desktopHostGateway?.publish(event)
 }
 
+function sendDesktopClientStatus(status: DesktopClientStatus): void {
+  const window = mainWindow
+  if (window !== null && !window.isDestroyed()) {
+    window.webContents.send(DESKTOP_CLIENT_STATUS_CHANNEL, status)
+  }
+}
+
 function forwardProviderAuthEvent(event: KernelProviderAuthEvent): void {
   wslHostPipe?.publish(PROVIDER_AUTH_EVENT_CHANNEL, event)
   if (mainWindow === null || mainWindow.isDestroyed()) return
@@ -1290,6 +1594,7 @@ async function startDesktopNotificationBroker(projectStore: ProjectStore): Promi
   let candidate: DesktopNotificationBroker | null = null
   try {
     candidate = createDesktopNotificationBroker({
+      ...(wslNotificationPresenter === null ? {} : { presenter: wslNotificationPresenter }),
       iconPath: app.isPackaged
         ? join(process.resourcesPath, 'pi-notify.png')
         : join(mainBundleDirectory, '../../extensions/pi-gui-task-notify/assets/pi-notify.png'),
@@ -1315,43 +1620,18 @@ async function startDesktopNotificationBroker(projectStore: ProjectStore): Promi
 }
 
 function focusMainWindow(): void {
+  if (wslHostMode) {
+    if (wslHostPipe === null) throw new Error('WSL desktop is not connected.')
+    void wslHostPipe.request(WSL_DESKTOP_CHANNEL, { type: 'window.focus' }).catch((error) => {
+      console.error(`[Pi GUI] WSL window focus failed: ${errorMessage(error)}`)
+    })
+    return
+  }
   const window = mainWindow
   if (window === null || window.isDestroyed()) return
   if (window.isMinimized()) window.restore()
   window.show()
   window.focus()
-}
-
-async function listSystemFonts(): Promise<string[]> {
-  if (process.platform !== 'linux') {
-    throw new Error('System font discovery is only available on Linux.')
-  }
-
-  const stdout = await new Promise<string>((resolve, reject) => {
-    execFile(
-      'fc-list',
-      ['--format', '%{family[0]}\n'],
-      { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
-      (error, output) => {
-        if (error !== null) {
-          reject(new Error(`Failed to list system fonts: ${errorMessage(error)}`))
-          return
-        }
-        resolve(output)
-      }
-    )
-  })
-  const fonts = [...new Set(
-    stdout
-      .split(/\r?\n/)
-      .map((font) => font.trim())
-      .filter((font) => font.length > 0)
-  )].sort()
-
-  if (fonts.length === 0) {
-    throw new Error('System font discovery returned no fonts.')
-  }
-  return fonts
 }
 
 async function startApplicationRemoteGateway(
@@ -1566,6 +1846,11 @@ async function dispatchRemoteAdminCommand(
 }
 
 async function stopKernel(): Promise<void> {
+  const remoteSession = windowsRemoteSession
+  windowsRemoteSession = null
+  if (remoteSession !== null) await remoteSession.close()
+  clientNotifications?.close()
+  clientNotifications = null
   const backend = wslBackend
   wslBackend = null
   if (backend !== null) await backend.close()
@@ -1582,6 +1867,9 @@ async function stopKernel(): Promise<void> {
   remoteDeviceStore = null
   if (gateway !== null) await gateway.stop()
   if (desktopGateway !== null) await desktopGateway.stop()
+  const attachmentStore = desktopAttachmentStore
+  desktopAttachmentStore = null
+  if (attachmentStore !== null) await attachmentStore.close()
   const activeKernel = kernel
   const activeSharedPiHost = sharedPiHost
   const projectStore = projectStoreForShutdown
@@ -1676,6 +1964,97 @@ async function activeProjectPath(
   return canonicalPath
 }
 
+async function pickOpenDirectory(): Promise<string | null> {
+  if (wslHostMode) return null
+  const selection = mainWindow === null
+    ? await dialog.showOpenDialog({ properties: ['openDirectory'] })
+    : await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
+  const selectedPath = selection.filePaths[0]
+  if (selection.canceled || selectedPath === undefined) return null
+  return selectedPath
+}
+
+async function bindWslClientDialogCommand(
+  distribution: string,
+  command: KernelCommand
+): Promise<KernelCommand> {
+  if (command.type === 'kernel.add-project' && command.projectPath === undefined) {
+    const selectedPath = await pickOpenDirectory()
+    if (selectedPath === null) return command
+    return {
+      type: 'kernel.add-project',
+      projectPath: await resolveWslFilePath(distribution, selectedPath)
+    }
+  }
+  if (command.type === 'kernel.select-prompt-attachments' && command.filePaths === undefined) {
+    const options: OpenDialogOptions = {
+      title: '选择附件',
+      properties: ['openFile', 'multiSelections']
+    }
+    const selection = mainWindow === null
+      ? await dialog.showOpenDialog(options)
+      : await dialog.showOpenDialog(mainWindow, options)
+    if (selection.canceled || selection.filePaths.length === 0) return command
+    return {
+      type: 'kernel.select-prompt-attachments',
+      filePaths: await Promise.all(
+        selection.filePaths.map((path) => resolveWslFilePath(distribution, path))
+      )
+    }
+  }
+  if (command.type === 'kernel.export-session' && command.filePath === undefined) {
+    const selectedPath = await pickSaveHtmlPath(null)
+    if (selectedPath === null) return command
+    return {
+      type: 'kernel.export-session',
+      filePath: await resolveWslFilePath(distribution, selectedPath)
+    }
+  }
+  if (command.type === 'kernel.install-extension' && command.path === undefined) {
+    const selectedPath = await pickExtensionPath(command.kind)
+    if (selectedPath === null) return command
+    return {
+      type: 'kernel.install-extension',
+      kind: command.kind,
+      path: await resolveWslFilePath(distribution, selectedPath)
+    }
+  }
+  return command
+}
+
+async function pickExtensionPath(kind: KernelExtensionSelectionKind): Promise<string | null> {
+  if (wslHostMode) return null
+  const options: OpenDialogOptions = kind === 'file'
+    ? {
+        title: '选择 Pi Extension 文件',
+        properties: ['openFile'],
+        filters: [{ name: 'Pi Extension', extensions: ['ts', 'js'] }]
+      }
+    : {
+        title: '选择 Pi Extension 目录',
+        properties: ['openDirectory']
+      }
+  const selection = mainWindow === null
+    ? await dialog.showOpenDialog(options)
+    : await dialog.showOpenDialog(mainWindow, options)
+  const selectedPath = selection.filePaths[0]
+  if (selection.canceled || selectedPath === undefined) return null
+  return selectedPath
+}
+
+async function pickSaveHtmlPath(title: string | null): Promise<string | null> {
+  const options = {
+    title: '导出会话为 HTML',
+    defaultPath: sessionExportFileName(title),
+    filters: [{ name: 'HTML', extensions: ['html'] }]
+  }
+  const selection = mainWindow === null
+    ? await dialog.showSaveDialog(options)
+    : await dialog.showSaveDialog(mainWindow, options)
+  if (selection.canceled || selection.filePath === undefined) return null
+  return selection.filePath
+}
+
 function sessionExportFileName(title: string | null): string {
   const base = (title ?? '')
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
@@ -1696,6 +2075,7 @@ function sameSessionExportIdentity(
 }
 
 function assertTrustedIpcSender(event: IpcMainInvokeEvent, rendererTarget: RendererTarget): void {
+  if (switchingEnvironment) throw new Error('Desktop environment is restarting.')
   if (
     mainWindow === null ||
     event.sender !== mainWindow.webContents ||
@@ -1712,22 +2092,4 @@ function isSubagentPackageEnabled(
   return packages.some((pkg) =>
     pkg.packageName === SUBAGENT_PACKAGE_NAME && pkg.extensionEnabled
   )
-}
-
-function isAdvisorPackageSource(source: string): boolean {
-  if (source === 'pi-gui-multi-advisor') return true
-  if (/^npm:pi-gui-multi-advisor(?:@[^/]+)?$/u.test(source)) return true
-  if (!isLocalPackageSource(source)) return false
-  const normalized = source.replace(/[\\/]+$/u, '')
-  return normalized.length > 0 && basename(normalized) === 'pi-gui-multi-advisor'
-}
-
-function isLocalPackageSource(source: string): boolean {
-  return source.startsWith('/') ||
-    source.startsWith('./') ||
-    source.startsWith('../') ||
-    source.startsWith('~/') ||
-    source.startsWith('\\\\') ||
-    /^[a-z]:[\\/]/iu.test(source) ||
-    (!/^[a-z][a-z0-9+.-]*:/iu.test(source) && /[\\/]/u.test(source))
 }

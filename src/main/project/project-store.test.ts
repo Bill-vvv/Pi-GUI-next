@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { ProjectStore } from './project-store.ts'
-import { DEFAULT_SUBAGENT_SETTINGS } from '../../shared/kernel-contract.ts'
+import { DEFAULT_GENERAL_SETTINGS, DEFAULT_SUBAGENT_SETTINGS } from '../../shared/kernel-contract.ts'
 import { DEFAULT_SHORTCUT_SETTINGS } from '../../shared/shortcut-settings.ts'
 
 test('project registrations persist in XDG config and initialize non-sensitive XDG state', async (t) => {
@@ -547,7 +547,7 @@ test('config v13 migrates restart continuation to off and persists v16', async (
 
   assert.equal((await store.loadGeneral()).autoContinueInterruptedTasks, false)
   await store.saveGeneral({
-    startupWorkspaceRestore: 'none',
+    startupWorkspaceRestore: 'restore',
     doubleClickBorderMaximize: true,
     fastExtensionLoading: false,
     autoContinueInterruptedTasks: true
@@ -555,7 +555,7 @@ test('config v13 migrates restart continuation to off and persists v16', async (
   const persisted = JSON.parse(await readFile(configFile, 'utf8'))
   assert.equal(persisted.version, 16)
   assert.deepEqual(persisted.general, {
-    startupWorkspaceRestore: 'none',
+    startupWorkspaceRestore: 'restore',
     doubleClickBorderMaximize: true,
     fastExtensionLoading: false,
     autoContinueInterruptedTasks: true
@@ -1439,4 +1439,28 @@ test('session pointers require a registered project and persist a canonical sess
     sessions: [canonicalPointer],
     activeSessionKey: canonicalPointer.sessionFile
   })
+})
+
+test('general settings reject dormant auto-continue writes without changing stored historical preferences', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-gui-general-invariant-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const configHome = join(root, 'config')
+  const configFile = join(configHome, 'pi-gui-next', 'config.json')
+  const store = new ProjectStore({ configHome, stateHome: join(root, 'state') })
+  await store.saveGeneral(DEFAULT_GENERAL_SETTINGS)
+  const dormant = {
+    ...DEFAULT_GENERAL_SETTINGS,
+    startupWorkspaceRestore: 'none' as const,
+    autoContinueInterruptedTasks: true
+  }
+  const original = await readFile(configFile, 'utf8')
+  assert.throws(() => store.saveGeneral(dormant), /Invalid Pi GUI general settings/)
+  assert.equal(await readFile(configFile, 'utf8'), original)
+
+  // Earlier releases allowed this saved preference. Reading must preserve it.
+  const historical = { ...JSON.parse(original), general: dormant }
+  await writeFile(configFile, JSON.stringify(historical))
+  assert.deepEqual(await store.loadGeneral(), dormant)
+  assert.throws(() => store.saveGeneral(dormant), /Invalid Pi GUI general settings/)
+  assert.deepEqual(await store.loadGeneral(), dormant)
 })

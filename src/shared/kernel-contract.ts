@@ -8,6 +8,12 @@ export const WINDOW_FULLSCREEN_CHANGED_CHANNEL = 'pi-gui:window.fullscreen-chang
 export const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = 'pi-gui:window.toggle-maximize'
 export const WINDOW_IS_MAXIMIZED_CHANNEL = 'pi-gui:window.is-maximized'
 export const WINDOW_MAXIMIZED_CHANGED_CHANNEL = 'pi-gui:window.maximized-changed'
+export const WINDOW_SET_CHROME_CHANNEL = 'pi-gui:window.set-chrome'
+export const WINDOW_CHROME_HEIGHT = 36
+export type WindowChrome = {
+  color: string
+  symbolColor: string
+}
 
 import type { ShortcutSettings } from './shortcut-settings'
 export type { ShortcutActionId, ShortcutBinding, ShortcutSettings } from './shortcut-settings'
@@ -914,68 +920,6 @@ export type KernelAdvisorState = {
   error: string | null
 }
 
-export const ADVISOR_TOOL_NAMES = [
-  'read',
-  'grep',
-  'find',
-  'ls',
-  'edit',
-  'write'
-] as const
-
-export type KernelAdvisorToolName = (typeof ADVISOR_TOOL_NAMES)[number]
-export type KernelAdvisorDefinitionScope = 'builtin' | 'user' | 'inherited' | 'project'
-export type KernelAdvisorEditableScope = Extract<
-  KernelAdvisorDefinitionScope,
-  'user' | 'project'
->
-
-export type KernelAdvisorDefinition = {
-  id: string
-  slug: string
-  scope: KernelAdvisorDefinitionScope
-  sourcePath: string | null
-  sourceOrder: number
-  editable: boolean
-  name: string
-  enabled: boolean
-  model: string | null
-  thinking: ThinkingLevel | null
-  tools: KernelAdvisorToolName[]
-  instructions: string
-}
-
-export type KernelAdvisorSource = {
-  id: string
-  scope: KernelAdvisorDefinitionScope
-  path: string | null
-  sourceOrder: number
-  editable: boolean
-  instructions: string
-}
-
-export type KernelAdvisorDiagnostic = {
-  sourcePath: string
-  message: string
-}
-
-export type KernelAdvisorConfiguration = {
-  definitions: KernelAdvisorDefinition[]
-  sources: KernelAdvisorSource[]
-  diagnostics: KernelAdvisorDiagnostic[]
-}
-
-export type KernelAdvisorDefinitionInput = {
-  originalSlug: string | null
-  scope: KernelAdvisorEditableScope
-  name: string
-  enabled: boolean
-  model: string | null
-  thinking: ThinkingLevel | null
-  tools: KernelAdvisorToolName[]
-  instructions: string
-}
-
 export type KernelState = {
   projects: KernelProjectState[]
   /** Selected top-level Navigator tab. Missing legacy fixtures default to project. */
@@ -1060,10 +1004,11 @@ export type KernelStatePatch = {
 }
 
 export type KernelCommand =
+  | { type: 'kernel.list-project-directories'; directoryPath?: string }
   | { type: 'kernel.get-state' }
   | { type: 'kernel.get-runtime-memory-diagnostics' }
   | { type: 'kernel.list-system-fonts' }
-  | { type: 'kernel.add-project' }
+  | { type: 'kernel.add-project'; projectPath?: string }
   | { type: 'kernel.activate-project'; projectKey: string }
   | { type: 'kernel.refresh-workspace-metadata'; workspaceKey: string }
   | { type: 'kernel.select-navigator'; kind: KernelNavigatorKind }
@@ -1089,7 +1034,7 @@ export type KernelCommand =
   | { type: 'kernel.list-fork-candidates' }
   | { type: 'kernel.fork-session'; entryId: string }
   | { type: 'kernel.navigate-history-prompt'; sessionKey: string; messageId: string }
-  | { type: 'kernel.export-session' }
+  | { type: 'kernel.export-session'; filePath?: string }
   | {
       type: 'kernel.get-message-image'
       sessionKey: string
@@ -1104,7 +1049,7 @@ export type KernelCommand =
     }
   | { type: 'kernel.search-project-paths'; query: string }
   | { type: 'kernel.reorder-projects'; projectKeys: string[] }
-  | { type: 'kernel.install-extension'; kind: KernelExtensionSelectionKind }
+  | { type: 'kernel.install-extension'; kind: KernelExtensionSelectionKind; path?: string }
   | { type: 'kernel.remove-extension'; path: string }
   | { type: 'kernel.search-pi-dev-extensions'; query: string }
   | { type: 'kernel.search-pi-dev-packages'; query: string }
@@ -1114,15 +1059,6 @@ export type KernelCommand =
   | { type: 'kernel.remove-pi-package'; source: string }
   | { type: 'kernel.set-subagent-enabled'; enabled: boolean }
   | { type: 'kernel.set-magic-context-enabled'; enabled: boolean }
-  | { type: 'kernel.set-advisor-system-enabled'; enabled: boolean }
-  | { type: 'kernel.set-advisor-extension-enabled'; enabled: boolean }
-  | { type: 'kernel.list-advisor-definitions' }
-  | { type: 'kernel.save-advisor-definition'; definition: KernelAdvisorDefinitionInput }
-  | {
-      type: 'kernel.remove-advisor-definition'
-      slug: string
-      scope: KernelAdvisorEditableScope
-    }
   | { type: 'kernel.list-subagent-definitions' }
   | { type: 'kernel.save-subagent-definition'; definition: KernelSubagentDefinitionInput }
   | {
@@ -1153,7 +1089,7 @@ export type KernelCommand =
     }
   | { type: 'kernel.cancel-provider-login'; operationId: string }
   | { type: 'kernel.logout-provider'; providerId: string }
-  | { type: 'kernel.select-prompt-attachments' }
+  | { type: 'kernel.select-prompt-attachments'; filePaths?: string[] }
   | {
       type: 'kernel.submit-ask'
       sessionKey: string
@@ -1237,7 +1173,8 @@ export type KernelApi = {
    */
   getRuntimeMemoryDiagnostics: () => Promise<KernelRuntimeMemoryDiagnostics>
   listSystemFonts: () => Promise<string[]>
-  addProject: () => Promise<KernelMutationAck>
+  listProjectDirectories: (directoryPath?: string) => Promise<import('./project-directory-contract').ProjectDirectoryListing>
+  addProject: (projectPath?: string) => Promise<KernelMutationAck>
   activateProject: (projectKey: string) => Promise<KernelMutationAck>
   refreshWorkspaceMetadata: (workspaceKey: string) => Promise<KernelMutationAck>
   selectNavigator: (kind: KernelNavigatorKind) => Promise<KernelMutationAck>
@@ -1289,16 +1226,6 @@ export type KernelApi = {
   removePiPackage: (source: string) => Promise<KernelMutationAck>
   setSubagentEnabled: (enabled: boolean) => Promise<KernelInstalledPackage[]>
   setMagicContextEnabled: (enabled: boolean) => Promise<KernelInstalledPackage[]>
-  setAdvisorSystemEnabled: (enabled: boolean) => Promise<KernelMutationAck>
-  setAdvisorExtensionEnabled: (enabled: boolean) => Promise<KernelInstalledPackage[]>
-  listAdvisorDefinitions: () => Promise<KernelAdvisorConfiguration>
-  saveAdvisorDefinition: (
-    definition: KernelAdvisorDefinitionInput
-  ) => Promise<KernelAdvisorConfiguration>
-  removeAdvisorDefinition: (
-    slug: string,
-    scope: KernelAdvisorEditableScope
-  ) => Promise<KernelAdvisorConfiguration>
   listSubagentDefinitions: () => Promise<KernelSubagentDefinition[]>
   saveSubagentDefinition: (
     definition: KernelSubagentDefinitionInput
@@ -1377,6 +1304,7 @@ export type KernelApi = {
   toggleMaximize: () => Promise<boolean>
   isMaximized: () => Promise<boolean>
   subscribeMaximized: (listener: (maximized: boolean) => void) => () => void
+  setWindowChrome: (chrome: WindowChrome) => Promise<void>
   subscribeProviderAuth: (listener: (event: KernelProviderAuthEvent) => void) => () => void
   subscribe: (listener: (event: KernelEvent) => void) => () => void
 }

@@ -54,6 +54,7 @@ type PinnedSessionNavigatorProps = {
     runtimeStatus: KernelState['sessions'][number]['runtimeStatus']
   ) => void
   onArchiveSession: (sessionKey: string) => Promise<void>
+  archiveAvailable?: boolean
 }
 
 export function PinnedSessionNavigator({
@@ -75,7 +76,8 @@ export function PinnedSessionNavigator({
   onActivateProject,
   onActivateTask,
   onOpenSession,
-  onArchiveSession
+  onArchiveSession,
+  archiveAvailable = true
 }: PinnedSessionNavigatorProps): React.JSX.Element | null {
   const [activityClock, setActivityClock] = useState(() => Date.now())
   const [unreadSessionKeys, setUnreadSessionKeys] = useState<Set<string>>(() => new Set())
@@ -226,7 +228,8 @@ export function PinnedSessionNavigator({
                       onTogglePinnedSession(item.identity)
                     }}
                   />
-                  <IconButton
+                  {archiveAvailable ? (
+                    <IconButton
                     className="session-archive"
                     icon="archive"
                     label={`归档${itemNoun}`}
@@ -241,6 +244,7 @@ export function PinnedSessionNavigator({
                       })().catch(() => undefined)
                     }}
                   />
+                  ) : null}
                 </div>
               </div>
             </div>

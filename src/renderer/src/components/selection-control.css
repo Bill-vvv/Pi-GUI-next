@@ -79,6 +79,8 @@
   line-height: var(--line-control);
   text-align: left;
   cursor: pointer;
+  /* Active options track pointer and keyboard selection without a fading trail. */
+  transition: none;
 }
 
 :is(.select-control-option, .font-select-option):hover:not(:disabled),

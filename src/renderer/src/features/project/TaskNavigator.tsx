@@ -59,6 +59,7 @@ type TaskNavigatorProps = {
     runtimeStatus: KernelState['sessions'][number]['runtimeStatus']
   ) => void
   onArchiveSession: (sessionKey: string) => Promise<void>
+  archiveAvailable?: boolean
 }
 
 export function TaskNavigator({
@@ -80,7 +81,8 @@ export function TaskNavigator({
   onClearArchivedSessionPreview,
   onActivateTask,
   onOpenSession,
-  onArchiveSession
+  onArchiveSession,
+  archiveAvailable = true
 }: TaskNavigatorProps): React.JSX.Element {
   const [activityClock, setActivityClock] = useState(() => Date.now())
   const [unreadSessionKeys, setUnreadSessionKeys] = useState<Set<string>>(() => new Set())
@@ -267,7 +269,8 @@ export function TaskNavigator({
                         onTogglePinnedSession(pinIdentity)
                       }}
                     />
-                    <IconButton
+                    {archiveAvailable ? (
+                      <IconButton
                       className="session-archive"
                       icon="archive"
                       label="归档任务"
@@ -282,6 +285,7 @@ export function TaskNavigator({
                         })().catch(() => undefined)
                       }}
                     />
+                    ) : null}
                   </div>
                 </div>
               </div>

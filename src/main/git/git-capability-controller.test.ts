@@ -98,6 +98,7 @@ function service(options: {
   executeBranchSync?: (request: GitBranchSyncExecutionRequest) => GitBranchSyncExecutionResult | Promise<GitBranchSyncExecutionResult>
 }): GitCapabilityService {
   return {
+    readFile: async () => { throw new Error('Unexpected file read in fixture') },
     refreshSafe: async (signal) => await options.refresh(signal),
     getDiff: async (request) => options.getDiff === undefined
       ? diffResult(request)
@@ -704,6 +705,30 @@ test('project-tags prepare and execute results and forwards validated execute re
   assert.equal(forwarded.expectedPushTarget?.remote, 'origin')
 })
 
+test('Git controller carries the current remote boundary through to both write services', async () => {
+  let writeCalls = 0
+  let boundaryCalls = 0
+  const boundary = async () => { boundaryCalls += 1 }
+  const stub = service({ refresh: () => ({ ok: true, state: state(PROJECT) }) })
+  stub.mutateFile = async (_request, _signal, guard) => {
+    assert.equal(guard, boundary)
+    await guard!()
+    writeCalls += 1
+    throw new Error('Synthetic write failure')
+  }
+  stub.executeCommit = async (_request, _signal, guard) => {
+    assert.equal(guard, boundary)
+    await guard!()
+    writeCalls += 1
+    throw new Error('Synthetic write failure')
+  }
+  const controller = new GitCapabilityController(async () => PROJECT, () => stub)
+  await controller.dispatch({ type: 'git.mutate-file', projectKey: PROJECT, request: mutationRequest() }, undefined, boundary)
+  await controller.dispatch({ type: 'git.execute-commit', projectKey: PROJECT, request: commitRequest() }, undefined, boundary)
+  assert.equal(writeCalls, 2)
+  assert.ok(boundaryCalls >= 2)
+})
+
 test('prepare and execute reject before service when active Project is unavailable', async () => {
   let factoryCalls = 0
   const controller = new GitCapabilityController(
@@ -1018,4 +1043,52 @@ test('dispatches prepare and execute branch-sync through the active Project queu
   assert.equal(executed.result.fetch?.status, 'succeeded')
   assert.equal(executed.result.postView.ok, false)
   assert.equal(executeCalls, 1)
+})
+
+test('queued Git commands repeat their caller boundary before entering the service', async () => {
+  const held = deferred<GitRefreshResult>()
+  let reads = 0
+  let valid = true
+  const controller = new GitCapabilityController(async (path) => path, () => service({
+    refresh: () => { reads += 1; return reads === 1 ? held.promise : { ok: true, state: state(PROJECT) } }
+  }))
+  const first = controller.dispatch({ type: 'git.refresh', projectKey: PROJECT })
+  await waitFor(() => reads === 1)
+  let checks = 0
+  const second = controller.dispatch({ type: 'git.refresh', projectKey: PROJECT }, undefined, async () => {
+    checks += 1
+    if (!valid) throw new Error('Caller navigation changed')
+  })
+  const rejected = assert.rejects(second, /Caller navigation changed/)
+  await waitFor(() => checks === 1)
+  valid = false
+  held.resolve({ ok: true, state: state(PROJECT) })
+  await first
+  await rejected
+  assert.equal(reads, 1)
+})
+
+test('ancestor authorization cannot publish a grant after its caller loses authority', async () => {
+  let valid = true
+  let authorizedReads = 0
+  const controller = new GitCapabilityController(async (path) => path, (_path, options) => service({
+    refresh: () => {
+      if (options?.authorizedRepositoryRoot) {
+        authorizedReads += 1
+        valid = false
+        return { ok: true, state: state(PROJECT, 'repository', REPOSITORY) }
+      }
+      return { ok: true, state: state(PROJECT, 'trust-required', REPOSITORY) }
+    }
+  }))
+  await controller.dispatch({ type: 'git.refresh', projectKey: PROJECT })
+  const response = await controller.dispatch({ type: 'git.authorize-ancestor-repository', projectKey: PROJECT,
+    repositoryRoot: REPOSITORY, expectedStatusRevision: HASH }, undefined, async () => {
+    if (!valid) throw new Error('Caller disconnected')
+  })
+  assert.equal(response.result.ok, false)
+  const next = await controller.dispatch({ type: 'git.refresh', projectKey: PROJECT })
+  assert.ok(next.result.ok)
+  assert.equal(next.result.state.kind, 'trust-required')
+  assert.equal(authorizedReads, 1)
 })

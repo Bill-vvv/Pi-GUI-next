@@ -1,0 +1,4 @@
+# The same checkout is read by Windows Node and Linux shell launchers.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf

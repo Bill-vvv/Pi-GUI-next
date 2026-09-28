@@ -4,6 +4,9 @@ import {
   type ChildProcess,
   type SpawnOptions
 } from 'node:child_process'
+import { constants } from 'node:fs'
+import { access } from 'node:fs/promises'
+import { join } from 'node:path'
 
 import type { WindowsRemoteHostConfig } from './windows-remote-host-config.ts'
 
@@ -27,16 +30,58 @@ type SpawnSsh = (
   options: SpawnOptions
 ) => ChildProcess
 
-type InspectSsh = (sshHostAlias: string) => Promise<string>
+type InspectSsh = (sshHostAlias: string, signal?: AbortSignal) => Promise<string>
 type VerifyUnauthenticatedDesktopHost = (connectionSignal: AbortSignal) => Promise<void>
 
+export class SystemSshTunnelError extends Error {
+  readonly kind: 'network' | 'authentication' | 'host-key' | 'configuration' | 'unknown'
+
+  constructor(
+    message: string,
+    kind: SystemSshTunnelError['kind']
+  ) {
+    super(message)
+    this.name = 'SystemSshTunnelError'
+    this.kind = kind
+  }
+}
+
+export class SystemSshStartupCleanupError extends AggregateError {
+  readonly tunnel: SystemSshTunnel
+  constructor(cause: unknown, cleanupError: unknown, tunnel: SystemSshTunnel) {
+    super([cause, cleanupError], 'OpenSSH startup failed and its process could not be stopped.')
+    this.tunnel = tunnel
+  }
+}
+
 export type StartSystemSshTunnelOptions = {
+  signal?: AbortSignal
+  onStage?: (stage: 'ssh-executable' | 'ssh-configuration' | 'ssh-tunnel') => void
   config: WindowsRemoteHostConfig
   verifyUnauthenticatedDesktopHost: VerifyUnauthenticatedDesktopHost
   inspectSsh?: InspectSsh
   spawnSsh?: SpawnSsh
+  sshExecutable?: string
   startupTimeoutMs?: number
   stopTimeoutMs?: number
+}
+
+export async function resolveSystemSshExecutable(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.Dict<string> = process.env
+): Promise<string> {
+  if (platform !== 'win32') return 'ssh'
+  const systemRoot = env.SystemRoot
+  if (typeof systemRoot !== 'string' || systemRoot.length === 0) {
+    throw new Error('Windows remote-only client requires SystemRoot to locate System OpenSSH.')
+  }
+  const executable = join(systemRoot, 'System32', 'OpenSSH', 'ssh.exe')
+  try {
+    await access(executable, constants.F_OK)
+  } catch {
+    throw new Error(`System OpenSSH was not found at ${executable}.`)
+  }
+  return executable
 }
 
 const MAX_SSH_STDERR_CHARS = 8 * 1024
@@ -82,10 +127,6 @@ export function buildSystemSshTunnelArgs(config: WindowsRemoteHostConfig): strin
 export async function startSystemSshTunnel(
   options: StartSystemSshTunnelOptions
 ): Promise<SystemSshTunnel> {
-  const inspectSsh = options.inspectSsh ?? inspectSystemSshConfiguration
-  const resolvedConfig = await inspectSsh(options.config.sshHostAlias)
-  assertNoConfiguredForwardings(resolvedConfig)
-
   const startupTimeoutMs = parseTimeout(
     options.startupTimeoutMs ?? DEFAULT_SSH_STARTUP_TIMEOUT_MS,
     'SSH startup timeout',
@@ -97,14 +138,28 @@ export async function startSystemSshTunnel(
     60_000
   )
 
+  const startupDeadline = Date.now() + startupTimeoutMs
+  options.signal?.throwIfAborted()
+  options.onStage?.('ssh-executable')
+  const sshExecutable = await waitForStartupReadiness(
+    options.sshExecutable === undefined ? resolveSystemSshExecutable() : Promise.resolve(options.sshExecutable),
+    startupDeadline, () => '', options.signal
+  )
+  options.signal?.throwIfAborted()
+  options.onStage?.('ssh-configuration')
+  const inspectSsh = options.inspectSsh ?? ((alias, signal) => inspectSystemSshConfiguration(sshExecutable, alias, signal))
+  const resolvedConfig = await waitForStartupReadiness(inspectSsh(options.config.sshHostAlias, options.signal), startupDeadline, () => '', options.signal)
+  assertNoConfiguredForwardings(resolvedConfig)
+  options.signal?.throwIfAborted()
+  options.onStage?.('ssh-tunnel')
+
   const spawnSsh = options.spawnSsh ?? spawn
-  const child = spawnSsh('ssh', buildSystemSshTunnelArgs(options.config), {
+  const child = spawnSsh(sshExecutable, buildSystemSshTunnelArgs(options.config), {
     windowsHide: true,
     stdio: ['ignore', 'ignore', 'pipe']
   })
   const connectionController = new AbortController()
   const processErrorListeners = new Set<(error: Error) => void>()
-  const startupDeadline = Date.now() + startupTimeoutMs
   const forwardingMarker = `Local forwarding listening on 127.0.0.1 port ${options.config.localPort}.`
   let stopRequested = false
   let settled = false
@@ -153,10 +208,11 @@ export async function startSystemSshTunnel(
     settled = true
     connectionController.abort()
     if (!startupSettled) {
-      failStartup(new Error(
+      failStartup(sshStartupError(
         error === null
           ? `OpenSSH terminated before tunnel readiness (code ${String(code)}, signal ${String(signal)}).`
-          : `OpenSSH could not start: ${error}`
+          : `OpenSSH could not start: ${error}`,
+        stderr
       ))
     }
     resolveTermination({
@@ -183,47 +239,52 @@ export async function startSystemSshTunnel(
   })
   child.once('exit', (code, signal) => finish(code, signal, null))
 
-  try {
-    await waitForStartupReadiness(startupReady, startupDeadline, () => stderr)
-    await waitForStartupReadiness(
-      options.verifyUnauthenticatedDesktopHost(connectionController.signal),
-      startupDeadline,
-      () => stderr
-    )
-    if (settled || connectionController.signal.aborted) {
-      throw new Error('OpenSSH terminated before the unauthenticated Desktop Host readiness probe completed.')
-    }
-  } catch (error) {
-    connectionController.abort()
-    await terminateFailedStartup(child, termination, settled, stopTimeoutMs)
-    throw error
-  }
-
-  return {
+  const ownedTunnel: SystemSshTunnel = {
     connectionSignal: connectionController.signal,
     termination,
     async stop() {
       if (settled) return
       stopRequested = true
       connectionController.abort()
-      await stopOwnedProcess(
-        child,
-        termination,
-        processErrorListeners,
-        lifecycleError,
-        stopTimeoutMs
-      )
+      await stopOwnedProcess(child, termination, processErrorListeners, stopTimeoutMs)
     }
   }
+
+  try {
+    await waitForStartupReadiness(startupReady, startupDeadline, () => stderr, options.signal)
+    options.signal?.throwIfAborted()
+    await waitForStartupReadiness(
+      options.verifyUnauthenticatedDesktopHost(connectionController.signal),
+      startupDeadline,
+      () => stderr,
+      options.signal
+    )
+    options.signal?.throwIfAborted()
+    if (settled || connectionController.signal.aborted) {
+      throw new Error('OpenSSH terminated before the unauthenticated Desktop Host readiness probe completed.')
+    }
+  } catch (error) {
+    try { await ownedTunnel.stop() } catch (cleanupError) {
+      throw new SystemSshStartupCleanupError(error, cleanupError, ownedTunnel)
+    }
+    throw error
+  }
+
+  return ownedTunnel
 }
 
-async function inspectSystemSshConfiguration(sshHostAlias: string): Promise<string> {
+async function inspectSystemSshConfiguration(
+  sshExecutable: string,
+  sshHostAlias: string,
+  signal?: AbortSignal
+): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    execFile('ssh', ['-G', sshHostAlias], {
+    execFile(sshExecutable, ['-G', sshHostAlias], {
       windowsHide: true,
       encoding: 'utf8',
       maxBuffer: MAX_SSH_CONFIG_BYTES,
-      timeout: 10_000
+      timeout: 10_000,
+      signal
     }, (error, stdout, stderr) => {
       if (error !== null) {
         const detail = appendBounded('', stderr || error.message).trim()
@@ -250,17 +311,24 @@ function hasAuthenticationSuccessMarker(value: string): boolean {
   return /(?:^|\n)(?:debug1: )?(?:Authenticated to .+ using ".+"\.|Authentication succeeded \(.+\)\.)/u.test(value)
 }
 
-async function waitForStartupReadiness(
-  readiness: Promise<void>,
+async function waitForStartupReadiness<T>(
+  readiness: Promise<T>,
   deadline: number,
-  readStderr: () => string
-): Promise<void> {
+  readStderr: () => string,
+  signal?: AbortSignal
+): Promise<T> {
   const remainingMs = deadline - Date.now()
-  if (remainingMs < 1) throw startupTimeoutError(readStderr())
+  if (remainingMs < 1) return Promise.race([Promise.reject(startupTimeoutError(readStderr())), readiness])
   let timeout: ReturnType<typeof setTimeout> | null = null
+  let onAbort: (() => void) | undefined
   try {
-    await Promise.race([
+    return await Promise.race([
       readiness,
+      new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(signal?.reason ?? new Error('SSH startup was cancelled.'))
+        if (signal?.aborted) onAbort()
+        else signal?.addEventListener('abort', onAbort, { once: true })
+      }),
       new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(() => reject(startupTimeoutError(readStderr())), remainingMs)
         timeout.unref?.()
@@ -268,43 +336,34 @@ async function waitForStartupReadiness(
     ])
   } finally {
     if (timeout !== null) clearTimeout(timeout)
+    if (onAbort) signal?.removeEventListener('abort', onAbort)
   }
 }
 
 function startupTimeoutError(stderr: string): Error {
-  const detail = stderr.trim()
-  return new Error(
-    `OpenSSH tunnel readiness timed out${detail.length > 0 ? `: ${detail}` : '.'}`
-  )
+  return sshStartupError('OpenSSH tunnel readiness timed out.', stderr, 'network')
 }
 
-async function terminateFailedStartup(
-  child: ChildProcess,
-  termination: Promise<SystemSshTunnelTermination>,
-  settled: boolean,
-  timeoutMs: number
-): Promise<void> {
-  if (settled) return
-  try {
-    child.kill()
-  } catch {
-    return
-  }
-  try {
-    await waitForTermination(termination, timeoutMs)
-  } catch {
-    // Preserve the original startup/readiness error.
-  }
+function sshStartupError(
+  message: string,
+  stderr: string,
+  defaultKind: SystemSshTunnelError['kind'] = 'unknown'
+): SystemSshTunnelError {
+  const detail = stderr.trim()
+  let kind = defaultKind
+  if (/host key verification failed|remote host identification has changed/iu.test(detail)) kind = 'host-key'
+  else if (/permission denied|authentication failed|no more authentication methods/iu.test(detail)) kind = 'authentication'
+  else if (/address already in use|bad configuration|bad forwarding|cannot listen to port|could not request local forwarding|could not resolve hostname.*(?:name or service not known|no such host)/iu.test(detail)) kind = 'configuration'
+  else if (/connection refused|connection timed out|connection reset|connection closed|network is unreachable|no route to host|temporary failure in name resolution|broken pipe/iu.test(detail)) kind = 'network'
+  return new SystemSshTunnelError(`${message}${detail.length > 0 ? ` ${detail}` : ''}`, kind)
 }
 
 async function stopOwnedProcess(
   child: ChildProcess,
   termination: Promise<SystemSshTunnelTermination>,
   processErrorListeners: Set<(error: Error) => void>,
-  existingError: Error | null,
   timeoutMs: number
 ): Promise<void> {
-  if (existingError !== null) throw existingError
   let rejectProcessError!: (error: Error) => void
   const processError = new Promise<never>((_resolve, reject) => {
     rejectProcessError = reject

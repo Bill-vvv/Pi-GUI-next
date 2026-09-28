@@ -21,6 +21,7 @@ import type {
 } from '../project/session-transcript-tail.ts'
 import type {
   PiRpcAvailableModel,
+  PiRpcEvent,
   PiRpcExtensionInventory,
   PiRpcSessionEntry,
   PiRpcSessionState,
@@ -370,62 +371,6 @@ class DeferredSessionStatsRuntimeHost extends FakeRuntimeHost {
   }
 }
 
-function advisorCapabilities(enabled: boolean): unknown {
-  return {
-    type: 'custom',
-    customType: 'pi-gui.multi-advisor/capabilities',
-    data: {
-      protocolVersion: 2,
-      identity: 'pi-gui-multi-advisor',
-      version: '1.0.0',
-      enabled,
-      multiAdvisor: true,
-      liveToggle: true,
-      roster: true,
-      status: true,
-      usage: true,
-      dump: false,
-      subagents: false,
-      severities: ['nit', 'concern', 'blocker'],
-      deliveries: ['aside', 'steer'],
-      readOnlyTools: ['read', 'grep', 'find', 'ls'],
-      optionalTools: ['edit', 'write']
-    }
-  }
-}
-
-class AdvisorRuntimeHost extends FakeRuntimeHost {
-  private confirmToggle = true
-
-  constructor(enabled: boolean) {
-    super(undefined, [], [{
-      name: 'advisor',
-      source: 'extension',
-      sourceInfo: {
-        source: 'pi-gui-multi-advisor',
-        scope: 'project',
-        origin: 'package'
-      }
-    }], undefined, undefined, [advisorCapabilities(enabled)])
-  }
-
-  setConfirmToggle(confirmToggle: boolean): void {
-    this.confirmToggle = confirmToggle
-  }
-
-  override async send(command: RuntimeCommand): Promise<RuntimeCommandResult> {
-    if (
-      command.type === 'invoke_extension_command' &&
-      command.name === 'advisor' &&
-      this.confirmToggle &&
-      (command.args === 'on' || command.args === 'off')
-    ) {
-      this.replaceEntries([advisorCapabilities(command.args === 'on')])
-    }
-    return super.send(command)
-  }
-}
-
 class ForkingRuntimeHost extends FakeRuntimeHost {
   private forked = false
   private readonly entries: PiRpcSessionEntry[]
@@ -434,6 +379,7 @@ class ForkingRuntimeHost extends FakeRuntimeHost {
   private readonly forkedMessages: unknown[]
   private readonly failForkedProjection: boolean
   private readonly cancelFork: boolean
+  private readonly forkedEntries?: PiRpcSessionEntry[]
 
   constructor(
     sessionState: PiRpcSessionState,
@@ -443,7 +389,8 @@ class ForkingRuntimeHost extends FakeRuntimeHost {
     forkedState: PiRpcSessionState,
     forkedMessages: unknown[],
     failForkedProjection = false,
-    cancelFork = false
+    cancelFork = false,
+    forkedEntries?: PiRpcSessionEntry[]
   ) {
     super(sessionState, messages)
     this.entries = entries
@@ -452,11 +399,15 @@ class ForkingRuntimeHost extends FakeRuntimeHost {
     this.forkedMessages = forkedMessages
     this.failForkedProjection = failForkedProjection
     this.cancelFork = cancelFork
+    this.forkedEntries = forkedEntries
   }
 
   override async send(command: RuntimeCommand): Promise<RuntimeCommandResult> {
     if (command.type === 'get_entries') {
       this.commands.push(command)
+      if (this.forked && this.forkedEntries !== undefined) {
+        return { type: 'entries', entries: this.forkedEntries, leafId: this.forkedEntries.at(-1)?.id ?? null }
+      }
       return { type: 'entries', entries: this.entries, leafId: this.leafId }
     }
     if (command.type === 'fork') {
@@ -842,57 +793,11 @@ function fileError(code: string, message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code })
 }
 
-test('advisor system toggle gates capability and refreshes the confirmed state', async () => {
-  const unavailableRuntime = new FakeRuntimeHost()
-  const unavailableKernel = new WorkbenchKernel(
-    () => unavailableRuntime,
-    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
-    kernelOptions()
-  )
-  await unavailableKernel.start()
-  assert.equal(unavailableKernel.getState().advisor.compatibility, 'unavailable')
-  await assert.rejects(
-    unavailableKernel.setAdvisorSystemEnabled(true),
-    /live toggle is unavailable/
-  )
-
-  const runtime = new AdvisorRuntimeHost(false)
-  const kernel = new WorkbenchKernel(
-    () => runtime,
-    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
-    kernelOptions()
-  )
-  await kernel.start()
-  assert.deepEqual(kernel.getState().advisor, {
-    compatibility: 'ready',
-    extensionVersion: '1.0.0',
-    systemEnabled: false,
-    liveToggle: true,
-    multiAdvisor: true,
-    roster: true,
-    error: null
-  })
-
-  await kernel.setAdvisorSystemEnabled(true)
-  assert.equal(kernel.getState().advisor.systemEnabled, true)
-  assert.deepEqual(runtime.commands.slice(-2), [
-    { type: 'invoke_extension_command', name: 'advisor', args: 'on' },
-    { type: 'get_entries' }
-  ])
-
-  runtime.setConfirmToggle(false)
-  await assert.rejects(
-    kernel.setAdvisorSystemEnabled(false),
-    /did not confirm/
-  )
-  assert.equal(kernel.getState().advisor.systemEnabled, true)
-})
-
 test('boolean toggle commands require strict payloads', () => {
   for (const type of [
     'kernel.set-openai-fast-mode',
-    'kernel.set-advisor-system-enabled',
-    'kernel.set-advisor-extension-enabled'
+    'kernel.set-subagent-enabled',
+    'kernel.set-magic-context-enabled'
   ] as const) {
     assert.equal(isKernelCommand({ type, enabled: true }), true)
     assert.equal(isKernelCommand({ type, enabled: false }), true)
@@ -1473,6 +1378,19 @@ test('ask cancellation is identity-bound and replies only to the matching pendin
   })
 })
 
+test('environment restart rejects active work and closes admission once settled', async () => {
+  const runtime = new FakeRuntimeHost()
+  const kernel = new WorkbenchKernel(() => runtime, { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' }, kernelOptions())
+  await kernel.start()
+  runtime.emit({ type: 'pi-event', event: { type: 'agent_start' } })
+  assert.throws(() => kernel.prepareEnvironmentSwitch(), /有会话正在工作/)
+  runtime.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+  kernel.prepareEnvironmentSwitch()
+  await assert.rejects(kernel.prompt('must not start after restart preparation'), /shutdown is in progress/)
+  await kernel.stop()
+  assert.equal(runtime.stopCalls, 1)
+})
+
 test('normal start and stop follows the lifecycle', async () => {
   const runtime = new FakeRuntimeHost()
   const kernel = new WorkbenchKernel(() => runtime, { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' }, kernelOptions())
@@ -1597,14 +1515,22 @@ test('general settings default to restore and update only after persistence succ
     } as unknown as GeneralSettings),
     /Invalid general settings/
   )
-  await kernel.setGeneral({
+  await assert.rejects(kernel.setGeneral({
     startupWorkspaceRestore: 'none',
+    doubleClickBorderMaximize: true,
+    fastExtensionLoading: false,
+    autoContinueInterruptedTasks: true
+  }), /Invalid general settings/)
+  assert.equal(persisted.length, 1)
+  assert.equal(kernel.getState().general.autoContinueInterruptedTasks, false)
+  await kernel.setGeneral({
+    startupWorkspaceRestore: 'restore',
     doubleClickBorderMaximize: true,
     fastExtensionLoading: false,
     autoContinueInterruptedTasks: true
   })
   assert.deepEqual(persisted[1], {
-    startupWorkspaceRestore: 'none',
+    startupWorkspaceRestore: 'restore',
     doubleClickBorderMaximize: true,
     fastExtensionLoading: false,
     autoContinueInterruptedTasks: true
@@ -3370,6 +3296,34 @@ test('invokes adapted Extension commands directly and expands prompt commands th
 
   await assert.rejects(kernel.invokeCommand('missing-command', ''), /not available/)
   await assert.rejects(kernel.invokeCommand(SET_MODEL_COMMAND_ID, 'missing-provider'), /provider\/model/)
+})
+
+test('a completed Extension command echoes only to its originating Session after navigation', async () => {
+  const first = { projectPath: '/tmp/project', sessionFile: '/tmp/extension-origin.jsonl', sessionId: 'origin', sessionName: 'Origin' }
+  const second = { projectPath: '/tmp/project', sessionFile: '/tmp/extension-next.jsonl', sessionId: 'next', sessionName: 'Next' }
+  const originRuntime = new DeferredExtensionCommandRuntimeHost(
+    { sessionId: first.sessionId, sessionFile: first.sessionFile, sessionName: first.sessionName }, [],
+    [{ name: 'run', source: 'extension', sourceInfo: { source: 'npm:pi-subagents@0.37.2', scope: 'user', origin: 'package' } }]
+  )
+  const nextRuntime = new FakeRuntimeHost({ sessionId: second.sessionId, sessionFile: second.sessionFile, sessionName: second.sessionName })
+  const runtimes = [originRuntime, nextRuntime]
+  const kernel = new WorkbenchKernel(() => { const runtime = runtimes.shift(); assert.ok(runtime); return runtime },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' }, {
+      ...kernelOptions(first), sessionRegistry: { sessions: [first, second], activeSessionKey: first.sessionFile }
+    })
+  await kernel.resumeSession()
+  const descriptor = kernel.getState().commands.find((command) => command.source === 'extension' && command.name === 'run')!
+  const invoked = kernel.invokeCommand(descriptor.id, 'explorer inspect')
+  await kernel.activateSession(second.sessionFile)
+  originRuntime.resolveNextExtensionCommand()
+  await invoked
+  assert.equal(kernel.getState().activeSessionKey, second.sessionFile)
+  assert.equal(kernel.getState().conversation.entries.some((entry) => entry.kind === 'command'), false)
+  await kernel.activateSession(first.sessionFile)
+  const echoes = kernel.getState().conversation.entries.filter((entry) => entry.kind === 'command')
+  assert.equal(echoes.length, 1)
+  assert.equal(echoes[0]?.text, '/run explorer inspect')
+  await kernel.stop()
 })
 
 test('projects and resolves dialogs only for the exact adapted command invocation', async () => {
@@ -6341,11 +6295,9 @@ test('activateSession relaunches every unhealthy or identity-mismatched managed 
     mutate: (context: {
       projectPath: string
       state: {
-        activeProjectKey: string | null
         activeSessionKey: string | null
         runtime: { status: RuntimeStatus }
         session: { id: string | null }
-        sessions: Array<{ key: string, id: string | null }>
       }
     }) => void
   }> = [
@@ -6354,21 +6306,15 @@ test('activateSession relaunches every unhealthy or identity-mismatched managed 
       mutate: (context: {
         projectPath: string
         state: {
-          activeProjectKey: string | null
           activeSessionKey: string | null
           runtime: { status: RuntimeStatus }
           session: { id: string | null }
-          sessions: Array<{ key: string, id: string | null }>
         }
       }) => { context.state.runtime.status = status }
     })),
     {
       name: 'Project path mismatch',
       mutate: (context) => { context.projectPath = '/tmp/different-project' }
-    },
-    {
-      name: 'active Project mismatch',
-      mutate: (context) => { context.state.activeProjectKey = '/tmp/different-project' }
     },
     {
       name: 'Session file mismatch',
@@ -6438,11 +6384,9 @@ test('activateSession relaunches every unhealthy or identity-mismatched managed 
         contextBySessionKey: Map<string, {
           projectPath: string
           state: {
-            activeProjectKey: string | null
             activeSessionKey: string | null
             runtime: { status: RuntimeStatus }
             session: { id: string | null }
-            sessions: Array<{ key: string, id: string | null }>
           }
         }>
       }
@@ -9592,6 +9536,64 @@ test('fork candidates follow the active entry path and fork migrates the same ru
   )
 })
 
+for (const scenario of [
+  { name: 'defers registration until its first answer', error: 'ENOENT', hasAssistant: false, provisional: true },
+  { name: 'does not hide permission errors', error: 'EACCES', hasAssistant: false, provisional: false },
+  { name: 'does not hide a missing populated session', error: 'ENOENT', hasAssistant: true, provisional: false }
+]) test(`fork without a saved file ${scenario.name}`, async () => {
+  const original: SessionPointer = {
+    projectPath: '/tmp/project', sessionFile: '/tmp/original-first-fork.jsonl',
+    sessionId: 'original-first-fork', sessionName: null
+  }
+  const forked: SessionPointer = {
+    ...original, sessionFile: '/tmp/empty-first-fork.jsonl', sessionId: 'empty-first-fork'
+  }
+  const assistant = { role: 'assistant', content: [{ type: 'text', text: 'Existing answer' }], timestamp: 1 }
+  const runtime = new ForkingRuntimeHost(
+    { sessionId: original.sessionId, sessionFile: original.sessionFile, isStreaming: false },
+    [assistant],
+    [{ id: 'first-user', parentId: null, type: 'message', timestamp: '2026-09-14T00:00:00Z',
+      message: { role: 'user', content: { text: 'Selected prompt', hasImage: false } } }],
+    'first-user',
+    { sessionId: forked.sessionId, sessionFile: forked.sessionFile, isStreaming: false },
+    scenario.hasAssistant ? [assistant] : [], false, false, []
+  )
+  const persisted: SessionPointer[] = []
+  let fileWritten = false
+  const kernel = new WorkbenchKernel(
+    () => runtime,
+    { projects: [{ path: original.projectPath }], activeProjectKey: original.projectPath },
+    { ...kernelOptions(original, persisted), validateSession: async (pointer) => {
+      if (pointer.sessionId === forked.sessionId && !fileWritten) throw fileError(scenario.error, 'fork file not available')
+      return pointer
+    } }
+  )
+  await kernel.activateSession(original.sessionFile)
+  if (!scenario.provisional) {
+    await assert.rejects(kernel.forkSession('first-user'), /fork file not available/)
+    assert.equal(kernel.getState().activeSessionKey, original.sessionFile)
+    assert.equal(persisted.some(({ sessionId }) => sessionId === forked.sessionId), false)
+    return
+  }
+  assert.deepEqual(await kernel.forkSession('first-user'), { draft: 'Selected prompt', cancelled: false })
+  assert.equal(kernel.getState().activeSessionKey, forked.sessionFile)
+  assert.equal(kernel.getState().runtime.status, 'ready')
+  assert.equal(kernel.getState().session.resumeAvailable, false)
+  assert.deepEqual(kernel.getState().sessions.filter(({ provisional }) => !provisional).map(({ key }) => key), [original.sessionFile])
+  assert.equal(kernel.getState().sessions.find(({ key }) => key === forked.sessionFile)?.provisional, true)
+  assert.equal(persisted.some(({ sessionId }) => sessionId === forked.sessionId), false)
+  assert.equal(runtime.stopCalls, 0)
+  await kernel.prompt('Edited fork prompt')
+  fileWritten = true
+  runtime.emit({ type: 'pi-event', event: { type: 'message_end', message: assistant } })
+  runtime.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(kernel.getState().session.resumeAvailable, true)
+  assert.deepEqual(kernel.getState().sessions.map(({ key }) => key).sort(), [original.sessionFile, forked.sessionFile].sort())
+  assert.equal(persisted.filter(({ sessionId }) => sessionId === forked.sessionId).length, 1)
+  assert.equal(runtime.stopCalls, 0)
+})
+
 test('fork buffers runtime events across persisted identity commit and replays them on the fork', async () => {
   const original: SessionPointer = {
     projectPath: '/tmp/project',
@@ -12424,7 +12426,8 @@ test('Stage 2B Context event gate and dispatcher have no loadContext or suppress
   }
   assert.equal(eventGate.includes('deferredEvents'), true)
   assert.equal(eventGate.includes('deliverContextEvent'), true)
-  assert.equal(dispatcher.includes('handleInactiveRuntimeEvent'), true)
+  assert.equal(dispatcher.includes('handleContextPiEvent'), true)
+  assert.equal(source.includes('handleInactiveRuntimeEvent'), false)
   assert.equal(source.includes('handleInactiveCompactionLegacy'), false)
   assert.equal(source.includes('private suppressEvents'), false)
 })
@@ -14508,4 +14511,337 @@ test('Conversation pagination commands require exact strict payloads', () => {
   assert.equal(isKernelCommand({ type: 'kernel.load-earlier-conversation', request: { ...request, beforeIndex: -1 } }), false)
   assert.equal(isKernelCommand({ type: 'kernel.get-last-assistant-final-answer' }), true)
   assert.equal(isKernelCommand({ type: 'kernel.get-last-assistant-final-answer', extra: true }), false)
+})
+
+test('retired Advisor controls are rejected at the Kernel command boundary', () => {
+  for (const command of [
+    { type: 'kernel.set-advisor-system-enabled', enabled: true },
+    { type: 'kernel.set-advisor-extension-enabled', enabled: true },
+    { type: 'kernel.list-advisor-definitions' },
+    { type: 'kernel.save-advisor-definition', definition: {
+      originalSlug: null, scope: 'user', name: 'Review', enabled: true,
+      model: null, thinking: null, tools: ['read'], instructions: ''
+    } },
+    { type: 'kernel.remove-advisor-definition', slug: 'review', scope: 'user' }
+  ]) {
+    assert.equal(isKernelCommand(command), false, command.type)
+  }
+})
+
+for (const background of [false, true]) {
+  test(`host settlement during provisional persistence retries ENOENT in ${background ? 'background' : 'foreground'}`, async (t) => {
+    const runtime = new FakeRuntimeHost({
+      sessionId: 'settlement-race',
+      sessionFile: '/tmp/settlement-race.jsonl'
+    })
+    const foreground = new FakeRuntimeHost({
+      sessionId: 'other-session',
+      sessionFile: '/tmp/other-session.jsonl',
+      sessionName: 'Other session'
+    })
+    const runtimes = [runtime, foreground]
+    const persisted: SessionPointer[] = []
+    let validationCalls = 0
+    let releaseValidation!: () => void
+    const validationGate = new Promise<void>((resolve) => { releaseValidation = resolve })
+    const kernel = new WorkbenchKernel(
+      () => {
+        const next = runtimes.shift()
+        assert.ok(next)
+        return next
+      },
+      { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+      {
+        ...kernelOptions(null, persisted),
+        validateSession: async (pointer) => {
+          if (pointer.sessionId !== 'settlement-race') return pointer
+          validationCalls += 1
+          if (validationCalls === 1) throw fileError('ENOENT', 'session not written yet')
+          if (validationCalls === 2) {
+            await validationGate
+            throw fileError('ENOENT', 'session write still in flight')
+          }
+          return pointer
+        }
+      }
+    )
+    t.after(() => kernel.stop())
+    await kernel.start()
+    await kernel.prompt('Persist this completed task')
+    if (background) await kernel.start()
+    const foregroundBefore = kernel.getState().conversation
+
+    runtime.emit({
+      type: 'pi-event',
+      event: {
+        type: 'message_end',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Done' }], timestamp: 1 }
+      }
+    })
+    assert.equal(validationCalls, 2)
+    runtime.emit({ type: 'activity-settled' })
+    assert.equal(validationCalls, 2, 'settlement must not start a concurrent commit')
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('settled Session was never materialized')), 1000)
+      const unsubscribe = kernel.subscribe(() => {
+        if (!kernel.getState().sessions.some((session) =>
+          session.id === 'settlement-race' && session.provisional !== true
+        )) return
+        clearTimeout(timer)
+        unsubscribe()
+        resolve()
+      })
+      t.after(() => { clearTimeout(timer); unsubscribe() })
+      releaseValidation()
+    })
+    assert.equal(validationCalls, 3)
+    assert.equal(persisted.filter((pointer) => pointer.sessionId === 'settlement-race').length, 1)
+    if (background) {
+      assert.equal(kernel.getState().session.id, 'other-session')
+      assert.deepEqual(kernel.getState().conversation, foregroundBefore)
+      await kernel.activateSession('/tmp/settlement-race.jsonl')
+    }
+    assert.equal(kernel.getState().session.id, 'settlement-race')
+    assert.equal(kernel.getState().runtime.status, 'ready')
+    assert.equal(kernel.getState().session.settled, true)
+    assert.equal(kernel.getState().session.resumeAvailable, true)
+  })
+}
+
+for (const stopBeforeReply of [false, true]) {
+  test(`delayed prompt acceptance ${stopBeforeReply ? 'cannot restart naming after stop' : 'starts naming on the originating background Session'}`, async (t) => {
+    let acceptPrompt!: () => void
+    const promptReply = new Promise<void>((resolve) => { acceptPrompt = resolve })
+    class DelayedPromptRuntimeHost extends FakeRuntimeHost {
+      override async send(command: RuntimeCommand): Promise<RuntimeCommandResult> {
+        if (command.type === 'prompt') await promptReply
+        return super.send(command)
+      }
+    }
+    const origin = new DelayedPromptRuntimeHost({
+      sessionId: 'prompt-origin',
+      sessionFile: '/tmp/prompt-origin.jsonl',
+      model: { provider: 'openai', id: 'gpt-purpose' }
+    })
+    const foreground = new FakeRuntimeHost({
+      sessionId: 'prompt-foreground',
+      sessionFile: '/tmp/prompt-foreground.jsonl',
+      sessionName: 'Foreground'
+    })
+    const runtimes = [origin, foreground]
+    const requests: SessionNameGenerationRequest[] = []
+    const kernel = new WorkbenchKernel(
+      () => {
+        const next = runtimes.shift()
+        assert.ok(next)
+        return next
+      },
+      { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+      {
+        ...kernelOptions(null, [], [], [], async (request) => {
+          requests.push(request)
+          return 'Origin purpose'
+        }),
+        validateSession: async (pointer) => {
+          if (pointer.sessionId === 'prompt-origin') throw fileError('ENOENT', 'not written yet')
+          return pointer
+        }
+      }
+    )
+    t.after(() => kernel.stop())
+    await kernel.start()
+    const prompt = kernel.prompt('Name the originating task')
+    if (stopBeforeReply) await kernel.stop()
+    else await kernel.start()
+    const beforeReply = kernel.getState()
+
+    acceptPrompt()
+    await prompt
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    assert.equal(requests.length, stopBeforeReply ? 0 : 1)
+    assert.deepEqual(origin.commands.filter(({ type }) => type === 'set_session_name'),
+      stopBeforeReply ? [] : [{ type: 'set_session_name', name: 'Origin purpose' }])
+    assert.deepEqual(foreground.commands.filter(({ type }) => type === 'set_session_name'), [])
+    assert.equal(kernel.getState().activeSessionKey, beforeReply.activeSessionKey)
+    assert.deepEqual(kernel.getState().conversation, beforeReply.conversation)
+    assert.deepEqual(kernel.getState().session, beforeReply.session)
+    if (stopBeforeReply) {
+      assert.equal(kernel.getState().runtime.status, 'stopped')
+    } else {
+      assert.equal(requests[0]?.userMessage, 'Name the originating task')
+      assert.equal(kernel.getState().sessions.find(({ id }) => id === 'prompt-origin')?.name,
+        'Origin purpose')
+    }
+  })
+}
+
+for (const provisional of [false, true]) {
+  test(`delayed prompt failure settles its ${provisional ? 'provisional' : 'persisted'} owner after a Session switch`, async (t) => {
+    const origin = new RejectablePromptRuntimeHost()
+    const foreground = new FakeRuntimeHost({
+      sessionId: 'failure-foreground', sessionFile: '/tmp/failure-foreground.jsonl', sessionName: 'B'
+    })
+    const runtimes = [origin, foreground]
+    const kernel = new WorkbenchKernel(
+      () => { const runtime = runtimes.shift(); assert.ok(runtime); return runtime },
+      { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+      {
+        ...kernelOptions(),
+        validateSession: async (pointer) => {
+          if (provisional && pointer.sessionId === 'session-1') throw fileError('ENOENT', 'not materialized')
+          return pointer
+        }
+      }
+    )
+    t.after(() => kernel.stop())
+    await kernel.start()
+    const submitted = kernel.prompt('This request will be rejected')
+    const rejected = assert.rejects(submitted, /prompt rejected/)
+    await origin.promptEntered
+    await kernel.start()
+    const before = kernel.getState()
+    const events: KernelEvent[] = []
+    kernel.subscribe((event) => events.push(event))
+    origin.rejectPrompt(new Error('prompt rejected'))
+    await rejected
+
+    const owner = stage2BInternals(kernel).contextByRuntime.get(origin)
+    assert.ok(owner)
+    assert.equal(owner.state.runtime.status, 'ready')
+    assert.equal(owner.state.runtime.lastError, 'prompt rejected')
+    assert.equal(owner.state.session.settled, true)
+    assert.equal(owner.state.conversation.activeRunStartIndex, null)
+    assert.deepEqual(kernel.getState().session, before.session)
+    assert.deepEqual(kernel.getState().conversation, before.conversation)
+    const snapshots = events.filter((event) => event.type === 'kernel.state-changed')
+    assert.equal(snapshots.length, 1)
+    assert.equal(events.some((event) => event.type === 'kernel.state-patched'), false)
+    const originSummary = snapshots[0]!.state.sessions.find(({ id }) => id === 'session-1')
+    assert.equal(originSummary?.runtimeStatus, 'ready')
+    if (provisional) {
+      assert.equal(snapshots[0]!.state.projects[0]?.sessions?.some(({ id }) => id === 'session-1'), false)
+    }
+  })
+}
+
+for (const crossProject of [false, true]) {
+  test(`Session events produce equivalent foreground and background state ${crossProject ? 'across Projects' : 'within a Project'}`, async (t) => {
+    // Both executions consume the same event clock, including projector duration/timestamps.
+    let eventTime = 1_000
+    t.mock.method(Date, 'now', () => eventTime)
+    const a: SessionPointer = {
+      projectPath: '/tmp/project', sessionFile: '/tmp/equivalent-a.jsonl',
+      sessionId: 'equivalent-a', sessionName: 'A'
+    }
+    const b: SessionPointer = {
+      projectPath: crossProject ? '/tmp/other-project' : a.projectPath,
+      sessionFile: '/tmp/equivalent-b.jsonl', sessionId: 'equivalent-b', sessionName: 'B'
+    }
+    const makeKernel = async (background: boolean) => {
+      const owner = new FakeRuntimeHost({ sessionId: a.sessionId, sessionFile: a.sessionFile, sessionName: 'A' })
+      const other = new FakeRuntimeHost({ sessionId: b.sessionId, sessionFile: b.sessionFile, sessionName: 'B' })
+      const runtimes = [owner, other]
+      const registry = { sessions: crossProject ? [a] : [a, b], activeSessionKey: a.sessionFile }
+      const kernel = new WorkbenchKernel(
+        () => { const runtime = runtimes.shift(); assert.ok(runtime); return runtime },
+        { projects: [...new Set([a.projectPath, b.projectPath])].map((path) => ({ path })), activeProjectKey: a.projectPath },
+        {
+          ...kernelOptions(), now: () => 1_000,
+          sessionRegistry: registry,
+          sessionRegistriesByProject: new Map([
+            [a.projectPath, registry],
+            ...(crossProject ? [[b.projectPath, { sessions: [b], activeSessionKey: b.sessionFile }] as [string, ProjectSessionRegistry]] : [])
+          ])
+        }
+      )
+      t.after(() => kernel.stop())
+      await kernel.activateSession(a.sessionFile)
+      if (background) {
+        if (crossProject) await kernel.activateProject(b.projectPath, { sessions: [b], activeSessionKey: b.sessionFile })
+        await kernel.activateSession(b.sessionFile)
+      }
+      return { kernel, owner }
+    }
+    const foreground = await makeKernel(false)
+    const background = await makeKernel(true)
+    const selectedBefore = background.kernel.getState()
+    const backgroundEvents: KernelEvent[] = []
+    background.kernel.subscribe((event) => backgroundEvents.push(event))
+    const pi = (event: PiRpcEvent): RuntimeHostEvent => ({ type: 'pi-event', event })
+    const trace: RuntimeHostEvent[] = [
+      { type: 'activity-started' },
+      { type: 'activity-started' },
+      pi({ type: 'agent_start' }),
+      pi({ type: 'message_end', message: { role: 'user', content: 'Inspect the project', timestamp: 10 } }),
+      pi({ type: 'queue_update', steering: ['steer'], followUp: ['follow up'] }),
+      pi({ type: 'queue_update', steering: 'invalid', followUp: [] }),
+      pi({ type: 'tool_execution_start', toolCallId: 'inspect', toolName: 'read', args: { path: 'README.md' } }),
+      pi({ type: 'tool_execution_update', toolCallId: 'inspect', toolName: 'read', partialResult: { content: [{ type: 'text', text: 'progress' }] } }),
+      pi({ type: 'tool_execution_end', toolCallId: 'inspect', toolName: 'read', result: { content: [{ type: 'text', text: 'Done' }] }, isError: false }),
+      pi({ type: 'message_update', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'Check' }, { type: 'text', text: 'Result' }], timestamp: 20 } }),
+      pi({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Result' }], timestamp: 20 } }),
+      pi({ type: 'extension_error', error: 'Extension message' }),
+      pi({ type: 'unknown_custom_event' }),
+      pi({ type: 'agent_settled' }),
+      { type: 'activity-settled' },
+      pi({ type: 'session_info_changed', name: 'Renamed A' }),
+      { type: 'diagnostic', kind: 'stderr', message: 'stderr tail', stderrChars: 11 },
+      { type: 'diagnostic', kind: 'protocol', message: 'protocol warning', stderrChars: 11 },
+      { type: 'process-exit', code: 9, signal: null },
+      pi({ type: 'agent_start' }),
+      pi({ type: 'message_update', message: { role: 'assistant', content: 'Late result', timestamp: 99 } })
+    ]
+    for (const [index, event] of trace.entries()) {
+      eventTime = 1_000 + index * 10
+      const beforeCount = backgroundEvents.length
+      foreground.owner.emit(event)
+      background.owner.emit(event)
+      const first = stage2BInternals(foreground.kernel).contextByRuntime.get(foreground.owner)!.state
+      const second = stage2BInternals(background.kernel).contextByRuntime.get(background.owner)!.state
+      assert.deepEqual(second, first, `event ${index}: ${event.type}`)
+      assert.deepEqual(background.kernel.getState().session, selectedBefore.session)
+      assert.deepEqual(background.kernel.getState().conversation, selectedBefore.conversation)
+      assert.ok(backgroundEvents.length - beforeCount <= 1, 'one bounded navigation publication per event')
+      if (event.type === 'pi-event' && ['message_end', 'message_update', 'tool_execution_start', 'tool_execution_update', 'tool_execution_end', 'queue_update', 'extension_error', 'unknown_custom_event'].includes(event.event.type)) {
+        assert.equal(backgroundEvents.length, beforeCount, 'ordinary background events must not publish')
+      }
+    }
+    assert.equal(backgroundEvents.some((event) => event.type === 'kernel.state-patched'), false)
+    assert.equal(foreground.kernel.getState().runtime.status, 'crashed')
+    assert.equal(foreground.kernel.getState().runtime.exitCode, 9)
+    assert.equal(foreground.kernel.getState().session.pendingMessageCount, 0)
+    assert.ok(backgroundEvents.every((event) => event.type !== 'kernel.state-changed' || event.state.session.id === b.sessionId))
+  })
+}
+
+test('Context retains only Session state and reactivation uses current workspace settings', async (t) => {
+  const runtimes = ['ownership-a', 'ownership-b'].map((id) => new FakeRuntimeHost({
+    sessionId: id, sessionFile: `/tmp/${id}.jsonl`, sessionName: id
+  }))
+  const a = runtimes[0]!
+  const queue = [...runtimes]
+  const kernel = new WorkbenchKernel(
+    () => { const runtime = queue.shift(); assert.ok(runtime); return runtime },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    kernelOptions()
+  )
+  t.after(() => kernel.stop())
+  await kernel.start()
+  await kernel.start()
+  const appearance = { ...kernel.getState().appearance, theme: 'dark' as const }
+  await kernel.setAppearance(appearance)
+  a.emit({ type: 'pi-event', event: { type: 'queue_update', steering: ['queued'], followUp: [] } })
+  a.emit({ type: 'diagnostic', kind: 'protocol', message: 'background warning', stderrChars: 0 })
+  for (const context of stage2BInternals(kernel).contexts) {
+    assert.deepEqual(Object.keys(context.state).sort(), [
+      'activeSessionKey', 'advisor', 'availableModels', 'commands',
+      'conversation', 'extensionDialog', 'runtime', 'session'
+    ])
+  }
+  await kernel.activateSession('/tmp/ownership-a.jsonl')
+  assert.deepEqual(kernel.getState().appearance, appearance)
+  assert.equal(kernel.getState().activeProjectKey, '/tmp/project')
+  assert.deepEqual(kernel.getState().session.pendingSteeringMessages, ['queued'])
+  assert.equal(kernel.getState().runtime.lastError, 'background warning')
 })

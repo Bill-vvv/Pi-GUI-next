@@ -1,4 +1,15 @@
 export const GIT_COMMAND_CHANNEL = 'pi-gui:git-command'
+export const GIT_FILE_READ_MAX_BYTES = 256 * 1024
+export type GitFileReadRequest = Omit<GitDiffRequest, 'kind'>
+export type GitFileReadResult = {
+  path: string
+  state: GitDiffState
+  text: string | null
+  byteCount: number
+  statusRevision: string | null
+  error: GitErrorDto | null
+}
+export type GitFileReadResponse = GitProjectResult<GitFileReadResult>
 export const GIT_REPOSITORY_RELATIVE_PATH_MAX_UTF8_BYTES = 4_096
 export const GIT_COMMIT_MESSAGE_MAX_UTF8_BYTES = 64 * 1024
 export const GIT_REF_NAME_MAX_UTF8_BYTES = 1_024
@@ -457,6 +468,7 @@ export type GitBranchSyncExecutionResult = {
 }
 
 export type GitCommand =
+  | { type: 'git.read-file'; projectKey: string; request: GitFileReadRequest }
   | { type: 'git.refresh'; projectKey: string }
   | {
       type: 'git.authorize-ancestor-repository'
@@ -490,6 +502,7 @@ export type GitHistoryFileDiffResponse = GitProjectResult<GitHistoryFileDiffResu
 export type GitBranchSyncPrepareResponse = GitProjectResult<GitBranchSyncPrepareResult>
 export type GitBranchSyncExecutionResponse = GitProjectResult<GitBranchSyncExecutionResult>
 export type GitCommandResponse =
+  | GitFileReadResponse
   | GitRefreshResponse
   | GitDiffResponse
   | GitMutationResponse
@@ -502,6 +515,7 @@ export type GitCommandResponse =
   | GitBranchSyncExecutionResponse
 
 export type GitApi = {
+  readFile: (projectKey: string, request: GitFileReadRequest) => Promise<GitFileReadResponse>
   refresh: (projectKey: string) => Promise<GitRefreshResponse>
   authorizeAncestorRepository: (
     projectKey: string,

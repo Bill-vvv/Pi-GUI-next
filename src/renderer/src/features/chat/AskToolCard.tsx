@@ -52,6 +52,7 @@ export function AskToolCard({
   const [draft, setDraft] = useState<AnswerDraft>(() => initialDraft(questions))
   const [activeStep, setActiveStep] = useState(0)
   const [localPending, setLocalPending] = useState<'submit' | 'cancel' | null>(null)
+  const pendingRef = useRef(false)
   const [localError, setLocalError] = useState<string | null>(null)
   const answers = useMemo(() => buildAskAnswers(questions, draft), [draft, questions])
   const completedQuestions = useMemo(() => questions.map((question) => {
@@ -100,7 +101,8 @@ export function AskToolCard({
   }
 
   const submit = async (): Promise<void> => {
-    if (interaction === null || interaction.sessionKey === null || answers === null) return
+    if (pendingRef.current || ask.status === 'submitting' || interaction === null || interaction.sessionKey === null || answers === null) return
+    pendingRef.current = true
     const sessionKey = interaction.sessionKey
     setLocalPending('submit')
     setLocalError(null)
@@ -109,12 +111,14 @@ export function AskToolCard({
     } catch (error) {
       setLocalError(unknownErrorMessage(error))
     } finally {
+      pendingRef.current = false
       setLocalPending(null)
     }
   }
 
   const cancel = async (): Promise<void> => {
-    if (interaction === null || interaction.sessionKey === null) return
+    if (pendingRef.current || ask.status === 'submitting' || interaction === null || interaction.sessionKey === null) return
+    pendingRef.current = true
     const sessionKey = interaction.sessionKey
     setLocalPending('cancel')
     setLocalError(null)
@@ -123,6 +127,7 @@ export function AskToolCard({
     } catch (error) {
       setLocalError(unknownErrorMessage(error))
     } finally {
+      pendingRef.current = false
       setLocalPending(null)
     }
   }

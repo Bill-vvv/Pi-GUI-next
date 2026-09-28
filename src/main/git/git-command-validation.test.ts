@@ -22,6 +22,18 @@ const OID = 'b'.repeat(40)
 const PROJECT = '/tmp/pi-gui-project'
 const REPOSITORY = '/tmp/pi-gui-repository'
 
+test('file read commands require an exact Linux path and complete snapshot without arbitrary read options', () => {
+  const { kind: _kind, ...request } = diffRequest
+  assert.ok(isGitCommand({ type: 'git.read-file', projectKey: PROJECT, request }))
+  for (const patch of [{ path: '../private' }, { path: '/etc/passwd' }, { kind: 'working' },
+    { encoding: 'base64' }, { limit: 100 }, { expectedStatusRevision: '' }, { expectedHeadOid: 'HEAD' }]) {
+    assert.equal(isGitCommand({ type: 'git.read-file', projectKey: PROJECT, request: { ...request, ...patch } }), false)
+  }
+  assert.equal(isGitCommand({ type: 'git.read-file', projectKey: 'C:\\project', request }), false)
+  const { expectedIndexTreeOid: _index, ...incomplete } = request
+  assert.equal(isGitCommand({ type: 'git.read-file', projectKey: PROJECT, request: incomplete }), false)
+})
+
 const diffRequest = {
   kind: 'working' as const,
   path: 'src/file.ts',

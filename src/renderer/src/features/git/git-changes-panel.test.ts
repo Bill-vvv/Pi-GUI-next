@@ -1,23 +1,24 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { after, test } from 'node:test'
+import { test } from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { createServer } from 'vite'
+import { createSsrTestServer } from '../../test-support/create-ssr-test-server.ts'
 
-const vite = await createServer({
-  configFile: false,
-  root: new URL('../../../../../', import.meta.url).pathname,
-  appType: 'custom',
-  optimizeDeps: { noDiscovery: true },
-  server: { middlewareMode: true, hmr: false }
-})
-after(() => vite.close())
+const vite = await createSsrTestServer()
 
 const module = await vite.ssrLoadModule(
   '/src/renderer/src/features/git/GitChangesPanel.tsx'
 ) as typeof import('./GitChangesPanel.tsx')
-const source = await readFile(new URL('./GitChangesPanel.tsx', import.meta.url), 'utf8')
+const panelSource = await readFile(new URL('./GitChangesPanel.tsx', import.meta.url), 'utf8')
+const owners = ['repository', 'changes', 'history', 'branches'] as const
+const ownerSources = await Promise.all(owners.map((owner) =>
+  readFile(new URL(`./use-git-${owner}.ts`, import.meta.url), 'utf8')
+))
+const source = [panelSource, ...ownerSources].join('\n')
+const changesModule = await vite.ssrLoadModule(
+  '/src/renderer/src/features/git/use-git-changes.ts'
+) as typeof import('./use-git-changes.ts')
 const diffViewerSource = await readFile(new URL('./GitDiffViewer.tsx', import.meta.url), 'utf8')
 const historyPanelSource = await readFile(new URL('./GitHistoryPanel.tsx', import.meta.url), 'utf8')
 const styles = await readFile(new URL('./git-changes.css', import.meta.url), 'utf8')
@@ -77,7 +78,7 @@ test('file diffs expand independently and the heading owns one real collapse-all
 })
 
 test('diff content remains plain React text and marks omitted unchanged ranges without inventing source lines', () => {
-  assert.match(source, /import \{ GitDiffViewer, type GitDiffViewerResult \} from '\.\/GitDiffViewer'/)
+  assert.match(source, /import \{ GitDiffViewer \} from '\.\/GitDiffViewer'/)
   assert.match(source, /<GitDiffViewer result=\{expanded\.result\} \/>/)
   assert.match(diffViewerSource, /\{line\.content\}/)
   assert.match(diffViewerSource, /buildGitDiffRenderRows\(result\.files\)/)
@@ -105,7 +106,7 @@ test('intent prefetch is revision-bound, deduplicated and bounded instead of pre
 })
 
 test('large diffs virtualize after a fixed threshold while small diffs keep the simple path', () => {
-  assert.match(source, /import \{ GitDiffViewer, type GitDiffViewerResult \} from '\.\/GitDiffViewer'/)
+  assert.match(source, /import \{ GitDiffViewer \} from '\.\/GitDiffViewer'/)
   assert.match(diffViewerSource, /from '@tanstack\/react-virtual'/)
   assert.match(diffViewerSource, /export const GIT_DIFF_VIRTUALIZE_AFTER_ROWS = 300/)
   assert.match(diffViewerSource, /rows\.length > GIT_DIFF_VIRTUALIZE_AFTER_ROWS/)
@@ -154,7 +155,7 @@ test('P3-2 commit remains a fenced confirmation flow beside later read/write Git
   assert.doesNotMatch(source, /stderrCharacters/)
 })
 
-test('P3-4 prepares and executes Branches & Sync through Parent-owned identity fences', () => {
+test('P3-4 prepares and executes Branches & Sync through workflow-owned identity fences', () => {
   assert.match(source, /branchPrepareTokenRef/)
   assert.match(source, /branchExecuteTokenRef/)
   assert.match(source, /branchSnapshotRef/)
@@ -194,10 +195,9 @@ test('Git tab hosts an internal accessible Changes/History/Branches tabset witho
   assert.match(styles, /\.git-history-/)
 })
 
-test('History activation, refresh, pagination and file-diff identities stay fenced in Parent state', () => {
+test('History activation, refresh, pagination and file-diff identities stay fenced in the history workflow', () => {
   assert.match(source, /historySnapshotRef\.current = snapshot/)
-  assert.match(source, /if \(subview !== 'history' \|\| historySnapshotRef\.current !== null\) return/)
-  assert.match(source, /if \(snapshot !== null\) activateHistory\(false\)/)
+  assert.match(source, /if \(active && snapshot !== null && historySnapshotRef\.current === null\) activateHistory\(false\)/)
   assert.doesNotMatch(source, /activateHistory\(true\)/)
   assert.match(source, /result\.offset !== offset/)
   assert.match(source, /result\.commits\.length > GIT_HISTORY_PAGE_SIZE/)
@@ -211,7 +211,7 @@ test('History activation, refresh, pagination and file-diff identities stay fenc
 })
 
 test('commit result mapping keeps partial success and landed warnings independent', () => {
-  const mapped = module.buildGitCommitDialogResult({
+  const mapped = changesModule.buildGitCommitDialogResult({
     mode: 'commit-and-push',
     commit: {
       status: 'succeeded',
@@ -235,4 +235,14 @@ test('commit result mapping keeps partial success and landed warnings independen
   assert.equal(mapped.push.status, 'failed')
   assert.equal(mapped.push.detail, 'Git operation failed.')
   assert.equal(mapped.refresh?.status, 'failed')
+})
+
+test('Git composition delegates complete workflows and resets all local owners by Project key', () => {
+  assert.match(panelSource, /<GitProjectPanel key=\{`\$\{projectKey\}:\$\{readOnly\}:\$\{remote\}`\}/)
+  assert.doesNotMatch(panelSource, /window\.piGit|useEffect|useLayoutEffect|TokenRef|SnapshotRef/)
+  for (const owner of owners) assert.match(panelSource, new RegExp(`useGit${owner[0]!.toUpperCase()}${owner.slice(1)}\\(`))
+  assert.doesNotMatch(ownerSources[0]!, /historyDraft|branchDialog|diffCacheRef|commitDialog/)
+  assert.doesNotMatch(ownerSources[1]!, /historyDraft|branchDialog|prepareBranchSync|listHistory/)
+  assert.doesNotMatch(ownerSources[2]!, /prepareBranchSync|executeCommit|stageFile/)
+  assert.doesNotMatch(ownerSources[3]!, /listHistory|executeCommit|stageFile/)
 })

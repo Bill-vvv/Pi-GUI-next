@@ -5,6 +5,7 @@ import type {
   RuntimeStatus
 } from '../../../../shared/kernel-contract'
 import { Select } from '../../components/Select'
+import { modelVisibilityKey } from '../../model-visibility'
 
 type ModelSettingsProps = {
   active: boolean
@@ -12,7 +13,9 @@ type ModelSettingsProps = {
   currentModel: KernelModelState | null
   runtimeStatus: RuntimeStatus
   busy: boolean
+  hiddenModelKeys: ReadonlySet<string>
   onSetModel: (provider: string, modelId: string) => Promise<void>
+  onSetModelVisible: (provider: string, modelId: string, visible: boolean) => void
 }
 
 export function ModelSettings({
@@ -21,7 +24,9 @@ export function ModelSettings({
   currentModel,
   runtimeStatus,
   busy,
-  onSetModel
+  hiddenModelKeys,
+  onSetModel,
+  onSetModelVisible
 }: ModelSettingsProps): React.JSX.Element | null {
   const [selectedProvider, setSelectedProvider] = useState(
     currentModel?.provider ?? availableModels[0]?.provider ?? ''
@@ -122,6 +127,63 @@ export function ModelSettings({
           </div>
         </div>
       </section>
+
+      <section
+        className="settings-group settings-group-inline settings-prefs"
+        aria-labelledby="settings-model-visibility"
+      >
+        <h3 id="settings-model-visibility" className="settings-group-heading">模型菜单</h3>
+        <div className="settings-group-card">
+          {availableModels.length === 0 ? (
+            <p className="settings-model-visibility-empty">
+              启动会话后，可选择哪些模型出现在 Composer 菜单中。关闭不会从 Provider 删除模型。
+            </p>
+          ) : groupedProviderModels(availableModels).map(([provider, models]) => (
+            <div className="settings-model-visibility-group" key={provider}>
+              <h4 className="settings-model-visibility-provider">{provider}</h4>
+              {models.map((model) => {
+                const inputId = modelVisibilityInputId(provider, model.id)
+                return (
+                  <div className="settings-row" key={modelVisibilityKey(provider, model.id)}>
+                    <div className="settings-row-copy">
+                      <label htmlFor={inputId}>
+                        {model.name}
+                      </label>
+                      {model.name === model.id ? null : <p><code>{model.id}</code></p>}
+                    </div>
+                    <div className="settings-row-control settings-checkbox-control">
+                      <input
+                        id={inputId}
+                        type="checkbox"
+                        checked={!hiddenModelKeys.has(modelVisibilityKey(provider, model.id))}
+                        onChange={(event) => {
+                          onSetModelVisible(provider, model.id, event.currentTarget.checked)
+                        }}
+                      />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ))}
+        </div>
+      </section>
     </>
   )
+}
+
+function groupedProviderModels(
+  models: readonly KernelModelState[]
+): Array<[string, KernelModelState[]]> {
+  const groups = new Map<string, KernelModelState[]>()
+  for (const model of models) {
+    const group = groups.get(model.provider)
+    if (group === undefined) groups.set(model.provider, [model])
+    else group.push(model)
+  }
+  return [...groups]
+}
+
+function modelVisibilityInputId(provider: string, modelId: string): string {
+  return `model-visible-${provider}-${modelId}`.replace(/[^A-Za-z0-9_-]/gu, '-')
 }

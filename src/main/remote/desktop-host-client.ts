@@ -1,4 +1,6 @@
+import { DESKTOP_ATTACHMENT_COMMAND_TYPES } from '../../shared/desktop-attachment-contract.ts'
 import { randomUUID } from 'node:crypto'
+import { desktopPairingId } from './desktop-device-binding.ts'
 
 import {
   isKernelSnapshot,
@@ -6,18 +8,23 @@ import {
   type KernelSnapshot
 } from '../../shared/kernel-contract.ts'
 import {
+  isDesktopHostControlIdentity,
   DESKTOP_HOST_API_PATHS,
   DESKTOP_HOST_CONTROLLER_HEADER,
   DESKTOP_HOST_CONTROLLER_ID_PATTERN,
+  DESKTOP_HOST_CREDENTIAL_PATTERN,
   DESKTOP_HOST_KERNEL_COMMAND_TYPES,
+  DESKTOP_HOST_GIT_COMMAND_TYPES,
+  DESKTOP_HOST_JSON_RESPONSE_BYTE_LIMIT,
   DESKTOP_HOST_PROTOCOL_VERSION,
+  DESKTOP_HOST_PAIRING_ID_PATTERN,
   type DesktopHostCapabilities,
   type DesktopHostCommandErrorCode,
   type DesktopHostCommandRequest,
   type DesktopHostCommandResponse,
   type DesktopHostControlIdentity,
   type DesktopHostEventEnvelope,
-  type DesktopHostKernelCommand,
+  type DesktopHostCommand,
   type DesktopHostPairResponse,
   type DesktopHostSessionStatus
 } from '../../shared/desktop-host-contract.ts'
@@ -27,6 +34,7 @@ export type DesktopHostClientErrorCode =
   | 'http'
   | 'network'
   | 'protocol'
+  | 'credential-target'
 
 export class DesktopHostClientError extends Error {
   readonly code: DesktopHostClientErrorCode
@@ -62,12 +70,11 @@ export type DesktopHostCompatibility = {
   buildCommit: string
 }
 
-const MAX_JSON_RESPONSE_BYTES = 2 * 1024 * 1024
+const MAX_JSON_RESPONSE_BYTES = DESKTOP_HOST_JSON_RESPONSE_BYTE_LIMIT
 const MAX_SSE_BUFFER_CHARS = 2 * 1024 * 1024
 const MAX_SSE_EVENT_CHARS = 1 * 1024 * 1024
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 const DEFAULT_EVENT_IDLE_TIMEOUT_MS = 45_000
-const CREDENTIAL_PATTERN = /^[A-Za-z0-9_-]{32,256}$/u
 const PAIRING_CODE_PATTERN = /^\d{6}$/u
 const COMMAND_ERROR_CODES = new Set<DesktopHostCommandErrorCode>([
   'bad-request',
@@ -77,7 +84,7 @@ const COMMAND_ERROR_CODES = new Set<DesktopHostCommandErrorCode>([
   'unavailable',
   'internal'
 ])
-const COMMAND_TYPES = new Set<string>(DESKTOP_HOST_KERNEL_COMMAND_TYPES)
+const COMMAND_TYPES = new Set<string>([...DESKTOP_HOST_KERNEL_COMMAND_TYPES, ...DESKTOP_HOST_GIT_COMMAND_TYPES, ...DESKTOP_ATTACHMENT_COMMAND_TYPES])
 const KERNEL_EVENT_TYPES = new Set<string>([
   'kernel.state-changed',
   'kernel.state-patched',
@@ -94,6 +101,7 @@ export class DesktopHostClient {
   private readonly requestTimeoutMs: number
   private readonly eventIdleTimeoutMs: number
   private compatibilityVerified = false
+  private pairingId: string | null = null
   private credential: string | null
 
   constructor(options: DesktopHostClientOptions) {
@@ -116,8 +124,12 @@ export class DesktopHostClient {
 
   setCredential(credential: string): void {
     this.assertCompatibilityVerified()
-    if (!CREDENTIAL_PATTERN.test(credential)) {
+    this.credential = null
+    if (!DESKTOP_HOST_CREDENTIAL_PATTERN.test(credential)) {
       throw new Error('Desktop Host credential must contain 32 to 256 base64url characters.')
+    }
+    if (this.pairingId === null || desktopPairingId(credential) !== this.pairingId) {
+      throw new DesktopHostClientError('已保存凭证与此 Host 当前的配对身份不一致。请核对主机配置，或在目标 Host 生成新配对码。原凭证未发送。', 'credential-target')
     }
     this.credential = credential
   }
@@ -126,16 +138,18 @@ export class DesktopHostClient {
     this.credential = null
   }
 
-  async verifyCompatibility(): Promise<DesktopHostSessionStatus> {
+  async verifyCompatibility(signal?: AbortSignal): Promise<DesktopHostSessionStatus> {
     this.compatibilityVerified = false
+    this.pairingId = null
     this.credential = null
     const { response, payload } = await this.requestJson('GET', DESKTOP_HOST_API_PATHS.session, {
-      credential: 'none'
+      credential: 'none', signal
     })
     assertOk(response, 'Desktop Host handshake')
     const status = parseSessionStatus(payload)
     assertDesktopHostCompatibility(status, this.compatibility)
     this.compatibilityVerified = true
+    this.pairingId = status.pairingId
     return status
   }
 
@@ -168,6 +182,7 @@ export class DesktopHostClient {
     const paired = parsePairResponse(payload)
     assertDesktopHostCompatibility(paired, this.compatibility)
     this.credential = paired.credential
+    this.pairingId = desktopPairingId(paired.credential)
     return paired
   }
 
@@ -177,7 +192,10 @@ export class DesktopHostClient {
     })
     assertOk(response, 'Desktop Host logout')
     const status = parseSessionStatus(payload)
+    assertDesktopHostCompatibility(status, this.compatibility)
+    if (status.authenticated || status.pairingId !== null) throw new DesktopHostClientError('Desktop Host did not confirm pairing revocation.')
     this.credential = null
+    this.pairingId = status.pairingId
     return status
   }
 
@@ -197,7 +215,7 @@ export class DesktopHostClient {
   async command(
     controllerId: string,
     expectedIdentity: DesktopHostControlIdentity,
-    command: DesktopHostKernelCommand,
+    command: DesktopHostCommand,
     requestId = randomUUID()
   ): Promise<unknown> {
     assertControllerId(controllerId)
@@ -229,6 +247,7 @@ export class DesktopHostClient {
     assertControllerId(controllerId)
     const controller = new AbortController()
     let closeRequested = false
+    let settled = false
     let connectTimedOut = false
     const connectTimeout = setTimeout(() => {
       connectTimedOut = true
@@ -275,11 +294,17 @@ export class DesktopHostClient {
     ).catch((error: unknown) => {
       if (closeRequested && isAbortError(error)) return
       throw error instanceof DesktopHostClientError ? error : networkError(error)
+    }).finally(() => {
+      settled = true
+      controller.abort()
     })
 
     return {
       closed,
       async close() {
+        // The original failure remains observable through closed; it is not a
+        // new cleanup failure when a recovery owner releases a settled stream.
+        if (settled) return
         if (closeRequested) return closed
         closeRequested = true
         controller.abort()
@@ -295,6 +320,7 @@ export class DesktopHostClient {
       body?: unknown
       credential: 'none' | 'optional' | 'required'
       controllerId?: string
+      signal?: AbortSignal
     }
   ): Promise<{ response: Response; payload: unknown }> {
     const controller = new AbortController()
@@ -309,7 +335,7 @@ export class DesktopHostClient {
         method,
         redirect: 'error',
         cache: 'no-store',
-        signal: controller.signal,
+        signal: options.signal === undefined ? controller.signal : AbortSignal.any([controller.signal, options.signal]),
         headers: this.headers({
           accept: 'application/json',
           credential: options.credential,
@@ -403,6 +429,7 @@ function parseSessionStatus(value: unknown): DesktopHostSessionStatus {
     'productVersion',
     'buildCommit',
     'authenticated',
+    'pairingId',
     'capabilities'
   ], 'Desktop Host session status')
   if (record.protocolVersion !== DESKTOP_HOST_PROTOCOL_VERSION) {
@@ -413,11 +440,16 @@ function parseSessionStatus(value: unknown): DesktopHostSessionStatus {
   if (typeof record.authenticated !== 'boolean') {
     throw new DesktopHostClientError('Desktop Host session authenticated flag is invalid.')
   }
+  if (record.pairingId !== null && (typeof record.pairingId !== 'string' || !DESKTOP_HOST_PAIRING_ID_PATTERN.test(record.pairingId))) {
+    throw new DesktopHostClientError('Desktop Host pairing identity is invalid.')
+  }
+  if (record.authenticated && record.pairingId === null) throw new DesktopHostClientError('Authenticated Desktop Host is missing its pairing identity.')
   return {
     protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
     productVersion: parseProductVersion(record.productVersion),
     buildCommit: parseBuildCommit(record.buildCommit),
     authenticated: record.authenticated,
+    pairingId: record.pairingId as string | null,
     capabilities: parseCapabilities(record.capabilities)
   }
 }
@@ -436,7 +468,7 @@ function parsePairResponse(value: unknown): DesktopHostPairResponse {
       `Unsupported Desktop Host protocol version: ${String(record.protocolVersion)}.`
     )
   }
-  if (typeof record.credential !== 'string' || !CREDENTIAL_PATTERN.test(record.credential)) {
+  if (typeof record.credential !== 'string' || !DESKTOP_HOST_CREDENTIAL_PATTERN.test(record.credential)) {
     throw new DesktopHostClientError('Desktop Host pair response credential is invalid.')
   }
   if (!Number.isSafeInteger(record.expiresAt) || (record.expiresAt as number) <= 0) {
@@ -453,16 +485,32 @@ function parsePairResponse(value: unknown): DesktopHostPairResponse {
 }
 
 function parseCapabilities(value: unknown): DesktopHostCapabilities {
-  const record = requireExactRecord(value, ['kernelCommandTypes'], 'Desktop Host capabilities')
+  const fields = ['kernelCommandTypes', ...['gitCommandTypes', 'attachmentCommandTypes'].filter((key) => isRecord(value) && Object.hasOwn(value, key))]
+  const record = requireExactRecord(value, fields, 'Desktop Host capabilities')
+  const kernelTypes = new Set<string>(DESKTOP_HOST_KERNEL_COMMAND_TYPES)
+  const gitTypes = new Set<string>(DESKTOP_HOST_GIT_COMMAND_TYPES)
+  const attachmentTypes = new Set<string>(DESKTOP_ATTACHMENT_COMMAND_TYPES)
+  if (Object.hasOwn(record, 'attachmentCommandTypes') && (
+    !Array.isArray(record.attachmentCommandTypes) ||
+    record.attachmentCommandTypes.some((type) => typeof type !== 'string' || !attachmentTypes.has(type)) ||
+    new Set(record.attachmentCommandTypes).size !== record.attachmentCommandTypes.length
+  )) throw new DesktopHostClientError('Desktop Host attachment capabilities are invalid.')
+  if (Object.hasOwn(record, 'gitCommandTypes') && (
+    !Array.isArray(record.gitCommandTypes) ||
+    record.gitCommandTypes.some((type) => typeof type !== 'string' || !gitTypes.has(type)) ||
+    new Set(record.gitCommandTypes).size !== record.gitCommandTypes.length
+  )) throw new DesktopHostClientError('Desktop Host Git capabilities are invalid.')
   if (
     !Array.isArray(record.kernelCommandTypes) ||
-    record.kernelCommandTypes.some((command) => typeof command !== 'string' || !COMMAND_TYPES.has(command)) ||
+    record.kernelCommandTypes.some((command) => typeof command !== 'string' || !kernelTypes.has(command)) ||
     new Set(record.kernelCommandTypes).size !== record.kernelCommandTypes.length
   ) {
     throw new DesktopHostClientError('Desktop Host command capabilities are invalid.')
   }
   return {
-    kernelCommandTypes: record.kernelCommandTypes as DesktopHostCapabilities['kernelCommandTypes']
+    kernelCommandTypes: record.kernelCommandTypes as DesktopHostCapabilities['kernelCommandTypes'],
+    ...(Object.hasOwn(record, 'gitCommandTypes') ? { gitCommandTypes: record.gitCommandTypes as DesktopHostCapabilities['gitCommandTypes'] } : {}),
+    ...(Object.hasOwn(record, 'attachmentCommandTypes') ? { attachmentCommandTypes: record.attachmentCommandTypes as DesktopHostCapabilities['attachmentCommandTypes'] } : {})
   }
 }
 
@@ -702,21 +750,8 @@ function parseTimeout(value: number, label: string): number {
 }
 
 function assertControlIdentity(value: DesktopHostControlIdentity): void {
-  if (!isRecord(value) || Object.keys(value).length !== 2) {
+  if (!isDesktopHostControlIdentity(value)) {
     throw new DesktopHostClientError('Desktop Host control identity is invalid.')
-  }
-  for (const identity of [value.projectKey, value.sessionKey]) {
-    if (
-      identity !== null &&
-      (
-        typeof identity !== 'string' ||
-        identity.length === 0 ||
-        identity.length > 4_096 ||
-        identity.includes('\0')
-      )
-    ) {
-      throw new DesktopHostClientError('Desktop Host control identity is invalid.')
-    }
   }
 }
 

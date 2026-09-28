@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { after, test } from 'node:test'
+import { test } from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { createServer } from 'vite'
+import { createSsrTestServer } from '../../test-support/create-ssr-test-server.ts'
 
 import type {
   KernelSubagentNoticeEntry,
@@ -11,14 +11,7 @@ import type {
   KernelToolEntry
 } from '../../../../shared/kernel-contract.ts'
 
-const vite = await createServer({
-  configFile: false,
-  root: new URL('../../../../../', import.meta.url).pathname,
-  appType: 'custom',
-  logLevel: 'error',
-  server: { middlewareMode: true }
-})
-after(async () => vite.close())
+const vite = await createSsrTestServer()
 
 const detailModule = await vite.ssrLoadModule(
   '/src/renderer/src/features/chat/SubagentTaskDetail.tsx'

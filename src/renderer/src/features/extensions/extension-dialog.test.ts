@@ -10,7 +10,7 @@ const workbenchSource = await readFile(
 )
 
 test('ExtensionDialog derives method-specific initial values without retaining an old request draft', () => {
-  assert.match(workbenchSource, /key=\{state\.extensionDialog\.requestId\}/u)
+  assert.match(workbenchSource, /state\.extensionDialog\.projectKey,[\s\S]*state\.extensionDialog\.sessionKey,[\s\S]*state\.extensionDialog\.sessionId,[\s\S]*state\.extensionDialog\.commandInvocationId,[\s\S]*state\.extensionDialog\.requestId/u)
   assert.match(source, /if \(request\.method === 'select'\) return request\.options\[0\] \?\? ''/u)
   assert.match(source, /if \(request\.method === 'editor'\) return request\.prefill \?\? ''/u)
 })

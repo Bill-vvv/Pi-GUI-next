@@ -7,10 +7,9 @@ Electron Renderer
     -> typed preload IPC
 Workbench Kernel (Electron Main)
     -> RuntimeContext[projectPath, sessionFile]
-       -> RuntimeHost
-LinuxLocalRuntime（每个 Session RuntimeContext 一个）
-    -> PiRpcClient / strict LF JSONL
-pi --mode rpc
+       -> SharedPiRuntime（实现 RuntimeHost）
+SharedPiHost（Linux Main 中一个共享 owner）
+    -> SharedPiAgentSession / Pi 0.83.0 SDK（每 Session 独立 driver）
     -> pi-gui-task-notify / bounded local request
 DesktopNotificationBroker（Electron Main）
     -> notify-send / default action
@@ -32,9 +31,9 @@ Main remote http listener
     -> same Workbench Kernel (no second Kernel / no WebSocket)
 ```
 
-Electron Main 仍是唯一 control plane，但可同时管理多个相互隔离的 Session Runtime。当前主路径不建立第二 Kernel、WebSocket、SQLite、launcher/mirror 或直接 Pi SDK 的第二条主路径。可选的私有远程呈现面（默认关闭）在同一 Main/Kernel 上提供 SSE + JSON POST，详见 [`remote-access.md`](remote-access.md)；默认入口由 Main 通过窄 RemoteAdmin IPC 管理系统 Tailscale Funnel/Serve，并让 Gateway 只监听 loopback，手动 Lucky 环境变量模式继续作为互斥的高级入口。两种入口都不是第二 control plane，也不把 electron-vite 开发服务器对外暴露。
+Linux Electron Main 是唯一 control plane；当前会话执行主路径是进程内 `SharedPiHost`，多个 Session 拥有独立 Runtime handle、driver 与 canonical session file，但共享 Main 进程。逻辑 Session 隔离不等于操作系统进程隔离，Main 崩溃会影响全部会话。该现状由 D-078 明确取代旧 RPC 主路径假设；本轮不改变运行实现，也不将源码验证视为发布验收。可选的私有远程呈现面（默认关闭）在同一 Main/Kernel 上提供 SSE + JSON POST，详见 [`remote-access.md`](remote-access.md)；默认入口由 Main 通过窄 RemoteAdmin IPC 管理系统 Tailscale Funnel/Serve，并让 Gateway 只监听 loopback，手动 Lucky 环境变量模式继续作为互斥的高级入口。两种入口都不是第二 control plane，也不把 electron-vite 开发服务器对外暴露。
 
-统一远程产品拓扑如下；P4-1 已实现 Linux loopback Desktop Gateway，P4-2A 的 Windows Host config、系统 OpenSSH tunnel 与 Node transport 已修复首轮安全 findings并通过正式 gate，但独立 closure 前保持不可用；Windows remote-only Main/Renderer composition 仍待 P4-2B：
+统一远程产品拓扑如下；P4-1 已实现 Linux loopback Desktop Gateway，P4-2 已接通 Windows remote-only Main/preload、Credential Manager、断线重连与 capability gating；P4-3 已打出并安装 Windows 包，真实 SSH gate 由用户暂缓，完成前不能宣称 Windows 已受支持：
 
 ```text
 Windows Desktop Renderer
@@ -50,40 +49,91 @@ Web Remote
     -> same Workbench Kernel / Runtime contexts
 ```
 
-Windows Desktop 是完整桌面客户端，不嵌入 `src/remote/RemoteApp.tsx`；Web Remote 仍是独立轻量入口。远程模式的 Windows Main 不创建本地 Kernel、不探测本地 Pi，也不拥有 Linux Project、Session、Git、Provider 或 Package 事实。P4-2A 的 transport 只连接固定本机 loopback 端口，先完成无凭证握手并强制 product/protocol/非空 build 完全一致，再允许配对或装载设备凭证；系统 `ssh -G` 拒绝 alias 中非 Pi GUI 所有的额外 forwarding，SSH 启动、连接存活、请求、SSE idle 与停止均有显式边界。它尚未接入 Main/preload，也不持久化凭证。Desktop Gateway 只复用 shared Kernel DTO、revision/event 和有界传输语义，不复用浏览器 Public Origin、Trusted Proxy、Secure Cookie 或静态资源安全边界。P4-1 的启用、SSH、配对和协议边界见 [`desktop-host.md`](desktop-host.md)；统一产品决策与后续发布条件见 D-067。
+Windows Desktop 是完整桌面客户端，不嵌入 `src/remote/RemoteApp.tsx`；Web Remote 仍是独立轻量入口。远程模式的 Windows Main 不创建本地 Kernel、不探测本地 Pi，也不拥有 Linux Project、Session、Git、Provider 或 Package 事实。P4-2A 的 transport 只连接固定本机 loopback 端口，先完成无凭证握手并强制 product/protocol/非空 build 完全一致，再允许配对或装载设备凭证；Windows 只使用 System32 OpenSSH，系统 `ssh -G` 拒绝 alias 中非 Pi GUI 所有的额外 forwarding，SSH 启动、连接存活、请求、SSE idle 与停止均有显式边界。P4-2B 已把该 transport 接到 Windows Main 与连接界面；P4-2C 把设备凭证写入 Windows Credential Manager，意外断线后重建 SSE 与 snapshot 且不重放 mutation，并按 Host capability 隐藏未接通入口。Desktop Gateway 只复用 shared Kernel DTO、revision/event 和有界传输语义，不复用浏览器 Public Origin、Trusted Proxy、Secure Cookie 或静态资源安全边界。P4-1 的启用、SSH、配对和协议边界见 [`desktop-host.md`](desktop-host.md)；统一产品决策与后续发布条件见 D-067。
+
+WSL Desktop Client 通过自己拥有的 `wsl.exe` 双向 stdio 管道进入与本地 IPC 相同的业务 handler。Windows Main 拥有文件对话框、系统字体、通知呈现与窗口聚焦；Linux Host 保留 Kernel、项目和 Session 激活校验。源码与平台依赖隔离、构建清单、更新切换和命令观察身份见 [cross-platform-development.md](cross-platform-development.md) 与 D-076。
+
+启动时的 `probePiRpc` 仍使用 `LinuxLocalRuntime → PiRpcClient → pi --mode rpc` 验证外部 Pi executable/version/protocol；metadata 命名与 Provider 连通性测试也继续使用各自有界的 Pi 子进程。RPC 探针通过不证明进程内 SDK 会话已可用。`LinuxLocalRuntime` 及其 RPC 客户端保留探针与回归用途，不作为当前 Session 的可选执行后端，也没有自动降级路径。
+
+R3 的远程目录选择通过独立 typed 目录 DTO 返回有界元数据；Desktop-only policy 将目录浏览、显式路径注册及项目信任答复与 Web Remote 的命令集合隔离。项目注册与本地 IPC 共用 `dispatchTerminalKernelCommand`、`ProjectStore` 和 `WorkbenchKernel`；异步目录验证/registry 读取后重复检查观察身份，Renderer 不另建项目事实源。范围与边界见 [`desktop-host.md`](desktop-host.md#远程项目选择r3) 和 D-079。
+
+R4 的 Git DTO 与 Kernel DTO 共用 Desktop Host 的认证/命令 envelope，Git 仍由 Linux Main 的同一个 `GitCapabilityController` 拥有。Windows `piGit` 携带 preload 已观察的 Project/Session 身份；队列进入及祖先仓库授权发布前复核调用方边界，Gateway 在读取后复核并限制响应大小。当前七项读/授权能力进入 transport；SSH Git UI 按这些 capability 开放只读 Changes/History 和当前变更文件全文阅读，按 Project、Session 和读写模式重建审阅生命周期，见 [`desktop-host.md`](desktop-host.md#git-只读审阅r4)。
+
+R9 的 `desktop-host-preflight` 复用 System SSH transport 与 DesktopHostClient 的无凭证握手，WindowsRemoteSession 为预检占用独立 checking 状态并保留临时进程所有权；不进入 Kernel、事件流或配对流程。配置与端口校验归入 shared Desktop client contract 的统一入口。取消贯穿 SSH 配置求值、启动等待与 Host HTTP；停止失败的启动错误携带仍被拥有的隧道，供原 Session 清理重试，见 D-085。
+
+R10 的配对身份核对由共同 DesktopHostClient 入口拥有，普通断开/关闭与显式取消配对由 WindowsRemoteSession 的同一收尾 owner 串行处理。收尾期间拒绝新连接和命令，等待正在建立的连接、恢复及残留进程清理；只在明确的远端撤销确认后删除本地凭证。Renderer 根据连接状态统一清除旧 Kernel 投影，异步操作返回不再重复清空下一连接。见 D-086、D-087。WindowsRemoteHostManager 进一步拥有多配置列表、迁移/删除待办与当前 Session，凭证按独立槽隔离；列表 revision 约束配置变更和连接，独立连接编号约束 Kernel/Git/附件/撤销的本机 IPC。原生附件操作捕获所属连接，不能在选择器迟到返回后改用新 Host；preload 状态观察器拒绝迟到状态读覆盖新连接，见 D-088。
 
 ## 所有权
+
+R8 的 SSH 主机发现属于 Windows Main 本机连接配置；无参数的 `desktop-client.list-ssh-hosts` 返回静态别名、来源和诊断，不进入 Linux Kernel 或 Desktop Gateway。Main 对配置读取与 Include 递归设界限，不执行 OpenSSH 配置命令；Renderer 复用共享 Select 并维护读取请求生命周期，最终连接仍由既有 System OpenSSH transport 验证，见 D-084。
 
 | 组件 | 唯一职责 | 明确不拥有 |
 | --- | --- | --- |
 | Electron Renderer | 展示 normalized state；发出 typed command | 子进程、文件系统、raw Pi event |
 | Preload | 暴露窄的 typed IPC API | 业务状态、Pi 协议 |
 | Workbench Kernel | Project、按 Session 隔离的 Runtime context、Conversation 投影与状态转换 | Linux spawn 细节、JSONL framing |
-| LinuxLocalRuntime | executable、cwd、spawn、signal、退出语义，以及 Main 授予该 Pi 子进程的通知 Broker capability | renderer 状态、Pi message 解释 |
-| PiRpcClient | LF JSONL framing、request/response correlation、RPC 事件接收 | GUI identity、重启策略 |
+| SharedPiHost / SharedPiRuntime | 共享 Host 的 Runtime 集合、canonical session file 唯一发布、精确 handle 释放与生命周期适配 | 工作区选择、Renderer 状态、第二份 Session 持久化 |
+| SharedPiAgentSession | Pi SDK Session/services、命令执行、Extension 绑定与事件转换 | Kernel revision、导航和跨 Session 调度 |
+| SharedPiProcessEnvironment | async-context 范围的环境值与代理安装/释放 | 独立 OS 进程、任意全局变量或原生资源隔离 |
+| LinuxLocalRuntime | 外部 RPC 探针的 executable、cwd、spawn、signal、退出语义 | 当前 Session 主路径、renderer 状态 |
+| PiRpcClient | 外部 RPC 的 LF JSONL framing、correlation 与事件接收；Main 内部继续复用其类型契约 | GUI identity、Shared Session 的实际传输、重启策略 |
+| Kernel state encoding | 快照防御性复制、Conversation entry 差量编码 | Runtime 生命周期、revision 分配、窗口选择或事件发送 |
+| Runtime Session state | 会话字段边界、同步 Runtime／Pi 事件状态转换 | 工作区选择、共享设置、持久化、进程命令或事件发送 |
 | DesktopNotificationBroker | 私有 Unix socket、桌面通知动作和已注册 Session 激活 | Conversation 内容、通用远程控制或任意路径打开 |
 | Web Remote Gateway | 静态 Remote、配对 Cookie、SSE、allowlisted JSON command 与受信代理校验 | Tailscale 账户、Lucky 配置、第二 Kernel 或任意 Main API |
 | Tailscale Remote Manager | 探测系统 Tailscale、管理 Pi GUI 精确拥有的 HTTPS 443 根 handler、持久化 loopback port/origin/token | 安装 Tailscale、保存账户凭据、覆盖未知 Serve/Funnel 配置或自建 relay |
 
-Electron Main 是唯一 control plane 和全部 Pi 子进程 owner。Renderer 不启动进程、不读取 Pi stdout，也不解析 raw Pi event。多个 Runtime 可并发运行，但每个 Runtime 只绑定一个 Pi Session；Renderer 同一时间只投影当前选中的 Session，后台状态通过 Session summary 展示。
+Linux Main 统一拥有 Shared Pi Host 和另行启动的 Pi 子进程。Renderer 不启动进程、不读取 Pi stdout，也不解析 raw Pi event。多个 Runtime 可并发运行，但每个 Runtime 只绑定一个 Pi Session；Renderer 同一时间只投影当前选中的 Session，后台状态通过 Session summary 展示。
 
-持久化 Session、受管 `RuntimeContext` 与实际 Pi RPC 进程是三个不同生命周期。新建对话可先拥有仅供活动工作区使用的空 provisional Runtime/identity；它在首条 prompt 被接受前不进入 Project Navigator 或数量统计，切换到其他 Project/Session 时直接停止移除。首条 prompt 成功提交后，同一 identity 才进入导航并等待 Pi JSONL materialization。S26 不向 Renderer 暴露主动休眠命令；Main/Kernel 只保留内部回收原语和保守的自动回收：每分钟扫描一次，后台 Runtime 连续 5 分钟未被激活或观察到活动后才进入候选，同时始终保留前台与最近使用的一个 quiescent 后台 warm Runtime。每个目标在 prepare 前、commit 前和 stop gate 内重新核对 persisted identity、foreground、ready/settled、provisional、queue、usage、naming、compaction、identity commit、stop 与 Runtime generation；stop 失败继续保留 Runtime ownership，再次选择时恢复同一 Session。任何未知 Extension owner、busy lease、协议错误、超时或竞态都只跳过本轮。
+`RuntimeContext` 唯一持有 Runtime 订阅、启动提交标记、provisional identity／提交任务／settled 标记，以及自动命名的 pending／operation；Kernel 的活动 Runtime 由 `activeContext` 推导。Context 的 `state` 使用 `RuntimeSessionState`，只保存 Session identity、命令、模型、Advisor、对话框、Runtime 状态、Session 与 Conversation 这 8 个字段，不保留完整 `KernelState`、共享设置或其他 Project 的导航数据。命令和导航提交通过 `captureActiveContext` 登记会话字段与项目索引；`loadContext` 只将会话字段投影到当前工作区，共享设置和工作区状态保持当前值。Kernel 的 `stopAllRequested` 是停止全部会话时的独立启动门禁，不与单个 Context 的 `stopRequested` 相互覆盖。
 
-## RuntimeHost 最小接口
+前后台 Runtime 事件统一经过 `deliverContextEvent`／`handleContextPiEvent`，同步状态转换由 `runtime-session-state.ts` 的纯函数完成；该模块不持有 Runtime 实例、不执行持久化、不访问 Kernel 类。提交、命名、Ask／Dialog、compaction 等副作用继续绑定发起操作的 Context。`publishContextState` 负责将前台会话发布为增量或快照，后台仅在项目导航变化时发布一次快照；普通后台流式事件不扫描导航、不发送对话。延迟 prompt 确认或拒绝继续作用于原 Context；Context 已停止或移除后不能重新启动命名，切换后收到拒绝也必须恢复原会话的 ready／settled 状态。
 
-当前主路径只实现实际使用的五项能力：
+持久化 Session、受管 `RuntimeContext` 与 Shared Pi Session driver 是不同生命周期；当前每个会话并不对应独立 Pi RPC 子进程。新建对话可先拥有仅供活动工作区使用的空 provisional Runtime/identity；它在首条 prompt 被接受前不进入 Project Navigator 或数量统计，切换到其他 Project/Session 时直接停止移除。首条 prompt 成功提交后，同一 identity 才进入导航并等待 Pi JSONL materialization。S26 不向 Renderer 暴露主动休眠命令；Main/Kernel 只保留内部回收原语和保守的自动回收：每分钟扫描一次，后台 Runtime 连续 5 分钟未被激活或观察到活动后才进入候选，同时始终保留前台与最近使用的一个 quiescent 后台 warm Runtime。每个目标在 prepare 前、commit 前和 stop gate 内重新核对 persisted identity、foreground、ready/settled、provisional、queue、usage、naming、compaction、identity commit、stop 与 Runtime generation；stop 失败继续保留 Runtime ownership，再次选择时恢复同一 Session。任何未知 Extension owner、busy lease、协议错误、超时或竞态都只跳过本轮。
 
-```text
-start
-send
-stop
-getState
-subscribe
-```
+## Desktop 交互职责
 
-出现第二个真实后端之前，不增加注册中心、插件发现或 transport 抽象。
+Desktop 的 R6 交互同样复用 Kernel owner：远程 `kernel.invoke-command` 仅允许当前普通 Project 的已适配 Extension catalog，重复执行既有 provenance/参数验证；对话框回应复用 TerminalKernelCommandDispatcher 和 Kernel 的完整 invocation/request 校验。控制连接不持有第二套 Ask 或 Extension 状态，重连从 Host snapshot 恢复。命令完成回显绑定发起 RuntimeContext，Composer 完成回调绑定发起 Session，导航后不写入新会话。
+
+## Desktop 附件上传职责
+
+R5 的 `DesktopAttachmentCommand` 与 Kernel/Git DTO 共用已配对的 Desktop Host envelope，但只允许 begin/chunk/finish/discard/submit 五项命令。Windows Main 原生选择器拥有本机路径；拖放/粘贴只传用户提供的有界 DOM 文件内容。`WindowsAttachmentUploader` 按 256 KiB 分块，每文件最多 16 MiB、每批最多 8 个，核对本机文件读取前后身份及 Host 返回的 offset、编号、名称和大小，不重放失败请求。
+
+`DesktopAttachmentStore` 是唯一 Host 上传 owner，存放在 `<Linux userData>/desktop-attachments` 的私有目录中。draft 绑定 controller、Project 与 Session，15 分钟后失效、每分钟清理；Host 重启时清除旧进程未提交的 draft。暂存最多 64 项/128 MiB，每 controller 最多 8 项。完成时从实际文件句柄回读 SHA-256，复用 `readPromptAttachments` 区分普通文件及归一化图片；提交前再核对文件与调用方身份。已提交文件移入 submitted 并保留供 Pi 路径引用使用，不作为临时文件自动删除。
+
+Renderer 只持有不含 Host 路径或正文的 `DesktopUploadedAttachment`。`PromptDraftAttachment` 属于输入草稿，Kernel command 继续只接受 canonical file/image；`submitPromptDraft` 把上传草稿转换为 ID 提交。Host 解析属于当前 controller/任务的 ID，再调用已有 Terminal dispatcher：普通文件仍为 `@路径`，图片仍为原生 ImageContent。提交前一次性消费 ID，结果未确认时提示检查对话并保留可能已被引用的文件，重复 ID 不能再次触发任务。原始远程 Kernel 命令继续拒绝附件，Web Remote 不获得上传或任意文件路径权限。输入框按五项 capability 开放选择/拖放/取消/移除，导航和断线忽略旧上传响应；上传内容不进入 KernelState、全局 store 或第二份对话数据库。
+
+## Git Renderer 职责
+
+Desktop R7 的写边界沿 `GitCapabilityController.dispatch` 传入 GitService，授权检查在仓库队列及实际 index/commit 写入前执行。暂存与取消暂存继续使用单文件 snapshot，冲突文件在共享校验处拒绝；提交在用户预览确认后校验 HEAD/index，仅远程普通 commit 放行。客户端读能力与写能力分别 gate，远程不显示分支/同步或 Amend。Git panel 在远程会话切换时重建；未收到提交响应归类为未知，原确认框不可再次提交，需重新刷新检查事实。
+
+`GitChangesPanel` 只装配 Changes／History／Branches、键盘 Tab 导航和现有纯 UI。内部面板以 Project key 挂载；切换 Project 时一起释放请求、缓存和确认框，不能暂时显示上一项目的分支或历史。
+
+- `use-git-repository.ts` 唯一发布仓库状态，拥有 Project 生命周期、刷新与授权；其他流程只读它的 generation／repository 引用，通过窄方法请求刷新或提交新的仓库状态。新快照发布时统一作废此前的刷新及其 loading／error 完成回调，避免旧读取覆盖提交或授权结果；此后发起的刷新仍正常执行。
+- `use-git-changes.ts` 拥有工作区 diff、预取／LRU、暂存与提交确认的完整流程。
+- `GitFileReader.tsx` 拥有显式打开的工作区全文阅读弹窗。只接受当前有界变更列表中的路径与仓库 snapshot；正文限 256 KiB UTF-8 纯文本，不进入 KernelState、持久缓存或对话。面板刷新、Project/远程 Session/读写模式变化与断线释放阅读状态；关闭或卸载后丢弃迟到响应。Main 按 Linux 目录句柄逐段禁止符号链接，核对文件元数据及读取前后仓库身份，继续使用同一项目授权和 controller 边界。
+- `use-git-history.ts` 一起管理分页、选中 commit、文件 diff 和失效清理；完成响应还需核对当前仓库的 HEAD／branch 身份，不能依赖下一次 React effect 才阻止旧结果。
+- `use-git-branches.ts` 拥有分支准备、选择、确认、执行和结果映射。确认框保存打开时的 snapshot，列表重新准备不能替换本次确认的对象；Main 继续校验原确认 snapshot。各流程只通过同一窄 `piGit` bridge 访问 Main；仓库级写入串行队列、trust 和 snapshot 校验仍由 Git Service 统一执行。
+
+这些模块属于 Git feature，不进入共享组件库，也不增加全局 store、事件总线或跨 feature 依赖。
+
+## Session Renderer 职责
+
+`use-session-archive.ts` 拥有归档凭证、过期、撤销、临时预览与只读分页；凭证在请求前同步占用，导航清理立即使旧预览请求失效。分页复用统一的 preview identity／边界校验，不持久化第二份 Conversation。
+
+`use-session-fork.ts` 拥有分叉候选、确认状态、请求失效与局部错误；候选与提交绑定打开时的 Project／Session／Session ID。历史会话先通过既有 Runtime controller 激活；成功回填草稿必须等待 mutation ack 对应 revision 已应用。取消或失败不回填草稿。
+
+`App` 保留唯一 revision barrier、跨功能操作互斥和错误归属，以及导航／Composer 装配。两个 Session hooks 使用既有 action runner，不另建全局 store；`Workbench` 继续装配现有视图和 modal，不接管异步 Session 事实。`session-view-target.ts` 只表达 Renderer 选择意图。
+
+## RuntimeHost 接口
+
+`runtime-host.ts` 是 Kernel 到 Runtime 的 Main-only typed contract。当前除 `start / send / stop / getState / subscribe` 外，还包括 `getRpcPid`、loaded-Extension inventory、quiescence 与 hibernation lease，以及可选 Extension EventBus 订阅。不能再用早期五方法清单解释当前接口；command/result 保留 Pi RPC 形状不表示 Shared Runtime 使用 JSONL 传输。
+
+Shared Runtime 没有独立 RPC PID，内存诊断不能把 Main 总进程内存归为某个 Session 的独占内存。RPC framing、stderr 和 signal 约束适用于实际外部子进程；Shared Session 使用其 driver 的开始、停止、异常与精确释放语义。当前不新增后端注册中心或自动切换策略。
 
 ## 状态来源
+
+当前应用设置的 schema、复制与提交约束由 `src/shared/workbench-settings.ts` 统一拥有，IPC、Kernel 与 ProjectStore 使用同一入口。新提交的“自动继续中断任务”必须同时开启工作区恢复；历史配置中已保存的休眠偏好仍按原值读取，由现有恢复开关阻止执行，不能通过普通保存重新写入无效组合。旧版本 schema 与迁移继续归 ProjectStore。
 
 | 状态 | 事实来源 | 持久化位置 |
 | --- | --- | --- |
@@ -96,7 +146,8 @@ subscribe
 | Subagent Agent 启停 | `pi-subagents` `settings.subagents.agentOverrides` | 用户级写入 Pi `settings.json`，项目级写入 `.pi/settings.json`；项目级优先 |
 | Magic Context 安装与 Extension 启停 | Pi `settings.json` `packages` | GUI 只展示真实 Package/资源过滤状态；配置与健康继续由上游 setup/doctor 负责；当前 `/ctx-status` 依赖 TUI custom UI，不进入 GUI 命令目录 |
 | 历史 Advisor advisory | Pi session 中既有的固定 custom message | Kernel 继续严格归一化为只读 Conversation entry；当前产品不再提供安装、启停或 roster 控制面 |
-| Project、外观、通用与有限应用快捷键设置 | Workbench Kernel | XDG config |
+| Project、启动/会话等工作区设置 | Workbench Kernel | XDG config |
+| 桌面外观、字体选择、应用快捷键、边框双击行为、Windows 执行环境选择 | Desktop Main | Electron appData/pi-gui-next-desktop/settings.json；WSL/SSH 共用本机偏好 |
 | 最近 session 指针与非敏感启动证据 | Workbench Kernel | XDG state |
 | Runtime 瞬时状态 | Workbench Kernel | 仅内存 |
 | 历史 Prompt 分支与活动 leaf | Pi Session Tree / `get_tree` | 由 Pi session 文件管理；GUI 只执行受控 `navigate_tree` 并刷新真实分支 |
@@ -180,7 +231,7 @@ run participant 的具体 request 替代泛化 attention，成功 supervisor rep
 原始参数留在展开技术详情。Main 只按固定 completion 首行协议建立独立详情目标，GUI 不用通知
 Markdown 强行关联原 run，也不直接绕过主 Agent 回复子代理。
 
-Composer 附件沿 Pi 0.83.0 的交互式 TUI 与 RPC 边界处理：普通文件只把 `@路径` 放入消息，由 Agent 使用 Pi 原生 `read` 工具按需读取；不在首条 prompt 中内联文件正文。`read` 的文本结果遵循 Pi 的 2,000 行或 50 KiB 截断边界，并可用 offset/limit 继续。图片转换为 RPC `images` 中的 `{ type: "image", mimeType, data }`，直接使用原生多模态输入。系统文件选择由 Main 取得路径，显式拖放由 Renderer 通过 Electron `webUtils.getPathForFile` 取得路径；普通文件只读取小段签名头用于区分图片，图片在进入 IPC/RPC 前满足 2000×2000 与 4.5 MiB base64 边界。
+Composer 附件沿 Pi 0.83.0 的交互式 TUI 与 RPC 边界处理：普通文件只把 `@路径` 放入消息，由 Agent 使用 Pi 原生 `read` 工具按需读取；不在首条 prompt 中内联文件正文。`read` 的文本结果遵循 Pi 的 2,000 行或 50 KiB 截断边界，并可用 offset/limit 继续。图片转换为 RPC `images` 中的 `{ type: "image", mimeType, data }`，直接使用原生多模态输入。本地/WSL 系统文件选择由 Main 取得路径，显式拖放由 Renderer 通过 Electron `webUtils.getPathForFile` 取得路径；普通文件只读取小段签名头用于区分图片，图片在进入 IPC/RPC 前满足 2000×2000 与 4.5 MiB base64 边界。
 
 Pi session 仍保存完整用户消息和 image content block。Kernel 对 Renderer 只投影文件名、路径和类型摘要，不把附件正文或图片 base64 放入 `KernelState`；恢复历史和实时事件使用同一投影。用户消息中的图片附件直接占据 Timeline 内联缩略图位置；缩略图接近可视区域后，Renderer 才通过窄 typed command 按需读取对应 session 消息中的 `ImageContent`，并只保存在该图片组件的短生命周期 state 中。点击缩略图复用同一 payload 打开灯箱；Session/message/attachment identity 变化会使旧异步结果失效并关闭 viewer。附件变化不能走纯文本 append patch，必须回退全量状态以避免静默丢失附件。
 
@@ -209,7 +260,7 @@ stopped -> starting -> ready -> running -> ready -> stopping -> stopped
 任何运行状态 -> crashed -> 用户显式 restart -> starting -> resume session
 ```
 
-状态变化只有 Workbench Kernel 一个 owner。每个 Session context 独立执行同一状态机，后台事件不得改写当前 Session 投影。Pi 非正常退出必须只让所属 context 进入 `crashed`；不自动无限重启。完整一轮以 `agent_settled` 为稳定点，不把中间的 retry、compaction 或 continuation 误判为结束；`compaction_start` / `compaction_end` 保留 manual、threshold、overflow 与 `willRetry` 语义并单独收口。
+状态变化只有 Workbench Kernel 一个 owner。每个 Session context 独立执行同一状态机，后台事件不得改写当前 Session 投影。可归属到单个 Runtime 的异常只使其 context 进入 `crashed`；Shared Main 进程整体退出则影响全部会话，不承诺独立进程级故障隔离，也不自动无限重启。完整一轮以 `agent_settled` 为稳定点，不把中间的 retry、compaction 或 continuation 误判为结束；`compaction_start` / `compaction_end` 保留 manual、threshold、overflow 与 `willRetry` 语义并单独收口。
 
 “重启后自动继续”是默认关闭的调试开关，只在正常 GUI shutdown 边界工作。Kernel 在停止 admission 前精确快照当时全部 `running + unsettled` 的已持久化 Context，并排除 provisional、Ask 等待、compaction、identity commit、stopping 与无法校验的 Session。一次性状态保存 exact `projectPath + sessionFile + sessionId` 和 canonical epoch-millisecond `capturedAt`；下一 boot 先绑定 boot ID，逐 Session 在发送继续 prompt 前原子 claim，claim 后即使崩溃也不自动重放。未被当前 boot 消费的旧状态在再下一次启动直接失效，不能根据 transcript、crashed、mtime 或 `settled=false` 猜测任务仍在运行。恢复可后台启动多个 Project/Task Runtime，但不得持久化改写最后的前台 Workspace/Session；需要新 Project trust 决定的候选等用户正常打开并授权后再继续。
 
@@ -217,7 +268,7 @@ stopped -> starting -> ready -> running -> ready -> stopping -> stopped
 
 持久 Session、managed RuntimeContext 与 Renderer 工作集是三个不同生命周期。休眠停止一个非前台 Pi Runtime，同时保留 Session pointer、导航 identity 与 transcript；再次选择只读取同一 Session 的静态历史，首个明确依赖 Runtime 的操作才按该 identity 重新启动。Renderer 的 Chromium native allocation 不属于 Runtime 休眠直接回收的内存。
 
-每个 managed Pi RPC 都显式加载 app-owned `pi-gui-runtime-quiescence` Extension。Main 通过隐藏命令和 nonce-correlated `setStatus` 取得 provider 协调结果，通过严格 `get_extensions` RPC 取得完整、脱敏、版本化的 loaded-Extension inventory；Pi 0.83.0 使用受版本约束的 private inventory bridge。protocol、complete/loading 一致性、capability、数量、路径边界或 owner discovery 任一异常都 fail-closed，不允许回退扫描 Timeline 或猜测 Extension 状态。
+每个 managed Session Runtime 都显式加载 app-owned `pi-gui-runtime-quiescence` Extension。Main 通过隐藏命令和 nonce-correlated `setStatus` 取得 provider 协调结果，通过 `RuntimeHost.getLoadedExtensions` 取得完整、脱敏、版本化的 loaded-Extension inventory；Shared driver 与外部 RPC 探针分别适配当前 Pi 0.83.0 的 inventory 边界。protocol、complete/loading 一致性、capability、数量、路径边界或 owner discovery 任一异常都 fail-closed，不允许回退扫描 Timeline 或猜测 Extension 状态。
 
 安全休眠由 coordinator 和每个后台 owner 共同执行 generation-fenced `prepare -> commit -> stop -> release`。coordinator 为同一 Session lifecycle 与 attempt 生成 exact token；Magic Context、pi-subagents、MCP adapter、CPA Responses WebSocket、Multi Advisor、ask 与 task-notify 等 owner 必须先同步关闭新 mutation admission，再确认已经进入的工作全部 drain。busy owner 快速拒绝且不取消原任务；stop 或 rollback 失败只允许用同一 generation、attempt 与 token 重试，不能用新 lease 覆盖仍冻结的 provider。
 
@@ -227,8 +278,8 @@ Runtime memory diagnostics 是独立的只读 typed API：只返回 opaque Runti
 
 ## 安全边界
 
-- Pi 使用参数数组、`shell: false` 和显式 cwd 启动。
-- stdout 只承载 strict LF JSONL；stderr 单独诊断，不能污染 framing。
+- 外部 Pi 子进程使用参数数组、`shell: false` 和显式 cwd 启动；Shared Session 的 cwd、环境和 Extension 资源由其 driver 与共享环境 owner 管理。
+- 外部 RPC 子进程的 stdout 只承载 strict LF JSONL，stderr 单独诊断；Shared Session 在进程内调用 SDK，不通过 stdout 传输事件。
 - 诊断默认不记录完整 prompt、tool output、环境变量或 credential。
 - Linux PATH、XDG、进程和权限逻辑只能存在于 runtime/main 边界，不进入 renderer 或会话模型。
 - 任务完成通知由 Main 的私有 Unix socket Broker 接收 strict v1 单行请求：目录 `0700`、socket `0600`、随机 capability token、固定限长 schema、无 Shell 插值，并以 `notify-send --print-id` 的服务端 ID 回执确认动作通知已创建。点击动作必须重新校验 canonical Project、未归档注册 Session 与可读常规文件；只为首轮 provisional materialization 对同一 identity 做 bounded 重试，验证后才聚焦并调用既有 `activateProject` / `activateSession`。Broker 在 Kernel shutdown 前停止接收并 drain 已开始的激活。

@@ -53,6 +53,8 @@ import {
 
 type SettingsPanelProps = {
   state: KernelState
+  clientOnly?: boolean
+  environmentPanel?: React.ReactNode
   busy: boolean
   section: SettingsSection
   pendingAction: WorkbenchOperation | null
@@ -126,12 +128,16 @@ type SettingsPanelProps = {
   onShortcutRecordingChange: (recording: boolean) => void
   toolDisplayDensity: ToolDisplayDensity
   onSetToolDisplayDensity: (density: ToolDisplayDensity) => void
+  hiddenModelKeys: ReadonlySet<string>
+  onSetModelVisible: (provider: string, modelId: string, visible: boolean) => void
   onDirtyChange: (dirty: boolean) => void
   onActiveOperationChange: (active: boolean) => void
 }
 
 export function SettingsPanel({
   state,
+  clientOnly = false,
+  environmentPanel,
   busy,
   section,
   pendingAction,
@@ -187,6 +193,8 @@ export function SettingsPanel({
   onShortcutRecordingChange,
   toolDisplayDensity,
   onSetToolDisplayDensity,
+  hiddenModelKeys,
+  onSetModelVisible,
   onDirtyChange,
   onActiveOperationChange
 }: SettingsPanelProps): React.JSX.Element {
@@ -273,7 +281,9 @@ export function SettingsPanel({
             <div className="settings-section-heading">
               <h2>常规</h2>
             </div>
+            {environmentPanel}
 
+            {!clientOnly ? <>
             <section
               className="settings-group settings-group-inline settings-prefs"
               aria-labelledby="settings-general-startup"
@@ -365,6 +375,8 @@ export function SettingsPanel({
               </div>
             </section>
 
+            </> : null}
+
             <section
               className="settings-group settings-group-inline settings-prefs"
               aria-labelledby="settings-general-window"
@@ -400,6 +412,7 @@ export function SettingsPanel({
               </div>
             </section>
 
+            {!clientOnly ? (
             <section
               className="settings-group settings-group-inline settings-prefs"
               aria-labelledby="settings-general-extensions"
@@ -433,6 +446,7 @@ export function SettingsPanel({
                 </div>
               </div>
             </section>
+            ) : null}
           </>
         ) : null}
 
@@ -883,7 +897,9 @@ export function SettingsPanel({
           currentModel={state.session.model}
           runtimeStatus={state.runtime.status}
           busy={busy}
+          hiddenModelKeys={hiddenModelKeys}
           onSetModel={onSetModel}
+          onSetModelVisible={onSetModelVisible}
         />
 
         {section === 'credentials' ? (

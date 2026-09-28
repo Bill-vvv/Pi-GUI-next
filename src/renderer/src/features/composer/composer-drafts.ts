@@ -1,8 +1,8 @@
-import type { KernelPromptAttachment } from '../../../../shared/kernel-contract'
+import type { PromptDraftAttachment } from '../../../../shared/desktop-attachment-contract'
 
 export type ComposerPendingAttachment = {
   id: string
-  attachment: KernelPromptAttachment
+  attachment: PromptDraftAttachment
 }
 
 export type ComposerDraft = {

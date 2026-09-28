@@ -1,10 +1,10 @@
+import type { PromptDraftAttachment } from '../../../../shared/desktop-attachment-contract'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import type {
   KernelCommandDescriptor,
   KernelProjectPathMatch,
   KernelProjectPathSearchResult,
-  KernelPromptAttachment,
   KernelSessionPreview,
   KernelSessionUsage,
   KernelState,
@@ -43,7 +43,8 @@ import {
   type ComposerDraft,
   type ComposerPendingAttachment as PendingAttachment
 } from './composer-drafts'
-import { readDroppedPromptAttachments } from './prompt-attachments'
+import { readDesktopAttachmentData, readDroppedPromptAttachments } from './prompt-attachments'
+import { visiblePickerModels } from '../../model-visibility'
 import { ComposerModelPicker } from './ComposerModelPicker'
 import { TodoPanel } from './TodoPanel'
 import {
@@ -82,17 +83,24 @@ type ComposerProps = {
   pendingAction: WorkbenchOperation | null
   completedAction: WorkbenchCompletedAction | null
   todos: KernelTodoItem[] | null
-  onSelectPromptAttachments: () => Promise<KernelPromptAttachment[]>
+  attachmentsAvailable?: boolean
+  remoteAttachments?: boolean
+  onPrepareRemoteAttachments?: () => Promise<void>
+  slashCommandsAvailable?: boolean
+  extensionCommandsOnly?: boolean
+  projectPathMentionsAvailable?: boolean
+  onSelectPromptAttachments: () => Promise<PromptDraftAttachment[]>
   onSearchProjectPaths: (query: string) => Promise<KernelProjectPathSearchResult>
   onStartSession: () => Promise<void>
   onActivateSession: (sessionKey: string) => Promise<void>
-  onPrompt: (message: string, attachments?: KernelPromptAttachment[]) => Promise<void>
-  onSteer: (message: string, attachments?: KernelPromptAttachment[]) => Promise<void>
-  onFollowUp: (message: string, attachments?: KernelPromptAttachment[]) => Promise<void>
+  onPrompt: (message: string, attachments?: PromptDraftAttachment[]) => Promise<void>
+  onSteer: (message: string, attachments?: PromptDraftAttachment[]) => Promise<void>
+  onFollowUp: (message: string, attachments?: PromptDraftAttachment[]) => Promise<void>
   onInvokeCommand: (commandId: string, argument: string) => Promise<void>
   onAbort: () => Promise<void>
   globalEscapeAbortEnabled: boolean
   onSetModel: (provider: string, modelId: string) => Promise<void>
+  hiddenModelKeys?: ReadonlySet<string>
   onSetThinkingLevel: (level: ThinkingLevel) => Promise<void>
   onSetOpenAiFastMode: (enabled: boolean) => Promise<void>
   onMeasuredHeightChange: (height: number) => void
@@ -111,6 +119,12 @@ export function Composer({
   pendingAction,
   completedAction,
   todos,
+  attachmentsAvailable = true,
+  remoteAttachments = false,
+  onPrepareRemoteAttachments,
+  slashCommandsAvailable = true,
+  extensionCommandsOnly = false,
+  projectPathMentionsAvailable = true,
   onSelectPromptAttachments,
   onSearchProjectPaths,
   onStartSession,
@@ -122,6 +136,7 @@ export function Composer({
   onAbort,
   globalEscapeAbortEnabled,
   onSetModel,
+  hiddenModelKeys = new Set(),
   onSetThinkingLevel,
   onSetOpenAiFastMode,
   onMeasuredHeightChange
@@ -129,6 +144,7 @@ export function Composer({
   const [prompt, setPrompt] = useState('')
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
   const [attachmentProcessing, setAttachmentProcessing] = useState(false)
+  const attachmentOperationRef = useRef<{ id: string; cancelled: boolean } | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null)
@@ -157,7 +173,7 @@ export function Composer({
     ? null
     : state.projects.find(({ path }) => path === activeProjectKey) ?? null
   const taskWorkspace = activeWorkspace?.workspaceKind === 'task'
-  const projectPathFeaturesAvailable = !taskWorkspace
+  const projectPathFeaturesAvailable = projectPathMentionsAvailable && !taskWorkspace
   const displayedSessionKey = viewingNewSession
     ? null
     : viewedSessionKey ?? activeSessionKey
@@ -178,6 +194,14 @@ export function Composer({
   const draftContextRef = useRef(draftContext)
   const displayedContextKeyRef = useRef(displayedContextKey)
   displayedContextKeyRef.current = displayedContextKey
+  useEffect(() => () => {
+    const operation = attachmentOperationRef.current
+    if (!operation || !remoteAttachments) return
+    operation.cancelled = true
+    void window.piDesktopClient?.cancelAttachmentUpload(operation.id).catch((error: unknown) => {
+      console.error('Could not confirm cancellation of an attachment upload.', error)
+    })
+  }, [displayedContextKey, remoteAttachments])
   const promptRef = useRef(prompt)
   promptRef.current = prompt
   const pendingAttachmentsRef = useRef(pendingAttachments)
@@ -188,8 +212,13 @@ export function Composer({
   activeProjectKeyRef.current = activeProjectKey
   const preparingNewSession = viewingNewSession && !newSessionPrepared
   const submissionBusy = busy && !preparingNewSession
-  const commands = preparingNewSession ? [] : state.commands ?? []
-  const availableModels = state.availableModels ?? []
+  const commands = preparingNewSession || !slashCommandsAvailable ? [] : (state.commands ?? [])
+    .filter((command) => !extensionCommandsOnly || command.source === 'extension')
+  const availableModels = visiblePickerModels(
+    state.availableModels ?? [],
+    hiddenModelKeys,
+    session.model
+  )
   const openAiFastModeAvailable = session.model !== null && (
     session.model.provider === 'openai' ||
     session.model.provider === 'openai-codex' ||
@@ -212,6 +241,7 @@ export function Composer({
     pendingAction !== null &&
     isRuntimeContextAction(pendingAction)
   const attachmentInputAvailable =
+    attachmentsAvailable &&
     draftEditable &&
     !attachmentProcessing &&
     !runtimeContextBusy
@@ -225,6 +255,7 @@ export function Composer({
     ? []
     : filterSlashCommands(commands, slashQuery)
   const showSlashCommandSurface =
+    slashCommandsAvailable &&
     !preparingNewSession &&
     ready && draftEditable && slashQuery !== null && dismissedMenuPrompt !== prompt
   const activeProjectPathToken = parseActiveProjectPathToken(prompt, cursorPosition)
@@ -584,23 +615,26 @@ export function Composer({
 
   async function invokeCommand(command: KernelCommandDescriptor, argument: string): Promise<void> {
     if (!ready || submitting || submissionBusy) return
+    const commandContextKey = displayedContextKeyRef.current
     setSubmitting(true)
     setCommandError(null)
     try {
       await onInvokeCommand(command.id, argument)
-      setPrompt('')
-      setCursorPosition(0)
-      if (textareaRef.current) textareaRef.current.style.height = ''
+      if (displayedContextKeyRef.current === commandContextKey) {
+        setPrompt('')
+        setCursorPosition(0)
+        if (textareaRef.current) textareaRef.current.style.height = ''
+      }
     } catch (error) {
-      setCommandError(errorMessage(error))
+      if (displayedContextKeyRef.current === commandContextKey) setCommandError(errorMessage(error))
       return
     } finally {
-      restoreFocusRef.current = true
+      if (displayedContextKeyRef.current === commandContextKey) restoreFocusRef.current = true
       setSubmitting(false)
     }
   }
 
-  function appendPendingAttachments(attachments: readonly KernelPromptAttachment[]): void {
+  function appendPendingAttachments(attachments: readonly PromptDraftAttachment[]): void {
     setPendingAttachments((current) => [
       ...current,
       ...attachments.map((attachment) => ({
@@ -610,56 +644,49 @@ export function Composer({
     ])
   }
 
-  async function selectAttachments(): Promise<void> {
-    if (!attachmentInputAvailable || attachmentProcessingRef.current) return
+  async function selectAttachments(files?: readonly File[]): Promise<void> {
+    if (!attachmentInputAvailable || attachmentProcessingRef.current || files?.length === 0) return
     const attachmentContextKey = displayedContextKeyRef.current
+    const operation = { id: crypto.randomUUID(), cancelled: false }
+    attachmentOperationRef.current = operation
     attachmentProcessingRef.current = true
     setAttachmentProcessing(true)
     setCommandError(null)
     try {
-      const attachments = await onSelectPromptAttachments()
-      if (displayedContextKeyRef.current === attachmentContextKey) {
-        appendPendingAttachments(attachments)
-      }
+      let attachments: PromptDraftAttachment[]
+      if (remoteAttachments) {
+        if (!window.piDesktopClient || !onPrepareRemoteAttachments) throw new Error('远程附件流程尚未就绪。')
+        await onPrepareRemoteAttachments()
+        if (operation.cancelled || displayedContextKeyRef.current !== attachmentContextKey) throw new Error('会话已变化，请重新选择附件。')
+        if (files) {
+          const data = await readDesktopAttachmentData(files)
+          if (operation.cancelled) throw new Error('附件上传已取消。')
+          attachments = await window.piDesktopClient.uploadAttachments(operation.id, data)
+        } else attachments = await window.piDesktopClient.selectAttachments(operation.id)
+      } else attachments = files
+        ? await readDroppedPromptAttachments(files, (file) => window.piGui.getPathForFile(file))
+        : await onSelectPromptAttachments()
+      if (!operation.cancelled && displayedContextKeyRef.current === attachmentContextKey) appendPendingAttachments(attachments)
     } catch (error) {
-      if (displayedContextKeyRef.current === attachmentContextKey) {
-        setCommandError(errorMessage(error))
-      }
+      if (displayedContextKeyRef.current === attachmentContextKey) setCommandError(errorMessage(error))
     } finally {
-      attachmentProcessingRef.current = false
-      setAttachmentProcessing(false)
-      if (displayedContextKeyRef.current === attachmentContextKey) {
-        restoreFocusRef.current = true
+      if (attachmentOperationRef.current === operation) {
+        attachmentOperationRef.current = null
+        attachmentProcessingRef.current = false
+        setAttachmentProcessing(false)
       }
+      if (displayedContextKeyRef.current === attachmentContextKey) restoreFocusRef.current = true
     }
   }
 
-  async function addDroppedAttachments(files: readonly File[]): Promise<void> {
-    if (!attachmentInputAvailable || attachmentProcessingRef.current || files.length === 0) return
-    const attachmentContextKey = displayedContextKeyRef.current
-    attachmentProcessingRef.current = true
-    setAttachmentProcessing(true)
-    setCommandError(null)
-    try {
-      const attachments = await readDroppedPromptAttachments(
-        files,
-        (file) => window.piGui.getPathForFile(file)
-      )
-      if (displayedContextKeyRef.current === attachmentContextKey) {
-        appendPendingAttachments(attachments)
-      }
-    } catch (error) {
-      if (displayedContextKeyRef.current === attachmentContextKey) {
-        setCommandError(errorMessage(error))
-      }
-    } finally {
-      attachmentProcessingRef.current = false
-      setAttachmentProcessing(false)
-      if (displayedContextKeyRef.current === attachmentContextKey) {
-        restoreFocusRef.current = true
-      }
-    }
+  async function cancelAttachmentUpload(): Promise<void> {
+    const operation = attachmentOperationRef.current
+    if (!operation || !remoteAttachments) return
+    operation.cancelled = true
+    try { await window.piDesktopClient?.cancelAttachmentUpload(operation.id) }
+    catch (error) { setCommandError(errorMessage(error)) }
   }
+
 
   function completeCommand(command: KernelCommandDescriptor): void {
     const completedPrompt = `/${command.name}${command.argumentHint !== null ? ' ' : ''}`
@@ -838,7 +865,7 @@ export function Composer({
         event.preventDefault()
         attachmentDragDepthRef.current = 0
         setDragOver(false)
-        void addDroppedAttachments([...event.dataTransfer.files])
+        void selectAttachments([...event.dataTransfer.files])
       }}
       onSubmit={(event) => {
         event.preventDefault()
@@ -904,13 +931,17 @@ export function Composer({
         }}
       >
         <div className="composer-editor-column">
+          {remoteAttachments && attachmentProcessing ? <div className="composer-attachment-upload" role="status">
+            <span>正在准备远程附件…</span>
+            <button type="button" onClick={() => void cancelAttachmentUpload()}>取消上传</button>
+          </div> : null}
           {pendingAttachments.length > 0 ? (
             <ul className="composer-attachment-list" aria-label="待发送附件">
               {pendingAttachments.map(({ id, attachment }) => (
                 <li
                   className={`composer-attachment ${attachment.type}`}
                   key={id}
-                  data-tooltip={attachment.path}
+                  data-tooltip={attachment.type === 'uploaded' ? `已上传 · ${attachment.byteCount} 字节` : attachment.path}
                   data-tooltip-variant="mono"
                 >
                   {attachment.type === 'image' ? (
@@ -920,7 +951,7 @@ export function Composer({
                       alt=""
                     />
                   ) : (
-                    <span className="composer-attachment-file-kind" aria-hidden="true">引用</span>
+                    <span className="composer-attachment-file-kind" aria-hidden="true">{attachment.type === 'uploaded' ? attachment.kind === 'image' ? '图片' : '已上传' : '引用'}</span>
                   )}
                   <span className="composer-attachment-name">{attachment.name}</span>
                   <button
@@ -930,6 +961,12 @@ export function Composer({
                     disabled={submitting || attachmentProcessing}
                     onClick={() => {
                       setPendingAttachments((current) => current.filter((item) => item.id !== id))
+                      if (attachment.type === 'uploaded') {
+                        const context = displayedContextKeyRef.current
+                        void window.piDesktopClient?.discardAttachments([attachment.uploadId]).catch((error: unknown) => {
+                          if (displayedContextKeyRef.current === context) setCommandError(errorMessage(error))
+                        })
+                      }
                     }}
                   >
                     ×
@@ -977,7 +1014,7 @@ export function Composer({
                   .filter((file): file is File => file !== null)
               if (files.length === 0) return
               event.preventDefault()
-              void addDroppedAttachments(files)
+              void selectAttachments(files)
             }}
             onChange={(event) => {
               setPrompt(event.target.value)
@@ -1070,15 +1107,17 @@ export function Composer({
         </div>
 
         <div className="composer-input-actions">
-          <IconButton
-            className="composer-attach-action"
-            icon="attach"
-            label="添加图片或引用文件"
-            type="button"
-            disabled={!attachmentInputAvailable}
-            aria-busy={attachmentProcessing ? true : undefined}
-            onClick={() => void selectAttachments()}
-          />
+          {attachmentsAvailable ? (
+            <IconButton
+              className="composer-attach-action"
+              icon="attach"
+              label="添加图片或引用文件"
+              type="button"
+              disabled={!attachmentInputAvailable}
+              aria-busy={attachmentProcessing ? true : undefined}
+              onClick={() => void selectAttachments()}
+            />
+          ) : null}
           <div className="composer-submit-actions">
             {running ? (
               <IconButton

@@ -10,12 +10,14 @@ const MAX_RESPONSE_CHARS = 16_000
 
 type ExtensionDialogProps = {
   request: KernelExtensionDialogRequest
+  unavailableReason?: string | null
   onRespond: (request: KernelExtensionDialogRequest, value: string) => Promise<void>
   onCancel: (request: KernelExtensionDialogRequest) => Promise<void>
 }
 
 export function ExtensionDialog({
   request,
+  unavailableReason = null,
   onRespond,
   onCancel
 }: ExtensionDialogProps): React.JSX.Element {
@@ -31,10 +33,10 @@ export function ExtensionDialog({
   const [value, setValue] = useState(() => initialExtensionDialogValue(request))
   const [pending, setPending] = useState(false)
   const [localError, setLocalError] = useState<string | null>(null)
-  const busy = pending || request.status === 'submitting'
+  const busy = pending || request.status === 'submitting' || unavailableReason !== null
 
   const respond = async (response: string): Promise<void> => {
-    if (pendingRef.current || request.status === 'submitting') return
+    if (pendingRef.current || request.status === 'submitting' || unavailableReason !== null) return
     pendingRef.current = true
     setPending(true)
     setLocalError(null)
@@ -48,7 +50,7 @@ export function ExtensionDialog({
   }
 
   const cancel = async (): Promise<void> => {
-    if (pendingRef.current || request.status === 'submitting') return
+    if (pendingRef.current || request.status === 'submitting' || unavailableReason !== null) return
     pendingRef.current = true
     setPending(true)
     setLocalError(null)
@@ -83,7 +85,7 @@ export function ExtensionDialog({
     onDismiss: () => void cancel()
   })
 
-  const error = localError ?? request.error
+  const error = unavailableReason ?? localError ?? request.error
 
   return createPortal(
     <div
@@ -173,7 +175,7 @@ export function ExtensionDialog({
               type="submit"
               disabled={busy}
             >
-              {busy ? '正在提交…' : request.method === 'confirm' ? '确认' : '提交'}
+              {unavailableReason !== null ? '暂不可用' : busy ? '正在提交…' : request.method === 'confirm' ? '确认' : '提交'}
             </button>
           </footer>
         </form>

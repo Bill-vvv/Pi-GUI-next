@@ -10,18 +10,7 @@ import type {
 import { conversationTurnWindowStartIndex } from '../../../shared/conversation-window.ts'
 import { mergeEarlierSessionPreviewPage } from '../kernel/conversation-page-merge.ts'
 
-export type SessionViewTarget =
-  | {
-      kind: 'session'
-      projectKey: string
-      sessionKey: string
-    }
-  | {
-      kind: 'new'
-      projectKey: string
-      prepared: boolean
-      sawProvisional: boolean
-    }
+import type { SessionViewTarget } from '../session-view-target'
 
 export type RuntimeEnsureTarget =
   | {

@@ -91,6 +91,7 @@ type ProjectNavigatorProps = {
     runtimeStatus: KernelState['sessions'][number]['runtimeStatus']
   ) => void
   onArchiveSession: (sessionKey: string) => Promise<void>
+  archiveAvailable?: boolean
   onReorderProjects: (projectKeys: string[]) => Promise<void>
 }
 
@@ -121,6 +122,7 @@ export function ProjectNavigator({
   onStartSession,
   onOpenSession,
   onArchiveSession,
+  archiveAvailable = true,
   onReorderProjects
 }: ProjectNavigatorProps): React.JSX.Element {
   const [draggedProjectKey, setDraggedProjectKey] = useState<string | null>(null)
@@ -877,7 +879,8 @@ export function ProjectNavigator({
                                   onTogglePinnedSession(pinIdentity)
                                 }}
                               />
-                              <IconButton
+                              {archiveAvailable ? (
+                                <IconButton
                                 className="session-archive"
                                 icon="archive"
                                 label="归档对话"
@@ -902,6 +905,7 @@ export function ProjectNavigator({
                                   })().catch(() => undefined)
                                 }}
                               />
+                              ) : null}
                             </div>
                           </div>
                         </div>
@@ -1104,8 +1108,9 @@ export function SessionSpinner({
 
   useLayoutEffect(() => {
     const [animation] = visualRef.current?.getAnimations() ?? []
-    // The document timeline is shared, so spinners mounted at different times keep one phase.
-    if (animation !== undefined) animation.startTime = 0
+    // Do not resume an indicator mounted while its action slot already hides it.
+    // Visible spinners still share the document timeline's phase.
+    if (animation !== undefined && animation.playState !== 'paused') animation.startTime = 0
   }, [])
 
   return (

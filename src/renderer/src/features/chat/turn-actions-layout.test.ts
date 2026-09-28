@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 
 const appSource = await readFile(new URL('../../App.tsx', import.meta.url), 'utf8')
+const forkSource = await readFile(new URL('../session/use-session-fork.ts', import.meta.url), 'utf8')
 const timelineSource = await readFile(new URL('./Timeline.tsx', import.meta.url), 'utf8')
 const workbenchSource = await readFile(new URL('../../composition/Workbench.tsx', import.meta.url), 'utf8')
 const chatStyles = await readFile(new URL('./chat.css', import.meta.url), 'utf8')
@@ -36,8 +37,8 @@ test('static history previews keep completed-turn actions and bind stateful acti
     /const canUseCompletedTurnActions =\s*canUseSettledSessionActions \|\| canUseStaticPreviewActions/
   )
   assert.match(
-    appSource,
-    /async function openForkDialog[\s\S]*?viewTarget\?\.kind === 'session'[\s\S]*?await ensureSessionRuntime\(viewTarget\.sessionKey, 'immediate'\)[\s\S]*?setForkDialogOpen\(true\)/
+    forkSource,
+    /async function openForkDialog[\s\S]*?viewTarget\?\.kind === 'session'[\s\S]*?await options\.ensureSessionRuntime\(viewTarget\.sessionKey, 'immediate'\)[\s\S]*?publish\(/
   )
   assert.match(
     appSource,
@@ -50,12 +51,17 @@ test('static history previews keep completed-turn actions and bind stateful acti
 })
 
 test('a new copy, export or fork action clears stale completion feedback', () => {
-  for (const action of ['forkSession', 'exportSession', 'copyAnswer']) {
+  for (const action of ['exportSession', 'copyAnswer']) {
     assert.match(
       appSource,
       new RegExp(`async function ${action}\\([\\s\\S]*?setCompletedAction\\(null\\)[\\s\\S]*?setPendingAction\\(`)
     )
   }
+})
+
+test('fork feedback is reset by its Session owner before entering the shared mutation runner', () => {
+  assert.match(forkSource, /options\.onCompletedAction\(null\)[\s\S]*?options\.runMutation\(action/)
+  assert.match(appSource, /useSessionFork\([\s\S]*?runMutation: runActionResult[\s\S]*?onCompletedAction: setCompletedAction/)
 })
 
 test('historical prompt editing stays in place and retries only the native prompt after navigation', () => {

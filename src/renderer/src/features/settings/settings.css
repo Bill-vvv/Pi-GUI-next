@@ -239,6 +239,35 @@
   width: min(220px, 44%);
 }
 
+.settings-model-visibility-empty {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-body-sm);
+  line-height: var(--line-body-sm);
+}
+
+.settings-model-visibility-group + .settings-model-visibility-group {
+  margin-top: 18px;
+}
+
+.settings-model-visibility-provider {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-medium);
+  line-height: var(--line-meta);
+}
+
+.settings-model-visibility-group .settings-row {
+  min-height: 0;
+  padding: 10px 0;
+}
+
+.settings-model-visibility-group .settings-row:last-child {
+  border-bottom: 0;
+}
+}
+
 .settings-prefs .settings-font-control {
   width: min(280px, 52%);
 }

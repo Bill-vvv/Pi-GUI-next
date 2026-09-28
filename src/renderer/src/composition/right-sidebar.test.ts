@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { after, test } from 'node:test'
+import { test } from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { createServer } from 'vite'
+import { createSsrTestServer } from '../test-support/create-ssr-test-server.ts'
 
 import {
   RIGHT_SIDEBAR_DEFAULT_WIDTH,
@@ -20,13 +20,7 @@ import {
   writeRightSidebarWidthPreference
 } from './right-sidebar-model.ts'
 
-const vite = await createServer({
-  configFile: false,
-  root: new URL('../../../../', import.meta.url).pathname,
-  appType: 'custom',
-  server: { middlewareMode: true, hmr: false }
-})
-after(() => vite.close())
+const vite = await createSsrTestServer()
 
 const rightSidebarModule = await vite.ssrLoadModule(
   '/src/renderer/src/composition/RightSidebar.tsx'
@@ -181,7 +175,8 @@ test('Workbench gives the shell a generic mirrored toggle and keeps domain modul
   assert.match(workbenchSource, /label=\{rightSidebarOpen \? '收起右侧栏' : '展开右侧栏'\}/)
   assert.match(workbenchSource, /if \(rightSidebarOpen\) \{[\s\S]*?setRightSidebarCollapsed\(true\)/)
   assert.match(workbenchSource, /if \(!rightSidebarHasModules\) \{[\s\S]*?setRightSidebarActivated\(true\)/)
-  assert.match(workbenchSource, /gitSidebarAvailable \? \[\{[\s\S]*?label: 'Git'[\s\S]*?content: <GitChangesPanel projectKey=\{activeProject\.path\} \/>/)
+  assert.match(workbenchSource, /gitSidebarAvailable \? \[\{[\s\S]*?label: 'Git'[\s\S]*?content: <GitChangesPanel[\s\S]*?projectKey=\{activeProject\.path\} readOnly=\{clientSurface\.gitReadOnly\} remote=\{clientSurface\.disconnectHost\} \/>/)
+  assert.match(workbenchSource, /key=\{clientSurface\.disconnectHost \? `\$\{activeProject\.path\}:\$\{state\.activeSessionKey\}` : activeProject\.path\}/)
   assert.match(workbenchSource, /selectedSubagentTask === null \? \[\] : \[\{[\s\S]*?label: '子任务'/)
   assert.match(workbenchSource, /reconcileRightSidebarActiveTab\(rightSidebarTabIds, rightSidebarTabId\)/)
   assert.match(workbenchSource, /if \(!settingsOpen && normalProjectActive\) return[\s\S]*?setRightSidebarActivated\(false\)/)

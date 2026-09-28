@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { setGlobalProxyFromEnv } from 'node:http'
 
 type ScopedEnvironmentValues = Map<string, string | undefined>
 
@@ -7,6 +8,7 @@ const environmentScope = new AsyncLocalStorage<ScopedEnvironmentValues>()
 let originalEnvironment: NodeJS.ProcessEnv | null = null
 let scopedEnvironmentProxy: NodeJS.ProcessEnv | null = null
 let ownerCount = 0
+let restoreHttpProxy: (() => void) | null = null
 
 function scopedValue(property: PropertyKey): { scoped: boolean, value: string | undefined } {
   if (typeof property !== 'string') return { scoped: false, value: undefined }
@@ -19,6 +21,9 @@ function installScopedEnvironment(): void {
   if (scopedEnvironmentProxy !== null) return
 
   const target = process.env
+  // The embedded SDK does not run Pi CLI's HTTP bootstrap. Capture the Host's
+  // proxy settings once, before Sessions can override their environment views.
+  restoreHttpProxy = setGlobalProxyFromEnv({ ...target })
   const proxy = new Proxy(target, {
     get(environment, property, receiver) {
       const scoped = scopedValue(property)
@@ -83,6 +88,8 @@ function uninstallScopedEnvironment(): void {
     throw new Error('Scoped Pi environment ownership changed before disposal.')
   }
   process.env = originalEnvironment
+  restoreHttpProxy?.()
+  restoreHttpProxy = null
   originalEnvironment = null
   scopedEnvironmentProxy = null
 }
@@ -93,6 +100,7 @@ export type SharedPiEnvironmentOverrides = Readonly<Record<string, string | unde
  * Process-wide adapter that gives each asynchronous Pi Session its own environment view.
  * The proxy is installed once while at least one SharedPiHost owns it; reads and writes
  * inside a scope stay in that AsyncLocalStorage lineage instead of mutating other Sessions.
+ * HTTP proxy configuration shares this process lifetime, never an individual Session's.
  */
 export class SharedPiProcessEnvironment {
   private disposed = false

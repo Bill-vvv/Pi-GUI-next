@@ -69,6 +69,8 @@ import {
 } from './timeline-process-model'
 
 export const TimelineSessionKeyContext = createContext<string | null>(null)
+// Explicit choices only; owned by the current Timeline identity, not transcript state.
+export const ThinkingDisclosureContext = createContext<Map<string, boolean> | null>(null)
 
 export type ConversationTurn = {
   id: string
@@ -211,7 +213,15 @@ function CompletedProcess({
 }): React.JSX.Element {
   const interaction = useContext(SubagentTaskInteractionContext)
   const selection = interaction?.selection ?? null
-  const [expanded, setExpanded] = useState(false)
+  const thinkingDisclosures = useContext(ThinkingDisclosureContext)
+  // LiveTurn is replaced on settlement; only an explicit open choice opts out of collapse.
+  const [expanded, setExpanded] = useState(() => {
+    const items = toolDisplayDensity === 'standard'
+      ? standardProcessItems(entries)
+      : groupAdjacentThinking(entries)
+    return items.some((item) => item.type === 'thinking-group' &&
+      thinkingGroupDisclosure(item.entries, thinkingDisclosures) === true)
+  })
   const selectedSubagentInProcess = selection?.kind === 'tool' && entries.some((entry) =>
     entry.kind === 'tool' &&
     entry.toolCallId === selection.toolCallId &&
@@ -634,6 +644,15 @@ function StandardToolSummary({
   )
 }
 
+function thinkingGroupDisclosure(
+  entries: KernelThinkingEntry[],
+  disclosures: ReadonlyMap<string, boolean> | null
+): boolean | undefined {
+  // On merge, the last explicitly chosen member in transcript order wins.
+  const chosen = entries.findLast((entry) => disclosures?.has(entry.id))
+  return chosen === undefined ? undefined : disclosures!.get(chosen.id)
+}
+
 function ThinkingGroup({
   activeEntryId,
   entries,
@@ -657,16 +676,22 @@ function ThinkingGroup({
   const title = active
     ? <ThinkingStatus label={activeSummaryLabel ?? '正在思考'} />
     : elapsedMs === null ? '思考' : `思考了 ${formatDuration(elapsedMs)}`
-  const [expanded, setExpanded] = useState(pinned || active)
+  const thinkingDisclosures = useContext(ThinkingDisclosureContext)
+  const localDisclosuresRef = useRef(new Map<string, boolean>())
+  const disclosures = thinkingDisclosures ?? localDisclosuresRef.current
+  const userExpanded = thinkingGroupDisclosure(entries, disclosures)
+  const [expanded, setExpanded] = useState(userExpanded ?? (pinned || active))
   const previousActiveRef = useRef(active)
   useLayoutEffect(() => {
     const wasActive = previousActiveRef.current
-    if (!pinned) {
+    if (userExpanded !== undefined) {
+      setExpanded(userExpanded)
+    } else if (!pinned) {
       if (active && !wasActive) setExpanded(true)
       if (!active && wasActive) setExpanded(false)
     }
     previousActiveRef.current = active
-  }, [active, pinned])
+  }, [active, pinned, userExpanded])
   const showShortDetail = !active && showDetail && isSingleLineThinkingDetail(detailText)
   return (
     <li className={`process-step thinking ${narrative ? 'narrative' : 'summary'} ${status}`}>
@@ -686,9 +711,18 @@ function ThinkingGroup({
         <details
           className="process-thinking"
           open={expanded}
-          onToggle={(event) => setExpanded(event.currentTarget.open)}
         >
-          <summary className="process-thinking-summary">
+          <summary
+            className="process-thinking-summary"
+            onClick={(event) => {
+              // Native toggle also fires for React's open updates, so record intent here.
+              event.preventDefault()
+              const nextExpanded = !expanded
+              // Store only actual displayed members so regrouping cannot lose the choice.
+              for (const entry of entries) disclosures.set(entry.id, nextExpanded)
+              setExpanded(nextExpanded)
+            }}
+          >
             <span className="process-thinking-title">{title}</span>
             <span className="process-thinking-expand" aria-hidden="true" />
           </summary>

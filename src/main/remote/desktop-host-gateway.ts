@@ -1,4 +1,7 @@
 import { randomBytes, randomInt } from 'node:crypto'
+import { desktopPairingIdFromHash } from './desktop-device-binding.ts'
+import { DESKTOP_ATTACHMENT_COMMAND_TYPES, isDesktopAttachmentCommand, type DesktopAttachmentCommand } from '../../shared/desktop-attachment-contract.ts'
+import { DesktopAttachmentError, type DesktopAttachmentOwner } from './desktop-attachment-store.ts'
 import {
   createServer,
   type IncomingMessage,
@@ -15,14 +18,19 @@ import {
   DESKTOP_HOST_CONTROLLER_HEADER,
   DESKTOP_HOST_CONTROLLER_ID_PATTERN,
   DESKTOP_HOST_KERNEL_COMMAND_TYPES,
+  DESKTOP_HOST_GIT_COMMAND_TYPES,
+  DESKTOP_HOST_JSON_RESPONSE_BYTE_LIMIT,
   DESKTOP_HOST_PROTOCOL_VERSION,
   isDesktopHostKernelCommand,
+  isDesktopHostGitCommand,
+  isDesktopHostControlIdentity,
   type DesktopHostCommandErrorCode,
   type DesktopHostCommandRequest,
   type DesktopHostControlIdentity,
   type DesktopHostCommandResponse,
   type DesktopHostEventEnvelope,
   type DesktopHostKernelCommand,
+  type DesktopHostGitCommand,
   type DesktopHostPairRequest,
   type DesktopHostPairResponse,
   type DesktopHostSessionStatus
@@ -30,6 +38,7 @@ import {
 import type { KernelEvent } from '../../shared/kernel-contract.ts'
 import { REMOTE_PAIRING_CODE_LENGTH } from '../../shared/remote-contract.ts'
 import { isKernelCommand } from '../kernel/kernel-command-validation.ts'
+import { isGitCommand } from '../git/git-command-validation.ts'
 import { isRecord } from '../utils/guards.ts'
 import { RemoteCommandPolicyError } from './remote-command-policy.ts'
 import type { DesktopHostEnabledConfig } from './desktop-host-config.ts'
@@ -58,11 +67,19 @@ export type DesktopHostGateway = {
 }
 
 export type DesktopHostGatewayHandlers = {
+  dispatchAttachmentCommand?(
+    command: DesktopAttachmentCommand, owner: DesktopAttachmentOwner,
+    assertCurrentBoundary: () => Promise<void>
+  ): Promise<unknown>
   getControlIdentity(): DesktopHostControlIdentity
   assertCommandPolicy(command: DesktopHostKernelCommand): Promise<void>
   dispatchCommand(
     command: DesktopHostKernelCommand,
     assertCurrentBoundary?: () => Promise<void>
+  ): Promise<unknown>
+  dispatchGitCommand?(
+    command: DesktopHostGitCommand,
+    assertCurrentBoundary: () => Promise<void>
   ): Promise<unknown>
 }
 
@@ -302,12 +319,15 @@ export async function startDesktopHostGateway(
   }
 
   const sessionStatus = (authenticated: boolean): DesktopHostSessionStatus => ({
+    pairingId: currentPairedDevice() === null ? null : desktopPairingIdFromHash(deviceStore.getDevice()!.credentialHash),
     protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
     productVersion: options.productVersion,
     buildCommit: options.buildCommit,
     authenticated,
     capabilities: {
-      kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES
+      kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES,
+      ...(options.handlers.dispatchGitCommand ? { gitCommandTypes: DESKTOP_HOST_GIT_COMMAND_TYPES } : {}),
+      ...(options.handlers.dispatchAttachmentCommand ? { attachmentCommandTypes: DESKTOP_ATTACHMENT_COMMAND_TYPES } : {})
     }
   })
 
@@ -383,7 +403,9 @@ export async function startDesktopHostGateway(
         credential,
         expiresAt,
         capabilities: {
-          kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES
+          kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES,
+          ...(options.handlers.dispatchGitCommand ? { gitCommandTypes: DESKTOP_HOST_GIT_COMMAND_TYPES } : {}),
+      ...(options.handlers.dispatchAttachmentCommand ? { attachmentCommandTypes: DESKTOP_ATTACHMENT_COMMAND_TYPES } : {})
         }
       }
     })
@@ -473,11 +495,13 @@ export async function startDesktopHostGateway(
     }
 
     const requestId = body.requestId
-    if (!isKernelCommand(body.command)) {
-      writeCommandError(res, requestId, 'bad-request', 'Unsupported kernel command.', 400)
+    if (!isKernelCommand(body.command) && !isGitCommand(body.command) && !isDesktopAttachmentCommand(body.command)) {
+      writeCommandError(res, requestId, 'bad-request', 'Unsupported Desktop Host command.', 400)
       return
     }
-    if (!isDesktopHostKernelCommand(body.command)) {
+    if (!isDesktopHostKernelCommand(body.command) &&
+      !(isDesktopHostGitCommand(body.command) && options.handlers.dispatchGitCommand) &&
+      !(isDesktopAttachmentCommand(body.command) && options.handlers.dispatchAttachmentCommand)) {
       writeCommandError(res, requestId, 'forbidden', 'Command is not allowed over Desktop Host.', 403)
       return
     }
@@ -506,15 +530,37 @@ export async function startDesktopHostGateway(
 
     try {
       await assertCurrentBoundary()
-      await options.handlers.assertCommandPolicy(body.command)
-      await assertCurrentBoundary()
-      const value = await options.handlers.dispatchCommand(body.command, assertCurrentBoundary)
+      let value: unknown
+      if (isDesktopAttachmentCommand(body.command)) {
+        value = await options.handlers.dispatchAttachmentCommand!(body.command,
+          { ...body.expectedIdentity, controllerId: readControllerId(req)! }, assertCurrentBoundary)
+        if (body.command.type !== 'attachment.submit') await assertCurrentBoundary()
+      } else if (isDesktopHostGitCommand(body.command)) {
+        if (body.command.type === 'git.execute-commit' && body.command.request.mode !== 'commit') {
+          throw new RemoteCommandPolicyError('Desktop Git supports ordinary commit only; push and amend are unavailable.')
+        }
+        if (body.command.projectKey !== body.expectedIdentity.projectKey) {
+          throw new RemoteCommandPolicyError('Git command must target the observed active Project.')
+        }
+        value = await options.handlers.dispatchGitCommand!(body.command, assertCurrentBoundary)
+        // Reads must not disclose results after navigation, disconnect or revocation.
+        await assertCurrentBoundary()
+      } else {
+        await options.handlers.assertCommandPolicy(body.command)
+        await assertCurrentBoundary()
+        value = await options.handlers.dispatchCommand(body.command, assertCurrentBoundary)
+      }
       await assertCurrentController()
       const response: DesktopHostCommandResponse = {
         protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
         requestId,
         ok: true,
         value
+      }
+      if (isDesktopHostGitCommand(body.command) &&
+        Buffer.byteLength(JSON.stringify(response)) > DESKTOP_HOST_JSON_RESPONSE_BYTE_LIMIT) {
+        writeCommandError(res, requestId, 'unavailable', 'Git result exceeded the Desktop Host response size limit.', 503)
+        return
       }
       writeJson(res, 200, response)
     } catch (error) {
@@ -528,6 +574,10 @@ export async function startDesktopHostGateway(
       }
       if (error instanceof RemoteCommandPolicyError) {
         writeCommandError(res, requestId, 'forbidden', error.message, 403)
+        return
+      }
+      if (error instanceof DesktopAttachmentError) {
+        writeCommandError(res, requestId, 'bad-request', error.message, 400)
         return
       }
       const internalMessage = error instanceof Error ? error.message : String(error)
@@ -726,23 +776,7 @@ function isCommandRequest(value: unknown): value is DesktopHostCommandRequest {
     value.requestId.length === 0 ||
     value.requestId.length > 256
   ) return false
-  return isControlIdentity(value.expectedIdentity) && isRecord(value.command)
-}
-
-function isControlIdentity(value: unknown): value is DesktopHostControlIdentity {
-  return isRecord(value) &&
-    Object.keys(value).length === 2 &&
-    isNullableBoundedIdentity(value.projectKey) &&
-    isNullableBoundedIdentity(value.sessionKey)
-}
-
-function isNullableBoundedIdentity(value: unknown): value is string | null {
-  return value === null || (
-    typeof value === 'string' &&
-    value.length > 0 &&
-    value.length <= 4_096 &&
-    !value.includes('\0')
-  )
+  return isDesktopHostControlIdentity(value.expectedIdentity) && isRecord(value.command)
 }
 
 function sameControlIdentity(

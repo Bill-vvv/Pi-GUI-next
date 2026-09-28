@@ -20,12 +20,12 @@ export type GitCommitDialogPreview = {
 }
 
 export type GitCommitDialogStepResult = {
-  status: 'succeeded' | 'failed'
+  status: 'succeeded' | 'failed' | 'unknown'
   detail?: string | null
 }
 
 export type GitCommitDialogPushResult = {
-  status: 'succeeded' | 'failed' | 'skipped'
+  status: 'succeeded' | 'failed' | 'skipped' | 'unknown'
   detail?: string | null
 }
 
@@ -41,6 +41,7 @@ export type GitCommitDialogResult = {
 }
 
 export type GitCommitDialogProps = {
+  commitOnly?: boolean
   preview: GitCommitDialogPreview
   busy: boolean
   result?: GitCommitDialogResult | null
@@ -80,7 +81,7 @@ export function gitCommitActionDisabled(
 }
 
 export function gitCommitResultTone(
-  status: 'succeeded' | 'failed' | 'skipped' | 'ok' | 'warning'
+  status: 'succeeded' | 'failed' | 'skipped' | 'ok' | 'warning' | 'unknown'
 ): 'success' | 'error' | 'warning' | 'muted' {
   switch (status) {
     case 'succeeded':
@@ -89,6 +90,7 @@ export function gitCommitResultTone(
     case 'failed':
       return 'error'
     case 'warning':
+    case 'unknown':
       return 'warning'
     case 'skipped':
       return 'muted'
@@ -97,12 +99,14 @@ export function gitCommitResultTone(
 
 export function gitCommitResultLabel(
   kind: 'commit' | 'push' | 'refresh',
-  status: 'succeeded' | 'failed' | 'skipped' | 'ok' | 'warning'
+  status: 'succeeded' | 'failed' | 'skipped' | 'ok' | 'warning' | 'unknown'
 ): string {
   if (kind === 'commit') {
+    if (status === 'unknown') return '提交结果未确认'
     return status === 'succeeded' ? '提交成功' : '提交失败'
   }
   if (kind === 'push') {
+    if (status === 'unknown') return '推送结果未确认'
     if (status === 'succeeded') return '推送成功'
     if (status === 'failed') return '推送失败'
     return '已跳过推送'
@@ -113,6 +117,7 @@ export function gitCommitResultLabel(
 }
 
 export function GitCommitDialog({
+  commitOnly = false,
   preview,
   busy,
   result = null,
@@ -147,14 +152,16 @@ export function GitCommitDialog({
 
   const hasUpstream = preview.upstream !== null
   const commitSucceeded = result?.commit.status === 'succeeded'
+  const commitUncertain = result?.commit.status === 'unknown'
   const messageSubmittable = isGitCommitMessageSubmittable(message)
   const describedBy = result === null ? descriptionId : `${descriptionId} ${resultId}`
 
   useEffect(() => {
-    if (commitSucceeded) cancelRef.current?.focus()
-  }, [commitSucceeded])
+    if (commitSucceeded || commitUncertain) cancelRef.current?.focus()
+  }, [commitSucceeded, commitUncertain])
 
   const submit = (mode: GitCommitMode): void => {
+    if (commitUncertain || commitOnly && mode !== 'commit') return
     if (gitCommitActionDisabled(mode, {
       busy,
       canAmend: preview.canAmend,
@@ -187,7 +194,7 @@ export function GitCommitDialog({
         <header className="git-commit-dialog-header">
           <h2 id={titleId}>确认提交</h2>
           <p id={descriptionId}>
-            将只提交当前已暂存内容，不会自动暂存其他变更。请确认目标分支、推送目标与提交说明。
+            {commitOnly ? '将只提交当前已暂存内容。请确认目标分支与提交说明。' : '将只提交当前已暂存内容，不会自动暂存其他变更。请确认目标分支、推送目标与提交说明。'}
           </p>
         </header>
 
@@ -203,7 +210,7 @@ export function GitCommitDialog({
             <dt>分支</dt>
             <dd title={preview.branch}>{preview.branch}</dd>
           </div>
-          <div>
+          {commitOnly ? null : <><div>
             <dt>推送目标</dt>
             <dd
               className={hasUpstream ? undefined : 'unavailable'}
@@ -217,7 +224,7 @@ export function GitCommitDialog({
             <dd className={preview.canAmend ? undefined : 'unavailable'}>
               {preview.canAmend ? '可用' : '不可用（没有可修改的现有提交）'}
             </dd>
-          </div>
+          </div></>}
         </dl>
 
         <label className="git-commit-dialog-message" htmlFor={messageId}>
@@ -228,7 +235,7 @@ export function GitCommitDialog({
             value={message}
             rows={4}
             spellCheck={false}
-            disabled={busy || commitSucceeded}
+            disabled={busy || commitSucceeded || commitUncertain}
             aria-invalid={!messageSubmittable}
             onChange={(event) => setMessage(event.target.value)}
           />
@@ -270,12 +277,12 @@ export function GitCommitDialog({
             disabled={busy}
             onClick={onCancel}
           >
-            {commitSucceeded ? '关闭' : '取消'}
+            {commitSucceeded || commitUncertain ? '关闭' : '取消'}
           </button>
           <div className="git-commit-dialog-actions" role="group" aria-label="提交方式">
             <button
               type="button"
-              disabled={gitCommitActionDisabled('commit', {
+              disabled={commitUncertain || gitCommitActionDisabled('commit', {
                 busy,
                 canAmend: preview.canAmend,
                 commitSucceeded,
@@ -286,10 +293,10 @@ export function GitCommitDialog({
             >
               {busy ? '提交中…' : 'Commit'}
             </button>
-            <button
+            {commitOnly ? null : <><button
               type="button"
               className="primary"
-              disabled={gitCommitActionDisabled('commit-and-push', {
+              disabled={commitUncertain || gitCommitActionDisabled('commit-and-push', {
                 busy,
                 canAmend: preview.canAmend,
                 commitSucceeded,
@@ -303,7 +310,7 @@ export function GitCommitDialog({
             </button>
             <button
               type="button"
-              disabled={gitCommitActionDisabled('amend', {
+              disabled={commitUncertain || gitCommitActionDisabled('amend', {
                 busy,
                 canAmend: preview.canAmend,
                 commitSucceeded,
@@ -314,7 +321,7 @@ export function GitCommitDialog({
               onClick={() => submit('amend')}
             >
               {busy ? '提交中…' : 'Amend'}
-            </button>
+            </button></>}
           </div>
         </footer>
       </section>
@@ -329,7 +336,7 @@ function GitCommitResultRow({
   detail
 }: {
   kind: 'commit' | 'push' | 'refresh'
-  status: 'succeeded' | 'failed' | 'skipped' | 'ok' | 'warning'
+  status: 'succeeded' | 'failed' | 'skipped' | 'ok' | 'warning' | 'unknown'
   detail?: string | null
 }): React.JSX.Element {
   const tone = gitCommitResultTone(status)

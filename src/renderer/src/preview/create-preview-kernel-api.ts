@@ -1,8 +1,6 @@
 import {
   MAGIC_CONTEXT_PACKAGE_NAME,
   SUBAGENT_PACKAGE_NAME,
-  type KernelAdvisorConfiguration,
-  type KernelAdvisorDefinition,
   type KernelApi,
   type KernelMutationAck,
   type KernelSnapshot,
@@ -689,92 +687,6 @@ export function createPreviewKernelApi(): KernelApi {
       maxSubagentDepth: 0
     }
   ]
-  let advisorConfiguration: KernelAdvisorConfiguration = {
-    definitions: [
-      {
-        id: 'builtin:default-advisor',
-        slug: 'default-advisor',
-        scope: 'builtin',
-        sourcePath: null,
-        sourceOrder: 0,
-        editable: false,
-        name: 'Default Advisor',
-        enabled: true,
-        model: 'gpt-5.6-sol',
-        thinking: 'medium',
-        tools: ['read', 'grep', 'find', 'ls'],
-        instructions: 'Review the current response for correctness and concrete risks.'
-      },
-      {
-        id: 'inherited:2:accessibility',
-        slug: 'accessibility',
-        scope: 'inherited',
-        sourcePath: '/home/vvv/Projects/WATCHDOG.yml',
-        sourceOrder: 2,
-        editable: false,
-        name: 'Accessibility',
-        enabled: true,
-        model: null,
-        thinking: 'high',
-        tools: ['read', 'grep', 'find'],
-        instructions: 'Check keyboard paths, accessible names, focus order, and narrow-window behavior.'
-      },
-      {
-        id: 'project:3:implementation-safety',
-        slug: 'implementation-safety',
-        scope: 'project',
-        sourcePath: '/home/vvv/Projects/pi-gui-next/WATCHDOG.yml',
-        sourceOrder: 3,
-        editable: true,
-        name: 'Implementation Safety',
-        enabled: true,
-        model: 'openai-codex/gpt-5.6-sol',
-        thinking: 'xhigh',
-        tools: ['read', 'grep', 'find', 'edit'],
-        instructions: 'Inspect the implementation boundary and report regressions with precise evidence.'
-      }
-    ],
-    sources: [
-      {
-        id: 'builtin:default-advisor',
-        scope: 'builtin',
-        path: null,
-        sourceOrder: 0,
-        editable: false,
-        instructions: ''
-      },
-      {
-        id: 'user:1',
-        scope: 'user',
-        path: '/home/vvv/.pi/agent/WATCHDOG.md',
-        sourceOrder: 1,
-        editable: true,
-        instructions: 'Prefer concise, actionable findings with evidence.'
-      },
-      {
-        id: 'inherited:2',
-        scope: 'inherited',
-        path: '/home/vvv/Projects/WATCHDOG.yml',
-        sourceOrder: 2,
-        editable: false,
-        instructions: 'Apply repository-wide accessibility and safety constraints.'
-      },
-      {
-        id: 'project:3',
-        scope: 'project',
-        path: '/home/vvv/Projects/pi-gui-next/WATCHDOG.yml',
-        sourceOrder: 3,
-        editable: true,
-        instructions: 'Respect the current Pi GUI architecture and frontend guidelines.'
-      }
-    ],
-    diagnostics: [
-      {
-        sourcePath: '/home/vvv/Projects/pi-gui-next/.omp/WATCHDOG.yml',
-        message: 'Preview diagnostic: inherited sample source was skipped.'
-      }
-    ]
-  }
   if (runningVariant) {
     state = {
       ...state,
@@ -848,6 +760,7 @@ export function createPreviewKernelApi(): KernelApi {
       throw new Error('System font discovery is unavailable in browser preview.')
     },
     addProject: currentAck,
+    listProjectDirectories: async () => { throw new Error('Host directory browsing is unavailable in browser preview.') },
     activateProject: (projectKey) =>
       projectKey in previewProjects ? activateSelection(projectKey as PreviewProjectKey) : currentAck(),
     refreshWorkspaceMetadata: currentAck,
@@ -1221,85 +1134,6 @@ export function createPreviewKernelApi(): KernelApi {
       )
       return structuredClone(installedPackages)
     },
-    setAdvisorSystemEnabled: (enabled) => commit({
-      ...state,
-      advisor: {
-        ...state.advisor,
-        systemEnabled: enabled
-      }
-    }),
-    setAdvisorExtensionEnabled: async (enabled) => {
-      const matches = installedPackages.filter(({ source }) => isAdvisorPackageSource(source))
-      if (matches.length !== 1) {
-        throw new Error('Advisor Package must have exactly one installed source.')
-      }
-      installedPackages = installedPackages.map((pkg) =>
-        isAdvisorPackageSource(pkg.source) ? { ...pkg, extensionEnabled: enabled } : pkg
-      )
-      return structuredClone(installedPackages)
-    },
-    listAdvisorDefinitions: async () => structuredClone(advisorConfiguration),
-    saveAdvisorDefinition: async (input) => {
-      const slug = slugifyAdvisorName(input.name)
-      const originalIndex = input.originalSlug === null
-        ? -1
-        : advisorConfiguration.definitions.findIndex((definition) =>
-            definition.editable &&
-            definition.scope === input.scope &&
-            definition.slug === input.originalSlug
-          )
-      if (input.originalSlug !== null && originalIndex === -1) {
-        throw new Error('Advisor definition no longer exists in the selected scope.')
-      }
-      if (advisorConfiguration.definitions.some((definition, index) =>
-        index !== originalIndex &&
-        definition.editable &&
-        definition.scope === input.scope &&
-        definition.slug === slug
-      )) {
-        throw new Error(`Advisor definition already exists: ${slug}`)
-      }
-      const sourceOrder = input.scope === 'project' ? 3 : 1
-      const sourcePath = input.scope === 'project'
-        ? '/home/vvv/Projects/pi-gui-next/WATCHDOG.yml'
-        : '/home/vvv/.pi/agent/WATCHDOG.yml'
-      const next: KernelAdvisorDefinition = {
-        id: `${input.scope}:${sourceOrder}:${slug}`,
-        slug,
-        scope: input.scope,
-        sourcePath,
-        sourceOrder,
-        editable: true,
-        name: input.name,
-        enabled: input.enabled,
-        model: input.model,
-        thinking: input.thinking,
-        tools: [...input.tools],
-        instructions: input.instructions
-      }
-      advisorConfiguration = {
-        ...advisorConfiguration,
-        definitions: originalIndex === -1
-          ? [...advisorConfiguration.definitions, next]
-          : advisorConfiguration.definitions.map((definition, index) =>
-              index === originalIndex ? next : definition
-            )
-      }
-      return structuredClone(advisorConfiguration)
-    },
-    removeAdvisorDefinition: async (slug, scope) => {
-      const index = advisorConfiguration.definitions.findIndex((definition) =>
-        definition.editable &&
-        definition.scope === scope &&
-        definition.slug === slug
-      )
-      if (index === -1) throw new Error('Advisor definition no longer exists.')
-      advisorConfiguration = {
-        ...advisorConfiguration,
-        definitions: advisorConfiguration.definitions.filter((_, candidate) => candidate !== index)
-      }
-      return structuredClone(advisorConfiguration)
-    },
     listSubagentDefinitions: async () => structuredClone(subagentDefinitions),
     saveSubagentDefinition: async (definition) => {
       const { originalId, ...fields } = definition
@@ -1436,6 +1270,7 @@ export function createPreviewKernelApi(): KernelApi {
     toggleMaximize: async () => false,
     isMaximized: async () => false,
     subscribeMaximized: () => () => undefined,
+    setWindowChrome: async () => undefined,
     subscribeProviderAuth: () => () => undefined,
     subscribe: (listener) => {
       listeners.add(listener)
@@ -1452,28 +1287,4 @@ function isFuzzySubsequence(candidate: string, query: string): boolean {
     if (queryIndex === query.length) return true
   }
   return query.length === 0
-}
-
-function isAdvisorPackageSource(source: string): boolean {
-  if (source === 'pi-gui-multi-advisor') return true
-  if (/^npm:pi-gui-multi-advisor(?:@[^/]+)?$/u.test(source)) return true
-  if (!(
-    source.startsWith('/') ||
-    source.startsWith('./') ||
-    source.startsWith('../') ||
-    source.startsWith('~/') ||
-    source.startsWith('\\\\') ||
-    /^[a-z]:[\\/]/iu.test(source) ||
-    (!/^[a-z][a-z0-9+.-]*:/iu.test(source) && /[\\/]/u.test(source))
-  )) return false
-  const normalized = source.replace(/[\\/]+$/u, '')
-  return normalized.length > 0 &&
-    normalized.split(/[\\/]/u).at(-1) === 'pi-gui-multi-advisor'
-}
-
-function slugifyAdvisorName(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/gu, '-')
-    .replace(/^-+|-+$/gu, '') || 'advisor'
 }

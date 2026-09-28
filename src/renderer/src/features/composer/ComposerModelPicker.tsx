@@ -5,8 +5,8 @@ import type { KernelState, ThinkingLevel } from '../../../../shared/kernel-contr
 import { Icon } from '../../components/Icon'
 import { IconButton } from '../../components/IconButton'
 import { useViewportPopoverPosition } from '../../components/useViewportPopoverPosition'
+import { ThinkingLevelSlider } from './ThinkingLevelSlider'
 import {
-  localizedThinkingLevelLabel,
   technicalThinkingLevelLabel,
   THINKING_LEVELS
 } from '../../thinking-level'
@@ -117,7 +117,7 @@ export function ComposerModelPicker({
     const focusFrame = requestAnimationFrame(() => {
       const popover = modelPickerPopoverRef.current
       const preferredTarget =
-        popover?.querySelector<HTMLElement>('.model-picker-item.selected:not(:disabled)') ??
+        popover?.querySelector<HTMLElement>('.model-picker-thinking-input:not(:disabled)') ??
         popover?.querySelector<HTMLElement>('.model-picker-model-button')
       preferredTarget?.focus()
     })
@@ -254,6 +254,15 @@ export function ComposerModelPicker({
               aria-label={modelPickerDialogLabel}
               data-placement={modelPickerPosition.placement}
               style={modelPickerPosition.style}
+              onKeyDown={(event) => {
+                if (event.key !== 'Tab' || event.defaultPrevented) return
+                const targets = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button, input'))
+                  .filter(isTabbable)
+                const boundary = event.shiftKey ? targets[0] : targets.at(-1)
+                if (event.target !== boundary) return
+                event.preventDefault()
+                closeModelPickerAndContinueTab(event.shiftKey)
+              }}
             >
               <div className="model-picker-content">
                 <section className="model-picker-thinking-section" aria-label="思考强度">
@@ -269,36 +278,13 @@ export function ComposerModelPicker({
                       当前模型没有可用的思考强度
                     </p>
                   ) : (
-                    <div className="model-picker-thinking-list">
-                      {availableThinkingLevels.map((level) => {
-                        const selected = thinkingLevel === level
-                        return (
-                          <button
-                            className={`picker-option model-picker-item${selected ? ' selected' : ''}`}
-                            type="button"
-                            key={level}
-                            aria-pressed={selected}
-                            disabled={busy || runtimeStatus !== 'ready'}
-                            onClick={() => {
-                              closeModelPickerAndRestoreFocus()
-                              void onSetThinkingLevel(level).catch(() => undefined)
-                            }}
-                          >
-                            <span className="model-picker-option-copy">
-                              <span className="model-picker-option-label">
-                                {technicalThinkingLevelLabel(level)}
-                              </span>
-                              <span className="model-picker-option-meta">
-                                {localizedThinkingLevelLabel(level)}
-                              </span>
-                            </span>
-                            {selected
-                              ? <span className="model-picker-selected">当前</span>
-                              : null}
-                          </button>
-                        )
-                      })}
-                    </div>
+                    <ThinkingLevelSlider
+                      key={JSON.stringify([contextKey, model.provider, model.id, availableThinkingLevels])}
+                      levels={availableThinkingLevels}
+                      value={thinkingLevel}
+                      disabled={busy || runtimeStatus !== 'ready'}
+                      onCommit={onSetThinkingLevel}
+                    />
                   )}
                 </section>
 
