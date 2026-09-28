@@ -21,6 +21,8 @@ type ModelSettingsProps = {
     models: ReadonlyArray<{ provider: string; modelId: string }>,
     visible: boolean
   ) => void
+  /** Custom Provider management, composed by the settings router. */
+  customProviders: React.ReactNode
 }
 
 export function ModelSettings({
@@ -31,7 +33,8 @@ export function ModelSettings({
   busy,
   hiddenModelKeys,
   onSetModel,
-  onSetModelsVisible
+  onSetModelsVisible,
+  customProviders
 }: ModelSettingsProps): React.JSX.Element | null {
   const [selectedProvider, setSelectedProvider] = useState(
     currentModel?.provider ?? availableModels[0]?.provider ?? ''
@@ -189,6 +192,13 @@ export function ModelSettings({
             )
           })}
         </div>
+      </section>
+
+      <section className="settings-group" aria-labelledby="custom-provider-settings-heading">
+        <h3 id="custom-provider-settings-heading" className="settings-group-heading">
+          自定义 Provider 配置
+        </h3>
+        {customProviders}
       </section>
     </>
   )

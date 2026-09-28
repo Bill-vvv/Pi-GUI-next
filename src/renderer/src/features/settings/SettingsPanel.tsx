@@ -36,6 +36,7 @@ import { ExtensionSettings } from './ExtensionSettings'
 import { GeneralSettings } from './GeneralSettings'
 import { ModelSettings } from './ModelSettings'
 import { PackageSettings } from './PackageSettings'
+import { ProviderSettings } from './ProviderSettings'
 import { RemoteSettings } from './RemoteSettings'
 import type { SettingsSection } from './SettingsNavigation'
 import { ShortcutSettingsPanel } from './ShortcutSettingsPanel'
@@ -256,12 +257,23 @@ export function SettingsPanel({
           hiddenModelKeys={hiddenModelKeys}
           onSetModel={onSetModel}
           onSetModelsVisible={onSetModelsVisible}
+          customProviders={(
+            <ProviderSettings
+              busy={busy}
+              tokenCountFormat={state.appearance.tokenCountFormat}
+              onListProviders={onListProviders}
+              onSaveProvider={onSaveProvider}
+              onRemoveProvider={onRemoveProvider}
+              onTestProvider={onTestProvider}
+              onFetchModelPricing={onFetchModelPricing}
+              onDirtyChange={onDirtyChange}
+            />
+          )}
         />
 
         {section === 'credentials' ? (
           <CredentialsPanel
             busy={busy}
-            tokenCountFormat={state.appearance.tokenCountFormat}
             onListProviderCredentials={onListProviderCredentials}
             onLoginProvider={onLoginProvider}
             onSubmitProviderAuthPrompt={onSubmitProviderAuthPrompt}
@@ -269,12 +281,6 @@ export function SettingsPanel({
             onLogoutProvider={onLogoutProvider}
             onSubscribeProviderAuth={onSubscribeProviderAuth}
             onOpenExternal={onOpenExternal}
-            onListProviders={onListProviders}
-            onSaveProvider={onSaveProvider}
-            onRemoveProvider={onRemoveProvider}
-            onTestProvider={onTestProvider}
-            onFetchModelPricing={onFetchModelPricing}
-            onDirtyChange={onDirtyChange}
             onActiveOperationChange={onActiveOperationChange}
           />
         ) : null}

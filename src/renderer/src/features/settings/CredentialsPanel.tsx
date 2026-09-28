@@ -2,26 +2,19 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import type {
-  AppearanceSettings,
-  KernelModelPricingFetchResult,
   KernelProviderAuthEvent,
   KernelProviderAuthMethod,
   KernelProviderAuthNotice,
   KernelProviderAuthPrompt,
   KernelProviderAuthType,
-  KernelProviderConfig,
-  KernelProviderCredential,
-  KernelProviderInput,
-  KernelProviderTestResult
+  KernelProviderCredential
 } from '../../../../shared/kernel-contract'
 import { useModalDialog } from '../../components/useModalDialog'
-import { ProviderSettings } from './ProviderSettings'
 import { SettingsPageHeading } from './SettingsPageHeading'
 import './credentials-panel.css'
 
 type CredentialsPanelProps = {
   busy: boolean
-  tokenCountFormat: AppearanceSettings['tokenCountFormat']
   onListProviderCredentials: () => Promise<KernelProviderCredential[]>
   onLoginProvider: (
     providerId: string,
@@ -38,15 +31,6 @@ type CredentialsPanelProps = {
     listener: (event: KernelProviderAuthEvent) => void
   ) => () => void
   onOpenExternal: (url: string) => Promise<void>
-  onListProviders: () => Promise<KernelProviderConfig[]>
-  onSaveProvider: (provider: KernelProviderInput) => Promise<KernelProviderConfig[]>
-  onRemoveProvider: (providerId: string) => Promise<KernelProviderConfig[]>
-  onTestProvider: (providerId: string, modelId: string) => Promise<KernelProviderTestResult>
-  onFetchModelPricing: (
-    providerId: string,
-    modelIds: string[]
-  ) => Promise<KernelModelPricingFetchResult>
-  onDirtyChange: (dirty: boolean) => void
   onActiveOperationChange: (active: boolean) => void
 }
 
@@ -73,7 +57,6 @@ type AuthNoticeState = {
 
 export function CredentialsPanel({
   busy,
-  tokenCountFormat,
   onListProviderCredentials,
   onLoginProvider,
   onSubmitProviderAuthPrompt,
@@ -81,12 +64,6 @@ export function CredentialsPanel({
   onLogoutProvider,
   onSubscribeProviderAuth,
   onOpenExternal,
-  onListProviders,
-  onSaveProvider,
-  onRemoveProvider,
-  onTestProvider,
-  onFetchModelPricing,
-  onDirtyChange,
   onActiveOperationChange
 }: CredentialsPanelProps): React.JSX.Element {
   const [credentials, setCredentials] = useState<KernelProviderCredential[]>([])
@@ -386,22 +363,6 @@ export function CredentialsPanel({
             ))}
           </div>
         )}
-      </section>
-
-      <section className="settings-group" aria-labelledby="custom-provider-settings-heading">
-        <h3 id="custom-provider-settings-heading" className="settings-group-heading">
-          自定义 Provider 配置
-        </h3>
-        <ProviderSettings
-          busy={busy || operation !== null}
-          tokenCountFormat={tokenCountFormat}
-          onListProviders={onListProviders}
-          onSaveProvider={onSaveProvider}
-          onRemoveProvider={onRemoveProvider}
-          onTestProvider={onTestProvider}
-          onFetchModelPricing={onFetchModelPricing}
-          onDirtyChange={onDirtyChange}
-        />
       </section>
 
       {promptState === null ? null : createPortal(
