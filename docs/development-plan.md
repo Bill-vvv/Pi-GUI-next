@@ -1174,6 +1174,7 @@ Windows 和 Linux/Web 必须从同一仓库/tag 发布。Web Remote 随 Linux Ho
 | 2026-09-13 | P4-4 window chrome | 只合入 Windows hidden titleBarOverlay 与拖拽条，不弹出整份 stash | typecheck、build、setup 通过。WSL `models.json` 增加 `gpt-6`（克隆 `gpt-5.5`）。P4-4 未 Complete |
 
 | 2026-09-29 | 设置页一致性整理（S21 外） | 用户要求参考成熟产品优化设置页。`SettingsPanel` 改为只分发页面，各页统一标题组件；tooltip 中的必要事实改为可见说明；即时生效偏好的保存失败在发起行显示；12 处 `window.confirm` 与两个撤销对话框改为设置页内确认框；开/关设置统一为 switch；模型可见性支持按 Provider 批量开关；自定义 Provider 从凭证页移到模型页；修正吞掉字体控件宽度规则的多余 `}` | typecheck、设置相关定向测试 84/84（含 1280/360px Chromium 交互 fixture）、完整 core 1518 通过 / 6 跳过、build、diff check 通过。未启动 S21：导航收起、设置搜索、deep link、作用域/来源/生效 badge 仍 Planned；Subagent 启停开关按 D-048 仍留在拓展页 |
+| 2026-09-29 | 设置页：pi-subagents 控件迁入 Subagent 页 | 用户确认按 D-100 替代 D-048 对 pi-subagents 的拓展页归属：安装、启停与详情移到 Subagent 页顶部，页面复用控件报告的 Package 状态，不再单独读取；拓展页保留 Magic Context、pi.dev 目录与本地拓展 | typecheck、设置相关定向测试 85/85（含 Chromium fixture）通过；Windows 侧用 Node 24.15 跑 typecheck 与设置测试（含 Chrome fixture）通过，项目锁定的 Node 26.4.0 尚未在 Windows 安装 |
 
 ## 17. 计划变更记录
 

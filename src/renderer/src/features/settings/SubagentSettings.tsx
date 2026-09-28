@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   SUBAGENT_PACKAGE_NAME,
   type KernelInstalledPackage,
+  type KernelPiPackageInstallJob,
   type KernelState,
   type KernelSubagentDefinition,
   type KernelSubagentEditableScope,
@@ -21,11 +22,13 @@ import { unknownErrorMessage as errorMessage } from '../../unknown-error-message
 import { SettingsField } from './SettingsField'
 import { useSettingsConfirm } from './SettingsConfirmDialog'
 import { SettingsPageHeading } from './SettingsPageHeading'
-import { findUniqueInstalledPackage } from './installed-package-selection'
+import {
+  AdaptedExtensionPackageControl,
+  type AdaptedPackageState
+} from './AdaptedExtensionPackageControl'
 
 const SUBAGENT_PAGE_SIZE = 6
 
-type SubagentPackageState = 'loading' | 'not-installed' | 'enabled' | 'disabled' | 'error'
 type SubagentScopeFilter = 'all' | KernelSubagentDefinition['scope']
 type SubagentEnabledFilter = 'all' | 'enabled' | 'disabled'
 type SubagentBatchField =
@@ -43,7 +46,13 @@ type SubagentSettingsProps = {
   activeProjectKey: string | null
   availableModels: KernelState['availableModels']
   busy: boolean
+  /** Package install/enable actions also wait for background package jobs. */
+  packageBusy: boolean
+  packageInstallJobs: KernelPiPackageInstallJob[]
   onListPiPackages: () => Promise<KernelInstalledPackage[]>
+  onInstallPiDevPackage: (name: string) => Promise<void>
+  onSetSubagentEnabled: (enabled: boolean) => Promise<void>
+  onOpenExternal: (url: string) => Promise<void>
   onListSubagentDefinitions: () => Promise<KernelSubagentDefinition[]>
   onSaveSubagentDefinition: (
     definition: KernelSubagentDefinitionInput
@@ -70,7 +79,12 @@ export function SubagentSettings({
   activeProjectKey,
   availableModels,
   busy,
+  packageBusy,
+  packageInstallJobs,
   onListPiPackages,
+  onInstallPiDevPackage,
+  onSetSubagentEnabled,
+  onOpenExternal,
   onListSubagentDefinitions,
   onSaveSubagentDefinition,
   onSetSubagentDefinitionEnabled,
@@ -79,7 +93,7 @@ export function SubagentSettings({
   onDirtyChange
 }: SubagentSettingsProps): React.JSX.Element {
   const { confirm, confirmDialog } = useSettingsConfirm()
-  const [packageState, setPackageState] = useState<SubagentPackageState>('loading')
+  const [packageState, setPackageState] = useState<AdaptedPackageState>('loading')
   const [definitions, setDefinitions] = useState<KernelSubagentDefinition[]>([])
   const [definitionsLoading, setDefinitionsLoading] = useState(true)
   const [definitionsError, setDefinitionsError] = useState<string | null>(null)
@@ -100,11 +114,9 @@ export function SubagentSettings({
   const [batchStatus, setBatchStatus] = useState<string | null>(null)
   const [acting, setActing] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
-  const packageRequestRevision = useRef(0)
   const definitionRequestRevision = useRef(0)
   const editorBackRef = useRef<HTMLButtonElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
-  const listPiPackagesRef = useRef(onListPiPackages)
   const listSubagentDefinitionsRef = useRef(onListSubagentDefinitions)
   const settingsDisabled = busy || packageState !== 'enabled'
   const managerDisabled = packageState === 'loading' ||
@@ -144,31 +156,6 @@ export function SubagentSettings({
     page * SUBAGENT_PAGE_SIZE,
     (page + 1) * SUBAGENT_PAGE_SIZE
   )
-  useEffect(() => {
-    const revision = packageRequestRevision.current + 1
-    packageRequestRevision.current = revision
-    setPackageState('loading')
-    void listPiPackagesRef.current().then(
-      (packages) => {
-        if (packageRequestRevision.current !== revision) return
-        try {
-          const pkg = findUniqueInstalledPackage(packages, SUBAGENT_PACKAGE_NAME)
-          setPackageState(
-            pkg === null ? 'not-installed' : pkg.extensionEnabled ? 'enabled' : 'disabled'
-          )
-        } catch {
-          setPackageState('error')
-        }
-      },
-      () => {
-        if (packageRequestRevision.current === revision) setPackageState('error')
-      }
-    )
-    return () => {
-      packageRequestRevision.current += 1
-    }
-  }, [])
-
   useEffect(() => {
     setEditorRevealed(false)
     setMultiSelect(false)
@@ -641,6 +628,22 @@ export function SubagentSettings({
                   : '状态异常'}
         </span>
       </SettingsPageHeading>
+
+      <AdaptedExtensionPackageControl
+        heading="拓展"
+        idPrefix="settings-subagent-package"
+        packageName={SUBAGENT_PACKAGE_NAME}
+        detailUrl="https://pi.dev/packages/pi-subagents"
+        description="为 Pi 提供可委派的 Subagent Extension"
+        notice="安装与启停会在新建或显式重载 Session 后生效。"
+        busy={packageBusy}
+        packageInstallJobs={packageInstallJobs}
+        onListPiPackages={onListPiPackages}
+        onInstallPiDevPackage={onInstallPiDevPackage}
+        onSetEnabled={onSetSubagentEnabled}
+        onOpenExternal={onOpenExternal}
+        onStateChange={setPackageState}
+      />
 
       <section className="settings-group" aria-labelledby="settings-subagent-agents-heading">
         <div className="settings-group-heading-row">
@@ -1306,10 +1309,10 @@ export function SubagentSettings({
             role={packageState === 'error' ? 'alert' : undefined}
           >
             {packageState === 'not-installed'
-              ? '请先在“拓展”的“已适配拓展”区域安装 pi-subagents。'
+              ? '请先在本页上方安装 pi-subagents。'
               : packageState === 'disabled'
-                ? 'pi-subagents 已关闭，请先在“拓展”的“已适配拓展”区域开启。'
-                : '无法读取 pi-subagents 状态，请前往“拓展”页重试。'}
+                ? 'pi-subagents 已关闭，请先在本页上方开启。'
+                : '无法读取 pi-subagents 状态，请在本页上方重试。'}
           </p>
         )}
       </section>
