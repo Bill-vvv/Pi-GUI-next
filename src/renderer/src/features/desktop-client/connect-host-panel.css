@@ -1,0 +1,169 @@
+.connect-host-screen {
+  display: flex;
+  min-height: 100%;
+  height: 100%;
+  overflow-y: auto;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+}
+
+.connect-host-panel {
+  width: min(28rem, 100%);
+  margin-block: auto;
+  display: grid;
+  gap: 16px;
+}
+
+.connect-host-copy h1 {
+  margin: 0 0 8px;
+  color: var(--color-text-primary);
+  font-family: var(--font-display);
+  font-size: var(--text-page-title);
+  line-height: var(--line-title);
+  font-weight: var(--weight-medium);
+}
+
+.connect-host-copy p {
+  margin: 0;
+  color: var(--color-text-soft);
+  font-size: var(--text-body-sm);
+  line-height: var(--line-body-sm);
+}
+
+.connect-host-ports {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.connect-host-field {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  color: var(--color-text-primary);
+  font-size: var(--text-body-sm);
+  font-weight: var(--weight-medium);
+}
+
+.connect-host-field input,
+.connect-host-panel .connect-host-action {
+  min-height: 36px;
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-control);
+  padding: 8px 12px;
+  color: var(--color-text-primary);
+  background: var(--color-surface-input);
+  font: inherit;
+  font-size: var(--text-control);
+  line-height: var(--line-control);
+}
+
+.connect-host-field input:focus,
+.connect-host-panel .connect-host-action:focus-visible {
+  outline: 2px solid var(--color-focus-outline);
+  outline-offset: 2px;
+}
+
+.connect-host-field input:disabled,
+.connect-host-panel .connect-host-action:disabled {
+  color: var(--color-text-muted);
+  background: var(--color-surface-subtle);
+  cursor: not-allowed;
+}
+
+.connect-host-panel .connect-host-action {
+  justify-self: start;
+  cursor: pointer;
+}
+
+.connect-host-panel .connect-host-action:hover:not(:disabled) {
+  border-color: var(--color-border-hover);
+  background: var(--color-surface-hover);
+}
+
+.connect-host-error {
+  margin: 0;
+  color: var(--color-status-error);
+  font-size: var(--text-body-sm);
+  line-height: var(--line-body-sm);
+  overflow-wrap: anywhere;
+}
+
+.connect-host-error p {
+  margin: 0;
+}
+
+.connect-host-error p + p {
+  margin-top: 8px;
+}
+
+.connect-host-status {
+  margin: 0;
+  color: var(--color-text-soft);
+  font-size: var(--text-body-sm);
+  line-height: var(--line-body-sm);
+}
+
+.connect-host-discovery {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.connect-host-profiles { display: grid; min-width: 0; gap: 8px; font-size: var(--text-body-sm); }
+.connect-host-profile-actions, .connect-host-profile-confirm { display: flex; flex-wrap: wrap; gap: 8px; }
+.connect-host-profile-confirm { min-width: 0; overflow-wrap: anywhere; }
+.connect-host-profile-confirm p { flex-basis: 100%; }
+
+.connect-host-check {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.connect-host-check > p,
+.connect-host-check-result {
+  flex-basis: 100%;
+  min-width: 0;
+}
+
+.connect-host-check-result {
+  color: var(--color-text-soft);
+  font-size: var(--text-body-sm);
+  line-height: var(--line-body-sm);
+  overflow-wrap: anywhere;
+}
+
+.connect-host-check-result p { margin: 0; }
+.connect-host-check-result ul { margin-block: 8px 0; padding-inline-start: 20px; }
+.connect-host-check-result li + li { margin-top: 6px; }
+.connect-host-check-result [data-check-status="failed"] { color: var(--color-status-error); }
+
+.connect-host-sources {
+  min-width: 0;
+  color: var(--color-text-soft);
+  font-size: var(--text-meta);
+  line-height: var(--line-meta);
+  overflow-wrap: anywhere;
+}
+
+.connect-host-sources ul,
+.connect-host-discovery .connect-host-error ul {
+  margin-block: 8px 0;
+  padding-inline-start: 20px;
+}
+
+@media (max-width: 700px) {
+  .connect-host-ports {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connect-host-field input,
+  .connect-host-panel .connect-host-action {
+    transition: none;
+  }
+}

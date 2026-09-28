@@ -96,7 +96,7 @@ test('remote Project activation refreshes metadata without exposing the refresh 
 test('Main validates and restores managed Tailscale ownership around gateway startup', async () => {
   const source = await readFile(mainIndexPath, 'utf8')
   const managedStart = source.indexOf('} else if (managedTailscaleConfig !== null) {')
-  const managedEnd = source.indexOf('\n  }\n\n  const desktopHostConfig', managedStart)
+  const managedEnd = source.indexOf('\n  const desktopHostConfig', managedStart)
   assert.ok(managedStart > 0)
   assert.ok(managedEnd > managedStart)
   const managedSource = source.slice(managedStart, managedEnd)

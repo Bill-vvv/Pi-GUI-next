@@ -181,3 +181,25 @@ test('serialized replaceDevice keeps the last write', async () => {
     assert.deepEqual(reopened.getDevice(), device)
   })
 })
+
+test('queued Web replacement captures the submitted record before the caller can mutate it', async () => {
+  await withStoreDir(async (_directory, storePath) => {
+    const store = await openRemoteDeviceStore({ path: storePath, uid })
+    const record = { credentialHash: hashRemoteDeviceCredential('submitted-credential'), pairedAt: 1, expiresAt: 10 }
+    const expected = { ...record }
+    const writing = store.replaceDevice(record)
+    record.credentialHash = hashRemoteDeviceCredential('mutated-credential')
+    await writing
+    assert.deepEqual(store.getDevice(), expected)
+    assert.deepEqual((await openRemoteDeviceStore({ path: storePath, uid })).getDevice(), expected)
+  })
+})
+
+test('Web pairing retains its 4 KiB file limit when sharing the private reader with Desktop', async () => {
+  await withStoreDir(async (_directory, storePath) => {
+    const document = JSON.stringify({ version: 1, credentialHash: 'a'.repeat(64), pairedAt: 1, expiresAt: 10 }).padEnd(4097, ' ')
+    await writeFile(storePath, document, { mode: 0o600 })
+    await assert.rejects(openRemoteDeviceStore({ path: storePath, uid }), /bounded size/)
+    assert.equal(await readFile(storePath, 'utf8'), document)
+  })
+})
