@@ -758,3 +758,19 @@
 - 决策：Main 使用 `ELECTRON_RUN_AS_NODE` 启动一个 Pi Runtime 子进程。子进程原样运行现有的 `SharedPiHost`、`SharedPiAgentSession` 和 `SharedPiProcessEnvironment`，所有 Session 共用这个子进程。Main 侧新增 `RemoteSharedPiRuntime`，实现现有的 `RuntimeHost` 接口，把命令、结果和事件转发给子进程；WorkbenchKernel 和 `createRuntime` 参数保持不变。进程间通信使用 Node 自带的 IPC 通道，不借用 stdout；子进程的 stdout 和 stderr 只作为日志转发给 Main。子进程每次启动都会得到一个新编号（generation），旧编号的事件一律丢弃，发给旧编号的命令一律拒绝。子进程退出后，所有属于它的 Runtime 进入现有崩溃状态，进行中的 prompt 和工具调用不重放。直到用户下一次需要 Runtime 时，才重新启动子进程；2 分钟内最多启动 3 次，超过后明确报错，不回退到在 Main 进程内运行。停机时先释放资源，超时后再依次发送 SIGTERM 和 SIGKILL。内存诊断报告子进程的真实 PID，并把它标为共享 Host，不伪装成某个 Session 独占的内存。进程内的 `SharedPiHost` 只在测试中直接使用。
 - 原因：Extension 卡住、泄漏内存或崩溃，目前都会拖垮所有会话、UI 主进程和远程网关。`RuntimeHost` 本来就是异步接口，命令、结果和事件都是纯数据，Kernel 也不直接依赖 Pi SDK，因此代价最低的做法是把边界放在这一层。共用一个子进程可以保留 D-078 的内存优势；每个 Session 一个进程会退回已被取代的旧模型。`SharedPiProcessEnvironment` 目前会改写 Main 的全局 `process.env`，迁出后这个副作用只影响子进程。这一步也为今后的无桌面 Host 打基础，但本决定不包括那项工作。
 - 影响：一个会话出问题仍可能影响其他会话，但不再波及 UI、Git、远程网关和通知。需要新增 electron-vite 构建入口，并把它加入 asar 和 Host 发行包。启动增加的延迟和 IPC 的事件吞吐量都要实际测量，不能预先宣称没有影响。验收时，D-078 的发布检查项仍全部适用；还要补充以下场景：任务运行中强制结束子进程、崩溃后按需恢复、达到重启次数上限、旧编号的事件和命令被拦截、正常停机和超时停机，以及 Extension 输出不影响通信。本项在 R12 重启计划的阶段 0 完成后实施，R12 的 A/B/C 任务基于迁移后的接线继续开发。
+
+## D-095 — 纯 Node Host 入口与命令行配对管理
+
+- 日期：2026-09-29
+- 状态：Accepted；用户确认：Host 改为纯 Node 入口；无界面时用命令行配对和管理设备；本机 Linux 桌面继续在进程内运行 Host；在 R12 之后与大模块拆分一起实施。本决定以 D-094 为前提，替代 D-089 和 `desktop-host.md`（R11）中“需要 Linux 图形会话、由 Electron Main 作为 Host 运行”的约束，也替代“首次配对只能在 Linux 设置页完成”的限制；Desktop 协议、配对凭证语义、loopback 与 SSH 边界不变。
+- 决策：新增一个纯 Node 的 Host 入口，用启动器已经校验过的 Node 运行。`main/index.ts` 拆成两部分：一是 Host 组装，负责 Kernel、D-094 的 Runtime 子进程、Git、现有远程网关、通知中转和 WSL 管道服务端，不依赖 Electron；二是 Electron 桌面外壳，负责窗口、IPC、对话框、shell 和系统通知。SSH Desktop Host 和 WSL 后端都改用 Node 启动 Host 组装。本机 Linux 桌面的 Electron Main 在进程内使用同一套 Host 组装，现有行为不变。Host 组装中仅有的三处 Electron 依赖按以下方式替换：`app.getPath` 改为显式计算的目录，并且必须与现有数据目录完全一致；`net.fetch` 改为 Node `fetch`，实施时须确认代理设置的差异；`nativeImage` 的附件图片解码在实施时另选替代方案。配对和设备管理新增 `pair`、`devices`、`revoke` 命令，通过只有本人可访问的 Unix socket 连接正在运行的 Host；设置页和命令行调用同一套管理函数。Host 发行包不再包含 Electron。
+- 原因：在本机 WSL 发行目录中实测，Electron 43.1.1 在没有 `DISPLAY` 时会报 `Missing X server` 并崩溃；加上 `--ozone-platform=headless` 后可以启动，但 Electron 没把它作为正式用法。Electron 启动时就要加载 GTK3、X11、NSS、CUPS、ALSA 等二十多个图形和桌面库，发行目录中 Electron 解压后约占 312 MB（`node_modules` 共 360 MB）。无桌面 Host 主要面向 SSH 服务器和精简环境，这些环境通常没有这些库。Kernel、Runtime、Git 和远程网关都不依赖 Electron，项目也没有需要按 Electron 版本编译的原生模块，所以纯 Node 入口可行。这次拆分同时完成了大模块拆分的主要部分。
+- 影响：WSL 后端不再依赖 WSLg，SSH Host 只需要 Node。Windows 客户端看到的协议和行为不变。R12 任务 C 必须把设备的列出和撤销实现为设置页和以后的命令行都能调用的函数。实施时须更新 `desktop-host.md`、启动器、WSL 启动脚本、构建入口和发行包清单。包体积变化、内存变化以及 Node `fetch` 的代理行为都要实际测量，不能预先宣称。数据目录的兼容性属于发布门槛：同一用户从 Electron Host 切换到 Node Host 后，必须读到原来的项目、会话和配对数据。
+
+## D-096 — 工作副本迁至 `/mnt/d/Projects/pi-gui-next`
+
+- 日期：2026-09-29
+- 状态：Accepted；用户确认：以 `/mnt/d` 副本为准，删除 `/home` 副本。本决定只替代 D-001 中的仓库路径；D-001 其余规则继续有效：新项目仍是唯一正式仓库，旧仓库与结项资源包只读，不整仓迁移。
+- 决策：`/mnt/d/Projects/pi-gui-next` 是唯一的本地工作副本，远程仍为 `Bill-vvv/Pi-GUI-next`。原 `/home/vvv/Projects/pi-gui-next` 与之同一 HEAD、没有独有提交或改动，已删除。
+- 原因：跨平台开发需要 Windows Node 与 Linux shell 读取同一个 checkout（见 `.gitattributes`），2026-09-11 之后的开发都在 `/mnt/d` 副本中进行，`/home` 副本已过时，继续保留会让 agent 和文档指向旧代码。
+- 影响：skill、文档和脚本中的仓库路径以本决定为准。`src/renderer/src/preview/` 中的 `/home/vvv/Projects/pi-gui-next` 只是预览用的假项目路径，不受影响。
