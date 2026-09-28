@@ -209,7 +209,7 @@ export function SettingsPanel({
     <section className="settings-screen" aria-label="设置">
       <div className="settings-content">
         {actionError === null ? null : (
-          <p className="settings-action-error" role="alert">{actionError}</p>
+          <p className="settings-feedback settings-feedback-error" role="alert">{actionError}</p>
         )}
         {section === 'general' ? (
           <GeneralSettings

@@ -192,7 +192,7 @@ export function RemoteAccessPanel({
   return (
     <div className="remote-access-panel">
       {error === null ? null : (
-        <p className="remote-access-error" role="alert">{error}</p>
+        <p className="settings-feedback settings-feedback-error settings-feedback-inset" role="alert">{error}</p>
       )}
 
       <section
@@ -356,7 +356,7 @@ export function RemoteAccessPanel({
             aria-atomic="true"
           >
             {pairingCode === null ? (
-              <p className="remote-access-code-empty">尚未生成配对码。</p>
+              <p className="settings-feedback">尚未生成配对码。</p>
             ) : (
               <>
                 <p className="remote-access-code-digits">{pairingCode.code}</p>

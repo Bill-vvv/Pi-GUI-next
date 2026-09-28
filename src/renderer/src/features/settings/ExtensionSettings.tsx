@@ -143,12 +143,12 @@ export function ExtensionSettings({
         </div>
         {isWorkbenchAction(pendingAction, 'install-extension') ||
         isWorkbenchAction(pendingAction, 'remove-extension') ? (
-          <p className="settings-extension-status" role="status" aria-live="polite">
+          <p className="settings-feedback" role="status" aria-live="polite">
             {isWorkbenchAction(pendingAction, 'install-extension') ? '正在安装…' : '正在卸载…'}
           </p>
         ) : null}
         {extensionActionError === null ? null : (
-          <p className="settings-extension-error" role="alert">{extensionActionError}</p>
+          <p className="settings-feedback settings-feedback-error" role="alert">{extensionActionError}</p>
         )}
         {extensions.length === 0 ? (
           <div className="settings-empty-state" role="status">

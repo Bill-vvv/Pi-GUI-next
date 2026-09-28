@@ -271,11 +271,11 @@ export function AppearanceSettings({
         </div>
 
         {systemFontsError !== null ? (
-          <p className="settings-font-error" role="alert">
+          <p className="settings-feedback settings-feedback-error" role="alert">
             无法读取系统字体：{systemFontsError}
           </p>
         ) : systemFonts === null ? (
-          <p className="settings-font-status" role="status">正在读取系统字体…</p>
+          <p className="settings-feedback" role="status">正在读取系统字体…</p>
         ) : null}
       </section>
     </>

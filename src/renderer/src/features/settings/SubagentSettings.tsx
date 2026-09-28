@@ -845,12 +845,12 @@ export function SubagentSettings({
                     </div>
                   </div>
                   {actionError === null ? null : (
-                    <p className="settings-subagent-editor-error" role="alert">{actionError}</p>
+                    <p className="settings-feedback settings-feedback-error settings-feedback-divided" role="alert">{actionError}</p>
                   )}
                   <div className="settings-subagent-editor-actions">
                     <div>
                       {batchStatus === null ? null : (
-                        <p className="settings-subagent-batch-status" role="status">
+                        <p className="settings-feedback settings-feedback-success" role="status">
                           {batchStatus}
                         </p>
                       )}
@@ -1198,7 +1198,7 @@ export function SubagentSettings({
                 </div>
 
                 {actionError === null ? null : (
-                  <p className="settings-subagent-editor-error" role="alert">{actionError}</p>
+                  <p className="settings-feedback settings-feedback-error settings-feedback-divided" role="alert">{actionError}</p>
                 )}
                 <div className="settings-subagent-editor-actions">
                   <div>
@@ -1281,7 +1281,7 @@ export function SubagentSettings({
         </div>
         {packageState === 'enabled' || packageState === 'loading' ? null : (
           <p
-            className="settings-subagent-notice"
+            className="settings-feedback settings-feedback-inset"
             role={packageState === 'error' ? 'alert' : undefined}
           >
             {packageState === 'not-installed'

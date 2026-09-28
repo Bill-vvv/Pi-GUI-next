@@ -112,3 +112,22 @@ test('settings keep required facts visible instead of tooltip-only', async () =>
     assert.doesNotMatch(source, /settings-empty-state"[^>]*\n?[^>]*data-tooltip/u)
   }
 })
+
+test('settings pages share one feedback text style instead of per-page error classes', async () => {
+  const { readdir } = await import('node:fs/promises')
+  const directory = new URL('./', import.meta.url)
+  const files = (await readdir(directory)).filter((name) => name.endsWith('.tsx'))
+  for (const file of files) {
+    const source = await readFile(new URL(file, directory), 'utf8')
+    for (const [, className] of source.matchAll(/className="([^"]*)"/gu)) {
+      for (const token of className.split(/\s+/u)) {
+        if (token.startsWith('settings-feedback')) continue
+        assert.doesNotMatch(
+          token,
+          /^(settings|credentials|provider-settings|remote-access)(-[a-z-]+)?-(error|notice)$/u,
+          `${file} uses ${token}; use settings-feedback with a tone modifier`
+        )
+      }
+    }
+  }
+})

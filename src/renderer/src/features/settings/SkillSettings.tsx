@@ -133,7 +133,7 @@ export function SkillSettings({
             />
           </div>
           {skillCreatorError === null ? null : (
-            <p className="settings-skill-error" role="alert">{skillCreatorError}</p>
+            <p className="settings-feedback settings-feedback-error" role="alert">{skillCreatorError}</p>
           )}
           <div className="settings-skill-create-actions">
             <p>Pi 会先展示拟创建的文件并等待你确认；技能可能包含可执行代码，请在写入前审查。</p>

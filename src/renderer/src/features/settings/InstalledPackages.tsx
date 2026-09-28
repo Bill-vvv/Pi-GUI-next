@@ -101,13 +101,13 @@ export function InstalledPackages({
 
       <div className="settings-group-card settings-package-manager">
         {packages === null && error === null ? (
-          <p className="settings-extension-status" role="status">正在读取已安装 Package…</p>
+          <p className="settings-feedback" role="status">正在读取已安装 Package…</p>
         ) : null}
         {error === null ? null : (
-          <p className="settings-extension-error" role="alert">{error}</p>
+          <p className="settings-feedback settings-feedback-error" role="alert">{error}</p>
         )}
         {packages?.length === 0 ? (
-          <div className="settings-pi-dev-empty" role="status">尚未安装用户级 Package。</div>
+          <div className="settings-feedback" role="status">尚未安装用户级 Package。</div>
         ) : null}
         {packages === null || packages.length === 0 ? null : (
           <div className="settings-resource-list">
