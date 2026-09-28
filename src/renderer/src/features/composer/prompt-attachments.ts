@@ -2,6 +2,33 @@ import type {
   KernelPromptAttachment,
   KernelPromptImage
 } from '../../../../shared/kernel-contract'
+import type { KernelMutationAck } from '../../../../shared/kernel-contract'
+import {
+  DESKTOP_ATTACHMENT_MAX_BYTES, DESKTOP_ATTACHMENT_MAX_COUNT,
+  type DesktopAttachmentData, type PromptDraftAttachment
+} from '../../../../shared/desktop-attachment-contract.ts'
+
+export async function readDesktopAttachmentData(files: readonly File[]): Promise<DesktopAttachmentData[]> {
+  if (files.length > DESKTOP_ATTACHMENT_MAX_COUNT || files.some((file) => file.size > DESKTOP_ATTACHMENT_MAX_BYTES)) {
+    throw new Error('每次最多上传 8 个附件，单个附件最多 16 MiB。')
+  }
+  return Promise.all(files.map(async (file) => ({ name: file.name, data: new Uint8Array(await file.arrayBuffer()) })))
+}
+
+export function submitPromptDraft(mode: 'prompt' | 'steer' | 'follow-up', message: string,
+  attachments: readonly PromptDraftAttachment[] = [], expectedSessionKey?: string): Promise<KernelMutationAck> {
+  const uploaded = attachments.filter((attachment) => attachment.type === 'uploaded')
+  if (uploaded.length) {
+    if (uploaded.length !== attachments.length || !window.piDesktopClient) {
+      return Promise.reject(new Error('远程附件不能与本机路径引用混合提交，请重新选择附件。'))
+    }
+    return window.piDesktopClient.submitAttachments(mode, message, uploaded.map((attachment) => attachment.uploadId), expectedSessionKey)
+  }
+  const local = attachments.filter((attachment) => attachment.type !== 'uploaded')
+  if (mode === 'prompt') return window.piGui.prompt(message, local, expectedSessionKey)
+  if (mode === 'steer') return window.piGui.steer(message, local)
+  return window.piGui.followUp(message, local)
+}
 
 const MAX_WIDTH = 2000
 const MAX_HEIGHT = 2000
