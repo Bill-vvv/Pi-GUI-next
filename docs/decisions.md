@@ -790,10 +790,10 @@
 - 决策：
   - 新增行数检查脚本并纳入常规检查：新增的非测试源码文件不超过 800 行。已经超过 800 行的文件记录当前行数，以后只能减少。`main/index.ts` 在 D-095 拆分完成后另设上限。测试文件不受限制。
   - `WorkbenchKernel` 按领域拆分：会话预览、fork/归档/休眠回收、启动生命周期、Ask 和 Extension 对话、Compaction、临时会话提交与自动命名、工具图片缓存、重启恢复、状态发布。`GitService` 按以下部分拆分：状态与 diff 读取、历史、提交与推送、分支同步、安全读取文件、解析函数、错误对象。两个类的公开方法、事件和错误语义都不变，现有测试不改，直接用来验证行为。`ProjectStore` 本轮不拆，只受“只许减少”约束。
-  - 删除 `pi-rpc/pi-rpc-client.ts` 和 `runtime/linux-local-runtime.ts`，以及只服务于它们的测试和 `PI_GUI_PROBE_ONLY` 分支。Kernel 和 Runtime 仍在使用的事件类型移到一个单独的类型文件，类型本身不变。`pnpm smoke:pi` 改为启动 D-094 的 Pi Runtime 子进程，完成一次不创建会话的初始化，并报告 Pi 版本和命令数量。
+  - 删除 `pi-rpc/pi-rpc-client.ts`、`pi-rpc/jsonl-framing.ts` 和 `runtime/linux-local-runtime.ts`，以及只服务于它们的测试。Kernel 和 Runtime 仍在使用的类型，以及条目和树的两个规范化函数，原样移到 `pi-rpc/pi-rpc-data.ts`；它们的边界测试改为直接调用函数，输入和期望不变。`PI_GUI_PROBE_ONLY` 保留为 `pnpm smoke:pi` 的开关，其分支改为启动 D-094 的 Pi Runtime 子进程：在临时 agent 目录中离线创建一个 Session（不写入用户的 Pi 数据），报告 Pi 版本、命令数量和子进程 PID。
   - 实施顺序：删除旧 RPC 并入 D-094 的阶段 0b，在 R12 之前完成；Kernel/Git 拆分和行数检查脚本放在 R12 之后，与 D-095、D-097 同一轮实施。
 - 原因：Kernel 有 6,408 行、247 个方法，Git 服务有 4,352 行，修改一处就要理解整个文件。Kernel 测试只通过公开方法验证，因此内部拆分的风险可以控制。旧 RPC 链路约 2,800 行，运行时代码里只剩一个探针在调用；它验证的是产品已经不再用于会话的外部 RPC，D-078 也说明这个探针不能代替 SDK 会话验收。改为启动 D-094 子进程后，冒烟测试检查的就是实际的会话运行路径。行数检查脚本推迟到 R12 之后，是因为 R12 要修改的 `desktop-host-gateway.ts` 已有 842 行，“只许减少”会挡住 R12。
-- 影响：同步更新 `release-gate.md`、`architecture.md`、`package.json` 脚本，以及 WSL 启动脚本里对 `PI_GUI_PROBE_ONLY` 的清理。拆分完成后，Kernel 和 Git 的全部现有测试必须原样通过。按领域拆分可能暴露内部的循环依赖；这类问题应在拆分时就地解决，不得借此改变行为。
+- 影响：同步更新 `architecture.md` 和 README；`smoke:pi` 命令与 WSL 启动脚本里对 `PI_GUI_PROBE_ONLY` 的清理保持不变。拆分完成后，Kernel 和 Git 的全部现有测试必须原样通过。按领域拆分可能暴露内部的循环依赖；这类问题应在拆分时就地解决，不得借此改变行为。
 
 ## D-099 — 可靠性补强：通信上限、基本日志与数据目录锁
 

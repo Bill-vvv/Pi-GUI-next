@@ -223,3 +223,11 @@ pnpm verify:linux -- --memory-diagnostics
 ```
 
 It remains subject to clean-worktree, real-AppImage, isolated-XDG, single-verifier and redaction rules.
+
+## 9. Shared Pi Runtime process (D-094)
+
+Sessions now run in one Pi Runtime process shared by all Sessions (`out/main/pi-runtime-host.js`), started by Main when first needed.
+
+- `getRuntimeMemoryDiagnostics()` keeps per-Runtime `rootPid` null: the shared process is never attributed to, or divided among, individual Sessions. Its real PID and RSS/PSS are reported once as `sharedHost`, with the same unavailable reasons.
+- `verify:linux --memory-diagnostics` classifies the process as role `pi-runtime-host` and includes it in the Pi PSS maximum.
+- The measurements above predate this topology and are not a baseline for it. Startup latency, event throughput and memory for the shared process still need a real measurement before any comparison is claimed.

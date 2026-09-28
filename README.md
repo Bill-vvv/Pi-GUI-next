@@ -43,9 +43,9 @@ node scripts/workspace.mjs wsl
 
 需先启用 Node 26.4.0，并把 pnpm/Git 加入 PATH。入口自动准备各平台独立开发目录。WSL 后端更新成功后才切换版本；运行中会明确拒绝更新。项目、Session 和 Pi 仍在 Linux Host。高级发行版选择、目录规则和验证范围见 [Windows / WSL 共同开发](docs/cross-platform-development.md)。P4-3 真实 SSH 发布 gate 与 P4-4 交互 gate 完成前，不宣称 Windows 正式支持。
 
-`PI_GUI_PROBE_ONLY=1` 仍走离线 Pi RPC 探针并立即退出，不进入 remote-only GUI。
+`PI_GUI_PROBE_ONLY=1`（`pnpm smoke:pi`）启动一次 Pi Runtime 子进程，在临时目录中离线创建 Session 并读取命令后退出，不进入 GUI，也不写入用户的 Pi 数据。
 
-通过 pnpm 启动会使用项目锁定的 Pi 0.83.0。Linux 上 Electron Main 会先检查 Pi 版本并执行离线、无 session 的 `get_state` 探针。默认从当前 `PATH` 解析 `pi`；需要显式指定时使用：
+通过 pnpm 启动会使用项目锁定的 Pi 0.83.0。Linux 上的会话运行在 Main 按需启动的 Pi Runtime 子进程中。会话命名等辅助功能默认从当前 `PATH` 解析 `pi`；需要显式指定时使用：
 
 ```bash
 PI_GUI_PI_EXECUTABLE=/absolute/path/to/pi pnpm dev
