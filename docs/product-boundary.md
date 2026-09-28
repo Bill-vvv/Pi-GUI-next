@@ -35,7 +35,9 @@ Pi GUI 的长期方向是桌面 Agent Workbench。P1 只建立第一条可发布
 
 Pi GUI 后续统一为一个产品下的三种角色：Linux Desktop 同时承载完整界面和唯一 Pi Host；Windows Desktop 第一版作为通过系统 OpenSSH 连接 Linux Host 的 remote-only 完整桌面客户端；现有浏览器 Remote App 继续作为由 Linux Host 托管的轻量 Web Remote。三者共享版本化 contract 和 Linux Main 的同一 `WorkbenchKernel`，不复制 Session、Runtime 或 control plane。
 
-该方向不把 Web Remote 嵌入 Windows Electron，也不把浏览器 Public Origin、Trusted Proxy 与 Secure Cookie 直接复用于 SSH。P4-1 已完成 Linux loopback Desktop Gateway、独立桌面设备配对、Bearer credential、单活动 controller 和 Kernel SSE/command 入口；启用与协议见 [`desktop-host.md`](desktop-host.md)。P4-2A 已建立严格 Host config、系统 OpenSSH tunnel owner 和 Node Desktop Host transport；首轮安全 findings 已修复并通过正式 gate，但独立 closure 前保持不可用；它尚未接入 Windows remote-only Main/preload/Renderer，也未实现凭证持久化。Windows remote-only 模式不得要求本地 Pi，也不得在本机创建第二 Kernel；SSH 负责主机身份、用户认证、加密和跳板连接。完整边界见决策 D-067；Windows 产物和真实 Windows→Linux 发布 gate 落地前，不得宣称 Windows 已受支持。
+该方向不把 Web Remote 嵌入 Windows Electron，也不把浏览器 Public Origin、Trusted Proxy 与 Secure Cookie 直接复用于 SSH。P4-1 已完成 Linux loopback Desktop Gateway、独立桌面设备配对、Bearer credential、单活动 controller 和 Kernel SSE/command 入口；启用与协议见 [`desktop-host.md`](desktop-host.md)。P4-2 已接通 Windows remote-only Main/preload、Windows Credential Manager、断线重连和按 Host capability 的 Renderer gating。Windows remote-only 模式不得要求本地 Pi，也不得在本机创建第二 Kernel；SSH 负责主机身份、用户认证、加密和跳板连接。完整边界见决策 D-067；Windows 产物和真实 Windows→Linux 发布 gate 落地前，不得宣称 Windows 已受支持。
+
+R3 已增加桌面 SSH 远程项目选择：配对用户浏览 Linux 目录元数据并显式注册项目，启动时沿用既有项目资源信任确认；Web Remote 不开放该目录能力。R4 已接通远程 Git Changes/History 只读审阅及当前变更文件的有界全文阅读；R5 已接通有界附件上传与任务绑定的引用提交；R6 已接通当前已适配 Extension 命令及其身份绑定的对话框回应，沿用 Ask 与项目资源信任交互。R7 已接通按 snapshot 确认的暂存、取消暂存和普通提交；Git 推送/分支操作及其他后续范围按 [`remote-development-plan.md`](remote-development-plan.md) 逐项验证，不因 UI 共用而自动开放。
 
 ## 旧项目边界
 

@@ -15,7 +15,7 @@ canonical Git checkout
   -> 计划、commit、证据一致后发布
 ```
 
-具体脚本在对应 Slice 实现后加入 `package.json`；不得用尚未实现的占位脚本制造已具备发布能力的假象。S7 唯一 Linux 产物是 `release/pi-gui-next-0.0.1-x86_64.AppImage`，选择依据见 `decisions.md` 的 D-008。
+具体脚本在对应 Slice 实现后加入 `package.json`；不得用尚未实现的占位脚本制造已具备发布能力的假象。S7 唯一 Linux 产物是 `release/pi-gui-next-0.0.1-x86_64.AppImage`，选择依据见 `decisions.md` 的 D-008。Windows x64 NSIS 安装包入口是 `pnpm package:win`，产物为 `release/pi-gui-next-0.0.1-win-x64-setup.exe`；它不是 Linux `verify:linux` 的替代，也不能单独宣称 Windows 已受支持。
 
 ## S0 gate
 
@@ -43,6 +43,8 @@ pnpm verify:linux -- --memory-diagnostics
 ```
 
 `pi-gui-ask` 是拥有独立 frozen lock 的本地 Package；根 `tsconfig` 会检查其源码，因此 clean clone 必须先按该 Package 自己的 lock 安装 peer/type 依赖。该安装显式保持传递依赖 build scripts 禁用；`strict-dep-builds=false` 只把已知 ignored-build 状态从安装错误降为警告，不执行 `@google/genai` 或 `protobufjs` 脚本。`pnpm test:core` 已包含仓库内 ask、runtime-quiescence、task-notify 与历史 multi-advisor quiescence 合同测试。Magic Context 与 pi-subagents 的当前安装版本由真实 AppImage Gate 通过 Pi Runtime 加载并验证；不得依赖已退役的项目 `node_modules/@aliou/pi-subagents` 或 npm 产物未发布的测试目录。自动测试保持定向，不设置覆盖率目标。
+
+Windows x64 安装包由 Windows 机器执行 `pnpm package:win`，产物为 `release/pi-gui-next-0.0.1-win-x64-setup.exe`。它不进入上面的 Linux `verify:linux` 序列；Linux AppImage 仍只在 Linux 上由 `pnpm package:linux` 生成。两边必须来自同一 tag。安装包存在不等于 Windows 已受支持。
 
 ## P1 真实产物回归
 

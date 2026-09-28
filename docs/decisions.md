@@ -433,6 +433,7 @@
 - 决策：用户级 Pi 环境卸载 `pi-gui-multi-advisor`，Settings 删除 Advisor 分类、Extension resource 控制和 roster 编辑器。当前产品不再提供 Advisor 安装、启停、配置或运行状态入口；仓库中的独立 Package 源码只作为历史 source snapshot 保留。既有 Session 中符合固定 schema 的 `pi-gui.multi-advisor/advisory` 继续由 Main strict projector 投影为只读 Timeline 卡片。
 - 原因：Advisor 不再是当前工作流依赖，继续常驻设置入口会把已卸载能力伪装成可用产品面；直接删除历史 projector 又会让旧 Session 丢失已保存的审查上下文。移除控制面并保留只读历史兼容是最小且可逆的退役边界。
 - 影响：新建或重载 Session 不再从用户 Package 设置加载 Advisor；GUI 不提示重新安装，也不编辑 WATCHDOG。历史卡片不具备重新运行、修改或启停能力。未来若重新引入 Advisor，必须重新建立真实 Package、版本化 capability、typed control 和独立验收，而不能仅恢复旧导航入口。
+- 2026-09-13 实现清理：移除残留的五个 Advisor 控制／配置 typed command、preload API、Main handler、WATCHDOG 配置存储与浏览器预览控制样例；旧命令统一在现有校验入口拒绝。独立 Extension 源码与历史 advisory projector 保留，不修改用户磁盘上的历史配置。
 
 ## D-055 — Subagent 详情按状态组织并投影实际模型、消耗与输出引用
 
@@ -536,7 +537,7 @@
 - 状态：Accepted；扩展 D-065/D-066 的远程产品边界，不改变当前 Web Remote v2 或 Linux Main 单一 control plane
 - 决策：Pi GUI 作为一个产品、一个仓库和一套版本化 shared contract，保留三种明确角色：Linux Desktop 同时拥有完整桌面界面和唯一 `WorkbenchKernel` / Pi Runtime Host；Windows Desktop 第一版只作为 remote-only 完整桌面客户端，通过系统 OpenSSH 的本地端口转发连接 Linux Main 的 loopback-only Desktop Gateway；现有 `src/remote` 继续作为由 Linux Host 托管的轻量 Web Remote。Windows Renderer 继续消费正常 typed preload API，由 Windows Main 持有 SSH 子进程、设备凭证、协议握手、重连和 snapshot 同步；远程模式不得探测本地 Pi、创建本地 Kernel 或把 Windows 路径当作 Linux 路径。Desktop Gateway 可复用 `KernelCommand`、`KernelEvent`、`KernelSnapshot`、revision、request ID 和 SSE+POST 编解码语义，但必须与浏览器的 Public Origin、Trusted Proxy、Secure Cookie 和静态资源入口分离；首版只监听 Linux loopback，要求显式桌面设备配对，并在协议版本不一致时 Fail Fast。
 - 原因：Web Remote 适合手机和临时浏览器访问，但把它嵌入 Windows Electron 会形成第二套桌面 UI，并把浏览器 cookie/origin 边界误用为桌面 SSH 安全边界。完整桌面 Renderer 已通过 `window.piGui` 使用 typed IPC；让 Windows Main 转发到 Linux 唯一 Kernel，可以复用现有界面与状态合同，同时由 OpenSSH 负责主机身份、用户认证、加密和 `ProxyJump`，不需要新增云端 relay、账户系统或第二 Kernel。
-- 影响：产品与版本统一不等于单一二进制或单一入口；Linux AppImage、Windows Desktop 产物和 Host 内置 Web Remote 必须从同一仓库/tag 构建。Web Remote 随 Linux Host 构建天然同步；Windows 连接时必须取得 host product/protocol/build/capability 信息，首版只接受完全一致的 Desktop Host protocol，不自动降级或兼容猜测。P4-1 Linux Host 已通过独立安全 closure并完成；P4-2 Windows remote-only client 正在实施。Windows 正式支持仍必须新增真实 Windows 构建与 Windows→SSH→Linux Host 发布 gate，在该 gate 存在前不宣称 Windows 已可用。P3-5 保持 Paused/Ready。
+- 影响：产品与版本统一不等于单一二进制或单一入口；Linux AppImage、Windows Desktop 产物和 Host 内置 Web Remote 必须从同一仓库/tag 构建。Web Remote 随 Linux Host 构建天然同步；Windows 连接时必须取得 host product/protocol/build/capability 信息，首版只接受完全一致的 Desktop Host protocol，不自动降级或兼容猜测。P4-1 Linux Host 已通过独立安全 closure并完成；P4-2 Windows remote-only client source 已完成（Credential Manager、断线重连与 capability gating）。Windows 正式支持仍必须新增真实 Windows 构建与 Windows→SSH→Linux Host 发布 gate，在该 gate 存在前不宣称 Windows 已可用。P3-5 保持 Paused/Ready。
 
 ## D-068 — 后台 Session 完成必须在当前窗口可发现
 
@@ -601,3 +602,159 @@
 - 决策：`select`、`confirm`、`input`、`editor` 不通过通用 TUI renderer 承载，而是只对 normalized catalog 中 provenance-checked 且显式声明对应 blocking method capability 的 Extension Slash Command 开放原生 GUI modal。Workbench 为每次命令调用生成 opaque invocation ID；Shared Runtime 通过 `AsyncLocalStorage` 只在该 handler 的异步调用链中附加 command name + invocation ID，不能使用 Session 级 ambient owner。Kernel 先保留 Ask 工具优先匹配，再核对当前 RuntimeContext 的精确 invocation、adapter method capability，严格归一化 request method、标题、消息、选项、placeholder/prefill 与长度，并绑定 Project、Session、Session ID、invocation ID、request ID 及内部 RuntimeContext。每个 RuntimeContext 同时最多一个阻塞 Command Dialog；桌面和 Web Remote 通过窄 typed respond/cancel command 回复，modal remount key 使用完整 owner identity，提交中禁止重复，错误保留同一请求，停止或崩溃清理，等待期间禁止 hibernation。没有精确 command invocation owner、没有 method capability 的已适配命令、模型工具或未知 Extension 请求继续自动取消并显示错误，任意 `ctx.ui.custom()` 继续直接失败。
 - 原因：四类标准 UI 已经是可序列化的 request/response，继续一律取消会迫使本可安全表达的命令依赖 TUI；但开放 raw request 或任意 custom Component 又会绕过命令目录、Session identity 和 Renderer 安全边界。把标准 Dialog 作为 Kernel-owned 阻塞运行态，可以复用现有 revision acknowledgement、Session 等待标记、modal 焦点/Escape 与远程命令策略，同时不建立第二事实源或 TUI 模拟器。
 - 影响：`/todos` 按固定 Magic Context provenance 恢复为无参数、notify-only 命令，且 adapter 的 blocking method capability 为空，所以即使同名 Extension 行为漂移也不能升级为确认框或输入框；当前仅 `pi-subagents /run` 家族中的 `/run` 显式允许四种标准阻塞 UI。`/subagents <agent> details` 虽然非交互，但真实输出包含 Agent/override 绝对路径与完整 system prompt，会绕过现有 Subagent 设置页的字段边界并写入 Session custom message，因此整个 `/subagents` Slash 入口继续隐藏。`/cpa-ws-status` 因当前仅有可变 local provenance、`/google-account` 因现有实现会触发 follow-up turn、`/curator` 与 `/search` 因存在配置/删除副作用，继续隐藏，等待固定 provenance、结果 schema 与 GUI 前置确认。`/ctx-status` 和 `/subagents-fleet` 仍需要上游版本化 typed snapshot/event，不能用 TUI 文本或私有数据库推断原生面板状态。
+
+
+## D-076 — Windows / WSL 共同开发收口到内容身份和客户端桌面能力
+
+- 日期：2026-09-13
+- 状态：Accepted；扩展 D-067 和 P4-4，替代仅凭 Git HEAD / 单 Main 文件判断同 build 的实现，不合并 SSH 与 WSL transport。
+- 决策：保留唯一 Linux Kernel 与共享业务 handler；Renderer 提交观察身份，SSH Main 不替换命令目标；关闭连接与撤销设备分开。Windows Main 拥有字体、系统通知、文件对话框和窗口聚焦。开发入口为每个平台准备独立源码镜像、依赖和产物；构建清单记录源码及完整打包资源摘要，WSL 在独立 release 目录完成安装验证后切换 current。
+- 原因：会话异步切换不应改变用户命令目标；共同编辑源码不意味着共享平台二进制；更新失败不能破坏现有可运行后端。内容身份必须识别未提交修改和单独更新的 worker/扩展。
+- 影响：旧 build manifest 必须重建，`PI_GUI_BUILD_COMMIT` 不再作为覆盖入口。正常关闭 SSH 窗口保留配对；显式断开继续撤销设备。开发操作与验证边界见 `cross-platform-development.md`。P4-3 与 P4-4 的真实交互 gate 不由 source tests 替代。
+
+## D-077 — 桌面环境显式重启切换，显示偏好归客户端
+
+- 日期：2026-09-13
+- 状态：Accepted；用户确认按跨平台改进计划逐项实施。扩展 D-076，替代旧架构中 Desktop 外观与快捷键由 Kernel 持久化的部分。
+- 决策：Windows 提供 WSL/SSH 当前环境与明确的重启切换入口，只记住成功启动的选择。WSL 校验全部会话与进行中的 Host 操作后同步关闭新任务入口，等待旧后端退出再重启；SSH 先断开。目标校验失败或取消保持当前连接；关闭失败明确退出，不能恢复成表面可用状态。Desktop 外观、字体选择、快捷键和边框双击行为由统一 Main 文件持久化，旧 Host 值只作首次迁移，Renderer 仅覆盖显示投影，不改变 Host revision 或命令身份。
+- 原因：执行环境选择应可见、可恢复，重启可以利用现有单一连接生命周期；设备字体和操作习惯不应随 Host 改变，也不应写回影响其他客户端。保留 Host 工作区事实源可避免跨端复制会话与设置冲突。
+- 影响：开发运行与校验目录分离，构建和 WSL release 只复用经过完整清单校验的相同输入。SSH 只开放本机应用设置，未扩张 Host 管理能力；Web Remote 保留既有契约。当前不迁移活动任务或草稿、不增加 Windows 原生 Pi、不引入通用后端 registry。详细实现和验证边界见 `cross-platform-improvement-plan.md`。
+
+
+## D-078 — 明确当前 Shared Pi Host 主路径与外部 RPC 探针边界
+
+- 日期：2026-09-13
+- 状态：Accepted；用户确认本轮架构对齐。就当前会话运行拓扑，替代 D-003、D-012、D-014、D-017、D-021 中外部 RPC 主路径、不内嵌 AgentSession 与每 Session 独立进程的约束；保留其中单一 control plane、Pi 事实源、metadata 子进程、认证与凭证边界。历史阶段验收仍按当时实现理解。
+- 决策：以当前 `main/index.ts → SharedPiHost.createRuntime → SharedPiAgentSession` 为唯一会话执行主路径。Linux Main 内的 Shared Host 统一拥有 Runtime handles 与 Session driver，按 canonical session file 原子发布并通过精确 handle 释放；Pi SDK 提供 Session/services 与命令执行。环境适配由 `SharedPiProcessEnvironment` 按 async context 管理，不向 Renderer 暴露 raw SDK 或新建 Kernel。`probePiRpc` 继续通过 `LinuxLocalRuntime + PiRpcClient` 验证外部 executable/version/protocol；命名和 Provider 测试保留其专用子进程。外部 RPC 不是可选 Session backend，也不能在 Shared 初始化失败后静默切换。
+- 原因：运行实现已经使用进程内 SDK，但旧架构图和未被替代的 ADR 仍承诺独立 RPC 进程，造成执行、异常、内存与发布验收边界不一致。本决定明确现状与约束，不以文档变更重新实现迁移，也不声称迁移性能收益已经实测。
+- 影响：Session 状态和资源仍须逻辑隔离，但共享 Main 故障域；环境代理不等价于任意全局变量、原生资源或 OS 进程隔离。Shared Runtime 无独立 RPC PID，不得伪造每 Session 独占内存；RPC smoke 不能替代 SDK 会话运行验收。发布仍须验证多 Session 并发、Extension 环境隔离、fork/reload、失败释放、停机与完整 prompt/tool 链路；P4-3 真实 SSH gate 继续暂缓，P4-4 原生交互开放项保持原状。旧 RPC 代码只在探针、显式工具和测试仍有引用时保留，后续删除须一并迁移对应调用与验证。
+
+## D-079 — Desktop Host 显式远程项目选择
+
+- 日期：2026-09-15
+- 状态：Accepted；用户确认按 SSH 远程开发计划持续实施。扩展 D-067，替代首版 Desktop Host 不暴露任何目录路径能力的范围限制；Web Remote 边界不变。
+- 决策：已配对 Desktop controller 通过窄 typed 命令浏览 Linux 目录元数据、以 Host canonical path 注册 Project，并回答现有项目资源信任请求。列表限制扫描量、条目数和响应大小；注册与本地 IPC 共用 ProjectStore 校验、Kernel 注册及信任 owner，异步准备后重复检查 controller 与导航身份。Renderer 同时具备目录、注册和信任三项 capability 才显示远程选择入口。
+- 原因：Windows 用户需要独立完成选择远端项目与开始任务，Windows 原生文件路径不能用于任意 Linux Host。目录元数据和项目注册足以完成该流程，无需通用文件读取或命令透传。
+- 影响：本地/WSL 保留原生选择；取消和断线使旧列表失效，未确认注册不重放。该能力不扩大为任意文件正文读取、上传、Git 或 Host 设置；真实 Windows→SSH→Linux gate 继续开放。
+
+
+## D-080 — 已授权 Git 变更文件的有界全文审阅
+
+- 日期：2026-09-15
+- 状态：Accepted；用户确认持续实施 R4 文件与 diff 审阅。扩展 D-067 的 Desktop Host 命令范围；仅为显式 Git 审阅增加文件正文投影，不改变 D-019 的普通附件路径引用、D-025 的目录搜索或 D-079 的目录元数据边界。
+- 决策：本地/WSL 和已配对 Desktop controller 共用 GitCapabilityController 与 `git.read-file`。请求只接受当前有界变更列表内的仓库相对路径和精确 repository/HEAD/index/status snapshot；祖先仓库必须先完成既有授权。Linux 按目录句柄逐段打开并拒绝符号链接，读取前后校验文件身份与仓库状态；只返回最多 256 KiB 的普通 UTF-8 文件，非文本、超限或过期结果明确拒绝。
+- 原因：diff 省略上下文，用户需要显式查看当前工作区全文以完成审阅。任意路径读取、自动附件正文注入和 staged blob 浏览不属于这条命令。
+- 影响：Git feature 拥有可取消的纯文本阅读弹窗，正文不进入 KernelState、对话或持久缓存；模式、项目、远程会话切换、断线与关闭销毁旧内容。Host 发送前复核设备/controller/导航身份，不重放请求。R4 自动化和真实 SSH gate 分别记录；此决定不开放 Git 写操作。
+
+
+## D-081 — Desktop 显式附件上传与任务绑定的引用提交
+
+- 日期：2026-09-15
+- 状态：Accepted；用户确认持续实施 R5。扩展 D-067 的 Desktop Host 范围；仅对用户显式上传的 SSH 附件替代 D-019 中“不复制普通文件”的传输限制，保留普通文件不内联到模型 prompt、本地/WSL 路径引用及图片原生多模态语义。
+- 决策：Windows Main 原生选择或用户 DOM 文件进入有界分块上传，Host 私有目录生成文件及 opaque 编号；单文件 16 MiB、每批/每 controller 8 项、每块 256 KiB，暂存总量 64 项/128 MiB。编号绑定 controller、Project 和 Session，finish 回读落盘内容校验 SHA-256，提交前再核对文件身份与调用方。Host 解析编号后生成 canonical Kernel 附件；客户端不能传任意 Host 路径。
+- 原因：Windows 文件对 Linux SSH Host 不可直接寻址；把 Windows 路径传过去或把普通文档全文内联到 prompt 都无法维持既有附件行为。上传存储只拥有文件及临时引用，不拥有任务、运行时或对话事实。
+- 影响：未提交 draft 在 15 分钟后失效、每分钟清理，Host 重启清除旧 draft；已提交文件保留供 Pi 后续读取。提交编号只能消费一次，结果不确定时检查对话并重新选择附件，禁止重放。Renderer 仅显示上传 metadata，取消/移除/导航/断线受完整生命周期校验；Web Remote 和原始远程 Kernel 附件限制不变。真实 Windows 原生选择器→SSH→Linux gate 与自动化测试分别记录。
+
+## D-082 — Desktop 的已适配扩展命令与请求回应
+
+- 日期：2026-09-15
+- 状态：Accepted；按已确认的 R6 远程交互计划实施，扩展 D-067 的 Desktop 命令范围。
+- 决策：Desktop 复用 `kernel.invoke-command` 的 typed 入口，但 Host 仅放行当前已注册普通 Project 的已适配 Extension catalog，并重复既有 provenance/参数校验；同时开放现有扩展回应/取消命令，完整绑定 Project、Session、Session ID、invocation ID 和 request ID。Ask 保持独立结构化工具协议，项目资源授权保持既有信任 owner。
+- 原因：用户需要在远程发起扩展工作并回答阻塞输入；只开放回复、没有发起入口，不能完成该流程。受控目录足以提供入口，无需任意命令透传或远程 TUI renderer。
+- 影响：远程 Composer 仅展示已适配 Extension；缺少调用/回应/取消 capability 不开放入口。提交与取消阻止重复，旧会话完成回调不能覆盖新会话草稿或回显，断线重连不重放 mutation。Web Remote、Provider/Package/Host 管理和 Git 写权限保持原边界。真实 SSH 验收仍独立开放。
+
+## D-083 — Desktop 的确认式 Git 暂存与普通提交
+
+- 日期：2026-09-15
+- 状态：Accepted；按已确认 R7 实施，扩展 D-067 与 D-080 的 Desktop Git 范围。
+- 决策：在完整读取能力上额外协商暂存/取消暂存、提交预览和提交执行三项 capability；Host 只放行普通 commit。复用 GitCapabilityController、仓库队列和文件/HEAD/index snapshot，将远程控制身份检查传到实际写前；冲突文件在共享入口拒绝 index mutation。
+- 原因：远程审阅后需要由用户确认暂存与提交，不能只展示本地按钮或依赖 UI 隐藏保护 Host。提交响应可能在 Git 已落盘后丢失，客户端必须保留结果不确定语义。
+- 影响：不自动暂存、提交或推送；远程 Amend、分支和网络操作不开放。迟到预览/结果受项目与会话生命周期约束；重复确认由 Renderer gate 和 Host snapshot/队列阻止。响应未确认时禁止从原确认框重试，先刷新检查历史。真实 SSH 验收与源码自动化独立记录。
+
+## D-084 — SSH 配置的静态候选发现
+
+- 日期：2026-09-15
+- 状态：Accepted；按已确认第三阶段 R8 实施。
+- 决策：Windows Main 拥有用户/系统 SSH 配置读取；无参数的窄 IPC 只返回候选 alias、来源及诊断。发现不启动 ssh、不执行 Match/Proxy 命令，不读取配置指定的密钥文件；候选 alias 与实际连接共用同一校验入口。
+- 原因：选择已配置主机能减少手填错误，但完整 OpenSSH 配置求值可能执行本地条件命令，不能在浏览候选时隐式触发。
+- 影响：静态 Include 有数量、深度、字节和扫描边界；动态条件未求值，错误/缺失明确呈现。用户选择后才填入 alias，实际有效配置与 Host 身份由连接流程验证。多主机持久化、设备凭证归属和 Host 预检继续按 R9/R10 实施。
+
+## D-085 — Host 无凭证预检与临时隧道所有权
+
+- 日期：2026-09-15
+- 状态：Accepted；按已确认第三阶段 R9 实施。
+- 决策：Windows Main 在独立 checking 生命周期内复用系统 SSH 及无凭证 Host 握手，逐阶段检查本机端口、SSH 程序、别名转发配置、SSH 就绪和协议/版本。检查命令有窄 operation ID 和严格配置，不接通任务或认证 mutation。
+- 原因：用户需要在配对前定位连接条件的失败阶段；配置发现不能证明 SSH 可用或 Host 在线，检查成功也不能替代正式认证。
+- 影响：临时隧道必须释放后才报告通过，失败清理保留所有权，不能忽略停止错误。检查、取消和关闭贯穿配置解析及 HTTP 请求的取消信号；旧 operation ID 不能取消新检查。凭证与已保存成功主机保持原状态；正式连接仍重做验证。本阶段不负责远端安装/启动/升级，真实 SSH 验收独立开放。
+
+## D-086 — 发送已存设备凭证前核对目标配对身份
+
+- 日期：2026-09-15
+- 状态：Accepted；按已确认 R10 分阶段实施。
+- 决策：Desktop 协议升级为 2，无凭证握手返回当前有效设备的公开 `pairingId`，由认证哈希加固定用途前缀后再次哈希生成。DesktopHostClient 在共同入口比较本地凭证派生值与握手值，仅一致时装载 Bearer；缺失字段或格式非法拒绝协议，空值或不一致报告独立 `credential-target` 错误。
+- 原因：产品版本和构建一致不能证明 SSH 别名仍指向原配对；在核对前发送全局已存凭证，会把原 Host 的凭证带到另一 Host。身份变化也可能来自撤销、过期或重新配对，不能据此认定本地凭证本身错误并自动删除。
+- 影响：新隧道与每次恢复都先无凭证核对；目标不一致时停止恢复并保留本地凭证，已认证请求明确返回 401 的清理行为保持不变。SSH 继续承担主机认证，公开配对标识不替代 SSH 信任。此阶段不代表多主机列表、独立凭证槽、多设备配对或真实 SSH 验收完成。
+
+## D-087 — 普通断开保留配对，显式撤销独立确认
+
+- 日期：2026-09-15
+- 状态：Accepted；按已确认 R10 实施，替代 D-076 与 P4-2C 中“显式断开即 logout”的客户端语义。
+- 决策：普通断开与关闭窗口共享清理 owner，只取消连接和恢复；独立 `desktop-client.revoke-pairing` 携带界面观察的 Host 配置，仅连接到相同目标时可请求 logout。收到兼容的未配对确认后才删除本机凭证，结果未确认不自动重试。
+- 原因：用户切换主机或暂时离开时应保留配对；把本机凭证删除当作远端撤销成功会掩盖网络中断后的真实状态。
+- 影响：disconnecting/revoking 阶段锁住新连接、检查与任务命令，等待旧尝试和清理完成；重复断开/关闭等待同一收尾，重复撤销拒绝。远端撤销未确认、本机删除失败和进程清理失败分别报告；清理失败保留可重试的资源 owner。Renderer 由状态事件统一清除旧 Kernel 投影，迟到的断开响应不得影响下一连接。多主机列表与独立凭证槽仍在 R10 后续范围。
+
+## D-088 — 多主机配置、独立凭证槽与连接编号
+
+- 日期：2026-09-15
+- 状态：Accepted；按已确认 R10 实施，替代 P4-2C 的单主机配置与全局设备凭证槽。
+- 决策：WindowsRemoteHostManager 统一拥有至多 32 套配置、当前 Session 和严格 revision。配置仅保存名称、alias/端口与随机凭证槽编号；凭证继续由 Windows Credential Manager 拥有。端点变更更换槽，名称或本机端口变更保留槽；不同配置不自动共享配对。保存后方可连接，变更与连接携带 Renderer 已观察的配置身份。
+- 原因：多主机切换需要明确凭证归属，且不能在旧选择或存储失败后沿用上一台主机的缓存。凭证存储与 JSON 无跨存储事务，因此先持久化迁移目标或删除待办，再执行凭证操作；重试及重启继续同一待办，不覆盖已有新凭证、不回退到旧配置。
+- 影响：断开后才能管理配置；删除/忘记只清理本机数据，远端撤销仍走 D-087。每次连接生成独立本机编号，preload 的 Kernel/Git/附件/撤销请求携带该编号，Windows Main 验证后才委托当前 Session。原生文件选择到上传清理全程捕获原连接；相同项目/会话名称不能绕过跨主机或重连隔离。迟到的状态读取不能覆盖新的状态事件。Host 仍只有单个已配对设备，本阶段没有改变 SSH 认证或新增网络协议能力；真实 SSH 验收仍独立开放。
+
+## D-089 — Host 配置与前台启动的统一入口
+
+- 日期：2026-09-15
+- 状态：Accepted；按持续推进目标补齐 R11 首次启用流程，部署升级后续实施。
+- 决策：Linux CLI 的 configure/check/start 复用 Main 的密钥校验与构建清单，配置文件只保存端口，密钥只在文件内。前台启动复用现有 Linux Electron/Main/Kernel，以系统 flock 串行配置和进程生命周期，真实无凭证握手成功后才报告就绪。
+- 原因：手工复制环境变量和重新生成密钥容易破坏既有配对；启动进程成功不能证明 Host 已启用。配置、构建检查和就绪检查需要共享业务入口，并明确图形会话、版本和退出条件。
+- 影响：已有密钥、设备记录与用户项目保持原有所有权；损坏、缺失或权限错误不重置。管理启动的 SIGINT/SIGTERM 进入 Main 既有退出收尾，退出超时明确报告强制终止。当前只支持已准备依赖的 Linux 构建目录，不创建第二 Kernel 或新 daemon；安装、升级与真实 SSH gate 仍未完成。
+
+## D-090 — Host 独立发行目录与原子版本选择
+
+- 日期：2026-09-15
+- 状态：Accepted；按 R11 实施部署、升级和回退。
+- 决策：部署以已准备依赖的 Linux 生产构建为输入，复制运行文件及 Node 到新的私有发行目录。版本化安装记录绑定配置目录，在一次原子替换中保存当前及上一发行版；源、候选和安装后文件均校验，依赖链接不得逃出发行目录。打包 Host CLI 与稳定引导入口支持脱离原构建目录启动。
+- 原因：在使用中的目录内覆盖文件会混合版本；单独更新 current/previous 指针会留下不一致状态；重复部署相同内容不应丢失上一可回退版本。
+- 影响：配置锁贯穿受管理启动、部署和回退，安装目录再持有独立锁以拒绝其他配置认领。只有验证完整的候选才被选中，完整相同版本复用当前记录；回退验证目标后交换当前与上一记录。进程中断的未完成候选在持锁重试时清理，完整发行目录暂不自动删除。机器密钥、配对、项目与任务继续留在原数据目录；首次系统依赖准备、可分发包及真实 SSH 验收仍分别验证。
+
+## D-091 — 可移交的 Host 运行包与保留配置的首次安装
+
+- 日期：2026-09-15
+- 状态：Accepted；按 R11 补齐 Linux 发行包及首次安装。
+- 决策：从已校验构建的生产依赖、显式 Electron 和随附扩展出发，按 Node 的实际解析目录遍历依赖图；保留选中包的完整文件与依赖链接，缺失必需依赖或跨构建链接直接失败。独立归档保留原产物身份，携带 Node、完整 payload 摘要、可选依赖报告及安装脚本；输出校验文件且不覆盖已有归档。
+- 原因：直接复制开发依赖把构建工具和其他平台安装器带入 Host。首次安装不应要求源码或系统 Node，也不应重置已有端口、机器密钥和配对。仅核对归档输入不足以保证激活候选仍是同一内容。
+- 影响：安装在创建配置前验证包，再复用 D-090 部署流程并在激活前对照包的完整摘要；同版本复用保留回退目标。Host 的子进程 PATH 优先使用启动器已验证的 Node，让 Pi 的 Linux 入口不依赖系统 Node。系统运行库、图形会话和 OpenSSH 仍由主机准备；不引入网络下载器或无桌面 daemon，真实 SSH 验收保持独立。
+
+## D-092 — Desktop 多设备存储与共享私有文件入口
+
+- 日期：2026-09-17
+- 状态：Accepted；R12 存储阶段，正式 Gateway 接入另行验证。
+- 决策：Desktop 使用版本 2 的有界集合，最多保存 8 个设备，记录仅含认证哈希、原有配对/到期时间和可空显示名称。读取旧版本 1 时保留原认证哈希与有效期，原子写入集合后才返回可用实例。Web Remote 继续使用自己的版本 1 单设备文件；两者复用私有文件读写和认证记录校验。
+- 原因：多设备配对不能覆盖已有凭证；直接修改共用单设备模型会改变 Web Remote 的行为。权限、非符号链接检查、固定读取上限和原子写入需要有一个共同入口。调用者修改排队中的对象，也不能改变已经提交的授权目标。
+- 影响：配对添加串行检查容量并清理已过期记录，拒绝重复凭证和无效新记录。撤销立即从当前进程移除指定设备，再持久化；失败明确报告，重复撤销仍写盘以完成重试，不影响其他设备。新格式尚未接入 Main，不能把存储测试通过视为多设备连接已可用。正式迁移前须补充握手、控制连接绑定及发行版/数据格式兼容检查，防止回退到无法读取新设备格式的旧发行版。
+
+## D-093 — 选择发行版前只读验证配对数据兼容性
+
+- 日期：2026-09-17
+- 状态：Accepted；R12 正式数据迁移的前置条件。
+- 决策：在经产物清单验证的 `package.json` 中声明 `desktopHost.deviceStoreVersions`。历史未声明构建对应版本 1 读取器，非法显式声明拒绝。共同检查入口复用设备存储的完整格式校验与私有文件读取，覆盖检查、启动、候选部署和回退；激活前重新检查配置目录中的数据。
+- 原因：数据迁移后，完整且未损坏的旧发行版也可能无法启动。若先切换版本再发现这一点，安装记录会指向不可用目标。把当前发行版是否兼容作为升级前提，又会阻止用户升级到可读取现有数据的新版。
+- 影响：将发行文件完整性与读取当前数据的能力分开验证，保留兼容的前向升级路径；不兼容回退保留当前/上一记录与全部配对字节，绝不通过重置或降级配对文件完成回退。检查本身不迁移数据。当前生产 Main 仍为版本 1 读取器，元数据相应声明 `[1]`，多设备握手与正式存储接入继续后续实施。历史程序未获得新增管理检查。
+
+## D-094 — Shared Pi Host 迁入独立 Node 子进程
+
+- 日期：2026-09-29
+- 状态：Accepted；用户确认：所有 Session 共享一个子进程，崩溃后等用户下次操作时再启动，并在 R12 之前实施。本决定替代 D-078 中“Shared Host 运行在 Linux Main 内”“Session 与 Main 共用故障范围”以及“Shared Runtime 没有独立 PID”这几项约束；D-078 其余规则继续有效：唯一会话主路径、由一个 Host 共享、初始化失败时不静默切换，以及 `probePiRpc` 和专用子进程的边界。D-061 规定的“Pi 为事实源、薄桥接”保持不变。
+- 决策：Main 使用 `ELECTRON_RUN_AS_NODE` 启动一个 Pi Runtime 子进程。子进程原样运行现有的 `SharedPiHost`、`SharedPiAgentSession` 和 `SharedPiProcessEnvironment`，所有 Session 共用这个子进程。Main 侧新增 `RemoteSharedPiRuntime`，实现现有的 `RuntimeHost` 接口，把命令、结果和事件转发给子进程；WorkbenchKernel 和 `createRuntime` 参数保持不变。进程间通信使用 Node 自带的 IPC 通道，不借用 stdout；子进程的 stdout 和 stderr 只作为日志转发给 Main。子进程每次启动都会得到一个新编号（generation），旧编号的事件一律丢弃，发给旧编号的命令一律拒绝。子进程退出后，所有属于它的 Runtime 进入现有崩溃状态，进行中的 prompt 和工具调用不重放。直到用户下一次需要 Runtime 时，才重新启动子进程；2 分钟内最多启动 3 次，超过后明确报错，不回退到在 Main 进程内运行。停机时先释放资源，超时后再依次发送 SIGTERM 和 SIGKILL。内存诊断报告子进程的真实 PID，并把它标为共享 Host，不伪装成某个 Session 独占的内存。进程内的 `SharedPiHost` 只在测试中直接使用。
+- 原因：Extension 卡住、泄漏内存或崩溃，目前都会拖垮所有会话、UI 主进程和远程网关。`RuntimeHost` 本来就是异步接口，命令、结果和事件都是纯数据，Kernel 也不直接依赖 Pi SDK，因此代价最低的做法是把边界放在这一层。共用一个子进程可以保留 D-078 的内存优势；每个 Session 一个进程会退回已被取代的旧模型。`SharedPiProcessEnvironment` 目前会改写 Main 的全局 `process.env`，迁出后这个副作用只影响子进程。这一步也为今后的无桌面 Host 打基础，但本决定不包括那项工作。
+- 影响：一个会话出问题仍可能影响其他会话，但不再波及 UI、Git、远程网关和通知。需要新增 electron-vite 构建入口，并把它加入 asar 和 Host 发行包。启动增加的延迟和 IPC 的事件吞吐量都要实际测量，不能预先宣称没有影响。验收时，D-078 的发布检查项仍全部适用；还要补充以下场景：任务运行中强制结束子进程、崩溃后按需恢复、达到重启次数上限、旧编号的事件和命令被拦截、正常停机和超时停机，以及 Extension 输出不影响通信。本项在 R12 重启计划的阶段 0 完成后实施，R12 的 A/B/C 任务基于迁移后的接线继续开发。

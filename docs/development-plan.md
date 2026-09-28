@@ -1,10 +1,10 @@
 # Pi GUI 开发计划
 
 > 当前阶段：P4 — Remote & Cross-platform Clients
-> 计划版本：10.7
-> 最后更新：2026-08-27
+> 计划版本：10.13
+> 最后更新：2026-09-13
 > 总体状态：In Progress
-> 当前 Slice：P4-2A — Windows Host connection foundation（Security Re-review Ready）
+> 当前 Slice：P4-4 — WSL Desktop Client（In Progress）
 
 ## 1. 计划用途
 
@@ -442,7 +442,7 @@ P1 完成后进入 P2。P2/P3/P4 的当前路径见下一节；后续调整继�
 | P1 — Linux Core Chain | 建立第一条可发布的 Linux 本地 Pi 核心链路 | `Complete` | 2026-07-21 完成 |
 | P2 — Workbench Foundation | 补齐日常工作台基础功能，并完成 UI、交互、Runtime 治理与内存预算收敛 | `Complete` | 2026-07-30；commit `152a9a3` 的 19 步正式 AppImage + memory gate 通过 |
 | P3 — Ecosystem Integration | 接入 Pi Extension、Package、Skill、prompt template、Git Workbench 与 MCP 等扩展能力 | `Paused` | P3-1、P3-2、P3-3、P3-4 已完成；P3-5 Settings Capability Center 保持 Ready，用户已将当前优先级切到 P4 |
-| P4 — Remote & Cross-platform Clients | 先交付 Windows remote-only Desktop Client over SSH，再独立评估 macOS、Windows 原生 Pi 与 WSL | `In Progress` | P4-1 Desktop Host 已通过独立 closure review并完成；P4-2A Windows Host connection foundation 已启动 |
+| P4 — Remote & Cross-platform Clients | 先交付 Windows remote-only Desktop Client over SSH，再独立评估 macOS、Windows 原生 Pi 与 WSL | `In Progress` | P4-3 真实 SSH gate 已暂停；当前 Slice 为 P4-4 WSL Desktop Client |
 
 ### 15.2 P2 — Workbench Foundation
 
@@ -972,20 +972,37 @@ P3-1 至 P3-7 全部完成后，对已经交付的 P3 工作流做一次整体�
 
 ### 15.4 P4 — Remote & Cross-platform Clients
 
+**2026-09-15 后续实施入口**：用户确认下一版先做 SSH 连接可靠性，再按远程项目选择、文件/diff、附件、交互、必要 Git 操作补齐开发闭环。具体范围与验收见 [SSH 远程开发实施计划](remote-development-plan.md)。用户确认 Linux Host 尚未准备，先做本地实现和自动化验证；P4-3 真实主机验收继续开放。该计划不把以下历史完成记录或 P4-4 原生交互待办改记为通过。
+
 P4 的方向已经由用户重新开启，当前优先级从 P3-5 切换到 P4-1；P3 既有 dirty candidate 保留且不得被本阶段覆盖或顺手整理。P4 保持一个产品、一个仓库、一个版本化 shared contract，并把 Linux Main 保持为远程工作区的唯一 control plane；产品统一不要求把 Desktop Renderer 与 Web Remote 合并成一个入口。
 
 实施顺序：
 
 1. **P4-1 Desktop Host contract（Complete）**：Linux Main 已增加 loopback-only Desktop Gateway、host handshake、protocol version、build identity、capability、独立桌面设备配对、Bearer credential、单活动 controller、revision/snapshot/SSE 和明确的 remote command owner；设置页可生成/撤销 Windows 桌面设备。它不托管 Web 静态资源、不接受 Public Origin、Trusted Proxy 或 Secure Cookie，也不建立第二 Kernel。首轮安全 findings 已修复，后续独立 closure review 确认 Blocker / High / Medium 为 0。
-2. **P4-2 Windows remote-only Desktop Client（In Progress）**：复用完整 Renderer 与 typed preload API，由 Windows Main 通过用户现有 OpenSSH host alias 建立 local port forward；Windows 模式跳过本地 Pi probe、ProjectStore、Provider/Package 和 WorkbenchKernel 初始化。第一版只支持 SSH key/agent、已确认 Host Key 和一台 Linux Host，不保存 SSH 密码、不自动发现主机、不建立云端 relay。P4-2A 已实现 Host config、系统 SSH 子进程和 Node Desktop Host transport；首轮安全 findings 已修复并通过正式 gate，当前保持 Security Re-review Ready。P4-2B 仍只在独立 closure 通过后接入 remote-only Main/preload composition 与连接界面，P4-2C 再收口凭证存储、重连和完整 Renderer capability gating。
-3. **P4-3 Windows package and real gate**：从同一 tag 构建 Linux AppImage、Windows x64 installer 和 Host 内置 Web Remote；真实 Windows 环境验证 install/launch、SSH 配对、prompt/streaming/Ask/abort、断线重连、Host 重启、版本不匹配和设备撤销。无真实 Windows gate 不得声明 Windows 支持。
-4. **后续本地 Runtime**：macOS、Windows 原生 Pi 与 WSL 只有在各自真实需求重新确认后独立规划；不得把 remote-only 首版扩大为路径翻译、文件同步、本地 Pi 兼容层或多 Host 平台。
+2. **P4-2 Windows remote-only Desktop Client（Complete）**：复用完整 Renderer 与 typed preload API，由 Windows Main 通过用户现有 OpenSSH host alias 建立 local port forward；Windows 模式跳过本地 Pi probe、ProjectStore、Provider/Package 和 WorkbenchKernel 初始化。第一版只支持 SSH key/agent、已确认 Host Key 和一台 Linux Host，不保存 SSH 密码、不自动发现主机、不建立云端 relay。P4-2A 已完成 Host config、系统 OpenSSH tunnel（Windows 固定 `%SystemRoot%\System32\OpenSSH\ssh.exe`）和 Node Desktop Host transport。P4-2B 已接通 remote-only Main/preload 与连接界面。P4-2C 已收口 Windows Credential Manager 凭证、断线重建 SSE/snapshot（不重放 mutation）和按 Host capability 的 Renderer gating。
+3. **P4-3 Windows package and real gate（Paused）**：Windows x64 安装包与本机 install/launch 已完成；同 tag Linux AppImage 与真实 SSH 配对/对话/重连/撤销 gate 由用户于 2026-09-12 暂缓。恢复条件是同一 tag 的 Linux Host 已运行，并完成剩余真实 Windows 验证。无该 gate 不得声明 Windows 支持。
+4. **P4-4 WSL Desktop Client（In Progress）**：用户于 2026-09-12 确认下一步做 WSL。Windows 界面通过已有 `wsl.exe` 私有管道连接本机 Ubuntu-24.04 里的 Linux Pi，不走 SSH Desktop Host，也不把默认 `pnpm dev` 改回本地 Pi。入口是 `scripts/setup-wsl.ps1` 与 `scripts/start-wsl.ps1`。不得顺手接入 window chrome stash，不得把 remote-only 与 WSL 混成一条路径。
+   - 2026-09-13 收口：已实施观察身份防止 SSH 命令错投、关闭保留凭证、Windows 字体和 WSL 通知桥接、平台隔离开发入口、内容清单与 WSL 原子 release 更新。Windows/Linux 类型检查与生产构建通过，两端产物摘要一致；51 项平台测试在 Linux 为 49 通过/2 平台跳过，Windows 为 48 通过/3 平台跳过，均无失败。真实 Windows→WSL 隔离部署与两次启动/关闭通过，Windows 字体枚举 361 项，退出释放锁。完整核心测试 1293 项中 1272 通过、18 失败、3 跳过；失败为 15 项 Git 2.43 不支持分页参数、1 项 Git EPIPE、1 项休眠命令断言和1 项 Composer 源码断言。证据与构建快照见 `release/evidence/cross-platform-validation.json`；验证后的同期 Kernel 修改不包含在该构建快照。P4-3/P4-4 真实窗口交互 gate 保持未完成。
+   - 2026-09-13 后续改进：用户批准的 A–D 项已按序实现，详见 [cross-platform-improvement-plan.md](cross-platform-improvement-plan.md)。Git 2.43/EPIPE 修复、只读 doctor、独立校验目录、构建/release 复用、Windows WSL/SSH 显式重启切换与本机偏好归属已落地。原生 Windows 的双向切换、取消/目标失败保持连接、跨环境偏好保留通过；原生确认框由脚本应答。最新测试与构建快照以 `release/evidence/cross-platform-improvements-validation.json` 为准，替代上一条的旧失败状态；人工通知/文件对话框和 P4-3 SSH gate 继续开放。
+   - 2026-09-14 运行补验：Windows Node 26.4.0 平台测试 66 项（61 通过、5 项 Linux 条件跳过、0 失败），包含此前 Linux 跳过的字体、Credential Manager 与 npm shim。真实 SDK 在本地模型 fixture 下通过并发 prompt/read、分叉及 Host 重建恢复回归，已纳入核心测试。此项不覆盖完整 Windows→WSL 产品交互；P4-4 继续 In Progress，P4-3 继续 Paused。当前证据见 [架构审查第七轮](architecture-review-2026-09-13.md#11-第七轮windows-原生检查与真实-sdk-会话回归)。
+   - 2026-09-14 真实模型补验：修复 Shared SDK 的进程代理初始化遗漏。原生 Windows Node → 生产 WSL 管道 → 实际 Electron Main/Kernel/SDK → 真实 `grok-4.6` 的 11 个检查点通过，涵盖工具、附件路径、HTML 文件、分叉/归档、中止及重启续聊；核心 1307 通过/3 跳过/0 失败，Windows SDK 代理回归 3/3，类型检查与构建通过。Computer Use 因工作目录 URI 错误在执行前失败，原生对话框、Renderer 操作和通知点击仍开放；P4-4 In Progress、P4-3 Paused。证据见 `release/evidence/pi-gui-wsl-live-mbeztalk/` 和[补验边界](cross-platform-improvement-plan.md#2026-09-14-真实模型链路补验)。
+   - 2026-09-14 原生交互补验：正式 Computer Use 恢复后，真实 Windows 项目/附件选择及取消、中文空格附件 read、HTML 保存及取消、关闭重开、分叉编辑发送/切换、归档、原生重启取消和 WSL → 未连接 SSH 客户端重启通过。发现并修复首条消息分叉时 SDK 延迟落盘导致的 ENOENT；复用临时会话登记，补充错误边界回归。核心 1310 通过/3 跳过/0 失败，类型检查与构建通过。通知显示/点击、归档撤销/临时查看、原生反向切换及运行中阻止重启仍开放；P4-4 In Progress、P4-3 Paused。证据见 `release/evidence/pi-gui-native-96we6oyk/README.md`。
+   - 2026-09-14 原生续验：SSH → WSL 原生反向重启、运行中切换拦截通过；真实 WSL 工具继续完成。归档后原生输入实测为 9149ms，超过 5000ms 有效期，撤销/临时预览未取得证据。通知权限 Enabled、开始菜单身份匹配，但 Windows 连续返回 QUNS_BUSY；待退出全屏/演示状态补验通知点击。本轮未改产品代码。证据见 `release/evidence/pi-gui-native-followup-20260914/README.md`；P4-4 In Progress、P4-3 Paused。
+   - 2026-09-15 通知续验：Windows 已恢复允许通知，WinRT 历史确认通知送达；应用内完成通知“查看”原生跳转通过。修复 Windows 正文字面 HTML 标签，以及横幅超时后提前释放点击回调的问题，客户端与 Host 共用 5 分钟动作期限。Linux 定向 11/11、Windows 定向 5/5、类型检查与生产构建通过，旧生命周期复现失败；真实 WSL 任务完成后系统记录新增纯文本通知。系统通知原生点击、归档撤销/预览仍待验，不以通知历史和模拟事件回归替代。最新源码摘要 b7d8538fe2b6d4d747e0b020c660b55eec84432b645e7a2b5e60a0165170c70d；证据及清理状态见 `release/evidence/pi-gui-native-followup-20260914/notification-fix-validation.json`。
+   - 2026-09-15 人工协同补验：用户确认归档后撤销操作正常，复查原生窗口与持久化状态，四条合成会话均恢复、归档标记为空。归档撤销记为人工验收通过；工具未捕获点击过程。用户明确尚未执行归档临时查看，并要求跳过当前系统通知点击验收；两项均未计为通过，本轮交互验收结束。隔离测试窗口已关闭、WSL 锁已释放、临时凭证已移除，131 个文件的残留扫描无匹配。P4-4 In Progress、P4-3 Paused。证据见 `release/evidence/pi-gui-native-assisted-20260915/README.md`。
+5. **后续本地 Runtime**：macOS 与 Windows 原生 Pi 仍需各自重新确认；不得把 WSL 扩大为路径同步、第二 Kernel 或多发行版自动发现。
 
 Windows 和 Linux/Web 必须从同一仓库/tag 发布。Web Remote 随 Linux Host 构建自动同步；Windows 每次连接读取 host product version、Desktop Host protocol、build commit 和 capabilities。首版协议版本必须完全一致，能力缺失由 host 显式报告并禁用对应入口，不做 silent fallback 或兼容猜测。完整决策见 D-067。
 
 **P4-1 完成证据**：新增 Desktop Host config/gateway/shared contract、Main event/command 接线、独立设备存储路径和 Settings 配对/撤销入口；首轮安全 findings 修复后，P4 定向 `20/20`、完整 remote/Settings 回归 `55/55`、完整 core `1198/1198`、`pnpm typecheck`、生产 Desktop/Web `pnpm build` 与 `git diff --check` 通过。command 携带并在 admission/异步准备边界复核客户端观察到的 `projectKey + sessionKey`，stale mutation 返回 typed `409 conflict`，命令自身成功改变 identity 不被误判，且非 JSON pairing 请求不消耗认证限流。独立 closure review 只读复跑 P4-1 `20/20`、扩展 remote/Settings `73/73`，确认 Blocker / High / Medium 为 0，故 P4-1 于 2026-08-22 标记 Complete。未启动 Electron、未执行真实 SSH、未生成 Windows 产物；这些仍属于 P4-2/P4-3，不把 Host 完成表述为 Windows 支持。
 
-**P4-2A 当前证据**：新增严格的单 alias/双端口配置校验、系统 `ssh` tunnel owner 和仅连接 `127.0.0.1` 的 Node Desktop Host client。SSH 固定使用 `BatchMode=yes`、`ExitOnForwardFailure=yes`，关闭 LocalCommand、multiplexing 与后台 fork；启动前通过有界 `ssh -G` 拒绝 alias 中额外的 LocalForward/RemoteForward/DynamicForward，同时不覆盖 Host Key、key/agent 或 ProxyJump。客户端先执行无凭证握手并严格校验 protocol/product/非空 exact build、capability、JSON/SSE 大小与 UTF-8，握手前本地拒绝配对或装载凭证；配对请求在 Host 持久化前再次绑定 product/build。SSH spawn error 直接拒绝启动，并固定连接/ServerAlive 边界；JSON 请求、SSE connect/idle 和 tunnel stop 均有显式 timeout，command 总是携带 snapshot identity 且网络失败不重放 mutation。首轮复核前候选曾通过 P4-2A 定向 `8/8`、完整 remote/Settings `63/63`、完整 core `1206/1206`、`pnpm typecheck`、生产 Desktop/Web `pnpm build` 与 `git diff --check`；core 当时仅报告既有 `24678` WebSocket/Vite dep-scan 噪声且退出为 0。首轮安全复核随后发现凭证可在兼容性前发送、配对可先产生 Host 替换副作用、SSH spawn 未 Fail Fast，以及请求/SSE/stop 生命周期和 same-build DTO 信任表述不完整。修复候选已通过 P4/Host 定向 `20/20`、完整 remote/Settings `90/90` 与 `pnpm typecheck`。首次完整 core 为 `1216/1218`，唯一叶子失败是既有 `pi-capability-inventory-service` overflow readiness 超时，当时按 Fail Fast 未继续 production build 与 diff check；经用户明确授权重跑后，完整 core `1219/1219`、生产 Desktop/Web `pnpm build` 与 `git diff --check` 均通过。core 仍输出既有 Vite dep-scan 与端口 `24678` 噪声，但命令退出为 0。该 Slice 涉及 SSH 子进程和设备凭证；独立 closure 通过前保持 Security Re-review Ready，不开始 P4-2B。
+**P4-2A 完成证据**：新增严格的单 alias/双端口配置校验、系统 `ssh` tunnel owner 和仅连接 `127.0.0.1` 的 Node Desktop Host client。SSH 固定使用 `BatchMode=yes`、`ExitOnForwardFailure=yes`，关闭 LocalCommand、multiplexing 与后台 fork；启动前通过有界 `ssh -G` 拒绝 alias 中额外的 LocalForward/RemoteForward/DynamicForward，同时不覆盖 Host Key、key/agent 或 ProxyJump。客户端先执行无凭证握手并严格校验 protocol/product/非空 exact build、capability、JSON/SSE 大小与 UTF-8，握手前本地拒绝配对或装载凭证；配对请求在 Host 持久化前再次绑定 product/build。SSH spawn error 直接拒绝启动，并固定连接/ServerAlive 边界；JSON 请求、SSE connect/idle 和 tunnel stop 均有显式 timeout，command 总是携带 snapshot identity 且网络失败不重放 mutation。首轮复核前候选曾通过 P4-2A 定向 `8/8`、完整 remote/Settings `63/63`、完整 core `1206/1206`、`pnpm typecheck`、生产 Desktop/Web `pnpm build` 与 `git diff --check`；core 当时仅报告既有 `24678` WebSocket/Vite dep-scan 噪声且退出为 0。首轮安全复核随后发现凭证可在兼容性前发送、配对可先产生 Host 替换副作用、SSH spawn 未 Fail Fast，以及请求/SSE/stop 生命周期和 same-build DTO 信任表述不完整。修复候选已通过 P4/Host 定向 `20/20`、完整 remote/Settings `90/90` 与 `pnpm typecheck`。首次完整 core 为 `1216/1218`，唯一叶子失败是既有 `pi-capability-inventory-service` overflow readiness 超时，当时按 Fail Fast 未继续 production build 与 diff check；经用户明确授权重跑后，完整 core `1219/1219`、生产 Desktop/Web `pnpm build` 与 `git diff --check` 均通过。core 仍输出既有 Vite dep-scan 与端口 `24678` 噪声，但命令退出为 0。该 Slice 涉及 SSH 子进程和设备凭证。2026-09-11 用户要求继续 P4 后，实施复核收口剩余 Medium：Windows 不再从 PATH 解析 `ssh`，只使用 `%SystemRoot%\System32\OpenSSH\ssh.exe`，缺失则 Fail Fast。Windows 定向 P4-2A/2B 测试 `14/14`、`pnpm typecheck`、生产 Desktop/Web `pnpm build` 与 `git diff --check` 通过。本次不是独立 closure review；P4-2A 于同日标记 Complete。Linux Host 侧 `getuid`/`fsync` 网关测试未在本机 Windows checkout 重跑，不覆盖 2026-08-27 的 Linux `1219/1219` 记录。
+
+**P4-2B 完成证据**：Windows `win32` 默认 GUI 入口改为 remote-only：要求非空 `PI_GUI_BUILD_COMMIT`，跳过本地 Pi/Kernel，由 `windows-remote-session` 持有 SSH 隧道、无凭证握手、6 位配对、SSE controller 与 allowlist command 转发；Git/RemoteAdmin/`file:` 外链 Fail Fast；Renderer 在 `windows-remote` 且未连接时显示 SSH alias/端口/配对码表单，不写 localStorage 或密码。凭证仍只在进程内存；隧道或 SSE 意外断开 Fail Close，不自动重连。上述 Windows 定向 `14/14`、typecheck、Desktop/Web build 与 diff check 通过。未生成 Windows 安装包，未对真实 Linux Host 做 SSH 端到端 gate；这些仍属于 P4-3，不得宣称 Windows 已受支持。
+
+**P4-2C 完成证据**：配对成功后把原始桌面设备 Bearer 写入 Windows Credential Manager（Generic `PiGUI/DesktopHost`），Host alias/端口只写入 userData JSON；Renderer 与日志不接触 secret。后续连接先无凭证握手再装载已存凭证；用户断开 Host 会 logout 并清除存储。隧道或 SSE 意外断开后自动重建隧道、握手、凭证、新 controller SSE 与 snapshot，且只允许一次自动重连、不重放 mutation。Workbench 按 Host `capabilities.kernelCommandTypes` 隐藏 Git、附件、添加项目/任务、归档/分叉/导出、Settings 与 slash/`@路径`。Windows 定向 `14/14`（含真实 Credential Manager round-trip）、`pnpm typecheck`、生产 Desktop/Web `pnpm build` 与 `git diff --check` 通过。未做独立安全 closure，未跑完整 Linux `test:core` / `verify:linux`，未对真实 Linux Host 做 SSH 端到端；P4-3 前不宣称 Windows 已受支持。
+
+**P4-3 进展（Paused，未 Complete）**：`pnpm build` 在 electron-vite 之后写入 `out/main/build-identity.json`；打包后的 Host 与 Windows 客户端读取该文件，源码 `pnpm dev` 仍可用 `PI_GUI_BUILD_COMMIT` 覆盖。Windows 入口为 `pnpm package:win`（NSIS x64、`signExecutable: false`）。本机已生成 `release/pi-gui-next-0.0.1-win-x64-setup.exe`（约 111 MiB），asar 内含与 `git rev-parse HEAD` 一致的 build identity，exe 产品名为 Pi GUI。build-identity 定向 `2/2`、`pnpm typecheck`、生产 Desktop/Web `pnpm build` 与 `git diff --check` 通过。本机已静默安装到 `%LOCALAPPDATA%\Programs\pi-gui-next`，启动后显示「连接 Linux Host」表单。2026-09-12 用户明确暂缓剩余真实 SSH/同 tag Linux AppImage gate。恢复条件：Linux 上同一 tag 的 Desktop Host 已运行，并完成配对、prompt/streaming/Ask/abort、重连、Host 重启、版本不匹配与设备撤销。无这些证据前不宣称 Windows 已受支持。
 
 ## 16. 进展日志
 
@@ -1144,6 +1161,17 @@ Windows 和 Linux/Web 必须从同一仓库/tag 发布。Web Remote 随 Linux Ho
 | 2026-08-23 | Settings 导航过时分类收口 | 删除只剩自动命名的「偏好」页并入常规；设置导航改为「应用 / 模型 / 远程访问 / Agent / 生态」分组，远程访问单独成组 | 不启动 S21；不增加搜索、收起、Context 页或生命周期 badge。P4-2A 仍为当前 Slice |
 | 2026-08-27 | P4-2A security findings repair | 修复兼容性前发送 credential、直接 pair 先替换 Host 设备、SSH spawn error 不拒绝启动，以及请求/SSE/tunnel 生命周期无显式边界；改为无凭证 exact-build handshake、Host pair precondition、Connect/ServerAlive、request/SSE idle/stop timeout | 定向 20/20、remote/Settings 90/90、typecheck 通过；首次完整 core 1216/1218，被既有 Capability Inventory overflow readiness timeout 阻断。按 Fail Fast 未重试、未继续 build/diff；P4-2A 标记 Security Fix Validation Blocked，P4-2B 不启动 |
 | 2026-08-27 | P4-2A Security Re-review Ready | 经用户明确授权重跑正式 gate；Capability Inventory overflow 本轮通过，完整 core 恢复为全绿 | 完整 core 1219/1219、生产 Desktop/Web build、diff check 通过；既有 Vite dep-scan 与 24678 端口噪声不改变成功退出。P4-2A 改为 Security Re-review Ready，独立 closure 前仍不启动 P4-2B |
+| 2026-09-11 | P4-2A Complete / P4-2B Complete | 用户要求先推进 P4；收口 Windows 只使用 System32 OpenSSH，并接通 remote-only Main/preload 连接界面 | Windows 定向 14/14、typecheck、Desktop/Web build、diff check 通过；凭证持久化/重连/完整 capability gating 留给 P4-2C；P4-3 真实 Windows gate 前不宣称支持 |
+| 2026-09-11 | P4-2C Complete | 凭证写入 Windows Credential Manager，断线重建 SSE/snapshot 且不重放 mutation，Renderer 按 Host capability 隐藏未接通入口 | Windows 定向 14/14、typecheck、Desktop/Web build、diff check 通过；P4-2 source Complete，当前 Slice 改为 P4-3 Ready。未做独立安全 closure 或真实 SSH e2e，P4-3 前不宣称支持 |
+| 2026-09-11 | P4-3 Start | 用户要求继续推进；接通同 tag 构建标识、Windows NSIS 入口，并在本机打出 x64 安装包 | build-identity 2/2、typecheck、Desktop/Web build、diff check 通过；产物 `release/pi-gui-next-0.0.1-win-x64-setup.exe`。Linux AppImage 与真实 SSH gate 仍缺，P4-3 保持 In Progress，不宣称 Windows 支持 |
+| 2026-09-11 | P4-3 install/launch | 用户要求先在本机安装 | 静默安装到 `%LOCALAPPDATA%\Programs\pi-gui-next`，启动后显示「连接 Linux Host」表单。下一步仍是同 tag Linux AppImage 与真实 SSH gate |
+| 2026-09-12 | P4-3 Paused | 用户确认已看到连接界面，并明确暂缓真实 SSH/Linux Host 测试 | P4-3 不标记 Complete，不宣称 Windows 支持。恢复条件是同 tag Linux Host 已运行。下一步待用户选择，不自动启动 P3-5 或 WSL |
+| 2026-09-12 | P4-4 Start | 用户选择下一步做 WSL：Windows 界面连接本机 WSL 里的 Pi | P4-3 保持 Paused。先同步当前 `out` 到 Ubuntu-24.04 后端并验证管道，不弹出含 window chrome 的 stash |
+| 2026-09-12 | P4-4 pipe smoke | 用当前 `out` 同步 Ubuntu-24.04 后端；修正 `verify-wsl.mjs` 读取 `KernelSnapshot.state` | `setup-wsl.ps1 -SkipBuild` 成功；verifier 报告 connected、14 projects、11 fonts；`start-wsl.ps1` 窗口标题为 `Pi GUI — WSL: Ubuntu-24.04`。P4-4 未 Complete |
+| 2026-09-12 | P4-4 dialog mapping | Windows 侧选择目录/附件，再翻译成 Linux 路径交给 WSL Host | WSL 定向 10/10、typecheck、build、setup 与 verifier 通过。Host 只接受绝对 Linux 路径；取消选择不弹无头对话框。未做真实添加项目手测，P4-4 未 Complete |
+| 2026-09-12 | P4-4 export / file open | Windows 侧弹出保存对话框并映射 Linux 路径后导出；`file:` 链接在 Windows 打开 | WSL 定向 11/11、typecheck、build、setup 与 verifier 通过（`exportWithoutPath: false`）。`start-wsl.ps1` 已重新连上 Ubuntu-24.04。未手测真实导出。P4-4 未 Complete |
+| 2026-09-12 | P4-4 install-extension | Windows 侧选择 Extension 文件/目录，再翻译成 Linux 路径交给 WSL Host | WSL 定向 11/11、typecheck、build、setup 与 verifier 通过（`installWithoutPath: true`）。同类对话框映射已收口。P4-4 未 Complete |
+| 2026-09-13 | P4-4 window chrome | 只合入 Windows hidden titleBarOverlay 与拖拽条，不弹出整份 stash | typecheck、build、setup 通过。WSL `models.json` 增加 `gpt-6`（克隆 `gpt-5.5`）。P4-4 未 Complete |
 
 
 ## 17. 计划变更记录
@@ -1256,3 +1284,8 @@ Windows 和 Linux/Web 必须从同一仓库/tag 发布。Web Remote 随 Linux Ho
 | 2026-08-21 | 10.4 | 启动 P4-1 并完成 Linux Desktop Host source 集成 gate | 用户明确要求按已冻结路线继续推进；Windows client 之前必须先建立真实、独立于 Web Cookie/Origin 的 Host 安全边界 | 当前阶段切到 P4，P3-5 Paused/Ready；P4-1 已接通 loopback、配对、Bearer、controller 与 Kernel 传输，但独立安全复核前不标记 Complete，不启动 P4-2 |
 | 2026-08-22 | 10.5 | 完成 P4-1 独立 closure并启动 P4-2A Windows Host connection foundation | 独立 reviewer 确认修复后无 Blocker / High / Medium，P4-2 security gate 可解除；Windows composition 前先建立可测试的 SSH 与 Host transport 边界 | P4-1 标记 Complete；P4-2 进入 In Progress，按 transport foundation → remote-only composition → credential/reconnect/capability closure 推进，P4-3 Windows package 与真实 gate 不提前 |
 | 2026-08-23 | 10.6 | 收口过时设置分类：删除偏好、五组导航，远程访问独立成组 | 偏好页只剩自动命名；用户确认远程访问不并入应用组 | 新增 D-071；当前设置导航落地五组。S21 仍 Planned，收起/搜索/作用域语义不提前实施；P4-2A 保持当前 Slice |
+| 2026-09-11 | 10.8 | 完成 P4-2A OpenSSH 路径硬化与 P4-2B Windows remote-only composition | 用户确认先推进 P4；剩余 PATH `ssh` finding 必须 Fail Fast，且 Windows 第一版不得启动本地 Pi | P4-2A/P4-2B 标记 Complete；当时 Slice 改为 P4-2C Ready。本次实施复核不是独立 closure review；P4-3 前不宣称 Windows 支持 |
+| 2026-09-11 | 10.9 | 完成 P4-2C 凭证持久化、重连与 Renderer capability gating | P4-2B 已接通 remote-only composition；用户要求继续推进 P4 | P4-2 source 标记 Complete；当前 Slice 改为 P4-3 Ready。本次实施复核不是独立 closure review；P4-3 前不宣称 Windows 支持 |
+| 2026-09-11 | 10.10 | 启动 P4-3：打包时写入 build identity，并增加 Windows x64 NSIS 入口 | 用户要求继续推进 P4；安装包不能再依赖手动 `PI_GUI_BUILD_COMMIT` | 本机已打出 `pi-gui-next-0.0.1-win-x64-setup.exe`。Linux 同 tag AppImage 与真实 Windows SSH gate 未完成，P4-3 保持 In Progress，不宣称 Windows 支持 |
+| 2026-09-12 | 10.11 | 暂停 P4-3 剩余真实 Windows gate | 用户已看过本机连接界面，明确暂缓 SSH/Linux Host 测试 | P4-3 改为 Paused，不标记 Complete。恢复条件是同 tag Linux Host 已运行。不自动启动 P3-5 或本地 Runtime |
+| 2026-09-12 | 10.12 | 启动独立 P4-4 WSL Desktop Client | 用户在暂缓 P4-3 真实 SSH 测试后选择 WSL | 默认 Windows 仍是 remote-only；WSL 走 `setup-wsl.ps1` / `start-wsl.ps1`。P4-3 保持 Paused |
