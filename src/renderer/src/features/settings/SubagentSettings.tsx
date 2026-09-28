@@ -19,6 +19,7 @@ import {
 } from '../../thinking-level'
 import { unknownErrorMessage as errorMessage } from '../../unknown-error-message'
 import { SettingsField } from './SettingsField'
+import { SettingsPageHeading } from './SettingsPageHeading'
 import { findUniqueInstalledPackage } from './installed-package-selection'
 
 const SUBAGENT_PAGE_SIZE = 6
@@ -606,8 +607,7 @@ export function SubagentSettings({
 
   return (
     <>
-      <div className="settings-section-heading settings-section-heading-with-action settings-subagent-heading">
-        <h2>Subagent</h2>
+      <SettingsPageHeading title="Subagent" className="settings-subagent-heading">
         <span className="settings-subagent-status" data-state={packageState}>
           {packageState === 'enabled'
             ? '已安装并开启'
@@ -619,7 +619,7 @@ export function SubagentSettings({
                   ? '读取中'
                   : '状态异常'}
         </span>
-      </div>
+      </SettingsPageHeading>
 
       <section className="settings-group" aria-labelledby="settings-subagent-agents-heading">
         <div className="settings-group-heading-row">

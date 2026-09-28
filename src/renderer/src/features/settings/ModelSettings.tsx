@@ -6,6 +6,7 @@ import type {
 } from '../../../../shared/kernel-contract'
 import { Select } from '../../components/Select'
 import { modelVisibilityKey } from '../../model-visibility'
+import { SettingsPageHeading } from './SettingsPageHeading'
 
 type ModelSettingsProps = {
   active: boolean
@@ -55,9 +56,7 @@ export function ModelSettings({
 
   return (
     <>
-      <div className="settings-section-heading">
-        <h2>模型</h2>
-      </div>
+      <SettingsPageHeading title="模型" />
 
       <section
         className="settings-group settings-group-inline"

@@ -16,6 +16,7 @@ import type {
 } from '../../../../shared/kernel-contract'
 import { useModalDialog } from '../../components/useModalDialog'
 import { ProviderSettings } from './ProviderSettings'
+import { SettingsPageHeading } from './SettingsPageHeading'
 import './credentials-panel.css'
 
 type CredentialsPanelProps = {
@@ -309,6 +310,7 @@ export function CredentialsPanel({
 
   return (
     <>
+      <SettingsPageHeading title="凭证" />
       <section className="settings-group credentials-panel" aria-labelledby="provider-credentials-heading">
         <h3 id="provider-credentials-heading" className="settings-group-heading">Provider 凭证</h3>
         {status === null ? null : (

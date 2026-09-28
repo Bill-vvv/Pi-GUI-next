@@ -4,11 +4,15 @@ import test from 'node:test'
 
 const NAV_PATH = new URL('./SettingsNavigation.tsx', import.meta.url)
 const PANEL_PATH = new URL('./SettingsPanel.tsx', import.meta.url)
+const GENERAL_PATH = new URL('./GeneralSettings.tsx', import.meta.url)
+const APPEARANCE_PATH = new URL('./AppearanceSettings.tsx', import.meta.url)
+const EXTENSIONS_PATH = new URL('./ExtensionSettings.tsx', import.meta.url)
 
 test('settings navigation groups current pages and drops leftover preferences', async () => {
-  const [nav, panel] = await Promise.all([
+  const [nav, panel, general] = await Promise.all([
     readFile(NAV_PATH, 'utf8'),
-    readFile(PANEL_PATH, 'utf8')
+    readFile(PANEL_PATH, 'utf8'),
+    readFile(GENERAL_PATH, 'utf8')
   ])
 
   assert.match(nav, /id:\s*'app'[\s\S]*label:\s*'应用'/u)
@@ -25,29 +29,29 @@ test('settings navigation groups current pages and drops leftover preferences', 
   assert.doesNotMatch(nav, /Advisor/u)
 
   assert.match(panel, /section === 'general'/u)
-  assert.match(panel, /htmlFor="session-naming-mode"/u)
-  assert.match(panel, /id="settings-session-naming"/u)
+  assert.match(general, /htmlFor="session-naming-mode"/u)
+  assert.match(general, /id="settings-session-naming"/u)
   assert.doesNotMatch(panel, /section === 'preferences'/u)
   assert.doesNotMatch(panel, />偏好</u)
 })
 
 test('settings resource pages share one row template', async () => {
-  const [panel, credentials, packages, catalog, skills] = await Promise.all([
-    readFile(PANEL_PATH, 'utf8'),
+  const [extensions, credentials, packages, catalog, skills] = await Promise.all([
+    readFile(EXTENSIONS_PATH, 'utf8'),
     readFile(new URL('./CredentialsPanel.tsx', import.meta.url), 'utf8'),
     readFile(new URL('./InstalledPackages.tsx', import.meta.url), 'utf8'),
     readFile(new URL('./PiDevCatalog.tsx', import.meta.url), 'utf8'),
     readFile(new URL('./SkillSettings.tsx', import.meta.url), 'utf8')
   ])
 
-  for (const source of [panel, credentials, packages, catalog, skills]) {
+  for (const source of [extensions, credentials, packages, catalog, skills]) {
     assert.match(source, /settings-resource-row/u)
   }
   assert.doesNotMatch(credentials, /credential-card|credential-details/u)
   assert.doesNotMatch(packages, /settings-package-item/u)
   assert.doesNotMatch(catalog, /settings-pi-dev-item/u)
   assert.doesNotMatch(skills, /settings-skill-item/u)
-  assert.doesNotMatch(panel, /settings-extension-list/u)
+  assert.doesNotMatch(extensions, /settings-extension-list/u)
 })
 
 test('shortcuts and remote access reuse the compact preference row rhythm', async () => {
@@ -64,12 +68,47 @@ test('shortcuts and remote access reuse the compact preference row rhythm', asyn
 })
 
 test('appearance uses theme cubes and density tiles as the actual controls', async () => {
-  const panel = await readFile(PANEL_PATH, 'utf8')
+  const panel = await readFile(APPEARANCE_PATH, 'utf8')
   assert.match(panel, /settings-theme-cubes/u)
   assert.match(panel, /settings-theme-cube/u)
-  assert.match(panel, /aria-pressed=\{state\.appearance\.theme === cube\.value\}/u)
+  assert.match(panel, /aria-pressed=\{appearance\.theme === cube\.value\}/u)
   assert.doesNotMatch(panel, /id="appearance-theme"/u)
   assert.match(panel, /settings-density-block/u)
   assert.match(panel, /onSelect=\{onSetToolDisplayDensity\}/u)
   assert.doesNotMatch(panel, /settings-density-slider/u)
+})
+
+test('settings panel only routes sections and every page owns one shared heading', async () => {
+  const panel = await readFile(PANEL_PATH, 'utf8')
+  assert.doesNotMatch(panel, /<h2/u)
+  assert.doesNotMatch(panel, /settings-section-heading/u)
+  const pages = [
+    'GeneralSettings.tsx',
+    'AppearanceSettings.tsx',
+    'ShortcutSettingsPanel.tsx',
+    'ModelSettings.tsx',
+    'CredentialsPanel.tsx',
+    'RemoteSettings.tsx',
+    'SubagentSettings.tsx',
+    'PackageSettings.tsx',
+    'ExtensionSettings.tsx',
+    'SkillSettings.tsx'
+  ]
+  for (const page of pages) {
+    const source = await readFile(new URL(`./${page}`, import.meta.url), 'utf8')
+    assert.match(source, /<SettingsPageHeading/u, page)
+    assert.doesNotMatch(source, /className="settings-section-heading/u, page)
+  }
+})
+
+test('settings keep required facts visible instead of tooltip-only', async () => {
+  const sources = await Promise.all(
+    ['GeneralSettings.tsx', 'PackageSettings.tsx', 'ExtensionSettings.tsx', 'SkillSettings.tsx']
+      .map((page) => readFile(new URL(`./${page}`, import.meta.url), 'utf8'))
+  )
+  for (const source of sources) {
+    assert.doesNotMatch(source, /<h[1-4][^>]*data-tooltip/u)
+    assert.doesNotMatch(source, /<label[^>]*data-tooltip/u)
+    assert.doesNotMatch(source, /settings-empty-state"[^>]*\n?[^>]*data-tooltip/u)
+  }
 })

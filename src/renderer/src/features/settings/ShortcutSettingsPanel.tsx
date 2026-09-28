@@ -9,6 +9,7 @@ import {
   type ShortcutActionId,
   type ShortcutSettings
 } from '../../../../shared/shortcut-settings'
+import { SettingsPageHeading } from './SettingsPageHeading'
 import './shortcut-settings-panel.css'
 
 const SHORTCUT_ACTION_LABELS: Record<ShortcutActionId, string> = {
@@ -104,8 +105,7 @@ export function ShortcutSettingsPanel({
 
   return (
     <>
-      <div className="settings-section-heading settings-section-heading-with-action">
-        <h2>快捷键</h2>
+      <SettingsPageHeading title="快捷键">
         <button
           className="shortcut-restore-defaults"
           type="button"
@@ -117,7 +117,7 @@ export function ShortcutSettingsPanel({
         >
           恢复默认
         </button>
-      </div>
+      </SettingsPageHeading>
 
       <section
         className="settings-group settings-group-inline settings-prefs"
