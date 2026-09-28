@@ -134,7 +134,7 @@ export function ModelSettings({
         <h3 id="settings-model-visibility" className="settings-group-heading">模型菜单</h3>
         <div className="settings-group-card">
           {availableModels.length === 0 ? (
-            <p className="settings-model-visibility-empty">
+            <p className="settings-feedback">
               启动会话后，可选择哪些模型出现在 Composer 菜单中。关闭不会从 Provider 删除模型。
             </p>
           ) : groupedProviderModels(availableModels).map(([provider, models]) => (

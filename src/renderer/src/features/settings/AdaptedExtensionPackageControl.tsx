@@ -186,12 +186,12 @@ export function AdaptedExtensionPackageControl({
           </div>
         </div>
         {displayedError === null ? null : (
-          <p className="settings-subagent-error" role="alert">
+          <p className="settings-feedback settings-feedback-error settings-feedback-divided" role="alert">
             {error === null ? `安装失败：${displayedError}` : displayedError}
           </p>
         )}
       </div>
-      <p className="settings-subagent-notice">{notice}</p>
+      <p className="settings-feedback settings-feedback-inset">{notice}</p>
     </section>
   )
 }

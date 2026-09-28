@@ -148,14 +148,14 @@ export function PiDevCatalog({
         </form>
 
         {catalogLoading ? (
-          <p className="settings-extension-status" role="status">正在读取 pi.dev…</p>
+          <p className="settings-feedback" role="status">正在读取 pi.dev…</p>
         ) : null}
         {catalogError === null ? null : (
-          <p className="settings-extension-error" role="alert">{catalogError}</p>
+          <p className="settings-feedback settings-feedback-error" role="alert">{catalogError}</p>
         )}
 
         {!catalogLoading && catalog !== null && catalog.packages.length === 0 ? (
-          <div className="settings-pi-dev-empty" role="status">没有匹配的{catalogLabel}。</div>
+          <div className="settings-feedback" role="status">没有匹配的{catalogLabel}。</div>
         ) : null}
 
         {catalog === null ? null : (

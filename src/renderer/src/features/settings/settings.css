@@ -131,10 +131,31 @@
   padding: 42px 36px 56px;
 }
 
-.settings-action-error {
+.settings-feedback {
   margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-body-sm);
+  line-height: var(--line-body-sm);
+  overflow-wrap: anywhere;
+}
+
+.settings-feedback-error {
   color: var(--color-status-error);
-  font-size: var(--text-control);
+}
+
+.settings-feedback-success {
+  color: var(--color-status-success);
+}
+
+/* Aligns page-level feedback with the text inset of the rows it describes. */
+.settings-feedback-inset {
+  padding: 0 12px;
+}
+
+/* Feedback closing a card section, separated from the rows above. */
+.settings-feedback-divided {
+  border-top: 1px solid var(--color-border-divider);
+  padding: 12px 18px;
 }
 
 .settings-section-heading {
@@ -250,13 +271,6 @@
   width: min(220px, 44%);
 }
 
-.settings-model-visibility-empty {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: var(--text-body-sm);
-  line-height: var(--line-body-sm);
-}
-
 .settings-model-visibility-group + .settings-model-visibility-group {
   margin-top: 18px;
 }
@@ -276,7 +290,6 @@
 
 .settings-model-visibility-group .settings-row:last-child {
   border-bottom: 0;
-}
 }
 
 .settings-prefs .settings-font-control {
@@ -964,23 +977,6 @@
   opacity: 0.55;
 }
 
-.settings-subagent-error {
-  margin: 0;
-  border-top: 1px solid var(--color-border-divider);
-  padding: 12px 18px;
-  color: var(--color-status-error);
-  font-size: var(--text-body-sm);
-  line-height: var(--line-body-sm);
-}
-
-.settings-subagent-notice {
-  margin: 0;
-  padding: 0 12px;
-  color: var(--color-text-muted);
-  font-size: var(--text-body-sm);
-  line-height: var(--line-body-sm);
-}
-
 .settings-pi-dev-catalog {
   overflow: hidden;
 }
@@ -1010,26 +1006,12 @@
   box-shadow: 0 0 0 3px var(--color-focus-ring);
 }
 
-.settings-pi-dev-notice,
-.settings-pi-dev-catalog > .settings-extension-status,
-.settings-pi-dev-catalog > .settings-extension-error,
-.settings-pi-dev-empty {
-  margin: 0;
+.settings-pi-dev-catalog > .settings-feedback {
   padding: 10px 0 0;
 }
 
-.settings-pi-dev-notice:last-child,
-.settings-pi-dev-catalog > .settings-extension-status:last-child,
-.settings-pi-dev-catalog > .settings-extension-error:last-child,
-.settings-pi-dev-empty:last-child {
+.settings-pi-dev-catalog > .settings-feedback:last-child {
   padding-bottom: 16px;
-}
-
-.settings-pi-dev-notice,
-.settings-pi-dev-empty {
-  color: var(--color-text-muted);
-  font-size: var(--text-body-sm);
-  line-height: var(--line-body-sm);
 }
 
 .settings-pi-dev-list {
@@ -1045,24 +1027,8 @@
   overflow: hidden;
 }
 
-.settings-package-manager > .settings-extension-status,
-.settings-package-manager > .settings-extension-error,
-.settings-package-manager > .settings-pi-dev-empty {
+.settings-package-manager > .settings-feedback {
   padding: 16px 0;
-}
-
-.settings-extension-status,
-.settings-extension-error,
-.settings-font-status,
-.settings-font-error {
-  margin: 0;
-  font-size: var(--text-body-sm);
-  line-height: var(--line-body-sm);
-}
-
-.settings-extension-error,
-.settings-font-error {
-  color: var(--color-status-error);
 }
 
 
@@ -1111,16 +1077,11 @@
 }
 
 .settings-skill-field p,
-.settings-skill-create-actions p,
-.settings-skill-error {
+.settings-skill-create-actions p {
   margin: 0;
   color: var(--color-text-muted);
   font-size: var(--text-body-sm);
   line-height: var(--line-body-sm);
-}
-
-.settings-skill-error {
-  color: var(--color-status-error);
 }
 
 .settings-skill-create-actions {
@@ -1542,15 +1503,6 @@
   font-weight: var(--weight-medium);
 }
 
-.settings-subagent-editor-error {
-  margin: 0;
-  border-top: 1px solid var(--color-border-divider);
-  padding: 12px 18px 0;
-  color: var(--color-status-error);
-  font-size: var(--text-body-sm);
-  line-height: var(--line-body-sm);
-}
-
 .settings-subagent-editor-actions {
   display: flex;
   align-items: center;
@@ -1565,13 +1517,6 @@
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.settings-subagent-batch-status {
-  margin: 0;
-  color: var(--color-status-success);
-  font-size: var(--text-body-sm);
-  line-height: var(--line-body-sm);
 }
 
 .settings-subagent-delete {

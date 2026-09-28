@@ -275,10 +275,10 @@ export function ProviderSettings({
       </div>
 
       {message === null ? null : (
-        <p className="provider-settings-status" role="status" aria-live="polite">{message}</p>
+        <p className="settings-feedback" role="status" aria-live="polite">{message}</p>
       )}
       {error === null ? null : (
-        <p className="provider-settings-error" role="alert">{error}</p>
+        <p className="settings-feedback settings-feedback-error" role="alert">{error}</p>
       )}
 
       {draft === null ? null : (

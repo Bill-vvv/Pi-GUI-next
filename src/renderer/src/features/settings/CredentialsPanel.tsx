@@ -314,10 +314,10 @@ export function CredentialsPanel({
       <section className="settings-group credentials-panel" aria-labelledby="provider-credentials-heading">
         <h3 id="provider-credentials-heading" className="settings-group-heading">Provider 凭证</h3>
         {status === null ? null : (
-          <p className="credentials-status" role="status" aria-live="polite">{status}</p>
+          <p className="settings-feedback settings-feedback-inset" role="status" aria-live="polite">{status}</p>
         )}
         {error === null ? null : (
-          <p className="credentials-error" role="alert">{error}</p>
+          <p className="settings-feedback settings-feedback-error settings-feedback-inset" role="alert">{error}</p>
         )}
         {operation === null ? null : (
           <AuthOperationStatus
