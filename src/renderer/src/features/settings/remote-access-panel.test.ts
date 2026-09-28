@@ -4,7 +4,7 @@ import test from 'node:test'
 
 const PANEL_PATH = new URL('./RemoteAccessPanel.tsx', import.meta.url)
 const DESKTOP_HOST_PANEL_PATH = new URL('./DesktopHostAccessPanel.tsx', import.meta.url)
-const SETTINGS_PANEL_PATH = new URL('./SettingsPanel.tsx', import.meta.url)
+const SETTINGS_PANEL_PATH = new URL('./RemoteSettings.tsx', import.meta.url)
 const APP_PATH = new URL('../../App.tsx', import.meta.url)
 const PRELOAD_PATH = new URL('../../../../preload/index.ts', import.meta.url)
 const REMOTE_APP_PATH = new URL('../../../../remote/RemoteApp.tsx', import.meta.url)

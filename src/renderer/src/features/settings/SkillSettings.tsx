@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 
 import type { KernelCommandDescriptor, KernelState } from '../../../../shared/kernel-contract'
 import { Select } from '../../components/Select'
+import { SettingsPageHeading } from './SettingsPageHeading'
 
 type SkillScopeFilter = 'all' | 'user' | 'project' | 'temporary'
 type SkillOriginFilter = 'all' | 'package' | 'top-level'
@@ -40,19 +41,17 @@ export function SkillSettings({
 
   if (!active) return null
 
+  const createUnavailableReason = activeProjectKey === null
+    ? '新建技能前，请先添加并选择一个项目'
+    : runtimeStatus !== 'ready' ? '新建技能需要等待 Pi Runtime 就绪' : undefined
+
   return (
     <>
-      <div className="settings-section-heading settings-section-heading-with-action">
-        <h2>技能</h2>
+      <SettingsPageHeading title="技能" description={createUnavailableReason}>
         <button
           className="settings-skill-create-toggle"
           type="button"
-          disabled={busy || activeProjectKey === null || runtimeStatus !== 'ready'}
-          data-tooltip={
-            activeProjectKey === null
-              ? '请先添加并选择一个项目。'
-              : runtimeStatus !== 'ready' ? '请等待 Pi Runtime 就绪。' : undefined
-          }
+          disabled={busy || createUnavailableReason !== undefined}
           onClick={() => {
             setSkillCreatorError(null)
             setSkillCreatorOpen((open) => !open)
@@ -60,7 +59,7 @@ export function SkillSettings({
         >
           {skillCreatorOpen ? '取消' : '新建技能'}
         </button>
-      </div>
+      </SettingsPageHeading>
 
       {skillCreatorOpen ? (
         <form
@@ -144,12 +143,9 @@ export function SkillSettings({
       ) : null}
 
       {skillCommands.length === 0 ? (
-        <div
-          className="settings-empty-state"
-          role="status"
-          data-tooltip="技能由 Pi 管理；Workbench 会在 Runtime 提供命令后显示在这里。"
-        >
+        <div className="settings-empty-state" role="status">
           <h3>尚未发现技能命令</h3>
+          <p>技能由 Pi 管理；Runtime 提供命令后会显示在这里</p>
         </div>
       ) : (
         <SkillCommandCatalog
