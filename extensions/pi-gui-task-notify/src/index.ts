@@ -45,8 +45,8 @@ function formatDuration(durationMs: number | undefined): string | undefined {
 function notificationBody(durationMs: number | undefined, actionable: boolean): string {
   const duration = formatDuration(durationMs)
   const status = duration
-    ? `<b>✓ 任务已完成</b>  ·  用时 ${duration}`
-    : '<b>✓ 任务已完成</b>'
+    ? `✓ 任务已完成  ·  用时 ${duration}`
+    : '✓ 任务已完成'
   return `${status}\n${actionable ? '点击通知返回对应对话。' : '可以回来查看结果了。'}`
 }
 
@@ -219,8 +219,8 @@ export default function taskNotifyExtension(pi: ExtensionAPI) {
       try {
         const delivery = await deliverTrackedNotification(
           notificationTitle(pi, ctx),
-          '<b>✓ 通知工作正常</b>\n点击通知返回当前对话。',
-          '<b>✓ 通知工作正常</b>\n当前环境仅支持桌面提醒。',
+          '✓ 通知工作正常\n点击通知返回当前对话。',
+          '✓ 通知工作正常\n当前环境仅支持桌面提醒。',
           ctx
         )
         if (delivery === null) {

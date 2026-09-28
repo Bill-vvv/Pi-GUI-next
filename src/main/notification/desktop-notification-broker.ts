@@ -17,6 +17,7 @@ const MAX_TITLE_LENGTH = 256
 const MAX_BODY_LENGTH = 2_048
 const MAX_PATH_LENGTH = 4_096
 const MAX_SOCKET_PATH_BYTES = 100
+export const DESKTOP_NOTIFICATION_ACTION_LIFETIME_MS = 5 * 60_000
 
 export type DesktopNotificationTarget = {
   projectPath: string
