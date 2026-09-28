@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 
 import type {
   DesktopHostAccessStatus,
   RemotePairingCode
 } from '../../../../shared/remote-admin-contract'
 import { REMOTE_PAIRING_CODE_LENGTH } from '../../../../shared/remote-contract'
-import { useModalDialog } from '../../components/useModalDialog'
 import { unknownErrorMessage } from '../../unknown-error-message'
+import { SettingsConfirmDialog } from './SettingsConfirmDialog'
 import './remote-access-panel.css'
 
 export type DesktopHostAccessPanelProps = {
@@ -237,8 +236,15 @@ export function DesktopHostAccessPanel({
       </section>
 
       {revokeOpen ? (
-        <RevokeDesktopHostDeviceDialog
+        <SettingsConfirmDialog
+          request={{
+            title: '撤销 Windows 客户端？',
+            description: '该设备凭证和活动事件连接会立即失效。',
+            confirmLabel: '确认撤销',
+            danger: true
+          }}
           busy={action === 'revoke'}
+          busyLabel="撤销中…"
           onCancel={() => {
             if (action !== 'revoke') setRevokeOpen(false)
           }}
@@ -246,62 +252,5 @@ export function DesktopHostAccessPanel({
         />
       ) : null}
     </div>
-  )
-}
-
-function RevokeDesktopHostDeviceDialog({
-  busy,
-  onCancel,
-  onConfirm
-}: {
-  busy: boolean
-  onCancel: () => void
-  onConfirm: () => void
-}): React.JSX.Element {
-  const dialogRef = useRef<HTMLElement>(null)
-  const cancelRef = useRef<HTMLButtonElement>(null)
-  useModalDialog({
-    open: true,
-    dialogRef,
-    initialFocus: () => cancelRef.current,
-    dismissDisabled: busy,
-    onDismiss: onCancel
-  })
-
-  return createPortal(
-    <div
-      className="remote-access-dialog-backdrop"
-      onPointerDown={(event) => event.stopPropagation()}
-    >
-      <section
-        ref={dialogRef}
-        className="remote-access-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="desktop-host-revoke-title"
-        aria-describedby="desktop-host-revoke-description"
-        aria-busy={busy}
-        tabIndex={-1}
-      >
-        <h2 id="desktop-host-revoke-title">撤销 Windows 客户端？</h2>
-        <p id="desktop-host-revoke-description">
-          该设备凭证和活动事件连接会立即失效。
-        </p>
-        <div className="remote-access-dialog-actions">
-          <button ref={cancelRef} type="button" disabled={busy} onClick={onCancel}>
-            取消
-          </button>
-          <button
-            type="button"
-            className="remote-access-action-danger"
-            disabled={busy}
-            onClick={onConfirm}
-          >
-            {busy ? '撤销中…' : '确认撤销'}
-          </button>
-        </div>
-      </section>
-    </div>,
-    document.body
   )
 }

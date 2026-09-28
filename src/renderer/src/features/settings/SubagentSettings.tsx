@@ -19,6 +19,7 @@ import {
 } from '../../thinking-level'
 import { unknownErrorMessage as errorMessage } from '../../unknown-error-message'
 import { SettingsField } from './SettingsField'
+import { useSettingsConfirm } from './SettingsConfirmDialog'
 import { SettingsPageHeading } from './SettingsPageHeading'
 import { findUniqueInstalledPackage } from './installed-package-selection'
 
@@ -57,6 +58,13 @@ type SubagentSettingsProps = {
   onDirtyChange: (dirty: boolean) => void
 }
 
+const DISCARD_AGENT_DRAFT = {
+  title: '放弃尚未保存的修改？',
+  description: '当前 Agent 的修改尚未保存，继续后将丢失。',
+  confirmLabel: '放弃修改',
+  danger: true
+} as const
+
 export function SubagentSettings({
   settings,
   activeProjectKey,
@@ -70,6 +78,7 @@ export function SubagentSettings({
   onSetSubagent,
   onDirtyChange
 }: SubagentSettingsProps): React.JSX.Element {
+  const { confirm, confirmDialog } = useSettingsConfirm()
   const [packageState, setPackageState] = useState<SubagentPackageState>('loading')
   const [definitions, setDefinitions] = useState<KernelSubagentDefinition[]>([])
   const [definitionsLoading, setDefinitionsLoading] = useState(true)
@@ -227,14 +236,14 @@ export function SubagentSettings({
     setEditorState(definition.editable ? 'edit' : 'override')
   }
 
-  function selectDefinition(definition: KernelSubagentDefinition): void {
-    if (dirty && !window.confirm('放弃尚未保存的 Agent 修改？')) return
+  async function selectDefinition(definition: KernelSubagentDefinition): Promise<void> {
+    if (dirty && !(await confirm(DISCARD_AGENT_DRAFT))) return
     selectDefinitionImmediately(definition)
     setEditorRevealed(true)
   }
 
-  function startCreate(): void {
-    if (dirty && !window.confirm('放弃尚未保存的 Agent 修改？')) return
+  async function startCreate(): Promise<void> {
+    if (dirty && !(await confirm(DISCARD_AGENT_DRAFT))) return
     setMultiSelect(false)
     setBatchSelectedIds(new Set())
     setBatchStatus(null)
@@ -254,8 +263,8 @@ export function SubagentSettings({
     window.requestAnimationFrame(() => searchInputRef.current?.focus())
   }
 
-  function closeEditor(): void {
-    if (!multiSelect && dirty && !window.confirm('放弃尚未保存的 Agent 修改？')) return
+  async function closeEditor(): Promise<void> {
+    if (!multiSelect && dirty && !(await confirm(DISCARD_AGENT_DRAFT))) return
     if (!multiSelect) {
       if (editorState === 'create') {
         selectDefinitionImmediately(effectiveDefinitions[0] ?? null)
@@ -275,9 +284,13 @@ export function SubagentSettings({
     returnToBrowser()
   }
 
-  function toggleMultiSelectMode(): void {
+  async function toggleMultiSelectMode(): Promise<void> {
     if (!multiSelect && dirty) {
-      if (!window.confirm('放弃尚未保存的 Agent 修改并进入多选？')) return
+      if (!(await confirm({
+        ...DISCARD_AGENT_DRAFT,
+        title: '放弃修改并进入多选？',
+        confirmLabel: '放弃并进入多选'
+      }))) return
       if (selectedDefinition !== null) selectDefinitionImmediately(selectedDefinition)
     }
     setMultiSelect(!multiSelect)
@@ -344,7 +357,11 @@ export function SubagentSettings({
 
   async function setDefinitionEnabled(enabled: boolean): Promise<void> {
     if (selectedDefinition === null || draft === null) return
-    if (dirty && !window.confirm('启停会立即保存。放弃当前尚未保存的 Agent 修改？')) return
+    if (dirty && !(await confirm({
+      ...DISCARD_AGENT_DRAFT,
+      description: '启停会立即保存。当前 Agent 尚未保存的修改将被放弃。',
+      confirmLabel: '放弃修改并继续'
+    }))) return
     setActing(true)
     setActionError(null)
     try {
@@ -373,9 +390,12 @@ export function SubagentSettings({
 
   async function removeDefinition(): Promise<void> {
     if (selectedDefinition === null || !selectedDefinition.editable) return
-    if (!window.confirm(`删除 Subagent「${selectedDefinition.name}」？此操作会删除对应定义文件。`)) {
-      return
-    }
+    if (!(await confirm({
+      title: `删除 Subagent「${selectedDefinition.name}」？`,
+      description: '此操作会删除对应的定义文件。',
+      confirmLabel: '删除',
+      danger: true
+    }))) return
     setActing(true)
     setActionError(null)
     try {
@@ -395,11 +415,12 @@ export function SubagentSettings({
 
   async function restoreBuiltinDefinition(): Promise<void> {
     if (selectedDefinition === null || !hasBuiltinDefault) return
-    if (!window.confirm(
-      `恢复 Subagent「${selectedDefinition.name}」的默认设置？所有同名用户级和项目级覆盖都会被删除。`
-    )) {
-      return
-    }
+    if (!(await confirm({
+      title: `恢复 Subagent「${selectedDefinition.name}」的默认设置？`,
+      description: '所有同名的用户级和项目级覆盖都会被删除。',
+      confirmLabel: '恢复默认',
+      danger: true
+    }))) return
     setActing(true)
     setActionError(null)
     try {
@@ -632,7 +653,7 @@ export function SubagentSettings({
               className="settings-link-button"
               aria-pressed={multiSelect}
               disabled={busy || acting || managerDisabled}
-              onClick={toggleMultiSelectMode}
+              onClick={() => void toggleMultiSelectMode()}
             >
               {multiSelect ? '退出多选' : '多选'}
             </button>
@@ -640,7 +661,7 @@ export function SubagentSettings({
               type="button"
               className="settings-extension-remove"
               disabled={busy || acting || managerDisabled}
-              onClick={startCreate}
+              onClick={() => void startCreate()}
             >
               新增 Agent
             </button>
@@ -764,7 +785,7 @@ export function SubagentSettings({
                     className="settings-subagent-list-item"
                     data-selected={definition.id === selectedId}
                     aria-pressed={definition.id === selectedId}
-                    onClick={() => selectDefinition(definition)}
+                    onClick={() => void selectDefinition(definition)}
                   >
                     <strong>{definition.name}</strong>
                   </button>
@@ -808,7 +829,7 @@ export function SubagentSettings({
                       className="settings-subagent-editor-back"
                       icon="arrow-left"
                       label="返回 Agent 列表"
-                      onClick={closeEditor}
+                      onClick={() => void closeEditor()}
                     />
                     <h4>批量修改 · {batchSelectedDefinitions.length} 个 Agent</h4>
                   </div>
@@ -880,7 +901,7 @@ export function SubagentSettings({
                     className="settings-subagent-editor-back"
                     icon="arrow-left"
                     label="返回 Agent 列表"
-                    onClick={closeEditor}
+                    onClick={() => void closeEditor()}
                   />
                   <h4>{editorState === 'create' ? '新增 Agent' : draft.name}</h4>
                 </div>
@@ -1292,6 +1313,7 @@ export function SubagentSettings({
           </p>
         )}
       </section>
+      {confirmDialog}
     </>
   )
 }

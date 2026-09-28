@@ -15,6 +15,7 @@ import { isWorkbenchAction, type WorkbenchOperation } from '../../workbench-acti
 import { AdaptedExtensionPackageControl } from './AdaptedExtensionPackageControl'
 import { PiDevCatalog } from './PiDevCatalog'
 import { SettingsPageHeading } from './SettingsPageHeading'
+import { useSettingsConfirm } from './SettingsConfirmDialog'
 
 export function ExtensionSettings({
   extensions,
@@ -52,6 +53,7 @@ export function ExtensionSettings({
   onOpenExternal: (url: string) => Promise<void>
 }): React.JSX.Element {
   const [removingExtensionPath, setRemovingExtensionPath] = useState<string | null>(null)
+  const { confirm, confirmDialog } = useSettingsConfirm()
   const installPiDevPackage = async (name: string): Promise<void> => {
     await onInstallPiDevPackage(name)
     onPackagesChanged()
@@ -170,11 +172,18 @@ export function ExtensionSettings({
                     data-tooltip="仅从 Pi 用户设置中移除此路径，不删除拓展源码。"
                     disabled={busy}
                     onClick={() => {
-                      if (!window.confirm(`卸载「${extension.name}」？源码文件不会被删除。`)) return
-                      setRemovingExtensionPath(extension.path)
-                      void onRemoveExtension(extension.path)
-                        .catch(() => undefined)
-                        .finally(() => setRemovingExtensionPath(null))
+                      void confirm({
+                        title: `卸载「${extension.name}」？`,
+                        description: '只从 Pi 用户设置中移除此路径，源码文件不会被删除。',
+                        confirmLabel: '卸载',
+                        danger: true
+                      }).then((confirmed) => {
+                        if (!confirmed) return
+                        setRemovingExtensionPath(extension.path)
+                        return onRemoveExtension(extension.path)
+                          .catch(() => undefined)
+                          .finally(() => setRemovingExtensionPath(null))
+                      })
                     }}
                   >
                     {removingExtensionPath === extension.path ? '卸载中…' : '卸载'}
@@ -185,6 +194,7 @@ export function ExtensionSettings({
           </div>
         )}
       </section>
+      {confirmDialog}
     </>
   )
 }

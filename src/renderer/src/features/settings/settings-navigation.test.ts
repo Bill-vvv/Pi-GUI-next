@@ -131,3 +131,17 @@ test('settings pages share one feedback text style instead of per-page error cla
     }
   }
 })
+
+test('settings pages confirm through the in-app dialog, not window.confirm', async () => {
+  const { readdir } = await import('node:fs/promises')
+  const directory = new URL('./', import.meta.url)
+  const files = (await readdir(directory)).filter((name) => name.endsWith('.tsx'))
+  for (const file of files) {
+    const source = await readFile(new URL(file, directory), 'utf8')
+    assert.doesNotMatch(source, /window\.confirm\(/u, file)
+  }
+  const dialog = await readFile(new URL('./SettingsConfirmDialog.tsx', directory), 'utf8')
+  assert.match(dialog, /useModalDialog\(\{/u)
+  assert.match(dialog, /aria-modal="true"/u)
+  assert.match(dialog, /dismissDisabled: busy/u)
+})

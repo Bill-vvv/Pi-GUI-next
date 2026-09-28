@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 
 import type {
   RemoteAccessStatus,
@@ -8,8 +7,8 @@ import type {
   TailscaleRemoteStatus
 } from '../../../../shared/remote-admin-contract'
 import { REMOTE_PAIRING_CODE_LENGTH } from '../../../../shared/remote-contract'
-import { useModalDialog } from '../../components/useModalDialog'
 import { unknownErrorMessage } from '../../unknown-error-message'
+import { SettingsConfirmDialog } from './SettingsConfirmDialog'
 import './remote-access-panel.css'
 
 type RemoteAccessPanelProps = {
@@ -392,8 +391,15 @@ export function RemoteAccessPanel({
       </section>
 
       {revokeOpen ? (
-        <RevokeDeviceDialog
+        <SettingsConfirmDialog
+          request={{
+            title: '撤销已配对手机？',
+            description: '撤销后，该手机会立即失去远程访问权限，需要重新生成配对码才能再次连接。',
+            confirmLabel: '确认撤销',
+            danger: true
+          }}
           busy={action === 'revoke'}
+          busyLabel="撤销中…"
           onCancel={() => {
             if (action === 'revoke') return
             setRevokeOpen(false)
@@ -430,61 +436,4 @@ function tailscaleStatusDescription(
     return '本机 Remote 已配置，但 Tailscale 路由需要重新启用。'
   }
   return 'Tailscale 已就绪，可以一键开启远程访问。'
-}
-
-function RevokeDeviceDialog({
-  busy,
-  onCancel,
-  onConfirm
-}: {
-  busy: boolean
-  onCancel: () => void
-  onConfirm: () => void
-}): React.JSX.Element {
-  const dialogRef = useRef<HTMLElement>(null)
-  const cancelRef = useRef<HTMLButtonElement>(null)
-  useModalDialog({
-    open: true,
-    dialogRef,
-    initialFocus: () => cancelRef.current,
-    dismissDisabled: busy,
-    onDismiss: onCancel
-  })
-
-  return createPortal(
-    <div
-      className="remote-access-dialog-backdrop"
-      onPointerDown={(event) => event.stopPropagation()}
-    >
-      <section
-        ref={dialogRef}
-        className="remote-access-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="remote-access-revoke-title"
-        aria-describedby="remote-access-revoke-description"
-        aria-busy={busy}
-        tabIndex={-1}
-      >
-        <h2 id="remote-access-revoke-title">撤销已配对手机？</h2>
-        <p id="remote-access-revoke-description">
-          撤销后，该手机会立即失去远程访问权限，需要重新生成配对码才能再次连接。
-        </p>
-        <div className="remote-access-dialog-actions">
-          <button ref={cancelRef} type="button" disabled={busy} onClick={onCancel}>
-            取消
-          </button>
-          <button
-            type="button"
-            className="remote-access-action-danger"
-            disabled={busy}
-            onClick={onConfirm}
-          >
-            {busy ? '撤销中…' : '确认撤销'}
-          </button>
-        </div>
-      </section>
-    </div>,
-    document.body
-  )
 }

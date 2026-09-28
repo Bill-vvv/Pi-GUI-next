@@ -11,6 +11,7 @@ import {
   isWorkbenchAction,
   type WorkbenchOperation
 } from '../../workbench-actions'
+import { useSettingsConfirm } from './SettingsConfirmDialog'
 
 type PiDevCatalogProps = {
   kind: 'package' | 'extension'
@@ -41,6 +42,7 @@ export function PiDevCatalog({
   const [catalogError, setCatalogError] = useState<string | null>(null)
   const [catalogLoading, setCatalogLoading] = useState(true)
   const [actingPackage, setActingPackage] = useState<string | null>(null)
+  const { confirm, confirmDialog } = useSettingsConfirm()
   const requestRevision = useRef(0)
 
   useEffect(() => {
@@ -70,14 +72,23 @@ export function PiDevCatalog({
 
   async function changeInstallation(pkg: KernelPiDevPackage): Promise<void> {
     const action = pkg.installed ? '卸载' : '安装'
-    const warning = kind === 'extension'
-      ? pkg.installed
-        ? `卸载 Package「${pkg.name}」？其中的 Extension 及其他资源会一并移除。`
-        : `安装含 Extension 资源的 Package「${pkg.name}」？第三方 Package 会以当前用户的完整系统权限运行，请先审查源码。`
-      : pkg.installed
-        ? `从 Pi 用户级 Package 中卸载「${pkg.name}」？`
-        : `安装 Package「${pkg.name}」？第三方 Package 会以当前用户的完整系统权限运行，请先审查源码。`
-    if (!window.confirm(warning)) return
+    const confirmed = await confirm(pkg.installed
+      ? {
+          title: `卸载 Package「${pkg.name}」？`,
+          description: kind === 'extension'
+            ? '其中的 Extension 及其他资源会一并移除。'
+            : '将从 Pi 用户级 Package 中移除。',
+          confirmLabel: '卸载',
+          danger: true
+        }
+      : {
+          title: kind === 'extension'
+            ? `安装含 Extension 资源的 Package「${pkg.name}」？`
+            : `安装 Package「${pkg.name}」？`,
+          description: '第三方 Package 会以当前用户的完整系统权限运行，请先审查源码。',
+          confirmLabel: '安装'
+        })
+    if (!confirmed) return
 
     setActingPackage(pkg.name)
     setCatalogError(null)
@@ -198,6 +209,7 @@ export function PiDevCatalog({
           </div>
         )}
       </div>
+      {confirmDialog}
     </section>
   )
 }
