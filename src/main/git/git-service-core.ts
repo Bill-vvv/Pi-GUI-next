@@ -1,4 +1,6 @@
 import type {
+  GitBranchSyncPushStep,
+  GitNetworkRemoteStep,
   GitPushTarget,
   GitRefreshResult,
   GitRepositoryState
@@ -21,4 +23,6 @@ export type GitServiceCore = {
   resolveQueue(repositoryRoot: string): SerialQueue
   readPushTarget(repositoryRoot: string, branch: string, signal?: AbortSignal): Promise<GitPushTarget | null>
   readUpstreamTrackingRef(repositoryRoot: string, branch: string, signal?: AbortSignal): Promise<string>
+  runNetworkFetch(repositoryRoot: string, remote: string): Promise<GitNetworkRemoteStep>
+  runNetworkPush(repositoryRoot: string, target: GitPushTarget, sourceOid: string): Promise<GitBranchSyncPushStep>
 }
