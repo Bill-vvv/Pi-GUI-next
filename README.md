@@ -2,7 +2,7 @@
 
 Windows GUI + WSL2 体验版安装及打包说明见 [Windows + WSL 安装版](docs/windows-wsl-install.md)。
 
-Pi GUI 是面向本地 Pi Coding Agent 的 Linux 桌面工作台。当前按 [重启与并行实施计划](docs/restart-plan-2026-09-28.md) 推进：Pi Runtime 已迁入独立子进程（D-094），R12 多设备配对已在本地接通并完成 Linux Host 安装包升级验证（D-101）；Windows 原生验收与真实 SSH 验收仍开放。各阶段状态以 [`docs/development-plan.md`](docs/development-plan.md) 为准。
+Pi GUI 是面向本地 Pi Coding Agent 的 Linux 桌面工作台。当前按 [重启与并行实施计划](docs/restart-plan-2026-09-28.md) 推进：Pi Runtime 已迁入独立子进程（D-094），R12 多设备配对已在本地接通，并完成 Linux Host 安装包升级验证与 Windows 平台自动化测试（D-101）；Windows 桌面人工验收与真实 SSH 验收仍开放。各阶段状态以 [`docs/development-plan.md`](docs/development-plan.md) 为准。
 
 ## 工具链
 

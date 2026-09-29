@@ -53,7 +53,7 @@ flowchart TD
 | 0b Pi Runtime 子进程 | 本地完成，待合并（分支 `codex/pi-runtime-subprocess`，证据 `release/evidence/pi-runtime-subprocess-20260929/`） | 0 完成 | 按 D-094 迁出 Shared Pi Host；按 D-098 删除旧 RPC 链路，并把 `smoke:pi` 改为启动子进程；按 D-099 加入子进程通信上限，并先接入子进程相关日志；提供对应的定向验证证据 |
 | A / B / C | 本地完成，待合并（主线依次实施；分支 `codex/r12-multi-device`，证据 `release/evidence/r12-multi-device-20260929/`） | 0、0b 完成 | 三份互不覆盖的实现及必要定向证据 |
 | 1 集成 | Pending | A、B、C 完成 | 同一源码候选，Main/preload/Renderer/Host 全部接通 |
-| 2A / 2B / 2C | 2A、2C 已完成（见“第二轮执行记录”）；2B 待 Windows 安装 Node 26.4.0 | 1 完成 | 平台与包验证、准确的操作文档和验收差项 |
+| 2A / 2B / 2C | 2A、2C 已完成；2B 自动化部分已完成，人工 Windows 桌面操作待进行（见“第二轮执行记录”） | 1 完成 | 平台与包验证、准确的操作文档和验收差项 |
 | 3 真实 SSH | Pending | 2 完成、指定 Host 已就绪 | 同一候选的真实开发闭环与发布证据 |
 
 ## 0：主线先完成的串行准备
@@ -139,7 +139,7 @@ flowchart TD
 
 **要在两台机器上使用 R12，必须同时满足**：Linux Host 用 R12 包（或同一源码构建）经 `install.sh` 升级，首次启动会迁移配对文件且此后不能回退到 R11；Windows 客户端从同一源码重新构建并安装。任一端仍是 09-28 或更早的版本时，匿名握手即报协议不兼容，凭证不会发送。
 
-**2B 前置条件**：Windows 上目前只有 fnm 管理的 Node 24.15.0，项目的 `workspace.mjs` 要求 Node 26.4.0 与 pnpm 11.9.0；需先安装，Windows 平台测试（含 Credential Manager 原生测试）才能按项目入口运行。worktree 的 `.git` 指向 Linux 路径，Windows 端的检查需从主工作区运行。
+**2B 自动化部分已完成**：核对时误以为 Windows 缺少 Node 26.4.0；实际 fnm 已安装 Node 26.4.0 与 pnpm 11.9.0，此前找不到是因为从 WSL 调用的 Windows 进程缺少 `PATHEXT`。在 Windows 上用干净克隆运行 `test-platform`（含 Chrome 界面测试），`70c9bd8` 连续两次 151 项 140 通过、0 失败、11 项 Linux 专属跳过；Credential Manager 原生测试与 R12 客户端测试均实际运行通过。首轮暴露的测试辅助代码 `EBUSY` 已由 `54e2a22` 修复。证据见 `release/evidence/r12-windows-2b-20260929/`（worktree）。剩余需人工在 Windows 桌面进行：安装当前源码构建的客户端后的重开、设备名称、被占用提示与取消配对，以及 WSL 归档临时查看。
 
 ## 第三轮：真实 SSH 验收与发布收口
 
