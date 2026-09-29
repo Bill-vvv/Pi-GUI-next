@@ -1949,54 +1949,63 @@
   }
 }
 
+/*
+ * Icon rail: the user collapsed the settings navigation, or the window is at
+ * most 500px wide (Workbench sets `settings-nav-rail` for both). Placed after
+ * the 700px block so it wins over the compact two-column layout.
+ */
+.app-shell.settings-open.settings-nav-rail {
+  grid-template-columns: var(--sidebar-rail-width) minmax(0, 1fr);
+}
+
+.app-shell.settings-nav-rail .settings-sidebar-content {
+  align-items: center;
+  gap: 0.32rem;
+  padding: 0.42rem 0;
+}
+
+.app-shell.settings-nav-rail .sidebar-footer {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.app-shell.settings-nav-rail .settings-back,
+.app-shell.settings-nav-rail .settings-nav button {
+  width: 42px;
+  height: 42px;
+}
+
+.app-shell.settings-nav-rail .settings-nav,
+.app-shell.settings-nav-rail .settings-nav-group {
+  align-items: center;
+  gap: 0.18rem;
+}
+
+.app-shell.settings-nav-rail .settings-nav-group-label {
+  display: none;
+}
+
+.app-shell.settings-nav-rail .settings-nav-group + .settings-nav-group {
+  margin-top: 0.28rem;
+  border-top: 1px solid var(--color-border-divider);
+  padding-top: 0.28rem;
+}
+
+.app-shell.settings-nav-rail .settings-nav button {
+  justify-content: center;
+  padding: 0;
+}
+
+.app-shell.settings-nav-rail .settings-nav button span {
+  display: none;
+}
+
+.app-shell.settings-nav-rail .settings-nav button.selected::before {
+  top: 10px;
+  bottom: 10px;
+}
+
 @media (max-width: 500px) {
-  .app-shell.settings-open,
-  .app-shell.settings-open.left-sidebar-collapsed {
-    grid-template-columns: var(--sidebar-rail-width) minmax(0, 1fr);
-  }
-
-  .app-shell.settings-open .settings-sidebar-content {
-    align-items: center;
-    gap: 0.32rem;
-    padding: 0.42rem 0;
-  }
-
-  .settings-back,
-  .settings-nav button {
-    width: 42px;
-    height: 42px;
-  }
-
-  .settings-nav,
-  .settings-nav-group {
-    align-items: center;
-    gap: 0.18rem;
-  }
-
-  .settings-nav-group-label {
-    display: none;
-  }
-
-  .settings-nav-group + .settings-nav-group {
-    margin-top: 0.28rem;
-    border-top: 1px solid var(--color-border-divider);
-    padding-top: 0.28rem;
-  }
-
-  .settings-nav button {
-    justify-content: center;
-    padding: 0;
-  }
-
-  .settings-nav button span {
-    display: none;
-  }
-
-  .settings-nav button.selected::before {
-    top: 10px;
-    bottom: 10px;
-  }
-
   .settings-content {
     padding: 24px 16px 36px;
   }

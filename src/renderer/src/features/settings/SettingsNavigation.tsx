@@ -13,6 +13,8 @@ export type SettingsSection =
   | 'subagent'
   | 'remote'
 
+export const SETTINGS_NAV_ID = 'settings-navigation'
+
 /**
  * Groups and labels follow the Codex desktop settings navigation
  * (个人 / 集成 / 编码). `client` marks pages that stay available in the SSH
@@ -76,7 +78,7 @@ export function SettingsNavigation({
         label="返回应用"
         onClick={onBack}
       />
-      <nav className="settings-nav" aria-label="设置分类">
+      <nav id={SETTINGS_NAV_ID} className="settings-nav" aria-label="设置分类">
         {SETTINGS_NAV_GROUPS.map((group) => {
           const items = group.items.filter((item) => !clientOnly || item.client === true)
           if (items.length === 0) return null

@@ -1,5 +1,6 @@
 .app-shell {
   --sidebar-width: 332px;
+  --sidebar-rail-width: 54px;
   --app-panel-gap: 0px;
   --window-chrome-top: 0px;
   --window-chrome-caption-width: 0px;
@@ -659,7 +660,6 @@
     .app-shell {
       --composer-bottom-offset: 4px;
       --composer-reserved-space: clamp(9.75rem, 27dvh, 11.75rem);
-      --sidebar-rail-width: 54px;
       grid-template-columns: minmax(220px, var(--sidebar-width)) minmax(0, 1fr);
     }
 
