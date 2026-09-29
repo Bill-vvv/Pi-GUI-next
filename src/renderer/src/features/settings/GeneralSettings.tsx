@@ -97,31 +97,6 @@ export function GeneralSettings({
               />
             </div>
           </div>
-          <div className="settings-row">
-            <div className="settings-row-copy">
-              <label htmlFor="general-auto-continue-interrupted-tasks">
-                自动继续重启中断的任务（调试）
-              </label>
-              <p>
-                正常退出时精确记录所有仍在运行的已保存对话，下次启动在后台逐个恢复并发送一次继续指令，且不改变前台选择。
-                默认关闭；可能重新触发模型和工具，不适用于崩溃或强制结束进程。
-              </p>
-              <SettingsRowError message={errorFor('auto-continue')} />
-            </div>
-            <div className="settings-row-control settings-switch-control">
-              <SettingsSwitch
-                id="general-auto-continue-interrupted-tasks"
-                checked={general.autoContinueInterruptedTasks}
-                disabled={busy}
-                onCheckedChange={(autoContinueInterruptedTasks) => {
-                  save('auto-continue', () => onSetGeneral({
-                    ...general,
-                    autoContinueInterruptedTasks
-                  }))
-                }}
-              />
-            </div>
-          </div>
         </div>
       </section>
 
@@ -187,18 +162,18 @@ export function GeneralSettings({
       {!clientOnly ? (
       <section
         className="settings-group settings-group-inline settings-prefs"
-        aria-labelledby="settings-general-extensions"
+        aria-labelledby="settings-general-experimental"
       >
-        <h3 id="settings-general-extensions" className="settings-group-heading">拓展</h3>
+        <h3 id="settings-general-experimental" className="settings-group-heading">实验性功能</h3>
         <div className="settings-group-card">
           <div className="settings-row">
             <div className="settings-row-copy">
               <label htmlFor="general-fast-extension-loading">
-                拓展启动加速（实验性）
+                扩展启动加速
               </label>
               <p>
-                已编译 JS 优先使用原生导入，多个拓展并行导入；factory
-                仍按原顺序执行。仅影响新建或显式重载的会话。
+                已编译 JS 优先使用原生导入，多个扩展并行导入；factory
+                仍按原顺序执行。仅影响新建或显式重载的会话
               </p>
               <SettingsRowError message={errorFor('fast-extension-loading')} />
             </div>
@@ -211,6 +186,31 @@ export function GeneralSettings({
                   save('fast-extension-loading', () => onSetGeneral({
                     ...general,
                     fastExtensionLoading
+                  }))
+                }}
+              />
+            </div>
+          </div>
+          <div className="settings-row">
+            <div className="settings-row-copy">
+              <label htmlFor="general-auto-continue-interrupted-tasks">
+                自动继续中断的任务
+              </label>
+              <p>
+                正常退出时精确记录所有仍在运行的已保存对话，下次启动在后台逐个恢复并发送一次继续指令，且不改变前台选择。
+                默认关闭；可能重新触发模型和工具，不适用于崩溃或强制结束进程
+              </p>
+              <SettingsRowError message={errorFor('auto-continue')} />
+            </div>
+            <div className="settings-row-control settings-switch-control">
+              <SettingsSwitch
+                id="general-auto-continue-interrupted-tasks"
+                checked={general.autoContinueInterruptedTasks}
+                disabled={busy}
+                onCheckedChange={(autoContinueInterruptedTasks) => {
+                  save('auto-continue', () => onSetGeneral({
+                    ...general,
+                    autoContinueInterruptedTasks
                   }))
                 }}
               />

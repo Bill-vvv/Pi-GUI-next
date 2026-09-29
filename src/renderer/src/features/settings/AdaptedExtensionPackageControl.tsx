@@ -82,8 +82,8 @@ export function AdaptedExtensionPackageControl({
 
   async function installPackage(): Promise<void> {
     if (!(await confirm({
-      title: `安装 Package「${packageName}」？`,
-      description: '第三方 Package 会以当前用户的完整系统权限运行，请先审查源码。',
+      title: `安装插件「${packageName}」？`,
+      description: '第三方插件会以当前用户的完整系统权限运行，请先审查源码。',
       confirmLabel: '安装'
     }))) return
     setActing(true)

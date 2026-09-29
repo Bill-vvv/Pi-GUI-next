@@ -609,6 +609,11 @@
   transition: background var(--motion-duration-control) var(--motion-easing-standard);
 }
 
+/* Inline groups align row text with the content column; the hover surface bleeds outward. */
+.settings-group-inline .settings-resource-row {
+  margin-inline: -12px;
+}
+
 .settings-resource-row:hover,
 .settings-resource-row:focus-within {
   background: var(--color-surface-subtle);

@@ -4,16 +4,20 @@ import { IconButton } from '../../components/IconButton'
 
 export type SettingsSection =
   | 'general'
-  | 'models'
-  | 'credentials'
-  | 'remote'
-  | 'shortcuts'
   | 'appearance'
+  | 'shortcuts'
+  | 'models'
   | 'packages'
   | 'extensions'
-  | 'subagent'
   | 'skills'
+  | 'subagent'
+  | 'remote'
 
+/**
+ * Groups and labels follow the Codex desktop settings navigation
+ * (个人 / 集成 / 编码). `client` marks pages that stay available in the SSH
+ * client, which has no Host-owned settings.
+ */
 const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   id: string
   label: string
@@ -21,46 +25,34 @@ const SETTINGS_NAV_GROUPS: ReadonlyArray<{
     section: SettingsSection
     label: string
     icon: IconName
+    client?: true
   }>
 }> = [
   {
-    id: 'app',
-    label: '应用',
+    id: 'personal',
+    label: '个人',
     items: [
-      { section: 'general', label: '常规', icon: 'settings' },
-      { section: 'appearance', label: '外观', icon: 'appearance' },
-      { section: 'shortcuts', label: '快捷键', icon: 'shortcuts' }
+      { section: 'general', label: '常规', icon: 'settings', client: true },
+      { section: 'appearance', label: '外观', icon: 'appearance', client: true },
+      { section: 'shortcuts', label: '键盘快捷键', icon: 'shortcuts', client: true },
+      { section: 'models', label: '模型', icon: 'model' }
     ]
   },
   {
-    id: 'models',
-    label: '模型',
+    id: 'integrations',
+    label: '集成',
     items: [
-      { section: 'models', label: '模型', icon: 'model' },
-      { section: 'credentials', label: '凭证', icon: 'credentials' }
+      { section: 'packages', label: '插件', icon: 'packages' },
+      { section: 'extensions', label: '扩展', icon: 'extensions' },
+      { section: 'skills', label: '技能', icon: 'skills' },
+      { section: 'subagent', label: '子智能体', icon: 'subagents' }
     ]
   },
   {
-    id: 'remote',
-    label: '远程访问',
+    id: 'coding',
+    label: '编码',
     items: [
-      { section: 'remote', label: '远程访问', icon: 'remote' }
-    ]
-  },
-  {
-    id: 'agent',
-    label: 'Agent',
-    items: [
-      { section: 'subagent', label: 'Subagent', icon: 'subagents' }
-    ]
-  },
-  {
-    id: 'ecosystem',
-    label: '生态',
-    items: [
-      { section: 'packages', label: 'Package', icon: 'packages' },
-      { section: 'extensions', label: '拓展', icon: 'extensions' },
-      { section: 'skills', label: '技能', icon: 'skills' }
+      { section: 'remote', label: '连接', icon: 'remote' }
     ]
   }
 ]
@@ -81,11 +73,13 @@ export function SettingsNavigation({
       <IconButton
         className="settings-back"
         icon="arrow-left"
-        label="返回对话"
+        label="返回应用"
         onClick={onBack}
       />
       <nav className="settings-nav" aria-label="设置分类">
-        {SETTINGS_NAV_GROUPS.filter((group) => !clientOnly || group.id === 'app').map((group) => {
+        {SETTINGS_NAV_GROUPS.map((group) => {
+          const items = group.items.filter((item) => !clientOnly || item.client === true)
+          if (items.length === 0) return null
           const headingId = `settings-nav-${group.id}`
           return (
             <div
@@ -95,7 +89,7 @@ export function SettingsNavigation({
               key={group.id}
             >
               <div id={headingId} className="settings-nav-group-label">{group.label}</div>
-              {group.items.map((item) => (
+              {items.map((item) => (
                 <button
                   type="button"
                   className={section === item.section ? 'selected' : ''}

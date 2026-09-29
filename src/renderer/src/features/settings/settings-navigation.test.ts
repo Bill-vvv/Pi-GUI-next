@@ -15,14 +15,20 @@ test('settings navigation groups current pages and drops leftover preferences', 
     readFile(GENERAL_PATH, 'utf8')
   ])
 
-  assert.match(nav, /id:\s*'app'[\s\S]*label:\s*'应用'/u)
-  assert.match(nav, /id:\s*'models'[\s\S]*label:\s*'模型'/u)
-  assert.match(nav, /id:\s*'remote'[\s\S]*label:\s*'远程访问'[\s\S]*section:\s*'remote'/u)
-  assert.match(nav, /id:\s*'agent'[\s\S]*label:\s*'Agent'/u)
-  assert.match(nav, /id:\s*'ecosystem'[\s\S]*label:\s*'生态'/u)
+  // Codex-aligned navigation (D-102): 个人 / 集成 / 编码.
+  const groups = [...nav.matchAll(/id:\s*'([a-z]+)',\s*label:\s*'([^']+)'/gu)].map(([, id, label]) => `${id}:${label}`)
+  assert.deepEqual(groups, ['personal:个人', 'integrations:集成', 'coding:编码'])
+  const items = [...nav.matchAll(/section:\s*'([a-z]+)',\s*label:\s*'([^']+)'/gu)].map(([, section, label]) => `${section}:${label}`)
+  assert.deepEqual(items, [
+    'general:常规', 'appearance:外观', 'shortcuts:键盘快捷键', 'models:模型',
+    'packages:插件', 'extensions:扩展', 'skills:技能', 'subagent:子智能体',
+    'remote:连接'
+  ])
+  const clientItems = [...nav.matchAll(/section:\s*'([a-z]+)'[^}]*client:\s*true/gu)].map(([, section]) => section)
+  assert.deepEqual(clientItems, ['general', 'appearance', 'shortcuts'])
   assert.match(nav, /role="group"/u)
-  assert.match(nav, /section:\s*'shortcuts'[\s\S]*icon:\s*'shortcuts'/u)
-  assert.match(nav, /section:\s*'credentials'[\s\S]*icon:\s*'credentials'/u)
+  assert.match(nav, /label="返回应用"/u)
+  assert.doesNotMatch(nav, /'credentials'/u)
   assert.doesNotMatch(nav, /icon:\s*'preferences'/u)
   assert.doesNotMatch(nav, /section:\s*'preferences'/u)
   assert.doesNotMatch(nav, /label:\s*'偏好'/u)
@@ -87,7 +93,6 @@ test('settings panel only routes sections and every page owns one shared heading
     'AppearanceSettings.tsx',
     'ShortcutSettingsPanel.tsx',
     'ModelSettings.tsx',
-    'CredentialsPanel.tsx',
     'RemoteSettings.tsx',
     'SubagentSettings.tsx',
     'PackageSettings.tsx',
@@ -175,4 +180,36 @@ test('pi-subagents install and enablement live on the Subagent page (D-100)', as
   assert.doesNotMatch(subagent, /“拓展”/u)
   assert.doesNotMatch(extensions, /SUBAGENT_PACKAGE_NAME|onSetSubagentEnabled/u)
   assert.match(extensions, /MAGIC_CONTEXT_PACKAGE_NAME/u)
+})
+
+test('provider credentials live on the models page as an inline group (D-102)', async () => {
+  const [models, credentials, panel] = await Promise.all([
+    readFile(new URL('./ModelSettings.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('./CredentialsPanel.tsx', import.meta.url), 'utf8'),
+    readFile(PANEL_PATH, 'utf8')
+  ])
+  assert.match(models, /\{credentials\}/u)
+  assert.doesNotMatch(credentials, /SettingsPageHeading/u)
+  assert.match(credentials, /settings-group settings-group-inline credentials-panel/u)
+  assert.match(panel, /credentials=\{\(\s*<CredentialsPanel/u)
+  assert.doesNotMatch(panel, /section === 'credentials'/u)
+})
+
+test('settings copy follows the Codex zh-CN wording', async () => {
+  const read = (file: string): Promise<string> => readFile(new URL(`./${file}`, import.meta.url), 'utf8')
+  const [general, appearance, shortcuts, packages, extensions, subagent] = await Promise.all([
+    read('GeneralSettings.tsx'), read('AppearanceSettings.tsx'), read('ShortcutSettingsPanel.tsx'),
+    read('PackageSettings.tsx'), read('ExtensionSettings.tsx'), read('SubagentSettings.tsx')
+  ])
+  assert.match(general, />实验性功能</u)
+  assert.doesNotMatch(general, /（实验性）|（调试）/u)
+  assert.match(appearance, /label: '系统'/u)
+  assert.match(appearance, /界面字号/u)
+  assert.match(shortcuts, /恢复默认快捷键/u)
+  assert.match(packages, /title="插件"/u)
+  assert.match(packages, /即 Pi Package/u)
+  assert.match(extensions, /title="扩展"/u)
+  for (const source of [general, extensions, subagent]) assert.doesNotMatch(source, /拓展/u)
+  assert.match(subagent, /title="子智能体"/u)
+  assert.doesNotMatch(subagent, /(['`>"]|[\u4e00-\u9fff] )Agent\b/u)
 })

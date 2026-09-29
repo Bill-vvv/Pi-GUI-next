@@ -12,7 +12,6 @@ export type IconName =
   | 'close'
   | 'collapse-all'
   | 'copy'
-  | 'credentials'
   | 'edit'
   | 'enter'
   | 'export'
@@ -146,13 +145,6 @@ export function Icon({ name, size = 'control' }: IconProps): React.JSX.Element {
         <svg {...common}>
           <rect x="8" y="8" width="11" height="11" rx="2.25" stroke="currentColor" strokeWidth="1.8" />
           <path d="M16 8V6.25A2.25 2.25 0 0 0 13.75 4h-7.5A2.25 2.25 0 0 0 4 6.25v7.5A2.25 2.25 0 0 0 6.25 16H8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        </svg>
-      )
-    case 'credentials':
-      return (
-        <svg {...common}>
-          <circle cx="8.25" cy="12" r="3.35" stroke="currentColor" strokeWidth="1.8" />
-          <path d="M11.5 12H20M17.35 12v2.45M20 12v2.45" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
         </svg>
       )
     case 'edit':
