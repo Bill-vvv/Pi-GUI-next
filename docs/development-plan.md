@@ -1181,6 +1181,7 @@ Windows 和 Linux/Web 必须从同一仓库/tag 发布。Web Remote 随 Linux Ho
 | 2026-09-29 | R12 第二轮 2B 自动化 | Windows Node 26.4.0 干净克隆运行 `test-platform`（含 Chrome）：151 项 140 通过、0 失败、11 项 Linux 专属跳过，连续两次；Credential Manager 原生与 R12 客户端测试通过；修复测试辅助代码在 Windows 上的 `EBUSY` | 证据 `release/evidence/r12-windows-2b-20260929/`；人工 Windows 桌面交互待进行 |
 | 2026-09-29 | 设置页：pi-subagents 控件迁入 Subagent 页 | 用户确认按 D-100 替代 D-048 对 pi-subagents 的拓展页归属：安装、启停与详情移到 Subagent 页顶部，页面复用控件报告的 Package 状态，不再单独读取；拓展页保留 Magic Context、pi.dev 目录与本地拓展 | typecheck、设置相关定向测试 85/85（含 Chromium fixture）通过；Windows 侧用 Node 24.15 跑 typecheck 与设置测试（含 Chrome fixture）通过，项目锁定的 Node 26.4.0 尚未在 Windows 安装 |
 | 2026-09-29 | 设置页对齐 Codex 分类与措辞（D-102） | 用户要求对齐 Codex 或 Cursor 的设置风格。从本机 Codex 26.924 与 Cursor 3.19.7 安装包读取导航结构与简体中文文案后，导航改为“个人 / 集成 / 编码”，凭证并入模型页，Package→插件、拓展→扩展、Subagent→子智能体、远程访问→连接、快捷键→键盘快捷键，页内措辞按 Codex 统一，实验性开关集中到“实验性功能” | typecheck、设置相关定向测试 96/96（含 Chromium fixture 与客户端模式）通过，预览截图核对导航、模型页与插件页。视觉样式（卡片/分隔线）未改，待取得 Codex 设置页截图；设置搜索与导航收起仍属 S21 |
+| 2026-09-30 | 左侧栏“展开侧边栏”入口固定到 Session Header | 原入口绝对定位在 Composer 测量高度之上，随输入框高度浮动并压在对话末尾。收起后改在 Header 标题前显示，与右侧栏入口左右对称，复用同一 32px 图标按钮样式；删除旧浮动容器样式 | typecheck、composition 定向测试 50/50、build、diff check 通过；预览在 1400px 与 640px 截图核对位置并验证点击后展开。设置页打开时侧栏强制展开，不受影响 |
 
 ## 17. 计划变更记录
 
