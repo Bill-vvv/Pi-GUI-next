@@ -1305,7 +1305,7 @@ export function SubagentSettings({
         </div>
         {packageState === 'enabled' || packageState === 'loading' ? null : (
           <p
-            className="settings-feedback settings-feedback-inset"
+            className="settings-feedback"
             role={packageState === 'error' ? 'alert' : undefined}
           >
             {packageState === 'not-installed'

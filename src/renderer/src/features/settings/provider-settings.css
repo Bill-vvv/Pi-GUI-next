@@ -24,22 +24,12 @@
   gap: 16px;
 }
 
-.provider-settings-heading h3,
 .provider-settings-heading p,
 .provider-model-editor-heading h4 {
   margin: 0;
 }
 
-.provider-settings-heading h3 {
-  color: var(--color-text-primary);
-  font-family: var(--font-ui);
-  font-size: var(--text-section-title);
-  font-weight: var(--weight-medium);
-  line-height: var(--line-heading);
-}
-
 .provider-settings-heading p {
-  margin-top: 5px;
   color: var(--color-text-muted);
   font-size: var(--text-body-sm);
   line-height: var(--line-body-sm);

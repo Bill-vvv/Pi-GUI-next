@@ -191,7 +191,7 @@ export function RemoteAccessPanel({
   return (
     <div className="remote-access-panel">
       {error === null ? null : (
-        <p className="settings-feedback settings-feedback-error settings-feedback-inset" role="alert">{error}</p>
+        <p className="settings-feedback settings-feedback-error" role="alert">{error}</p>
       )}
 
       <section
