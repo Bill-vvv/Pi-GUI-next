@@ -23,6 +23,7 @@ import {
 import { isKernelCommand } from '../kernel/kernel-command-validation.ts'
 import { isRecord } from '../utils/guards.ts'
 import { RemoteCommandPolicyError } from './remote-command-policy.ts'
+import { NOOP_LOGGER, type JsonlLogger, type LogFields, type LogLevel } from '../utils/jsonl-log.ts'
 import {
   BodyLimitError,
   COMMAND_BODY_LIMIT_BYTES,
@@ -70,6 +71,8 @@ export type RemoteGatewayOptions = {
   staticRoot: string
   deviceStore: RemoteDeviceStore
   handlers: RemoteGatewayHandlers
+  /** Lifecycle and error metadata only; never credentials or pairing codes (D-099). */
+  logger?: JsonlLogger
   now?: () => number
   randomDeviceCredential?: () => string
   randomPairingCode?: () => string
@@ -122,6 +125,9 @@ type SseClient = {
 }
 
 export async function startRemoteGateway(options: RemoteGatewayOptions): Promise<RemoteGateway> {
+  const logger = options.logger ?? NOOP_LOGGER
+  const log = (level: LogLevel, event: string, fields?: LogFields): void =>
+    logger.write(level, 'remote-gateway', event, fields)
   const config = options.config
   const deviceStore = options.deviceStore
   const now = options.now ?? Date.now
@@ -192,6 +198,7 @@ export async function startRemoteGateway(options: RemoteGatewayOptions): Promise
     } finally {
       closeSseClients()
     }
+    log('info', 'device-revoked')
     return getStatus()
   })
 
@@ -315,6 +322,7 @@ export async function startRemoteGateway(options: RemoteGatewayOptions): Promise
       return
     }
     if (!checkPairRateLimit(peer, now, pairAttempts)) {
+      log('warn', 'pair-rejected', { reason: 'rate-limit' })
       writeText(res, 429, 'Too Many Requests')
       return
     }
@@ -373,9 +381,11 @@ export async function startRemoteGateway(options: RemoteGatewayOptions): Promise
     })
 
     if (paired === null) {
+      log('warn', 'pair-rejected', { reason: 'code' })
       writeText(res, 401, 'Unauthorized')
       return
     }
+    log('info', 'paired')
 
     const status: RemoteSessionStatus = {
       protocolVersion: REMOTE_PROTOCOL_VERSION,
@@ -398,9 +408,11 @@ export async function startRemoteGateway(options: RemoteGatewayOptions): Promise
       return true
     })
     if (!revoked) {
+      log('warn', 'auth-failed', { endpoint: 'logout' })
       writeText(res, 401, 'Unauthorized')
       return
     }
+    log('info', 'device-logged-out')
     res.setHeader('Set-Cookie', clearSessionCookie())
     const status: RemoteSessionStatus = {
       protocolVersion: REMOTE_PROTOCOL_VERSION,
@@ -497,6 +509,7 @@ export async function startRemoteGateway(options: RemoteGatewayOptions): Promise
       }
       const internalMessage = error instanceof Error ? error.message : String(error)
       console.error(`[Remote] ${body.command.type} failed.`, error)
+      log('error', 'command-failed', { commandType: body.command.type })
       if (/unavailable/i.test(internalMessage)) {
         writeCommandError(
           res,
@@ -530,10 +543,12 @@ export async function startRemoteGateway(options: RemoteGatewayOptions): Promise
 
     const client: SseClient = { res, closed: false }
     sseClients.add(client)
+    log('info', 'events-connected', { clients: sseClients.size })
     const close = (): void => {
       if (client.closed) return
       client.closed = true
       sseClients.delete(client)
+      log('info', 'events-closed', { clients: sseClients.size })
     }
     req.on('close', close)
     res.on('close', close)
@@ -650,6 +665,8 @@ export async function startRemoteGateway(options: RemoteGatewayOptions): Promise
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()))
     throw new Error('Remote gateway did not expose a TCP port after listening.')
   }
+  log('info', 'listening', { port: address.port })
+
 
   return {
     bindHost: config.bindHost,

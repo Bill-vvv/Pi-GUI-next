@@ -55,6 +55,7 @@ import { isKernelCommand } from './kernel/kernel-command-validation.ts'
 import { createKernelEventForwarder } from './kernel/kernel-event-forwarder.ts'
 import { startHostApplication, type HostApplication, type RendererLifecycle } from './host/host-application.ts'
 import { HostDataDirectoryInUseError } from './host/host-control.ts'
+import { rotateLogIfLarger } from './utils/log-rotation.ts'
 import { resolvePiExecutable } from './runtime/pi-executable.ts'
 import { probePiRuntimeProcess } from './runtime/pi-runtime-probe.ts'
 import { errorMessage } from './utils/errors.ts'
@@ -292,6 +293,7 @@ async function startApplication(): Promise<void> {
     resourcesPath: process.resourcesPath,
     userDataDirectory: app.getPath('userData'),
     logDirectory: app.getPath('logs'),
+    logName: 'main',
     productVersion: app.getVersion(),
     fetch: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init),
     resolveBuildCommit: () => resolveBuildCommit({
@@ -401,8 +403,12 @@ async function startWslApplication(distribution: string): Promise<void> {
     rendererFilePath: join(mainBundleDirectory, '../renderer/index.html')
   })
   await mkdir(app.getPath('logs'), { recursive: true })
-  const log = createWriteStream(join(app.getPath('logs'), 'wsl-backend.log'), { flags: 'w', mode: 0o600 })
+  // Keep earlier runs for diagnosis (D-099); one previous generation above 5 MiB.
+  const logPath = join(app.getPath('logs'), 'wsl-backend.log')
+  await rotateLogIfLarger(logPath, 5 * 1024 * 1024)
+  const log = createWriteStream(logPath, { flags: 'a', mode: 0o600 })
   log.on('error', (error) => console.error(`[Pi GUI] WSL log failed: ${error.message}`))
+  log.write(`--- ${new Date().toISOString()} WSL backend start (${distribution}) ---\n`)
   clientNotifications = createElectronNotifications(Notification)
   const desktopDispatch = createWslDesktopClient({
     present: clientNotifications.present,

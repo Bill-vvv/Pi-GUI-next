@@ -16,6 +16,7 @@ import {
 } from '../../shared/desktop-host-contract.ts'
 import type { DesktopHostEnabledConfig } from './desktop-host-config.ts'
 import { hashRemoteDeviceCredential } from './remote-device-store.ts'
+import type { JsonlLogger } from '../utils/jsonl-log.ts'
 import { DESKTOP_DEVICE_LIMIT, openDesktopDeviceStore, type DesktopDeviceStore } from './desktop-device-store.ts'
 import { startDesktopHostGateway } from './desktop-host-gateway.ts'
 
@@ -53,7 +54,8 @@ async function withGateway(
     dispatches: string[]
     setControlIdentity: (identity: { projectKey: string | null, sessionKey: string | null }) => void
     advanceClock: (milliseconds: number) => void
-  }) => Promise<void>
+  }) => Promise<void>,
+  logger?: JsonlLogger
 ): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'pi-gui-desktop-host-gateway-'))
   const port = await listenPort()
@@ -76,6 +78,7 @@ async function withGateway(
     productVersion: '0.0.1',
     buildCommit: 'abcdef1',
     deviceStore,
+    ...(logger === undefined ? {} : { logger }),
     now,
     randomPairingCode: () => '123456',
     randomDeviceCredential: () => DEVICE_CREDENTIALS[credentialIndex++]!,
@@ -786,4 +789,39 @@ test('R12: the device limit stops new pairing codes and expired devices free the
       await events.reader.cancel().catch(() => undefined)
     }
   })
+})
+
+test('D-099: the gateway logs lifecycle metadata without credentials, pairing codes or device identities', async () => {
+  const records: Array<{ level: string, component: string, event: string, fields: unknown }> = []
+  const logger: JsonlLogger = { write: (level, component, event, fields) => { records.push({ level, component, event, fields: fields ?? {} }) } }
+  await withGateway(async ({ baseUrl, gateway }) => {
+    gateway.createPairingCode()
+    const wrong = await jsonRequest(baseUrl, DESKTOP_HOST_API_PATHS.pair, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION, productVersion: '0.0.1', buildCommit: 'abcdef1', code: '654321' })
+    })
+    assert.equal(wrong.status, 401)
+    const credential = await pair(baseUrl, gateway, 'Logged PC')
+    const deviceId = gateway.listDevices()[0]!.deviceId
+    const events = await openEvents(baseUrl, credential)
+    events.abort()
+    await events.reader.cancel().catch(() => undefined)
+    for (let attempt = 0; gateway.listDevices()[0]?.controlling !== false; attempt++) {
+      assert.ok(attempt < 200)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    const logout = await jsonRequest(baseUrl, DESKTOP_HOST_API_PATHS.logout, { method: 'POST', headers: { Authorization: `Bearer ${credential}` } })
+    assert.equal(logout.status, 200)
+
+    assert.deepEqual(records.map(({ event }) => event), [
+      'listening', 'pair-rejected', 'paired', 'controller-connected', 'controller-closed', 'device-logged-out'
+    ])
+    assert.ok(records.every(({ component }) => component === 'desktop-host-gateway'))
+    assert.deepEqual(records[1]!.fields, { reason: 'code' })
+    const text = JSON.stringify(records)
+    for (const secret of [credential, '123456', '654321', deviceId, hashRemoteDeviceCredential(credential), 'Logged PC']) {
+      assert.equal(text.includes(secret), false, `log must not contain ${secret.slice(0, 8)}`)
+    }
+  }, logger)
 })

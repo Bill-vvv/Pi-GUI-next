@@ -31,6 +31,7 @@ import {
 import { readPromptAttachments } from '../prompt/prompt-attachment-selection.ts'
 import { ProjectStore } from '../project/project-store.ts'
 import { errorMessage } from '../utils/errors.ts'
+import type { JsonlLogger } from '../utils/jsonl-log.ts'
 
 
 export type RemoteAccessOptions = {
@@ -43,6 +44,7 @@ export type RemoteAccessOptions = {
   remoteStaticRoot: string
   productVersion: string
   resolveBuildCommit: () => string | null
+  logger: JsonlLogger
 }
 
 export type RemoteAccess = {
@@ -157,6 +159,7 @@ export async function startRemoteAccess(options: RemoteAccessOptions): Promise<R
       config: desktopHostConfig,
       productVersion: options.productVersion,
       buildCommit: await options.resolveBuildCommit(),
+      logger: options.logger,
       deviceStore: desktopHostDeviceStore,
       handlers: {
         getControlIdentity: (): DesktopHostControlIdentity => {
@@ -236,6 +239,7 @@ export async function startRemoteAccess(options: RemoteAccessOptions): Promise<R
     const gateway = await startRemoteGateway({
       config,
       staticRoot: options.remoteStaticRoot,
+      logger: options.logger,
       deviceStore,
       handlers
     })

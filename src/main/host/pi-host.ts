@@ -63,6 +63,7 @@ try {
     resourcesPath: '',
     userDataDirectory,
     logDirectory: hostLogDirectory(userDataDirectory),
+    logName: 'host',
     productVersion: packageJson.version,
     fetch: globalThis.fetch,
     resolveBuildCommit: () => resolveBuildCommit({ identityFilePath: join(mainBundleDirectory, BUILD_IDENTITY_FILE_NAME) }),
