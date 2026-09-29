@@ -147,7 +147,7 @@
   color: var(--color-status-success);
 }
 
-/* Aligns page-level feedback with the text inset of the rows it describes. */
+/* Aligns feedback with the 12px text inset of resource-list rows. */
 .settings-feedback-inset {
   padding: 0 12px;
 }
@@ -156,6 +156,11 @@
 .settings-feedback-divided {
   border-top: 1px solid var(--color-border-divider);
   padding: 12px 18px;
+}
+
+/* Inline groups place rows flush with the content column. */
+.settings-group-inline .settings-feedback-divided {
+  padding-inline: 0;
 }
 
 .settings-section-heading {
@@ -1598,13 +1603,15 @@
 .settings-dialog {
   display: grid;
   width: min(100%, 24rem);
+  max-height: calc(100vh - 2.5rem);
+  overflow: auto;
   gap: 0.85rem;
   border: 1px solid var(--color-border-panel);
   border-radius: var(--radius-panel);
-  padding: 1.1rem 1rem;
-  background: var(--color-surface-panel);
+  padding: 1.25rem;
+  background: var(--color-surface-popover);
   color: var(--color-text-primary);
-  box-shadow: var(--shadow-sidebar, none);
+  box-shadow: var(--shadow-popover);
 }
 
 .settings-dialog h2 {

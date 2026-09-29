@@ -273,10 +273,7 @@ export function ProviderSettings({
   return (
     <section className="provider-settings" aria-label="Provider 管理">
       <div className="provider-settings-heading">
-        <div>
-          <h3>自定义 Provider</h3>
-          <p>管理写入 Pi 用户模型配置的自定义 Provider。</p>
-        </div>
+        <p>管理写入 Pi 用户模型配置的自定义 Provider。</p>
         <button type="button" disabled={controlsDisabled || draft !== null} onClick={startCreate}>
           新增 Provider
         </button>
