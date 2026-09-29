@@ -198,7 +198,8 @@ export function ConnectHostPanel({
   const failureHint = unavailable ? '配置或凭证操作尚未完成，请点击“重试配置与凭证操作”。完成前无法连接或修改主机。' : status.failureKind === null ? null : {
     network: '请检查网络和 Linux 主机是否在线，并确认 Pi GUI 已启动，然后重试连接。',
     authentication: '设备凭证或配对码已失效。请在 Linux Pi GUI 中生成新的配对码后连接。',
-    'credential-target': '此 Host 的配对身份与已保存的凭证不一致。请核对目标主机；连接新主机时填写新的配对码。原凭证已保留。',
+    'credential-target': '此设备在该 Host 上没有有效配对（可能已撤销、已过期，或连接到了另一台 Host）。请核对目标主机，或在 Linux Pi GUI 中生成新的配对码后连接。原凭证未发送，也已保留。',
+    occupied: '另一台已配对设备正在使用此 Host。请先在那台设备上断开，再点击连接；不会自动重试。',
     'ssh-authentication': 'SSH 登录失败。请先确认系统 SSH 可以登录该主机，再重试连接。',
     'host-key': 'SSH 主机身份校验失败。请在系统 SSH 中核实主机身份后再连接。',
     protocol: '请确认 Windows 和 Linux 使用同一版本、同一源码构建的 Pi GUI，并重新启动两端。',

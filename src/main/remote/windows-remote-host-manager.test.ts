@@ -10,7 +10,7 @@ import { DESKTOP_HOST_KERNEL_COMMAND_TYPES } from '../../shared/desktop-host-con
 import type { KernelSnapshot } from '../../shared/kernel-contract.ts'
 import { DesktopHostClient } from './desktop-host-client.ts'
 import { startDesktopHostGateway } from './desktop-host-gateway.ts'
-import { openRemoteDeviceStore } from './remote-device-store.ts'
+import { openDesktopDeviceStore } from './desktop-device-store.ts'
 import { createFileDesktopHostProfileStore, parseDesktopHostProfileState, type DesktopHostProfileState, type DesktopHostProfileStore } from './desktop-host-profile-store.ts'
 import { createMemoryDesktopClientHostConfigStore, createFileDesktopClientHostConfigStore } from './desktop-client-host-config-store.ts'
 import { createMemoryDesktopDeviceCredentialStore, desktopHostProfileCredentialTarget, createWindowsCredentialManagerStore, type DesktopDeviceCredentialStore } from './desktop-device-credential-store.ts'
@@ -333,7 +333,7 @@ test('real HTTP Hosts preserve per-profile pairing through switching, detect a r
     const path = join(dirname(f.path), `${key}.device`)
     const gateway = await startDesktopHostGateway({
       config: { enabled: true, bindHost: '127.0.0.1', port, tokenFile: `${path}.token`, token: 'machine-secret-token-machine-secret-token', deviceStorePath: path },
-      productVersion: '1.0.0', buildCommit: 'test-build', deviceStore: await openRemoteDeviceStore({ path, uid: process.getuid!() }),
+      productVersion: '1.0.0', buildCommit: 'test-build', deviceStore: await openDesktopDeviceStore({ path, uid: process.getuid!() }),
       randomPairingCode: () => '123456', randomDeviceCredential: () => token!,
       handlers: { getControlIdentity: () => ({ projectKey: `/${key}`, sessionKey: 'session' }), assertCommandPolicy: async () => {},
         dispatchCommand: async () => ({ revision: 1, state: { activeProjectKey: `/${key}`, activeSessionKey: 'session' } } as KernelSnapshot) }
@@ -362,8 +362,9 @@ test('real HTTP Hosts preserve per-profile pairing through switching, detect a r
   await select(manager, a)
   const beforeRedirect = requests.length
   routes.set(aConfig.localPort, bConfig.localPort)
-  await assert.rejects(connect(manager, aConfig), /配对身份不一致/)
-  assert.deepEqual(requests.slice(beforeRedirect).map((request) => [request.port, request.authorization]), [[bConfig.localPort, null]])
+  await assert.rejects(connect(manager, aConfig), /没有有效配对/)
+  // Handshake and credential-free identity check reach the wrong Host; the credential never does.
+  assert.deepEqual(requests.slice(beforeRedirect).map((request) => [request.port, request.authorization]), [[bConfig.localPort, null], [bConfig.localPort, null]])
   assert.equal(manager.status().hasStoredCredential, true)
   routes.delete(aConfig.localPort)
   assert.equal((await connect(manager, aConfig)).state.activeProjectKey, '/host-a')

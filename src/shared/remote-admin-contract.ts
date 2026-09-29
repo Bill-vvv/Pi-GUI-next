@@ -32,6 +32,19 @@ export type TailscaleRemoteStatus = {
   publicOrigin: string | null
 }
 
+/** One currently valid Desktop Host device (R12). Never carries credentials or hashes. */
+export type DesktopHostDeviceSummary = {
+  /** Public pairing identity, 64 lowercase hex characters. */
+  deviceId: string
+  label: string | null
+  pairedAt: number
+  expiresAt: number
+  /** Whether this device holds the current control connection. */
+  controlling: boolean
+}
+
+export const DESKTOP_HOST_DEVICE_ID_PATTERN = /^[0-9a-f]{64}$/u
+
 export type DesktopHostAccessStatus =
   | {
       enabled: false
@@ -39,7 +52,8 @@ export type DesktopHostAccessStatus =
   | {
       enabled: true
       endpoint: string
-      device: RemotePairedDevice | null
+      /** Currently valid devices, oldest pairing first, at most 8. */
+      devices: DesktopHostDeviceSummary[]
     }
 
 export type RemoteAdminCommand =
@@ -52,7 +66,7 @@ export type RemoteAdminCommand =
   | { type: 'remote-admin.disable-tailscale' }
   | { type: 'remote-admin.get-desktop-host-status' }
   | { type: 'remote-admin.create-desktop-host-pairing-code' }
-  | { type: 'remote-admin.revoke-desktop-host-device' }
+  | { type: 'remote-admin.revoke-desktop-host-device'; deviceId: string }
 
 export type RemoteAdminApi = {
   getStatus(): Promise<RemoteAccessStatus>
@@ -64,7 +78,7 @@ export type RemoteAdminApi = {
   disableTailscale(): Promise<TailscaleRemoteStatus>
   getDesktopHostStatus(): Promise<DesktopHostAccessStatus>
   createDesktopHostPairingCode(): Promise<RemotePairingCode>
-  revokeDesktopHostDevice(): Promise<DesktopHostAccessStatus>
+  revokeDesktopHostDevice(deviceId: string): Promise<DesktopHostAccessStatus>
 }
 
 const REMOTE_ADMIN_COMMAND_TYPES = new Set<RemoteAdminCommand['type']>([
@@ -81,10 +95,13 @@ const REMOTE_ADMIN_COMMAND_TYPES = new Set<RemoteAdminCommand['type']>([
 ])
 
 export function isRemoteAdminCommand(value: unknown): value is RemoteAdminCommand {
-  return typeof value === 'object' &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.keys(value).length === 1 &&
-    typeof (value as { type?: unknown }).type === 'string' &&
-    REMOTE_ADMIN_COMMAND_TYPES.has((value as { type: RemoteAdminCommand['type'] }).type)
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const record = value as { type?: unknown, deviceId?: unknown }
+  if (typeof record.type !== 'string' || !REMOTE_ADMIN_COMMAND_TYPES.has(record.type as RemoteAdminCommand['type'])) return false
+  if (record.type === 'remote-admin.revoke-desktop-host-device') {
+    return Object.keys(value).length === 2 &&
+      typeof record.deviceId === 'string' &&
+      DESKTOP_HOST_DEVICE_ID_PATTERN.test(record.deviceId)
+  }
+  return Object.keys(value).length === 1
 }

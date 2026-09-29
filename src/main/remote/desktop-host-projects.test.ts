@@ -11,7 +11,7 @@ import { dispatchTerminalKernelCommand } from '../kernel/terminal-kernel-command
 import { ProjectStore } from '../project/project-store.ts'
 import { startDesktopHostGateway } from './desktop-host-gateway.ts'
 import { DesktopHostClient, desktopHostControlIdentity } from './desktop-host-client.ts'
-import { openRemoteDeviceStore } from './remote-device-store.ts'
+import { openDesktopDeviceStore } from './desktop-device-store.ts'
 import { assertDesktopHostKernelCommandPolicy } from './remote-command-policy.ts'
 
 test('paired Desktop Host lists and registers projects through the real Kernel, fences stale writes and answers trust', {
@@ -44,7 +44,7 @@ test('paired Desktop Host lists and registers projects through the real Kernel, 
   const gateway = await startDesktopHostGateway({
     config: { enabled: true, bindHost: '127.0.0.1', port, token: 'm'.repeat(32), tokenFile: join(root, 'token'), deviceStorePath: join(root, 'device') },
     productVersion: '1.0.0', buildCommit: 'fixture',
-    deviceStore: await openRemoteDeviceStore({ path: join(root, 'device'), uid: process.getuid!() }),
+    deviceStore: await openDesktopDeviceStore({ path: join(root, 'device'), uid: process.getuid!() }),
     randomPairingCode: () => '123456', randomDeviceCredential: () => 'c'.repeat(43),
     handlers: {
       getControlIdentity: () => desktopHostControlIdentity(kernel.getSnapshot()),

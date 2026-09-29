@@ -225,7 +225,7 @@ type WorkbenchProps = {
   onDisableTailscale: () => Promise<TailscaleRemoteStatus>
   onGetDesktopHostStatus: () => Promise<DesktopHostAccessStatus>
   onCreateDesktopHostPairingCode: () => Promise<RemotePairingCode>
-  onRevokeDesktopHostDevice: () => Promise<DesktopHostAccessStatus>
+  onRevokeDesktopHostDevice: (deviceId: string) => Promise<DesktopHostAccessStatus>
   onSelectPromptAttachments: () => Promise<PromptDraftAttachment[]>
   onSearchProjectPaths: (query: string) => Promise<KernelProjectPathSearchResult>
   onSubmitAsk: (

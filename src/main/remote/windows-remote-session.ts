@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { hostname } from 'node:os'
 import { isDesktopAttachmentCommand, type DesktopAttachmentCommand } from '../../shared/desktop-attachment-contract.ts'
 import { setTimeout as waitForTimeout } from 'node:timers/promises'
 
@@ -71,6 +72,8 @@ export type CreateWindowsRemoteSessionOptions = {
   initialHasStoredCredential?: boolean
   initialCachedCredential?: string | null
   waitForRetry?: (delayMs: number, signal: AbortSignal) => Promise<void>
+  /** Name sent when pairing, shown in the Host device list; defaults to this computer's name. */
+  deviceLabel?: () => string
 }
 
 export function parseWindowsRemoteConnectRequest(value: unknown): WindowsRemoteConnectRequest {
@@ -123,6 +126,7 @@ export function createWindowsRemoteSession(
   const credentialStore = options.credentialStore ?? createMemoryDesktopDeviceCredentialStore()
   const hostConfigStore = options.hostConfigStore ?? createMemoryDesktopClientHostConfigStore()
   const waitForRetry = options.waitForRetry ?? ((delayMs, signal) => waitForTimeout(delayMs, undefined, { signal }))
+  const deviceLabel = options.deviceLabel ?? hostname
   let phase: Extract<DesktopClientStatus, { mode: 'windows-remote' }>['phase'] = 'disconnected'
   let generation = 0
   let tunnel: SystemSshTunnel | null = null
@@ -212,7 +216,7 @@ export function createWindowsRemoteSession(
         throw new Error('Desktop Host handshake did not advertise capabilities.')
       }
       if (pairingCode !== null) {
-        const paired = await nextClient.pair(pairingCode)
+        const paired = await nextClient.pair(pairingCode, deviceLabel())
         if (ownedGeneration !== generation) throw new Error('Desktop Host connection was cancelled.')
         cachedCredential = paired.credential
         await credentialStore.save(paired.credential)
@@ -225,7 +229,8 @@ export function createWindowsRemoteSession(
           throw new Error('No stored Desktop Host credential is available. Generate a new pairing code on Linux.')
         }
         cachedCredential = stored
-        nextClient.setCredential(stored)
+        // Sent only after the Host confirms this device's pairing without receiving the credential.
+        await nextClient.setCredential(stored)
         nextCapabilities = handshakeCapabilities
       }
       if (ownedGeneration !== generation) {
@@ -553,6 +558,7 @@ function connectionFailureKind(error: unknown): DesktopConnectionFailureKind {
   if (error instanceof SystemSshTunnelError) return error.kind === 'authentication' ? 'ssh-authentication' : error.kind
   if (error instanceof DesktopHostClientError) {
     if (error.code === 'credential-target') return 'credential-target'
+    if (error.code === 'occupied') return 'occupied'
     if (error.code === 'unauthorized' || error.status === 401) return 'authentication'
     if (error.code === 'protocol') return 'protocol'
     if (error.code === 'network' || error.code === 'unavailable' ||

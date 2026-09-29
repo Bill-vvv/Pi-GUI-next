@@ -88,7 +88,7 @@ node "$HOME/.local/share/pi-gui-next-host/host.mjs" start
 
 ### 配对数据格式兼容检查（R12）
 
-- 构建的 `package.json.desktopHost.deviceStoreVersions` 声明该程序可读取的配对文件版本，属于产物校验范围。没有该字段的历史构建按其实际的版本 1 读取能力处理；显式但非法的声明会报错。当前 Main 仍使用单设备存储，声明为 `[1]`；新集合正式接入后才可声明相应读取能力。
+- 构建的 `package.json.desktopHost.deviceStoreVersions` 声明该程序可读取的配对文件版本，属于产物校验范围。没有该字段的历史构建按其实际的版本 1 读取能力处理；显式但非法的声明会报错。R12 起 Main 使用版本 2 设备集合（首次启动时原子迁移版本 1 文件），声明为 `[1, 2]`；迁移后只声明 `[1]` 的发行版会被拒绝启动和回退。
 - 当前管理入口在 `check`、`start`、部署目标与回退目标检查中，只读校验配对文件的完整格式、私有权限、大小及目标读取能力。检查不会触发旧数据迁移，也不会生成或删除配对记录。复制和完整摘要校验结束后、选择候选前再次检查。
 - 已经存在的新格式数据会阻止选择只认识旧格式的发行版，即使新文件中的设备列表为空也一样。保留现有配对数据，使用可读取该格式的版本继续运行。
 - 当前发行版的文件完整性与它能否读取数据分别检查。因此，如果文件完整但已不兼容当前数据，仍允许部署可读取数据的新版；回退时再判断保留的上一版是否兼容。
@@ -192,11 +192,11 @@ Windows 源码客户端首次进入 SSH 模式，之后恢复上次成功选择�
 
 1. SSH 进程成功启动后，Windows client 必须先不携带设备凭证请求握手，并要求 protocol、product version 与非空 build commit 完全一致。
 2. 兼容性通过后，才可在 Linux Pi GUI 设置页生成并由 Windows client 提交 6 位桌面配对码；client 在握手前必须本地拒绝配对。
-3. 配对请求再次携带预期 product/build，Host 必须在替换已有设备前复核，避免 Host 重启或版本变化后先撤销旧设备再由 client 报 mismatch。配对码 5 分钟、一次有效；重新生成替代旧码，连续错误和每分钟尝试均有界。
+3. 配对请求再次携带预期 product/build，Host 必须在写入新设备前复核。R12 起新设备与已有设备并存，不替换、也不断开当前控制连接；已有 8 台有效设备时拒绝生成配对码，并发配对也会被拒绝。配对请求可带 Windows 计算机名作为设备名称，Host 规范化后保存，名称不合格时按未命名保存，不因名称拒绝配对。配对码 5 分钟、一次有效；重新生成替代旧码，连续错误和每分钟尝试均有界。
 4. `POST /api/desktop-host/pair` 成功后只返回一次高熵桌面设备凭证。
-5. 后续客户端通过 `Authorization: Bearer <credential>` 认证；不得把凭证放入 URL、Renderer、日志或浏览器存储。已有凭证只能在新隧道完成无凭证兼容性握手、且握手的 `pairingId` 与本地凭证派生值一致后装载进 client。配对身份为空或不一致时，报告 `credential-target` 并停止恢复，保留本地凭证，供用户核对主机或重新配对。
-6. Linux 设置页撤销设备或客户端 logout 后，凭证和活动 SSE 立即失效。
-7. 当前只记住一个 Windows Desktop 设备；Web Remote 手机设备存储独立，双方不会互相替换。
+5. 后续客户端通过 `Authorization: Bearer <credential>` 认证；不得把凭证放入 URL、Renderer、日志或浏览器存储。已有凭证只能在新隧道完成无凭证兼容性握手后，再用 `x-pi-gui-pairing-id` 请求头发送本地凭证派生的公开配对身份，且 Host 回答 `pairingKnown: true` 时才装载进 client。回答不是 `true`（已撤销、已过期或目标 Host 不同）时报告 `credential-target` 并停止恢复，凭证未发送，本地凭证保留，供用户核对主机或重新配对。
+6. Linux 设置页逐台撤销设备，或客户端 logout 只撤销自身后，该设备的凭证立即失效；只有它正持有控制连接时才关闭 SSE，其他设备不受影响。
+7. 每个 Linux Host 最多保留 8 台 Windows Desktop 设备（R12，接口见 [R12 共享接口](r12-shared-interfaces.md)）；Web Remote 手机设备存储独立，仍只记住一部手机，双方不会互相替换。
 
 正式 Windows 客户端按主机配置把原始凭证保存在 Windows Credential Manager（Generic target `PiGUI/DesktopHost/<credentialKey>`）。名称、Host alias、端口与凭证槽编号保存在 Main userData 的 `desktop-client-hosts.json`，不含 secret。Renderer、环境变量、URL 和日志不得出现原始 Bearer。`src/main/remote/windows-remote-session.ts` 在无凭证握手成功后才 `setCredential`；401 时清除存储的凭证。
 
@@ -208,15 +208,15 @@ Windows 源码客户端首次进入 SSH 模式，之后恢复上次成功选择�
 - Pi GUI product version；
 - 源码内容摘要（协议字段名仍为 `buildCommit`）或 `null`；
 - 当前认证状态；
-- 当前有效配对的公开 `pairingId`，未配对或已过期时为 `null`；
+- `pairingKnown`：请求带 `x-pi-gui-pairing-id` 时表示该公开配对身份是否为当前有效配对，未带时为 `null`；Host 不列出、不计数其他设备；
 - Host 明确允许的 Kernel command types。
 
-当前 Desktop 协议为 2，严格要求 `pairingId` 字段，两端必须使用匹配构建。该值为设备凭证哈希加固定用途前缀后的 SHA-256 摘要，区别于原始凭证与认证哈希；Host 重启并加载同一有效设备记录后保持一致。它用于在发送已存凭证前发现目标配对变化，SSH 仍负责主机身份与加密。Windows 已支持多套主机配置与独立 Credential Manager 槽；每个 Linux Host 当前仍只支持一台已配对桌面设备，不自动合并指向同一 Host 的不同 SSH 别名。
+当前 Desktop 协议为 3（R12），两端必须使用匹配构建；版本 2 的客户端或 Host 在匿名握手阶段即报不兼容，不发送凭证。公开配对身份为设备凭证哈希加固定用途前缀后的 SHA-256 摘要，区别于原始凭证与认证哈希；Host 重启并加载同一有效设备记录后保持一致。它用于在发送已存凭证前确认本设备仍在目标 Host 上有效，SSH 仍负责主机身份与加密。Windows 支持多套主机配置与独立 Credential Manager 槽；每个 Linux Host 可保留多台桌面设备，但同一时刻只有一个控制连接，不自动合并指向同一 Host 的不同 SSH 别名。
 
 ### 断开与取消配对
 
 - 普通断开与关闭窗口共享连接清理入口，取消重连，等待正在建立的连接和临时资源收尾；保留设备凭证与成功主机配置。断开不会提交任务停止命令。
-- 取消配对必须仍连接到界面观察的同一 Host 配置；离线、目标变化或已有收尾操作时拒绝。先请求 logout，确认兼容的未认证、无配对响应后才删除本机凭证；不自动重放撤销请求。
+- 取消配对必须仍连接到界面观察的同一 Host 配置；离线、目标变化或已有收尾操作时拒绝。先请求 logout，确认兼容的 `authenticated: false` 且 `pairingKnown: false` 响应后才删除本机凭证；不自动重放撤销请求。
 - logout 响应丢失时明确标为结果未确认，并保留本机凭证供用户核对。Host 已确认撤销但 Credential Manager 删除失败时，明确报告远端已撤销、本机删除失败；不误报完整成功。
 - disconnecting/revoking 期间拒绝新连接、检查、任务命令及重复撤销；关闭或重复断开等待同一收尾。SSH 进程清理失败保留资源所有权，可关闭重试。
 - Renderer 根据 Main 状态清除旧 Kernel 投影；断开请求的迟到返回不再次清空可能已建立的新连接。连接操作弹窗由 desktop-client feature 拥有，并复用共享 modal 的焦点和键盘协议。
@@ -228,9 +228,9 @@ Windows 源码客户端首次进入 SSH 模式，之后恢复上次成功选择�
 - `GET /api/desktop-host/events`：SSE KernelEvent；
 - `GET /api/desktop-host/state`：权威 KernelSnapshot；
 - `POST /api/desktop-host/command`：allowlist 内的 typed KernelCommand；
-- `POST /api/desktop-host/logout`：撤销当前桌面设备。
+- `POST /api/desktop-host/logout`：只撤销发起请求的桌面设备。
 
-客户端先以随机 UUID 放入 `X-Pi-Gui-Controller-Id` 并建立 SSE。Host 同一时刻只接受一个活动 controller；没有活动事件流、controller identity 缺失或另一 controller 已占用时，state/command 必须明确拒绝。Renderer 应用状态后更新 preload 的观察身份；Main 不在发命令前重新读取 Host 状态来替换目标。每个 command 必须携带客户端当前观察到的 `projectKey + sessionKey` control identity；Host 在 policy、dispatch 和异步准备边界重复核对，Linux 本地状态变化后以 typed `409 conflict` 拒绝 stale command，不能让旧 `steer`、`follow-up`、`abort` 或设置命令落入另一 Session。断线后客户端应先重建事件流并获取 snapshot，不自动重放未确认 mutation。
+客户端先以随机 UUID 放入 `X-Pi-Gui-Controller-Id` 并建立 SSE。Host 同一时刻只接受一个活动 controller，并把它同时绑定到打开它的设备与 controller identity：另一台设备借用相同 controller identity 也会被拒绝。另一台设备已持有控制连接时，事件流返回 409 `Another desktop device is controlling this Host.`，客户端归类为 `occupied` 并停止，不抢占、不排队、不自动重连。没有活动事件流、controller identity 缺失或另一 controller 已占用时，state/command 必须明确拒绝。Renderer 应用状态后更新 preload 的观察身份；Main 不在发命令前重新读取 Host 状态来替换目标。每个 command 必须携带客户端当前观察到的 `projectKey + sessionKey` control identity；Host 在 policy、dispatch 和异步准备边界重复核对，Linux 本地状态变化后以 typed `409 conflict` 拒绝 stale command，不能让旧 `steer`、`follow-up`、`abort` 或设置命令落入另一 Session。断线后客户端应先重建事件流并获取 snapshot，不自动重放未确认 mutation。
 
 ## 当前命令边界
 

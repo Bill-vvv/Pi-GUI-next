@@ -22,7 +22,12 @@ test('isRemoteAdminCommand accepts only the closed admin command set', () => {
   assert.equal(isRemoteAdminCommand({ type: 'remote-admin.disable-tailscale' }), true)
   assert.equal(isRemoteAdminCommand({ type: 'remote-admin.get-desktop-host-status' }), true)
   assert.equal(isRemoteAdminCommand({ type: 'remote-admin.create-desktop-host-pairing-code' }), true)
-  assert.equal(isRemoteAdminCommand({ type: 'remote-admin.revoke-desktop-host-device' }), true)
+  assert.equal(isRemoteAdminCommand({ type: 'remote-admin.revoke-desktop-host-device', deviceId: 'a'.repeat(64) }), true)
+  // R12: Desktop revocation always names one device by its public identity.
+  assert.equal(isRemoteAdminCommand({ type: 'remote-admin.revoke-desktop-host-device' }), false)
+  assert.equal(isRemoteAdminCommand({ type: 'remote-admin.revoke-desktop-host-device', deviceId: 'A'.repeat(64) }), false)
+  assert.equal(isRemoteAdminCommand({ type: 'remote-admin.revoke-desktop-host-device', deviceId: 'a'.repeat(64), extra: true }), false)
+  assert.equal(isRemoteAdminCommand({ type: 'remote-admin.revoke-device', deviceId: 'a'.repeat(64) }), false)
   assert.equal(isRemoteAdminCommand({ type: 'remote-admin.get-status', extra: true }), false)
   assert.equal(isRemoteAdminCommand({ type: 'kernel.get-state' }), false)
   assert.equal(isRemoteAdminCommand(null), false)
@@ -135,7 +140,7 @@ test('Main opens each device store before starting its gateway', async () => {
   assert.match(webHelper, /deviceStore,/u)
 
   const desktopOpenIndex = source.indexOf(
-    'const desktopHostDeviceStore = await openRemoteDeviceStore('
+    'const desktopHostDeviceStore = await openDesktopDeviceStore('
   )
   const desktopStartIndex = source.indexOf('startDesktopHostGateway(')
   assert.ok(desktopOpenIndex > 0)

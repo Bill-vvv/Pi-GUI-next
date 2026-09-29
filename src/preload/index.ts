@@ -117,8 +117,8 @@ const remoteAdminApi: RemoteAdminApi = {
     const command: RemoteAdminCommand = { type: 'remote-admin.create-desktop-host-pairing-code' }
     return ipcRenderer.invoke(REMOTE_ADMIN_COMMAND_CHANNEL, command) as Promise<RemotePairingCode>
   },
-  revokeDesktopHostDevice: () => {
-    const command: RemoteAdminCommand = { type: 'remote-admin.revoke-desktop-host-device' }
+  revokeDesktopHostDevice: (deviceId) => {
+    const command: RemoteAdminCommand = { type: 'remote-admin.revoke-desktop-host-device', deviceId }
     return ipcRenderer.invoke(REMOTE_ADMIN_COMMAND_CHANNEL, command) as Promise<DesktopHostAccessStatus>
   }
 }

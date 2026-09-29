@@ -12,7 +12,7 @@ import { startSystemSshTunnel, type StartSystemSshTunnelOptions, type SystemSshT
 
 const CONFIG = { sshHostAlias: 'fixture', localPort: 18788, desktopHostPort: 18788 }
 const COMPATIBILITY = { productVersion: '1.0.0', buildCommit: 'fixture-build' }
-const HANDSHAKE = { ...COMPATIBILITY, protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION, authenticated: false, pairingId: null,
+const HANDSHAKE = { ...COMPATIBILITY, protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION, authenticated: false, pairingKnown: null,
   capabilities: { kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES } }
 
 function fakeTunnel(stop?: () => Promise<void>): SystemSshTunnel {

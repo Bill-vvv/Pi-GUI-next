@@ -10,14 +10,13 @@ import {
   DESKTOP_HOST_API_PATHS,
   DESKTOP_HOST_CONTROLLER_HEADER,
   DESKTOP_HOST_KERNEL_COMMAND_TYPES,
+  DESKTOP_HOST_OCCUPIED_MESSAGE,
+  DESKTOP_HOST_PAIRING_ID_HEADER,
   DESKTOP_HOST_PROTOCOL_VERSION
 } from '../../shared/desktop-host-contract.ts'
 import type { DesktopHostEnabledConfig } from './desktop-host-config.ts'
-import {
-  hashRemoteDeviceCredential,
-  openRemoteDeviceStore,
-  type RemoteDeviceStore
-} from './remote-device-store.ts'
+import { hashRemoteDeviceCredential } from './remote-device-store.ts'
+import { DESKTOP_DEVICE_LIMIT, openDesktopDeviceStore, type DesktopDeviceStore } from './desktop-device-store.ts'
 import { startDesktopHostGateway } from './desktop-host-gateway.ts'
 
 const uid = process.getuid!()
@@ -25,6 +24,8 @@ const CONTROLLER_ID = '00000000-0000-4000-8000-000000000001'
 const OTHER_CONTROLLER_ID = '00000000-0000-4000-8000-000000000002'
 const MACHINE_SECRET = 'h'.repeat(32)
 const DEVICE_CREDENTIAL = 'c'.repeat(43)
+// Each pairing receives the next credential, so several devices can coexist.
+const DEVICE_CREDENTIALS = ['c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k'].map((letter) => letter.repeat(43))
 const CONTROL_IDENTITY = {
   projectKey: '/tmp/desktop-host-project',
   sessionKey: '/tmp/desktop-host-session.jsonl'
@@ -48,9 +49,10 @@ async function withGateway(
   run: (input: {
     baseUrl: string
     gateway: Awaited<ReturnType<typeof startDesktopHostGateway>>
-    deviceStore: RemoteDeviceStore
+    deviceStore: DesktopDeviceStore
     dispatches: string[]
     setControlIdentity: (identity: { projectKey: string | null, sessionKey: string | null }) => void
+    advanceClock: (milliseconds: number) => void
   }) => Promise<void>
 ): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'pi-gui-desktop-host-gateway-'))
@@ -63,7 +65,10 @@ async function withGateway(
     tokenFile: join(directory, 'desktop.token'),
     deviceStorePath: join(directory, 'desktop.token.desktop-device')
   }
-  const deviceStore = await openRemoteDeviceStore({ path: config.deviceStorePath, uid })
+  let clock = Date.now()
+  const now = (): number => clock
+  const deviceStore = await openDesktopDeviceStore({ path: config.deviceStorePath, uid, now })
+  let credentialIndex = 0
   const dispatches: string[] = []
   let controlIdentity: { projectKey: string | null, sessionKey: string | null } = CONTROL_IDENTITY
   const gateway = await startDesktopHostGateway({
@@ -71,8 +76,9 @@ async function withGateway(
     productVersion: '0.0.1',
     buildCommit: 'abcdef1',
     deviceStore,
+    now,
     randomPairingCode: () => '123456',
-    randomDeviceCredential: () => DEVICE_CREDENTIAL,
+    randomDeviceCredential: () => DEVICE_CREDENTIALS[credentialIndex++]!,
     handlers: {
       getControlIdentity: () => ({ ...controlIdentity }),
       assertCommandPolicy: async () => undefined,
@@ -93,7 +99,8 @@ async function withGateway(
       gateway,
       deviceStore,
       dispatches,
-      setControlIdentity: (identity) => { controlIdentity = identity }
+      setControlIdentity: (identity) => { controlIdentity = identity },
+      advanceClock: (milliseconds) => { clock += milliseconds }
     })
   } finally {
     await gateway.stop()
@@ -117,7 +124,8 @@ async function jsonRequest(
 
 async function pair(
   baseUrl: string,
-  gateway: Awaited<ReturnType<typeof startDesktopHostGateway>>
+  gateway: Awaited<ReturnType<typeof startDesktopHostGateway>>,
+  label?: unknown
 ): Promise<string> {
   const pairing = gateway.createPairingCode()
   const response = await jsonRequest(baseUrl, DESKTOP_HOST_API_PATHS.pair, {
@@ -127,7 +135,8 @@ async function pair(
       protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
       productVersion: '0.0.1',
       buildCommit: 'abcdef1',
-      code: pairing.code
+      code: pairing.code,
+      ...(label === undefined ? {} : { label })
     })
   })
   assert.equal(response.status, 200, response.text)
@@ -172,7 +181,7 @@ test('Desktop Host exposes a loopback handshake and one-time bearer pairing with
       protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
       productVersion: '0.0.1',
       buildCommit: 'abcdef1',
-      authenticated: false, pairingId: null,
+      authenticated: false, pairingKnown: null,
       capabilities: { kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES }
     })
 
@@ -180,7 +189,7 @@ test('Desktop Host exposes a loopback handshake and one-time bearer pairing with
     assert.equal(credential, DEVICE_CREDENTIAL)
     assert.equal(session.headers.get('set-cookie'), null)
     assert.equal(
-      deviceStore.getDevice()?.credentialHash,
+      deviceStore.getDevices()[0]?.credentialHash,
       hashRemoteDeviceCredential(DEVICE_CREDENTIAL)
     )
 
@@ -189,7 +198,8 @@ test('Desktop Host exposes a loopback handshake and one-time bearer pairing with
     })
     assert.equal(authenticated.status, 200)
     assert.equal((authenticated.value as { authenticated: boolean }).authenticated, true)
-    const publicIdentity = (authenticated.value as { pairingId: string }).pairingId
+    assert.equal((authenticated.value as { pairingKnown: boolean | null }).pairingKnown, null)
+    const publicIdentity = gateway.listDevices()[0]!.deviceId
     assert.equal(publicIdentity, desktopPairingId(credential))
     assert.notEqual(publicIdentity, hashRemoteDeviceCredential(credential))
     assert.equal(JSON.stringify(authenticated.value).includes(credential), false)
@@ -253,7 +263,7 @@ test('Desktop Host rejects incompatible pairing before replacing the remembered 
       })
     })
     assert.equal(incompatible.status, 409)
-    assert.equal(deviceStore.getDevice(), null)
+    assert.deepEqual(deviceStore.getDevices(), [])
 
     const compatible = await jsonRequest(baseUrl, DESKTOP_HOST_API_PATHS.pair, {
       method: 'POST',
@@ -266,7 +276,7 @@ test('Desktop Host rejects incompatible pairing before replacing the remembered 
       })
     })
     assert.equal(compatible.status, 200, compatible.text)
-    assert.equal(deviceStore.getDevice()?.credentialHash, hashRemoteDeviceCredential(DEVICE_CREDENTIAL))
+    assert.equal(deviceStore.getDevices()[0]?.credentialHash, hashRemoteDeviceCredential(DEVICE_CREDENTIAL))
   })
 })
 
@@ -441,15 +451,17 @@ test('Desktop Host publishes typed events and revocation closes the controller a
       assert.equal(envelope.protocolVersion, DESKTOP_HOST_PROTOCOL_VERSION)
       assert.equal(envelope.event.type, 'kernel.pi-package-install')
 
-      const revoked = await gateway.revokeDevice()
+      const revoked = await gateway.revokeDevice(desktopPairingId(credential))
       assert.equal(revoked.enabled, true)
-      if (revoked.enabled) assert.equal(revoked.device, null)
+      if (revoked.enabled) assert.deepEqual(revoked.devices, [])
+      assert.equal((await events.reader.read()).done, true, 'revoking the controlling device closes its stream')
 
       const session = await jsonRequest(baseUrl, DESKTOP_HOST_API_PATHS.session, {
-        headers: { Authorization: `Bearer ${credential}` }
+        headers: { Authorization: `Bearer ${credential}`, [DESKTOP_HOST_PAIRING_ID_HEADER]: desktopPairingId(credential) }
       })
       assert.equal((session.value as { authenticated: boolean }).authenticated, false)
-      assert.equal((session.value as { pairingId: string | null }).pairingId, null)
+      assert.equal((session.value as { pairingKnown: boolean | null }).pairingKnown, false)
+      await assert.rejects(gateway.revokeDevice(desktopPairingId(credential)), /设备不存在或已撤销/u)
     } finally {
       events.abort()
       await events.reader.cancel().catch(() => undefined)
@@ -602,6 +614,173 @@ test('Desktop Host rejects protocol mismatch, disallowed commands, bad credentia
         })
       })
       assert.equal(forbidden.status, 403)
+    } finally {
+      events.abort()
+      await events.reader.cancel().catch(() => undefined)
+    }
+  })
+})
+
+function commandRequest(credential: string, controllerId: string, requestId: string): RequestInit {
+  return {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${credential}`,
+      [DESKTOP_HOST_CONTROLLER_HEADER]: controllerId,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
+      requestId,
+      expectedIdentity: CONTROL_IDENTITY,
+      command: { type: 'kernel.abort' }
+    })
+  }
+}
+
+test('R12: a second device pairs beside the first without taking or borrowing its control connection', async () => {
+  await withGateway(async ({ baseUrl, gateway, dispatches }) => {
+    const first = await pair(baseUrl, gateway, 'Desk PC')
+    const events = await openEvents(baseUrl, first)
+    try {
+      const second = await pair(baseUrl, gateway, 'Laptop')
+      assert.notEqual(second, first)
+      assert.deepEqual(gateway.listDevices().map(({ label, controlling }) => ({ label, controlling })), [
+        { label: 'Desk PC', controlling: true },
+        { label: 'Laptop', controlling: false }
+      ])
+
+      // Pairing did not close the first device's stream: it still receives events.
+      gateway.publish({ type: 'kernel.pi-package-install', job: { id: 'job-1', name: 'example', status: 'queued', error: null } })
+      assert.match(new TextDecoder().decode((await events.reader.read()).value), /^data: /u)
+
+      const occupied = await fetch(`${baseUrl}${DESKTOP_HOST_API_PATHS.events}`, {
+        headers: { Authorization: `Bearer ${second}`, [DESKTOP_HOST_CONTROLLER_HEADER]: OTHER_CONTROLLER_ID }
+      })
+      assert.equal(occupied.status, 409)
+      assert.equal(await occupied.text(), DESKTOP_HOST_OCCUPIED_MESSAGE)
+      const sameIdOtherDevice = await fetch(`${baseUrl}${DESKTOP_HOST_API_PATHS.events}`, {
+        headers: { Authorization: `Bearer ${second}`, [DESKTOP_HOST_CONTROLLER_HEADER]: CONTROLLER_ID }
+      })
+      assert.equal(sameIdOtherDevice.status, 409, 'another device cannot take over by reusing the controller id')
+      await sameIdOtherDevice.body?.cancel()
+
+      const borrowedState = await jsonRequest(baseUrl, DESKTOP_HOST_API_PATHS.state, {
+        headers: { Authorization: `Bearer ${second}`, [DESKTOP_HOST_CONTROLLER_HEADER]: CONTROLLER_ID }
+      })
+      assert.equal(borrowedState.status, 409)
+      const borrowedCommand = await jsonRequest(baseUrl, DESKTOP_HOST_API_PATHS.command,
+        commandRequest(second, CONTROLLER_ID, 'request-borrowed'))
+      assert.equal(borrowedCommand.status, 409)
+      assert.deepEqual(dispatches, [])
+
+      // Revoking the other device leaves the controller untouched.
+      await gateway.revokeDevice(desktopPairingId(second))
+      const allowed = await jsonRequest(baseUrl, DESKTOP_HOST_API_PATHS.command,
+        commandRequest(first, CONTROLLER_ID, 'request-allowed'))
+      assert.equal(allowed.status, 200, allowed.text)
+      assert.deepEqual(gateway.listDevices().map(({ label }) => label), ['Desk PC'])
+    } finally {
+      events.abort()
+      await events.reader.cancel().catch(() => undefined)
+    }
+  })
+})
+
+test('R12: revoking the controlling device ends its stream and later commands', async () => {
+  await withGateway(async ({ baseUrl, gateway }) => {
+    const first = await pair(baseUrl, gateway)
+    const second = await pair(baseUrl, gateway)
+    const events = await openEvents(baseUrl, first)
+    try {
+      await gateway.revokeDevice(desktopPairingId(first))
+      assert.equal((await events.reader.read()).done, true)
+      const rejected = await jsonRequest(baseUrl, DESKTOP_HOST_API_PATHS.command,
+        commandRequest(first, CONTROLLER_ID, 'request-after-revoke'))
+      assert.equal(rejected.status, 401)
+      // The control connection is free for the remaining device.
+      const next = await openEvents(baseUrl, second, OTHER_CONTROLLER_ID)
+      next.abort()
+      await next.reader.cancel().catch(() => undefined)
+    } finally {
+      events.abort()
+      await events.reader.cancel().catch(() => undefined)
+    }
+  })
+})
+
+test('R12: the credential-free check answers only for the claimed identity', async () => {
+  await withGateway(async ({ baseUrl, gateway }) => {
+    const credential = await pair(baseUrl, gateway)
+    const check = async (value: string) => jsonRequest(baseUrl, DESKTOP_HOST_API_PATHS.session, {
+      headers: { [DESKTOP_HOST_PAIRING_ID_HEADER]: value }
+    })
+    const known = await check(desktopPairingId(credential))
+    assert.equal(known.status, 200)
+    assert.equal((known.value as { pairingKnown: boolean }).pairingKnown, true)
+    assert.equal((known.value as { authenticated: boolean }).authenticated, false)
+    assert.equal(JSON.stringify(known.value).includes(desktopPairingId(credential)), false, 'identities are never listed')
+    assert.equal(((await check('0'.repeat(64))).value as { pairingKnown: boolean }).pairingKnown, false)
+    assert.equal((await check('not-an-identity')).status, 400)
+  })
+})
+
+test('R12: logout revokes only the calling device', async () => {
+  await withGateway(async ({ baseUrl, gateway }) => {
+    const first = await pair(baseUrl, gateway)
+    const second = await pair(baseUrl, gateway)
+    const events = await openEvents(baseUrl, first)
+    try {
+      const logout = await jsonRequest(baseUrl, DESKTOP_HOST_API_PATHS.logout, {
+        method: 'POST', headers: { Authorization: `Bearer ${second}` }
+      })
+      assert.equal(logout.status, 200)
+      assert.equal((logout.value as { authenticated: boolean }).authenticated, false)
+      assert.equal((logout.value as { pairingKnown: boolean }).pairingKnown, false)
+      assert.deepEqual(gateway.listDevices().map(({ deviceId }) => deviceId), [desktopPairingId(first)])
+      const stillControlling = await jsonRequest(baseUrl, DESKTOP_HOST_API_PATHS.command,
+        commandRequest(first, CONTROLLER_ID, 'request-after-other-logout'))
+      assert.equal(stillControlling.status, 200, stillControlling.text)
+      const repeated = await jsonRequest(baseUrl, DESKTOP_HOST_API_PATHS.logout, {
+        method: 'POST', headers: { Authorization: `Bearer ${second}` }
+      })
+      assert.equal(repeated.status, 401)
+    } finally {
+      events.abort()
+      await events.reader.cancel().catch(() => undefined)
+    }
+  })
+})
+
+test('R12: device names are normalized and never reject pairing', async () => {
+  await withGateway(async ({ baseUrl, gateway }) => {
+    await pair(baseUrl, gateway, '  Win\u0007PC  ')
+    await pair(baseUrl, gateway, 'x'.repeat(200))
+    await pair(baseUrl, gateway, '\u0000\u0001')
+    await pair(baseUrl, gateway)
+    assert.deepEqual(gateway.listDevices().map(({ label }) => label), ['WinPC', 'x'.repeat(80), null, null])
+  })
+})
+
+test('R12: the device limit stops new pairing codes and expired devices free their slots', async () => {
+  await withGateway(async ({ baseUrl, gateway, advanceClock }) => {
+    for (let index = 0; index < DESKTOP_DEVICE_LIMIT; index++) {
+      // Stay under the pairing rate limit while filling every slot.
+      if (index > 0 && index % 4 === 0) advanceClock(61_000)
+      await pair(baseUrl, gateway)
+    }
+    assert.equal(gateway.listDevices().length, DESKTOP_DEVICE_LIMIT)
+    assert.throws(() => gateway.createPairingCode(), /Host 已有 8 台配对设备/u)
+
+    const first = DEVICE_CREDENTIALS[0]!
+    const events = await openEvents(baseUrl, first)
+    try {
+      advanceClock(31 * 24 * 60 * 60 * 1000)
+      assert.deepEqual(gateway.listDevices(), [])
+      gateway.publish({ type: 'kernel.pi-package-install', job: { id: 'job-1', name: 'example', status: 'queued', error: null } })
+      assert.equal((await events.reader.read()).done, true, 'an expired controlling device loses its stream')
+      await pair(baseUrl, gateway)
+      assert.equal(gateway.listDevices().length, 1)
     } finally {
       events.abort()
       await events.reader.cancel().catch(() => undefined)

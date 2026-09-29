@@ -11,7 +11,7 @@ import type { RuntimeHost, RuntimeHostEvent, RuntimeCommand, RuntimeCommandResul
 import { ProjectStore } from '../project/project-store.ts'
 import { startDesktopHostGateway } from './desktop-host-gateway.ts'
 import { DesktopHostClient, desktopHostControlIdentity } from './desktop-host-client.ts'
-import { openRemoteDeviceStore } from './remote-device-store.ts'
+import { openDesktopDeviceStore } from './desktop-device-store.ts'
 import { assertDesktopHostKernelCommandPolicy } from './remote-command-policy.ts'
 
 test('Desktop interactions traverse HTTP/SSE, the shared dispatcher and real Kernel with exact request ownership', {
@@ -68,7 +68,7 @@ test('Desktop interactions traverse HTTP/SSE, the shared dispatcher and real Ker
   const gateway = await startDesktopHostGateway({
     config: { enabled: true, bindHost: '127.0.0.1', port, token: 'm'.repeat(32), tokenFile: join(root, 'token'), deviceStorePath: join(root, 'device') },
     productVersion: '1.0.0', buildCommit: 'fixture',
-    deviceStore: await openRemoteDeviceStore({ path: join(root, 'device'), uid: process.getuid!() }),
+    deviceStore: await openDesktopDeviceStore({ path: join(root, 'device'), uid: process.getuid!() }),
     randomPairingCode: () => '123456', randomDeviceCredential: () => 'c'.repeat(43),
     handlers: {
       getControlIdentity: () => desktopHostControlIdentity(kernel.getSnapshot()),
@@ -164,6 +164,11 @@ test('Desktop interactions traverse HTTP/SSE, the shared dispatcher and real Ker
   const pending = show('after-disconnect', 'confirm')
   const count = responses().length
   await stream.close()
+  // The Host sees the closed stream asynchronously; wait until it has released control.
+  for (let attempt = 0; gateway.listDevices()[0]?.controlling !== false; attempt++) {
+    assert.ok(attempt < 200, 'Host did not release the closed control stream')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
   await assert.rejects(client.command(controller, identity, { type: 'kernel.cancel-extension-dialog', ...pending }))
   assert.equal(responses().length, count)
   const reconnected = await client.openEventStream(controller, () => {})
@@ -172,7 +177,7 @@ test('Desktop interactions traverse HTTP/SSE, the shared dispatcher and real Ker
   const restored = await client.getState(controller)
   assert.equal(restored.state.extensionDialog?.requestId, pending.requestId)
   assert.equal(responses().length, count, 'Reconnect must not replay a response')
-  await gateway.revokeDevice()
+  await gateway.revokeDevice(gateway.listDevices()[0]!.deviceId)
   await assert.rejects(client.command(controller, identity, { type: 'kernel.cancel-extension-dialog', ...pending }), /Authentication/)
   assert.equal(responses().length, count)
   finishInvocation!()

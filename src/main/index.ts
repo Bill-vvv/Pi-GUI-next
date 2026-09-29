@@ -96,6 +96,7 @@ import {
   openRemoteDeviceStore,
   type RemoteDeviceStore
 } from './remote/remote-device-store.ts'
+import { openDesktopDeviceStore } from './remote/desktop-device-store.ts'
 import {
   startRemoteGateway,
   type RemoteGateway,
@@ -682,7 +683,8 @@ async function startApplication(): Promise<void> {
         'Desktop Host device store ownership can only be verified when process.getuid is available.'
       )
     }
-    const desktopHostDeviceStore = await openRemoteDeviceStore({
+    // R12: Desktop uses the bounded version-2 collection; a version-1 file is migrated atomically.
+    const desktopHostDeviceStore = await openDesktopDeviceStore({
       path: desktopHostConfig.deviceStorePath,
       uid
     })
@@ -1849,7 +1851,7 @@ async function dispatchRemoteAdminCommand(
     case 'remote-admin.revoke-desktop-host-device': {
       const gateway = desktopHostGateway
       if (gateway === null) throw new Error('Desktop Host is disabled.')
-      return await gateway.revokeDevice()
+      return await gateway.revokeDevice(command.deviceId)
     }
     default: {
       const exhaustive: never = command

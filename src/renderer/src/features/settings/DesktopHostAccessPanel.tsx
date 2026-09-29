@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type {
   DesktopHostAccessStatus,
+  DesktopHostDeviceSummary,
   RemotePairingCode
 } from '../../../../shared/remote-admin-contract'
 import { REMOTE_PAIRING_CODE_LENGTH } from '../../../../shared/remote-contract'
@@ -13,7 +14,14 @@ export type DesktopHostAccessPanelProps = {
   busy: boolean
   onGetStatus: () => Promise<DesktopHostAccessStatus>
   onCreatePairingCode: () => Promise<RemotePairingCode>
-  onRevokeDevice: () => Promise<DesktopHostAccessStatus>
+  onRevokeDevice: (deviceId: string) => Promise<DesktopHostAccessStatus>
+}
+
+/** Matches the Host's device limit (R12); the Host enforces it independently. */
+const DESKTOP_HOST_DEVICE_LIMIT = 8
+
+function deviceName(device: DesktopHostDeviceSummary): string {
+  return device.label ?? '未命名设备'
 }
 
 function formatTimestamp(value: number): string {
@@ -37,7 +45,7 @@ export function DesktopHostAccessPanel({
   const [action, setAction] = useState<'create' | 'revoke' | null>(null)
   const [pairingCode, setPairingCode] = useState<RemotePairingCode | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [revokeOpen, setRevokeOpen] = useState(false)
+  const [revokeTarget, setRevokeTarget] = useState<DesktopHostDeviceSummary | null>(null)
   const mountedRef = useRef(true)
   const actionRef = useRef<'create' | 'revoke' | null>(null)
 
@@ -101,19 +109,30 @@ export function DesktopHostAccessPanel({
     }
   }
 
-  async function confirmRevoke(): Promise<void> {
+  async function confirmRevoke(target: DesktopHostDeviceSummary): Promise<void> {
     if (busy || actionRef.current !== null) return
     actionRef.current = 'revoke'
     setAction('revoke')
     setError(null)
     try {
-      const next = await onRevokeDevice()
+      const next = await onRevokeDevice(target.deviceId)
       if (!mountedRef.current) return
       setStatus(next)
-      setPairingCode(null)
-      setRevokeOpen(false)
+      setRevokeTarget(null)
     } catch (reason) {
-      if (mountedRef.current) setError(unknownErrorMessage(reason))
+      if (!mountedRef.current) return
+      setError(unknownErrorMessage(reason))
+      // The device may already be gone (revoked elsewhere or expired); show the Host's list.
+      try {
+        const next = await onGetStatus()
+        if (!mountedRef.current) return
+        setStatus(next)
+        if (!next.enabled || !next.devices.some((device) => device.deviceId === target.deviceId)) {
+          setRevokeTarget(null)
+        }
+      } catch {
+        // Keep the original error; the list stays as last confirmed by the Host.
+      }
     } finally {
       actionRef.current = null
       if (mountedRef.current) setAction(null)
@@ -121,7 +140,8 @@ export function DesktopHostAccessPanel({
   }
 
   const controlsDisabled = busy || loading || action !== null
-  const hasPairedDevice = status?.enabled === true && status.device !== null
+  const devices = status?.enabled === true ? status.devices : []
+  const deviceLimitReached = devices.length >= DESKTOP_HOST_DEVICE_LIMIT
 
   return (
     <div className="remote-access-panel">
@@ -179,13 +199,17 @@ export function DesktopHostAccessPanel({
           <div className="settings-row">
             <div className="settings-row-copy">
               <h4>一次性配对码</h4>
-              <p>供 Windows Pi GUI 在 SSH 隧道建立后于 5 分钟内使用。</p>
+              <p>
+                {deviceLimitReached
+                  ? `已配对 ${DESKTOP_HOST_DEVICE_LIMIT} 台设备，已达上限。请先撤销一台，再配对新设备。`
+                  : '供 Windows Pi GUI 在 SSH 隧道建立后于 5 分钟内使用。新设备会与已配对设备并存。'}
+              </p>
             </div>
             <div className="settings-row-control remote-access-actions">
               <button
                 type="button"
                 className="remote-access-action"
-                disabled={controlsDisabled || status?.enabled !== true}
+                disabled={controlsDisabled || status?.enabled !== true || deviceLimitReached}
                 onClick={() => { void createPairingCode() }}
               >
                 {action === 'create' ? '生成中…' : '生成桌面配对码'}
@@ -209,48 +233,62 @@ export function DesktopHostAccessPanel({
             )}
           </div>
 
-          <div className="settings-row">
-            <div className="settings-row-copy">
-              <h4>已配对 Windows 客户端</h4>
-              {hasPairedDevice && status.enabled ? (
-                <p>
-                  配对于 {formatTimestamp(status.device!.pairedAt)}，有效至{' '}
-                  {formatTimestamp(status.device!.expiresAt)}
-                </p>
-              ) : (
-                <p>当前没有已记住的 Windows 客户端。</p>
-              )}
-            </div>
-            <div className="settings-row-control remote-access-actions">
-              <button
-                type="button"
-                className="remote-access-action remote-access-action-danger"
-                disabled={controlsDisabled || !hasPairedDevice}
-                onClick={() => setRevokeOpen(true)}
-              >
-                撤销 Windows 客户端
-              </button>
-            </div>
-          </div>
         </div>
       </section>
 
-      {revokeOpen ? (
+      <section
+        className="settings-group settings-group-inline settings-prefs"
+        aria-labelledby="settings-desktop-host-devices"
+      >
+        <h3 id="settings-desktop-host-devices" className="settings-group-heading">
+          已配对设备{status?.enabled === true ? `（${devices.length}/${DESKTOP_HOST_DEVICE_LIMIT}）` : ''}
+        </h3>
+        <div className="settings-group-card">
+          {devices.length === 0 ? (
+            <p className="settings-feedback settings-feedback-inset">当前没有已配对的 Windows 客户端。</p>
+          ) : devices.map((device) => (
+            <div className="settings-row" key={device.deviceId}>
+              <div className="settings-row-copy">
+                <h4>{deviceName(device)}</h4>
+                <p>
+                  配对于 {formatTimestamp(device.pairedAt)}，有效至 {formatTimestamp(device.expiresAt)}
+                </p>
+              </div>
+              <div className="settings-row-control remote-access-actions">
+                {device.controlling ? <span className="settings-value-chip">正在使用</span> : null}
+                <button
+                  type="button"
+                  className="remote-access-action remote-access-action-danger"
+                  disabled={controlsDisabled}
+                  aria-label={`撤销 ${deviceName(device)}`}
+                  onClick={() => setRevokeTarget(device)}
+                >
+                  撤销
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {revokeTarget === null ? null : (
         <SettingsConfirmDialog
           request={{
-            title: '撤销 Windows 客户端？',
-            description: '该设备凭证和活动事件连接会立即失效。',
+            title: `撤销“${deviceName(revokeTarget)}”？`,
+            description: revokeTarget.controlling
+              ? '该设备正在使用此 Host。撤销后它的凭证立即失效，当前连接会断开；其他设备不受影响。'
+              : '该设备的凭证会立即失效，需要重新配对才能再次连接；其他设备不受影响。',
             confirmLabel: '确认撤销',
             danger: true
           }}
           busy={action === 'revoke'}
           busyLabel="撤销中…"
           onCancel={() => {
-            if (action !== 'revoke') setRevokeOpen(false)
+            if (action !== 'revoke') setRevokeTarget(null)
           }}
-          onConfirm={() => { void confirmRevoke() }}
+          onConfirm={() => { void confirmRevoke(revokeTarget) }}
         />
-      ) : null}
+      )}
     </div>
   )
 }

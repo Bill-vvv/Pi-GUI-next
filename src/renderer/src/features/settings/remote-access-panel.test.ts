@@ -43,7 +43,10 @@ test('DesktopHostAccessPanel keeps SSH pairing separate from Web Remote browser 
   assert.match(source, /Desktop Host（SSH）/u)
   assert.match(source, /Linux loopback/u)
   assert.match(source, /生成桌面配对码/u)
-  assert.match(source, /撤销 Windows 客户端/u)
+  // R12: each paired device has its own revoke action bound to its public device id.
+  assert.match(source, /onRevokeDevice\(target\.deviceId\)/u)
+  assert.match(source, /aria-label=\{`撤销 \$\{deviceName\(device\)\}`\}/u)
+  assert.match(source, /deviceLimitReached/u)
   assert.match(source, /<SettingsConfirmDialog/u)
   assert.doesNotMatch(source, /document\.cookie|localStorage|sessionStorage|Public Origin/u)
   assert.match(settings, /<DesktopHostAccessPanel/u)
