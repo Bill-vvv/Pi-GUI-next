@@ -79,7 +79,7 @@ import {
 import { SessionForkDialog } from '../features/session/SessionForkDialog'
 import { SettingsPanel } from '../features/settings/SettingsPanel'
 import { DesktopEnvironmentPanel } from '../features/desktop-client/DesktopEnvironmentPanel'
-import { SettingsNavigation } from '../features/settings/SettingsNavigation'
+import { SETTINGS_NAV_ID, SettingsNavigation } from '../features/settings/SettingsNavigation'
 import { useSettingsWorkspace } from '../features/settings/settings-workspace'
 import { Timeline } from '../features/chat/Timeline'
 import { SubagentTaskDetail } from '../features/chat/SubagentTaskDetail'
@@ -124,6 +124,8 @@ import {
 const TOOL_DISPLAY_DENSITY_STORAGE_KEY = 'pi-workbench.tool-display-density'
 const PINNED_PROJECTS_STORAGE_KEY = 'pi-workbench.pinned-projects'
 const PINNED_SESSIONS_STORAGE_KEY = 'pi-workbench.pinned-sessions'
+/** Below this width the settings navigation is always the icon rail and cannot be expanded. */
+const SETTINGS_NAV_RAIL_MEDIA = '(max-width: 500px)'
 const EDITABLE_TARGET_SHORTCUTS = new Set(
   Object.values(DEFAULT_SHORTCUT_SETTINGS).filter((binding): binding is string => binding !== null)
 )
@@ -394,12 +396,45 @@ export function Workbench({
   const {
     settingsOpen,
     settingsSection,
+    settingsJumpTarget,
     openSettings,
     requestSectionChange,
+    requestSettingsTarget,
     requestCloseSettings,
     onDirtyChange,
     onActiveOperationChange
   } = useSettingsWorkspace()
+  const [settingsNavCollapsed, setSettingsNavCollapsed] = useState(false)
+  const [settingsNavNarrow, setSettingsNavNarrow] = useState(
+    () => window.matchMedia(SETTINGS_NAV_RAIL_MEDIA).matches
+  )
+  useEffect(() => {
+    const narrow = window.matchMedia(SETTINGS_NAV_RAIL_MEDIA)
+    const sync = (): void => setSettingsNavNarrow(narrow.matches)
+    sync()
+    narrow.addEventListener('change', sync)
+    return () => narrow.removeEventListener('change', sync)
+  }, [])
+  // At 500px and below the navigation stays an icon rail; its toggle opens the
+  // full navigation as an overlay instead of widening the column.
+  const [settingsNavOverlayOpen, setSettingsNavOverlayOpen] = useState(false)
+  const settingsNavOverlay = settingsOpen && settingsNavNarrow && settingsNavOverlayOpen
+  const settingsNavRail = settingsOpen && (settingsNavCollapsed || settingsNavNarrow) && !settingsNavOverlay
+  const settingsNavExpanded = settingsNavNarrow ? settingsNavOverlay : !settingsNavCollapsed
+  const leftSidebarRef = useRef<HTMLElement>(null)
+  const settingsNavToggleRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (!settingsOpen || !settingsNavNarrow) setSettingsNavOverlayOpen(false)
+  }, [settingsNavNarrow, settingsOpen])
+  useEffect(() => {
+    if (!settingsNavOverlay) return
+    const closeOnOutsidePointer = (event: PointerEvent): void => {
+      if (event.target instanceof Node && leftSidebarRef.current?.contains(event.target)) return
+      setSettingsNavOverlayOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointer, true)
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer, true)
+  }, [settingsNavOverlay])
   const [shortcutRecording, setShortcutRecording] = useState(false)
   useEffect(() => {
     const compactWorkbench = window.matchMedia('(max-width: 700px)')
@@ -542,6 +577,13 @@ export function Workbench({
         shortcutRecording ||
         hasVisibleShortcutBlockingSurface()
       ) return
+      if (settingsNavOverlay && event.key === 'Escape') {
+        setSettingsNavOverlayOpen(false)
+        settingsNavToggleRef.current?.focus()
+        event.preventDefault()
+        event.stopPropagation()
+        return
+      }
       if (settingsOpen && event.key === 'Escape') {
         if (requestCloseSettings()) restoreSettingsFocusRef.current = true
         event.preventDefault()
@@ -1035,7 +1077,7 @@ export function Workbench({
     return true
   }
   return (
-    <main className={`app-shell${sidebarCollapsed ? ' left-sidebar-collapsed' : ''}${settingsOpen ? ' settings-open' : ''}${rightSidebarOpen ? ' right-sidebar-open' : ''}`}>
+    <main className={`app-shell${sidebarCollapsed ? ' left-sidebar-collapsed' : ''}${settingsOpen ? ' settings-open' : ''}${settingsNavRail ? ' settings-nav-rail' : ''}${settingsNavOverlay ? ' settings-nav-overlay' : ''}${rightSidebarOpen ? ' right-sidebar-open' : ''}`}>
       <div className="window-drag-region" aria-hidden="true" />
       {doubleClickBorderMaximize ? (
         <div className="window-edge-hit-layer" aria-hidden="true">
@@ -1045,15 +1087,30 @@ export function Workbench({
           <div className="window-edge-hit left" onDoubleClick={handleWindowEdgeDoubleClick} />
         </div>
       ) : null}
-      <aside className="left-sidebar" aria-label={settingsOpen ? '设置导航' : '项目与任务'}>
+      <aside
+        ref={leftSidebarRef}
+        className="left-sidebar"
+        aria-label={settingsOpen ? '设置导航' : '项目与任务'}
+        onBlur={settingsNavOverlay ? (event) => {
+          const next = event.relatedTarget
+          if (next instanceof Node && !event.currentTarget.contains(next)) setSettingsNavOverlayOpen(false)
+        } : undefined}
+      >
         <div className={`sidebar-content${settingsOpen ? ' settings-sidebar-content' : ''}`}>
           {settingsOpen ? (
             <SettingsNavigation
               clientOnly={!clientSurface.hostSettings}
               section={settingsSection}
+              searchAvailable={!settingsNavRail}
               onSectionChange={(section) => {
                 invalidateRightSidebarFocusRestoration()
+                setSettingsNavOverlayOpen(false)
                 requestSectionChange(section)
+              }}
+              onSearchSelect={(entry) => {
+                invalidateRightSidebarFocusRestoration()
+                setSettingsNavOverlayOpen(false)
+                return requestSettingsTarget(entry.section, entry.target)
               }}
               onBack={() => {
                 if (requestCloseSettings()) restoreSettingsFocusRef.current = true
@@ -1200,7 +1257,23 @@ export function Workbench({
           </WorkspaceNavigatorGroup>
         </div>
 
-        {settingsOpen ? null : (
+        {settingsOpen ? (
+          <footer className="sidebar-footer">
+            <IconButton
+              ref={settingsNavToggleRef}
+              className="sidebar-collapse-toggle"
+              icon={settingsNavExpanded ? 'left-sidebar-close' : 'left-sidebar-open'}
+              iconSize="lg"
+              label={settingsNavExpanded ? '收起设置导航' : '展开设置导航'}
+              aria-controls={SETTINGS_NAV_ID}
+              aria-expanded={settingsNavExpanded}
+              onClick={() => {
+                if (settingsNavNarrow) setSettingsNavOverlayOpen((open) => !open)
+                else setSettingsNavCollapsed((collapsed) => !collapsed)
+              }}
+            />
+          </footer>
+        ) : (
           <footer className="sidebar-footer">
             <IconButton
               className="sidebar-collapse-toggle"
@@ -1240,16 +1313,6 @@ export function Workbench({
         aria-label={`${projectName}${navigatorKind === 'task' ? '' : ' 对话'}工作区`}
       >
         {operationNotifications}
-        {sidebarCollapsed ? (
-          <div className="left-sidebar-bottom-triggers">
-            <IconButton
-              className="left-sidebar-trigger"
-              icon="left-sidebar-open"
-              label="展开侧边栏"
-              onClick={() => setSidebarCollapsed(false)}
-            />
-          </div>
-        ) : null}
         {settingsOpen ? (
           <SettingsPanel
             clientOnly={!clientSurface.hostSettings}
@@ -1257,6 +1320,7 @@ export function Workbench({
             state={settingsState}
             busy={busy}
             section={settingsSection}
+            jumpTarget={settingsJumpTarget}
             pendingAction={pendingAction}
             extensionActionError={extensionActionError}
             actionError={settingsActionError}
@@ -1329,6 +1393,15 @@ export function Workbench({
           <>
         <header className="workbench-session-header">
           <div className="workbench-session-primary">
+            {sidebarCollapsed ? (
+              <IconButton
+                className="workbench-header-left-sidebar-toggle"
+                icon="left-sidebar-open"
+                iconSize="lg"
+                label="展开侧边栏"
+                onClick={() => setSidebarCollapsed(false)}
+              />
+            ) : null}
             <div className="workbench-session-heading">
               <span className="workbench-session-scope">
                 {navigatorKind === 'task' ? '任务' : projectName}
@@ -1691,7 +1764,10 @@ function hasConnectedMeaningfulFocus(mainChat: HTMLElement | null): boolean {
 
 function hasVisibleShortcutBlockingSurface(): boolean {
   return [...document.querySelectorAll<HTMLElement>(
-    '[aria-modal="true"], [role="menu"], [role="listbox"]'
+    // Inline result lists (settings search) are not popups: they only block while
+    // their focused, expanded combobox owns Escape and typing.
+    '[aria-modal="true"], [role="menu"], [role="listbox"]:not([data-inline-listbox]), ' +
+      '[role="combobox"][aria-expanded="true"]:focus'
   )].some((element) => {
     if (element.getAttribute('aria-hidden') === 'true' || element.getClientRects().length === 0) {
       return false

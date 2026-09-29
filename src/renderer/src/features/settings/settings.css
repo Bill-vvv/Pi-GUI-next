@@ -12,6 +12,7 @@
 .settings-section-heading h2,
 .settings-group-heading,
 .settings-row h4,
+.settings-density-block h4,
 .settings-card h3,
 .settings-empty-state h3,
 .settings-resource-copy h3,
@@ -63,6 +64,109 @@
   flex-direction: column;
   gap: 14px;
   width: 100%;
+}
+
+.settings-nav[hidden] {
+  display: none;
+}
+
+.settings-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  color: var(--color-text-muted);
+}
+
+.settings-search svg {
+  position: absolute;
+  left: 11px;
+  pointer-events: none;
+}
+
+.settings-search input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-control);
+  padding: 7px 11px 7px 32px;
+  color: var(--color-text-primary);
+  background: var(--color-surface-input);
+  font: inherit;
+  font-size: var(--text-control);
+  line-height: var(--line-control);
+  outline: none;
+}
+
+.settings-search input:focus {
+  border-color: var(--color-border-focus);
+  box-shadow: 0 0 0 3px var(--color-focus-ring);
+}
+
+.settings-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-height: 0;
+}
+
+.settings-search-results [role='listbox'] {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-search-results [role='option'] {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-radius: 8px;
+  padding: 7px 12px;
+  color: var(--color-text-soft);
+  cursor: pointer;
+}
+
+.settings-search-results [role='option'] span {
+  font-size: var(--text-list-item);
+  line-height: var(--line-control);
+}
+
+.settings-search-results [role='option'] small {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--text-caption);
+  line-height: var(--line-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-search-results [role='option'].active {
+  color: var(--color-text-primary);
+  background: var(--color-surface-hover);
+}
+
+.settings-search-results .settings-feedback {
+  padding: 7px 12px;
+}
+
+/*
+ * A settings search result that was just revealed; cleared on the next pointer
+ * or key press. The mark extends past the row edge like resource-row hover.
+ */
+.settings-content [data-settings-search-hit] {
+  position: relative;
+  isolation: isolate;
+}
+
+.settings-content [data-settings-search-hit]::before {
+  content: '';
+  position: absolute;
+  inset: 0 -12px;
+  z-index: -1;
+  border-radius: var(--radius-control);
+  background: var(--color-surface-hover);
+  pointer-events: none;
 }
 
 .settings-nav-group {
@@ -267,6 +371,7 @@
 }
 
 .settings-prefs .settings-row h4,
+.settings-prefs .settings-density-block h4,
 .settings-prefs .settings-row-copy label {
   font-weight: var(--weight-normal);
 }
@@ -311,6 +416,7 @@
 }
 
 .settings-prefs .settings-switch-control,
+.settings-prefs .settings-segmented-control,
 .settings-prefs .shortcut-settings-actions,
 .settings-prefs .remote-access-actions {
   width: auto;
@@ -444,6 +550,7 @@
 }
 
 .settings-row h4,
+.settings-density-block h4,
 .settings-row-copy label {
   color: var(--color-text-primary);
   font-size: var(--text-body);
@@ -454,7 +561,8 @@
   display: block;
 }
 
-.settings-row p {
+.settings-row p,
+.settings-density-block .settings-row-copy p {
   margin: 4px 0 0;
   color: var(--color-text-muted);
   font-size: var(--text-body-sm);
@@ -466,9 +574,63 @@
   flex: 0 0 auto;
 }
 
-.settings-switch-control {
+.settings-switch-control,
+.settings-segmented-control {
   display: flex;
   justify-content: flex-end;
+}
+
+.settings-segmented {
+  display: inline-flex;
+  gap: 2px;
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-control);
+  padding: 2px;
+  background: var(--color-surface-input);
+}
+
+.settings-segmented button {
+  flex: 1 1 0;
+  min-width: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  color: var(--color-text-soft);
+  background: transparent;
+  font-size: var(--text-control);
+  line-height: var(--line-control);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-duration-control) var(--motion-easing-standard),
+    color var(--motion-duration-control) var(--motion-easing-standard);
+}
+
+.settings-segmented button:hover:not(:disabled):not([aria-pressed='true']) {
+  color: var(--color-text-primary);
+  background: var(--color-hover-subtle);
+}
+
+/* Same selected surface as the theme cubes. */
+.settings-segmented button[aria-pressed='true'] {
+  color: var(--color-text-primary);
+  background: var(--color-surface-subtle-strong);
+}
+
+.settings-segmented button:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 1px;
+}
+
+.settings-segmented button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-segmented button {
+    transition: none;
+  }
 }
 
 .settings-switch {
@@ -1755,6 +1917,10 @@
 }
 
 @media (max-width: 620px) {
+  .settings-segmented {
+    width: 100%;
+  }
+
   .settings-row {
     min-height: 0;
     align-items: stretch;
@@ -1886,54 +2052,71 @@
   }
 }
 
+/*
+ * Icon rail: the user collapsed the settings navigation, or the window is at
+ * most 500px wide (Workbench sets `settings-nav-rail` for both). At 500px and
+ * below the toggle opens `settings-nav-overlay` instead: the column keeps the
+ * rail width and the full navigation floats over the page until a section is
+ * chosen. Placed after the 700px block so it wins over the compact layout.
+ */
+.app-shell.settings-open.settings-nav-rail,
+.app-shell.settings-open.settings-nav-overlay {
+  grid-template-columns: var(--sidebar-rail-width) minmax(0, 1fr);
+}
+
+.app-shell.settings-nav-overlay .left-sidebar {
+  width: min(220px, calc(100vw - (var(--app-shell-padding) * 2)));
+  box-shadow: var(--shadow-popover);
+}
+
+.app-shell.settings-nav-rail .settings-sidebar-content {
+  align-items: center;
+  gap: 0.32rem;
+  padding: 0.42rem 0;
+}
+
+.app-shell.settings-nav-rail .sidebar-footer {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.app-shell.settings-nav-rail .settings-back,
+.app-shell.settings-nav-rail .settings-nav button {
+  width: 42px;
+  height: 42px;
+}
+
+.app-shell.settings-nav-rail .settings-nav,
+.app-shell.settings-nav-rail .settings-nav-group {
+  align-items: center;
+  gap: 0.18rem;
+}
+
+.app-shell.settings-nav-rail .settings-nav-group-label {
+  display: none;
+}
+
+.app-shell.settings-nav-rail .settings-nav-group + .settings-nav-group {
+  margin-top: 0.28rem;
+  border-top: 1px solid var(--color-border-divider);
+  padding-top: 0.28rem;
+}
+
+.app-shell.settings-nav-rail .settings-nav button {
+  justify-content: center;
+  padding: 0;
+}
+
+.app-shell.settings-nav-rail .settings-nav button span {
+  display: none;
+}
+
+.app-shell.settings-nav-rail .settings-nav button.selected::before {
+  top: 10px;
+  bottom: 10px;
+}
+
 @media (max-width: 500px) {
-  .app-shell.settings-open,
-  .app-shell.settings-open.left-sidebar-collapsed {
-    grid-template-columns: var(--sidebar-rail-width) minmax(0, 1fr);
-  }
-
-  .app-shell.settings-open .settings-sidebar-content {
-    align-items: center;
-    gap: 0.32rem;
-    padding: 0.42rem 0;
-  }
-
-  .settings-back,
-  .settings-nav button {
-    width: 42px;
-    height: 42px;
-  }
-
-  .settings-nav,
-  .settings-nav-group {
-    align-items: center;
-    gap: 0.18rem;
-  }
-
-  .settings-nav-group-label {
-    display: none;
-  }
-
-  .settings-nav-group + .settings-nav-group {
-    margin-top: 0.28rem;
-    border-top: 1px solid var(--color-border-divider);
-    padding-top: 0.28rem;
-  }
-
-  .settings-nav button {
-    justify-content: center;
-    padding: 0;
-  }
-
-  .settings-nav button span {
-    display: none;
-  }
-
-  .settings-nav button.selected::before {
-    top: 10px;
-    bottom: 10px;
-  }
-
   .settings-content {
     padding: 24px 16px 36px;
   }

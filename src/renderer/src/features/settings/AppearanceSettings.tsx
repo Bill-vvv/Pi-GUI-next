@@ -3,15 +3,14 @@ import { FontSelect } from '../../components/FontSelect'
 import { Select, type SelectOptionGroup } from '../../components/Select'
 import { type ToolDisplayDensity } from '../../tool-display-density'
 import { SettingsPageHeading } from './SettingsPageHeading'
+import { SettingsSegmented } from './SettingsSegmented'
 import { SettingsRowError, useSettingsRowSave } from './useSettingsRowSave'
 
-const TEXT_SIZE_OPTION_GROUPS: SelectOptionGroup[] = [{
-  options: [
-    { value: 'small', label: '小' },
-    { value: 'default', label: '默认' },
-    { value: 'large', label: '大' }
-  ]
-}]
+const TEXT_SIZE_OPTIONS: ReadonlyArray<{ value: AppearanceSettingsValue['textSize']; label: string }> = [
+  { value: 'small', label: '小' },
+  { value: 'default', label: '默认' },
+  { value: 'large', label: '大' }
+]
 const ACCENT_COLOR_OPTION_GROUPS: SelectOptionGroup[] = [{
   options: [
     { value: 'amber', label: '琥珀色' },
@@ -27,12 +26,13 @@ const TRANSPARENCY_OPTION_GROUPS: SelectOptionGroup[] = [{
     label: `${value}%`
   }))
 }]
-const TOKEN_COUNT_FORMAT_OPTION_GROUPS: SelectOptionGroup[] = [{
-  options: [
-    { value: 'full', label: '完整数字（65,600）' },
-    { value: 'compact', label: 'k / m / b 缩写（65.6k）' }
-  ]
-}]
+const TOKEN_COUNT_FORMAT_OPTIONS: ReadonlyArray<{
+  value: AppearanceSettingsValue['tokenCountFormat']
+  label: string
+}> = [
+  { value: 'full', label: '65,600' },
+  { value: 'compact', label: '65.6k' }
+]
 
 export function AppearanceSettings({
   appearance,
@@ -145,26 +145,23 @@ export function AppearanceSettings({
         <div className="settings-group-card">
           <div className="settings-row">
             <div className="settings-row-copy">
-              <h4>Token 数量</h4>
+              <h4 id="appearance-token-count-format-label">Token 数量</h4>
               <p>选择完整数字，或使用 k、m、b 单位缩写</p>
               <SettingsRowError message={errorFor('token-format')} />
             </div>
-            <div className="settings-row-control settings-theme-control">
-              <Select
-                id="appearance-token-count-format"
+            <div className="settings-row-control settings-segmented-control">
+              <SettingsSegmented
+                labelledBy="appearance-token-count-format-label"
                 value={appearance.tokenCountFormat}
-                groups={TOKEN_COUNT_FORMAT_OPTION_GROUPS}
+                options={TOKEN_COUNT_FORMAT_OPTIONS}
                 disabled={busy}
-                onValueChange={(value) => {
-                  if (!isTokenCountFormat(value)) return
-                  saveAppearance('token-format', { tokenCountFormat: value })
-                }}
+                onValueChange={(tokenCountFormat) => saveAppearance('token-format', { tokenCountFormat })}
               />
             </div>
           </div>
           <div className="settings-density-block">
             <div className="settings-row-copy">
-              <h4>工作过程密度</h4>
+              <h4 id="appearance-tool-density-label">工作过程密度</h4>
               <p>调整思考与操作在对话中的显示程度</p>
             </div>
             <div className="settings-density-examples" role="group" aria-label="工作过程密度">
@@ -202,20 +199,17 @@ export function AppearanceSettings({
         <div className="settings-group-card">
           <div className="settings-row">
             <div className="settings-row-copy">
-              <h4>界面字号</h4>
+              <h4 id="appearance-text-size-label">界面字号</h4>
               <p>调整界面与对话文字的大小</p>
               <SettingsRowError message={errorFor('text-size')} />
             </div>
-            <div className="settings-row-control settings-theme-control">
-              <Select
-                id="appearance-text-size"
+            <div className="settings-row-control settings-segmented-control">
+              <SettingsSegmented
+                labelledBy="appearance-text-size-label"
                 value={appearance.textSize}
-                groups={TEXT_SIZE_OPTION_GROUPS}
+                options={TEXT_SIZE_OPTIONS}
                 disabled={busy}
-                onValueChange={(value) => {
-                  if (!isAppearanceTextSize(value)) return
-                  saveAppearance('text-size', { textSize: value })
-                }}
+                onValueChange={(textSize) => saveAppearance('text-size', { textSize })}
               />
             </div>
           </div>
@@ -361,14 +355,6 @@ function DensityExample({
       <span>{description}</span>
     </button>
   )
-}
-
-function isAppearanceTextSize(value: string): value is AppearanceSettingsValue['textSize'] {
-  return value === 'small' || value === 'default' || value === 'large'
-}
-
-function isTokenCountFormat(value: string): value is AppearanceSettingsValue['tokenCountFormat'] {
-  return value === 'full' || value === 'compact'
 }
 
 function isAppearanceAccentColor(value: string): value is AppearanceSettingsValue['accentColor'] {

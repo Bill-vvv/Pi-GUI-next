@@ -9,7 +9,7 @@ for (const width of [1280, 360]) {
     await runBrowserChecks(t, {
       fixture: 'src/renderer/src/features/settings/settings-interactions.fixture.tsx',
       exportName: 'runSettingsInteractionChecks',
-      expectedChecks: 15,
+      expectedChecks: 19,
       viewport: { width, height: 900 }
     })
   })

@@ -14,7 +14,7 @@
   "src/main/remote/remote-gateway.ts": 845,
   "src/main/subagent/subagent-definition-store.ts": 975,
   "src/renderer/src/App.tsx": 1219,
-  "src/renderer/src/composition/Workbench.tsx": 1734,
+  "src/renderer/src/composition/Workbench.tsx": 1810,
   "src/renderer/src/composition/session-runtime-controller.ts": 1024,
   "src/renderer/src/features/chat/Timeline.tsx": 1636,
   "src/renderer/src/features/chat/TimelineTurns.tsx": 1811,

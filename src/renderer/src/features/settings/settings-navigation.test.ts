@@ -213,3 +213,46 @@ test('settings copy follows the Codex zh-CN wording', async () => {
   assert.match(subagent, /title="子智能体"/u)
   assert.doesNotMatch(subagent, /(['`>"]|[\u4e00-\u9fff] )Agent\b/u)
 })
+
+test('two- and three-option settings use the segmented pressed-button group', async () => {
+  const [general, appearance, control] = await Promise.all([
+    readFile(new URL('./GeneralSettings.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('./AppearanceSettings.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('./SettingsSegmented.tsx', import.meta.url), 'utf8')
+  ])
+  assert.match(control, /role="group"/u)
+  assert.match(control, /aria-pressed=\{option\.value === value\}/u)
+  assert.match(general, /labelledBy="general-startup-workspace-restore-label"/u)
+  assert.match(appearance, /labelledBy="appearance-text-size-label"/u)
+  assert.match(appearance, /labelledBy="appearance-token-count-format-label"/u)
+})
+
+test('settings navigation collapses to the icon rail and opens as an overlay at 500px and below', async () => {
+  const [nav, workbench, styles] = await Promise.all([
+    readFile(NAV_PATH, 'utf8'),
+    readFile(new URL('../../composition/Workbench.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('./settings.css', import.meta.url), 'utf8')
+  ])
+  assert.match(nav, /<nav id=\{SETTINGS_NAV_ID\} className="settings-nav"/u)
+  assert.match(workbench, /const SETTINGS_NAV_RAIL_MEDIA = '\(max-width: 500px\)'/u)
+  assert.match(workbench, /const settingsNavOverlay = settingsOpen && settingsNavNarrow && settingsNavOverlayOpen/u)
+  assert.match(workbench, /const settingsNavRail = settingsOpen && \(settingsNavCollapsed \|\| settingsNavNarrow\) && !settingsNavOverlay/u)
+  // One toggle in the Workbench sidebar-collapse position: it widens the column on
+  // wide windows and opens the overlay on narrow ones.
+  assert.match(
+    workbench,
+    /className="sidebar-collapse-toggle"[\s\S]*?label=\{settingsNavExpanded \? '收起设置导航' : '展开设置导航'\}[\s\S]*?aria-controls=\{SETTINGS_NAV_ID\}[\s\S]*?aria-expanded=\{settingsNavExpanded\}[\s\S]*?if \(settingsNavNarrow\) setSettingsNavOverlayOpen\(\(open\) => !open\)[\s\S]*?else setSettingsNavCollapsed/u
+  )
+  // The overlay closes on section choice, Escape (restoring toggle focus), outside pointer and focus leaving.
+  assert.match(workbench, /onSectionChange=\{\(section\) => \{[\s\S]*?setSettingsNavOverlayOpen\(false\)[\s\S]*?requestSectionChange\(section\)/u)
+  assert.match(workbench, /if \(settingsNavOverlay && event\.key === 'Escape'\) \{\s*setSettingsNavOverlayOpen\(false\)\s*settingsNavToggleRef\.current\?\.focus\(\)/u)
+  assert.ok(workbench.indexOf("settingsNavOverlay && event.key === 'Escape'") < workbench.indexOf("settingsOpen && event.key === 'Escape'"))
+  assert.match(workbench, /document\.addEventListener\('pointerdown', closeOnOutsidePointer, true\)/u)
+  assert.match(workbench, /onBlur=\{settingsNavOverlay \?/u)
+  assert.match(styles, /\.app-shell\.settings-open\.settings-nav-rail,\s*\.app-shell\.settings-open\.settings-nav-overlay \{\s*grid-template-columns: var\(--sidebar-rail-width\) minmax\(0, 1fr\);/u)
+  assert.match(styles, /\.app-shell\.settings-nav-overlay \.left-sidebar \{\s*width: min\(220px/u)
+  assert.match(styles, /\.app-shell\.settings-nav-rail \.settings-nav button span \{\s*display: none;/u)
+  // The rail rules follow the 700px compact layout so they win over it.
+  assert.ok(styles.lastIndexOf('@media (max-width: 700px)') < styles.indexOf('.app-shell.settings-open.settings-nav-rail'))
+  assert.doesNotMatch(styles, /@media \(max-width: 500px\) \{[^}]*grid-template-columns/u)
+})

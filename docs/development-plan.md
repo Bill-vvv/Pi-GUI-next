@@ -580,8 +580,8 @@ S20 明确不以“更多动画”为目标，不让位移或 pulse 成为 runni
 
 | 阶段 | 状态 | 范围 | 完成门槛 |
 | --- | --- | --- | --- |
-| S21-1 Information Architecture | `Pending` | 当前导航按 D-102 对齐 Codex：“个人：常规/外观/键盘快捷键/模型”“集成：插件/扩展/技能/子智能体”“编码：连接”；Context 只有在 S24 有真实内容时加入。分组与删除偏好已落地，本阶段剩余导航可收起 | 既有功能和 dirty draft 保护无回退；窄窗口使用可访问的单页/覆盖式导航；Context 只有在 S24 有真实内容时出现；不恢复 Advisor 分类 |
-| S21-2 Search & Deep Link | `Pending` | 扩展窄 typed section/group metadata，索引真实设置名称、组和人工同义词；搜索结果跳到稳定应用内目标 | 不索引 credential、endpoint、Agent prompt 或日志；Enter/Escape、焦点恢复和无结果状态通过；不注册 OS URL protocol，不建立插件 registry |
+| S21-1 Information Architecture | `Complete` | 当前导航按 D-102 对齐 Codex：“个人：常规/外观/键盘快捷键/模型”“集成：插件/扩展/技能/子智能体”“编码：连接”；Context 只有在 S24 有真实内容时加入。分组、删除偏好、导航收起与窄窗口覆盖式导航均已落地（2026-09-30） | 既有功能和 dirty draft 保护无回退；窄窗口使用可访问的单页/覆盖式导航；Context 只有在 S24 有真实内容时出现；不恢复 Advisor 分类 |
+| S21-2 Search & Deep Link | `Complete` | 扩展窄 typed section/group metadata，索引真实设置名称、组和人工同义词；搜索结果跳到稳定应用内目标 | 不索引 credential、endpoint、Agent prompt 或日志；Enter/Escape、焦点恢复和无结果状态通过；不注册 OS URL protocol，不建立插件 registry |
 | S21-3 Scope, Source & Activation | `Pending` | 为重要设置表达 application/user/project/session 作用域、GUI/Pi/Extension 事实来源与 immediate/next-session/reload 生效时机；区分 saved config 与当前 Runtime loaded config | Package installed、Extension enabled、当前 Session loaded、健康 verified 四层状态不混淆；设置保存不静默重启，reload 失败不伪装已应用 |
 
 设置行不机械堆叠三个 badge；默认立即生效项保持简洁，只在特殊作用域、外部事实源或需 reload 时提高可见性。`settings-redesign-preview.html` 只作为交互参考，模拟状态和未接通选项不是生产事实。
@@ -1181,6 +1181,11 @@ Windows 和 Linux/Web 必须从同一仓库/tag 发布。Web Remote 随 Linux Ho
 | 2026-09-29 | R12 第二轮 2B 自动化 | Windows Node 26.4.0 干净克隆运行 `test-platform`（含 Chrome）：151 项 140 通过、0 失败、11 项 Linux 专属跳过，连续两次；Credential Manager 原生与 R12 客户端测试通过；修复测试辅助代码在 Windows 上的 `EBUSY` | 证据 `release/evidence/r12-windows-2b-20260929/`；人工 Windows 桌面交互待进行 |
 | 2026-09-29 | 设置页：pi-subagents 控件迁入 Subagent 页 | 用户确认按 D-100 替代 D-048 对 pi-subagents 的拓展页归属：安装、启停与详情移到 Subagent 页顶部，页面复用控件报告的 Package 状态，不再单独读取；拓展页保留 Magic Context、pi.dev 目录与本地拓展 | typecheck、设置相关定向测试 85/85（含 Chromium fixture）通过；Windows 侧用 Node 24.15 跑 typecheck 与设置测试（含 Chrome fixture）通过，项目锁定的 Node 26.4.0 尚未在 Windows 安装 |
 | 2026-09-29 | 设置页对齐 Codex 分类与措辞（D-102） | 用户要求对齐 Codex 或 Cursor 的设置风格。从本机 Codex 26.924 与 Cursor 3.19.7 安装包读取导航结构与简体中文文案后，导航改为“个人 / 集成 / 编码”，凭证并入模型页，Package→插件、拓展→扩展、Subagent→子智能体、远程访问→连接、快捷键→键盘快捷键，页内措辞按 Codex 统一，实验性开关集中到“实验性功能” | typecheck、设置相关定向测试 96/96（含 Chromium fixture 与客户端模式）通过，预览截图核对导航、模型页与插件页。视觉样式（卡片/分隔线）未改，待取得 Codex 设置页截图；设置搜索与导航收起仍属 S21 |
+| 2026-09-30 | 左侧栏“展开侧边栏”入口固定到 Session Header | 原入口绝对定位在 Composer 测量高度之上，随输入框高度浮动并压在对话末尾。收起后改在 Header 标题前显示，与右侧栏入口左右对称，复用同一 32px 图标按钮样式；删除旧浮动容器样式 | typecheck、composition 定向测试 50/50、build、diff check 通过；预览在 1400px 与 640px 截图核对位置并验证点击后展开。设置页打开时侧栏强制展开，不受影响 |
+| 2026-09-30 | S21-1 设置导航收起 | 用户要求推进 S21 并先做导航收起。设置导航底部新增“收起设置导航 / 展开设置导航”，位置与图标沿用工作台侧边栏收起按钮；收起后复用原 ≤500px 的 icon rail 样式（改为由 `settings-nav-rail` 类驱动，Workbench 在收起或窗口 ≤500px 时设置），≤500px 不显示该按钮；收起状态不持久化，不卸载设置页面，dirty draft 保护不变 | typecheck、设置与 composition 定向测试 74/74（含 Chromium fixture）、build、diff check 通过；预览在 1280/640/420px 核对展开、收起、键盘焦点保留、rail 内切换页面且无横向溢出。窄窗口覆盖式导航见下一条 |
+| 2026-09-30 | S21-1 窄窗口覆盖式设置导航，S21-1 完成 | 用户确认窄窗口改为覆盖式导航。≤500px 时 icon rail 底部同一按钮打开完整导航浮层（列宽保持 rail，内容区不移动），选择页面、Escape、外点、焦点移出或窗口变宽时关闭；Escape 先关浮层并把焦点还给按钮，不再关闭设置页 | typecheck、设置与 composition 定向测试 74/74（含 Chromium fixture）、build、diff check 通过；预览 420px 逐项核对打开、选页、Escape、外点、Tab 移出与放宽到 900px。S21-1 标记 Complete；S21-2/S21-3 仍 Pending |
+| 2026-09-30 | Tooltip 跟随目标改名 | 切换按钮（设置导航收起、左右侧栏）点击后会改 `aria-label`/`data-tooltip`，但已显示的 tooltip 仍保留点击前文字。`TooltipProvider` 显示期间额外观察当前目标的 `data-tooltip`、`data-tooltip-placement`、`data-tooltip-variant`，变化时原地更新并重新定位，清空时关闭 | typecheck、tooltip Chromium fixture 19/19、components 与设置定向测试 25/25、build、diff check 通过；预览中悬停“收起设置导航”后连续点击，提示依次变为“展开设置导航”“收起设置导航” |
+| 2026-09-30 | S21-2 设置搜索与应用内跳转，S21-2 完成 | 设置导航顶部新增搜索（combobox + 内联 listbox，方向键/Enter/Escape、无结果状态）；`settings-search.ts` 静态索引固定设置名、分组与人工同义词（快捷键动作由同一标签表生成），每条指向页面实际渲染的 id，SSH 客户端只索引其可见项；选中后经 settings workspace 切页并由 `useSettingsJump` 滚动、聚焦、标记目标，异步页面等待目标出现且用户接管即停止。快捷键标签移到 `shortcut-labels.ts`，为工作过程密度、技能新建与技能搜索补 id。不注册 OS URL protocol、不建立 registry、不索引凭证/地址/提示词/日志 | typecheck、设置/composition/renderer 定向测试 177/177（新增 22 项 Chromium 搜索 fixture、目标 id 存在性与敏感词排除单测）、build、diff check 通过；预览 1280px 核对跨页跳转、连接页异步目标、Escape 先清空后关闭设置。S21-2 标记 Complete，S21-3 仍 Pending |
 
 ## 17. 计划变更记录
 

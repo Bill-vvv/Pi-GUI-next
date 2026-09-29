@@ -5,6 +5,7 @@ import type {
 } from '../../../../shared/kernel-contract'
 import { Select, type SelectOptionGroup } from '../../components/Select'
 import { SettingsPageHeading } from './SettingsPageHeading'
+import { SettingsSegmented } from './SettingsSegmented'
 import { SettingsSwitch } from './SettingsSwitch'
 import { SettingsRowError, useSettingsRowSave } from './useSettingsRowSave'
 
@@ -46,13 +47,14 @@ export function GeneralSettings({
         ...(!selectedNamingModelAvailable && selectedNamingModel !== null
           ? [{
               value: namingValue,
-              label: `${selectedNamingModel.provider}/${selectedNamingModel.modelId}（当前不可用）`,
+              label: `${selectedNamingModel.modelId} · ${selectedNamingModel.provider}（当前不可用）`,
               disabled: true
             }]
           : []),
         ...availableModels.map((model) => ({
           value: sessionNamingModelValue(model.provider, model.id),
-          label: `${model.provider}/${model.name}`
+          // Model first: the narrow control truncates the tail, so a long provider must not hide the model.
+          label: `${model.name} · ${model.provider}`
         }))
       ]
     }
@@ -72,23 +74,20 @@ export function GeneralSettings({
         <div className="settings-group-card">
           <div className="settings-row">
             <div className="settings-row-copy">
-              <h4>启动后显示</h4>
+              <h4 id="general-startup-workspace-restore-label">启动后显示</h4>
               <p>打开应用时，是否自动回到上次使用的项目和对话</p>
               <SettingsRowError message={errorFor('startup')} />
             </div>
-            <div className="settings-row-control">
-              <Select
-                id="general-startup-workspace-restore"
+            <div className="settings-row-control settings-segmented-control">
+              <SettingsSegmented
+                labelledBy="general-startup-workspace-restore-label"
                 value={general.startupWorkspaceRestore}
-                groups={[{
-                  options: [
-                    { value: 'restore', label: '继续上次使用' },
-                    { value: 'none', label: '不自动打开项目' }
-                  ]
-                }]}
+                options={[
+                  { value: 'restore', label: '继续上次使用' },
+                  { value: 'none', label: '不自动打开' }
+                ]}
                 disabled={busy}
                 onValueChange={(startupWorkspaceRestore) => {
-                  if (startupWorkspaceRestore !== 'restore' && startupWorkspaceRestore !== 'none') return
                   save('startup', () => onSetGeneral({
                     ...general,
                     startupWorkspaceRestore

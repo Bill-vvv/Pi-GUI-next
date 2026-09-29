@@ -185,6 +185,12 @@ test('Workbench gives the shell a generic mirrored toggle and keeps domain modul
   assert.match(iconSource, /\| 'right-sidebar-close'[\s\S]*?\| 'right-sidebar-open'/)
   assert.match(iconSource, /case 'right-sidebar-close':[\s\S]*?case 'right-sidebar-open':/)
   assert.doesNotMatch(workbenchSource, /workbench-header-git-trigger|right-sidebar-reopen-trigger|icon="fork"/)
+  assert.match(
+    workbenchSource,
+    /<div className="workbench-session-primary">\s*\{sidebarCollapsed \? \(\s*<IconButton\s*className="workbench-header-left-sidebar-toggle"\s*icon="left-sidebar-open"\s*iconSize="lg"\s*label="展开侧边栏"/
+  )
+  assert.doesNotMatch(workbenchSource, /left-sidebar-bottom-triggers|left-sidebar-trigger/)
+  assert.doesNotMatch(workbenchStyles, /left-sidebar-bottom-triggers|composer-clearance[^;]*\+ 0\.35rem/)
   assert.doesNotMatch(workbenchSource, /label: '(?:History|Branches|Sync|MCP|Browser|Terminal)'/)
 })
 
