@@ -193,6 +193,9 @@ D-095 完成后，第三轮中“Host 需具备图形会话”和“真实 Elect
 - **2 Git 拆分完成**：`git-service.ts` 4352 → 1081 行。类外声明移入 `git-service-types.ts`、`git-admission.ts`、`git-parsing.ts`、`git-worktree-io.ts`；类方法按领域移入 `GitWorktreeContent`、`GitCommits`、`GitHistory`、`GitBranchSync`，它们只通过 `GitServiceCore`（`git-service-core.ts`）使用共享操作。公开方法签名与拆分前一致；Git 测试 114/114。新文件均不超过 800 行。
 - **3 网关按修订后的 D-097 完成**：逐字相同或行为等价的部分移入 `remote/gateway-common.ts`（117 行）；`remote-gateway.ts` 906 → 828 行，`desktop-host-gateway.ts` 900 → 852 行；认证、推送与请求边界各自保持原样。`remote` 测试 251 项：248 通过、0 失败、3 项仅 Windows 跳过。
 - **4 Host 与桌面外壳分离、纯 Node Host、命令行配对、数据目录锁完成**（D-095、D-099，实施记录见两决策）：`main/index.ts` 2110 → 850 行；WSL 后端与 SSH Desktop Host 运行 `out/main/pi-host.js`，无需 Electron 与图形会话；`devices`/`pair`/`revoke` 与数据目录锁经 `host.sock`。完整核心回归 1490 项、1457 通过、0 失败、33 项浏览器跳过；无显示环境下的 WSL 管道与 Desktop Host 端到端脚本通过。
+- **5 日志扩展与行数检查完成**（D-099、D-098 实施记录）：网关与 Host 生命周期写入 `main.jsonl`/`host.jsonl`，只含元数据；`wsl-backend.log` 改为追加并轮换；`check:size` 纳入 `test:core`。与 `wip` 合并后：完整核心 1501 项、1467 通过、0 失败、34 项浏览器跳过；设置与连接页 Chromium 48/48；构建通过；无显示环境下 `verify-host-pipe.ts` 与 `verify-desktop-host-cli.ts`（含日志只含元数据的核对）通过。证据 `release/evidence/backend-restructure-20260930/`（worktree）。
+
+本轮五步均已在本地完成。仍待真实环境验证：WSL 后端（Node Host）与 Windows 客户端的真机连接、真实 SSH 主机上的无图形会话 Desktop Host、安装包体积与内存的实测。
 
 
 **本轮可先交付的结果：** 可恢复且可追溯的开发基线、完成接线的 R12 本地候选、可用的 Host 包与客户端，以及准确的真实 SSH 待验清单。正式跨平台交付以第三轮实际通过为准。

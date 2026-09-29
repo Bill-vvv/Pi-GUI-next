@@ -75,7 +75,7 @@ try {
 
   const client = new DesktopHostClient({ localPort: port, compatibility: { productVersion, buildCommit: identity.sourceDigest } })
   await client.verifyCompatibility()
-  await client.pair(code, 'CLI check PC')
+  const paired2 = await client.pair(code, 'CLI check PC')
   const after = JSON.parse(cli('devices').stdout).devices as Array<{ deviceId: string, label: string | null }>
   assert.deepEqual(after.map(({ label }) => label), ['CLI check PC'])
   log({ stage: 'client-paired-and-listed', devices: after.length })
@@ -102,6 +102,20 @@ try {
   await assert.rejects(stat(join(dataDirectory, 'host.sock')), { code: 'ENOENT' })
   assert.notEqual(cli('devices').status, 0)
   log({ stage: 'stopped-and-released', launcherExitCode: exitCode })
+
+  // D-099: the Node Host writes lifecycle metadata to host.jsonl and never secrets or names.
+  const records = (await readFile(join(dataDirectory, 'logs/host.jsonl'), 'utf8')).trim().split('\n')
+    .map((line) => JSON.parse(line) as { component: string, event: string })
+  const events = records.map(({ component, event }) => `${component}:${event}`)
+  for (const expected of ['host:start', 'desktop-host-gateway:listening', 'desktop-host-gateway:paired',
+    'desktop-host-gateway:device-revoked', 'host:stopped']) {
+    assert.ok(events.includes(expected), `host.jsonl lacks ${expected}`)
+  }
+  const text = JSON.stringify(records)
+  for (const secret of [code, paired2.credential, after[0]!.deviceId, 'CLI check PC']) {
+    assert.equal(text.includes(secret), false, 'host.jsonl must not contain secrets, identities or names')
+  }
+  log({ stage: 'host-log-metadata-only', records: records.length })
 } finally {
   launcher?.kill('SIGKILL')
   await rm(home, { recursive: true, force: true })
