@@ -1,12 +1,31 @@
-import { readRepositoryFile, GitFileReadError, gitFileReadFailure } from './git-file-reader.ts'
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { createHash, createHmac, randomBytes } from 'node:crypto'
-import { constants as fsConstants } from 'node:fs'
-import { lstat, open, readlink, realpath, type FileHandle } from 'node:fs/promises'
-import { isAbsolute, relative, resolve, sep } from 'node:path'
-
-import { simpleGit } from 'simple-git'
-
+import {
+  readRepositoryFile,
+  GitFileReadError,
+  gitFileReadFailure
+} from './git-file-reader.ts'
+import {
+  spawn
+} from 'node:child_process'
+import {
+  createHmac,
+  randomBytes
+} from 'node:crypto'
+import {
+  constants as fsConstants
+} from 'node:fs'
+import {
+  lstat,
+  open,
+  realpath,
+  type FileHandle
+} from 'node:fs/promises'
+import {
+  isAbsolute,
+  resolve
+} from 'node:path'
+import {
+  simpleGit
+} from 'simple-git'
 import {
   GIT_BRANCH_LIST_MAX,
   GIT_BRANCH_SYNC_NETWORK_TIMEOUT_MS,
@@ -18,9 +37,7 @@ import {
   GIT_REPOSITORY_RELATIVE_PATH_MAX_UTF8_BYTES
 } from '../../shared/git-contract.ts'
 import type {
-  GitBranchEntry,
   GitBranchMutationWarning,
-  GitBranchStep,
   GitBranchSyncActions,
   GitBranchSyncCurrent,
   GitBranchSyncExecutionRequest,
@@ -28,7 +45,6 @@ import type {
   GitBranchSyncPrepareResult,
   GitBranchSyncPushStep,
   GitBranchSyncSnapshot,
-  GitChangeKind,
   GitCommitExecutionRequest,
   GitCommitExecutionResult,
   GitCommitPreview,
@@ -43,16 +59,13 @@ import type {
   GitDiffResult,
   GitFileReadRequest,
   GitFileReadResult,
-  GitErrorCode,
   GitErrorDto,
   GitFastForwardStep,
   GitFileChange,
   GitFileMutationRequest,
   GitHistoryCommitDetail,
-  GitHistoryCommitSummary,
   GitHistoryDetailRequest,
   GitHistoryDetailResult,
-  GitHistoryFileChange,
   GitHistoryFileDiffRequest,
   GitHistoryFileDiffResult,
   GitHistoryFileEntry,
@@ -63,27 +76,107 @@ import type {
   GitNetworkRemoteStep,
   GitPushTarget,
   GitRefreshResult,
-  GitRemoteEntry,
   GitRepositoryState
 } from '../../shared/git-contract.ts'
-import { isGitRefName } from './git-command-validation.ts'
-
-const DEFAULT_TIMEOUT_MS = 15_000
-const DEFAULT_MAX_STATUS_BYTES = 2 * 1024 * 1024
-const DEFAULT_MAX_STATUS_FILES = 2_000
-const DEFAULT_MAX_DIFF_BYTES = 1024 * 1024
-const DEFAULT_MAX_DIFF_FILES = 25
-const DEFAULT_MAX_DIFF_HUNKS = 200
-const DEFAULT_MAX_DIFF_LINES = 5_000
-const DEFAULT_MAX_AUTOMATIC_FINGERPRINT_BYTES = 1024 * 1024
-const CONTENT_HASH_WORKERS = 4
-const MAX_ERROR_MESSAGE_CHARACTERS = 512
-const MAX_ERROR_STDERR_CHARACTERS = 2 * 1024 * 1024
-const GIT_HISTORY_READ_ENV = { GIT_GRAFT_FILE: '/dev/null', GIT_NO_REPLACE_OBJECTS: '1' } as const
-const GIT_BRANCH_SYNC_READ_ENV = { GIT_GRAFT_FILE: '/dev/null', GIT_NO_REPLACE_OBJECTS: '1' } as const
-const GIT_NETWORK_ENV = { GIT_TERMINAL_PROMPT: '0' } as const
-const GIT_HISTORY_STREAM_STDERR_MAX_BYTES = 64 * 1024
-const GIT_REMOTE_TRACKING_SCAN_MAX = 512
+import {
+  isGitRefName
+} from './git-command-validation.ts'
+import {
+  GitRunError,
+  admitHistoryState,
+  assertBranchMutationAdmission,
+  assertCleanNamedBranchState,
+  assertCommitAdmission,
+  assertNotAborted,
+  assertPositiveOptions,
+  assertPushBranchAdmission,
+  assertPushTargetFence,
+  assertRepositoryRootFence,
+  assertUpstreamFence,
+  boundedGitMessage,
+  digest,
+  errorDto,
+  errorMessage,
+  failedBranchSyncExecution,
+  failedCommitExecution,
+  historyDetailFailure,
+  historyListFailure,
+  historySnapshotFromState,
+  isActualNotRepositoryError,
+  isFileNotFoundError,
+  isNetworkOutcomeUnknown,
+  notRepositoryState,
+  sameRepositoryIdentity,
+  snapshotFromState,
+  staleError,
+  staleMutationError,
+  stderrLength,
+  toErrorDto,
+  toPublicErrorDto,
+  trustRequiredError,
+  trustRequiredErrorPublic,
+  trustRequiredState,
+  validateCommitMessage
+} from './git-admission.ts'
+import {
+  boundHistoryMessage,
+  diffChangeForStatus,
+  diffRevision,
+  emptyDiff,
+  emptyDiffFromPath,
+  emptyHistoryFileDiff,
+  historyStatusToDiffChange,
+  mapStatusCode,
+  parseHistoryNameStatusRecords,
+  parseHistorySummaries,
+  parseIndexEntries,
+  parseSingleFilePatch,
+  parseStatus,
+  splitNonEmptyLines,
+  suggestCommitMessage,
+  trimNullable,
+  validateRepositoryPath,
+  validatedPathspecsForStatusFile
+} from './git-parsing.ts'
+import {
+  CONTENT_HASH_WORKERS,
+  type CommitInspection,
+  DEFAULT_MAX_AUTOMATIC_FINGERPRINT_BYTES,
+  DEFAULT_MAX_DIFF_BYTES,
+  DEFAULT_MAX_DIFF_FILES,
+  DEFAULT_MAX_DIFF_HUNKS,
+  DEFAULT_MAX_DIFF_LINES,
+  DEFAULT_MAX_STATUS_BYTES,
+  DEFAULT_MAX_STATUS_FILES,
+  DEFAULT_TIMEOUT_MS,
+  type ExactWorktreeContent,
+  type FileIdentity,
+  GIT_BRANCH_SYNC_READ_ENV,
+  GIT_HISTORY_READ_ENV,
+  GIT_HISTORY_STREAM_STDERR_MAX_BYTES,
+  GIT_NETWORK_ENV,
+  GIT_REMOTE_TRACKING_SCAN_MAX,
+  type HashChild,
+  type HistoryNameStatusRecord,
+  type MutationContentFence,
+  type RunOptions,
+  type StatusRecord
+} from './git-service-types.ts'
+import {
+  assertPathIdentityUnchanged,
+  assertSafeNoFollowPlatform,
+  endHashInput,
+  isNoFollowRaceError,
+  killHashChild,
+  mapWithConcurrency,
+  readBounded,
+  readStableSymbolicLink,
+  sameFileIdentity,
+  serializeFileIdentity,
+  toFileIdentity,
+  worktreeFileKind,
+  writeHashChunk
+} from './git-worktree-io.ts'
 
 export type GitServiceOptions = {
   gitBinary?: string
@@ -105,76 +198,7 @@ type GitServiceTestHooks = {
   beforeNoFollowOpen?: (absolutePath: string) => Promise<void>
 }
 
-type ResolvedOptions = Required<Omit<GitServiceOptions, 'authorizedRepositoryRoot'>> & Pick<GitServiceOptions, 'authorizedRepositoryRoot'>
-
-type StatusRecord = {
-  path: string
-  originalPath: string | null
-  indexCode: string
-  worktreeCode: string
-  conflicted: boolean
-  untracked: boolean
-}
-
-type RunOptions = {
-  signal?: AbortSignal
-  maxOutputBytes: number
-  timeoutMs?: number
-  env?: Record<string, string>
-  stdin?: string
-}
-
-type HistoryNameStatusRecord = readonly [status: string, path: string] | readonly [status: string, originalPath: string, path: string]
-
-type FileIdentity = {
-  dev: string
-  ino: string
-  mode: string
-  size: string
-  mtime: string
-  ctime: string
-}
-
-type MutationContentFence = {
-  rawOid: string | null
-}
-
-type CommitInspection = {
-  oid: string
-  parentMatched: boolean
-  snapshotMatched: boolean
-}
-
-type ExactWorktreeContent = {
-  kind: 'regular' | 'symlink'
-  mode: string
-  rawOid: string
-  filteredOid: string
-}
-
-type HashChild = {
-  process: ChildProcessWithoutNullStreams
-  stdout: Buffer[]
-  stderr: Buffer[]
-  outputBytes: number
-  inputError: Error | null
-  result: Promise<{ code: number | null; error: Error | null }>
-}
-
-type IndexEntry = {
-  mode: string
-  oid: string
-}
-
-class GitRunError extends Error {
-  readonly dto: GitErrorDto
-
-  constructor(dto: GitErrorDto) {
-    super(dto.message)
-    this.name = 'GitRunError'
-    this.dto = dto
-  }
-}
+export type ResolvedOptions = Required<Omit<GitServiceOptions, 'authorizedRepositoryRoot'>> & Pick<GitServiceOptions, 'authorizedRepositoryRoot'>
 
 class SerialQueue {
   private tail: Promise<void> = Promise.resolve()
@@ -3238,1115 +3262,5 @@ export class GitService {
       child.once('close', (code) => finish(null, code))
       child.stdin.end(stdin, 'utf8')
     })
-  }
-}
-
-function parseIndexEntries(text: string): Map<string, IndexEntry> {
-  const entries = new Map<string, IndexEntry>()
-  for (const record of text.split('\0')) {
-    if (record.length === 0) continue
-    const match = /^(\d+) ((?:[0-9a-f]{40}|[0-9a-f]{64})) ([0-3])\t(.*)$/s.exec(record)
-    if (match === null) throw new GitRunError(errorDto('git-error', 'Git returned an invalid index entry.'))
-    if (match[3] === '0') entries.set(match[4]!, { mode: match[1]!, oid: match[2]! })
-  }
-  return entries
-}
-
-function parseStatus(text: string): StatusRecord[] {
-  const records = text.split('\0')
-  const result: StatusRecord[] = []
-  for (let index = 0; index < records.length; index += 1) {
-    const record = records[index]
-    if (record.length === 0) continue
-    if (record.startsWith('? ')) {
-      result.push({ path: record.slice(2), originalPath: null, indexCode: '.', worktreeCode: '?', conflicted: false, untracked: true })
-      continue
-    }
-    if (record.startsWith('! ')) continue
-    const ordinary = /^1 (..) \S+ \S+ \S+ \S+ \S+ \S+ (.*)$/s.exec(record)
-    if (ordinary !== null) {
-      result.push(statusRecord(ordinary[2]!, null, ordinary[1]!))
-      continue
-    }
-    const renamed = /^2 (..) \S+ \S+ \S+ \S+ \S+ \S+ \S+ (.*)$/s.exec(record)
-    if (renamed !== null) {
-      const originalPath = records[index + 1]
-      if (originalPath === undefined) throw new GitRunError(errorDto('git-error', 'Git returned an incomplete rename status record.'))
-      index += 1
-      result.push(statusRecord(renamed[2]!, originalPath, renamed[1]!))
-      continue
-    }
-    const unmerged = /^u (..) \S+ \S+ \S+ \S+ \S+ \S+ \S+ \S+ (.*)$/s.exec(record)
-    if (unmerged !== null) {
-      result.push({ ...statusRecord(unmerged[2]!, null, unmerged[1]!), conflicted: true })
-      continue
-    }
-    throw new GitRunError(errorDto('git-error', 'Git returned an unsupported status record.'))
-  }
-  return result
-}
-
-function statusRecord(path: string, originalPath: string | null, xy: string): StatusRecord {
-  const indexCode = xy[0] ?? '.'
-  const worktreeCode = xy[1] ?? '.'
-  return {
-    path,
-    originalPath,
-    indexCode,
-    worktreeCode,
-    conflicted: indexCode === 'U' || worktreeCode === 'U' || xy === 'AA' || xy === 'DD',
-    untracked: false
-  }
-}
-
-function mapStatusCode(code: string): GitChangeKind {
-  switch (code) {
-    case '.': return 'unmodified'
-    case 'A': return 'added'
-    case 'M': return 'modified'
-    case 'D': return 'deleted'
-    case 'R': return 'renamed'
-    // Git copy detection is intentionally projected as an added file until the product needs copy identity.
-    case 'C': return 'added'
-    case 'T': return 'type-changed'
-    case 'U': return 'unmerged'
-    case '?': return 'untracked'
-    case '!': return 'ignored'
-    default: return 'unknown'
-  }
-}
-
-function diffChangeForStatus(
-  kind: GitDiffKind,
-  statusFile: GitFileChange | undefined,
-  hasRenameHeader: boolean
-): GitDiffFile['change'] | null {
-  if (statusFile === undefined) return null
-  const change = kind === 'working' ? statusFile.worktreeChange : statusFile.indexChange
-  switch (change) {
-    case 'added': return 'added'
-    case 'deleted': return 'deleted'
-    case 'renamed': return 'renamed'
-    case 'type-changed': return 'type-changed'
-    case 'modified': return hasRenameHeader ? 'renamed' : 'modified'
-    default: return null
-  }
-}
-
-function parseSingleFilePatch(
-  kind: GitDiffKind,
-  path: string,
-  patch: string,
-  maxHunks: number,
-  maxLines: number
-): { hunks: GitDiffHunk[]; hasRenameHeader: boolean; hasModeOnlyChange: boolean } {
-  const lines = patch.split('\n')
-  const fileHeaders = lines.filter((line) => line.startsWith('diff --git ')).length
-  if (fileHeaders !== 1 || !lines[0]?.startsWith('diff --git ')) {
-    throw new GitRunError(errorDto('unsupported', 'Git diff must contain exactly one expected file.'))
-  }
-  let hasRenameHeader = false
-  let hasModeHeader = false
-  let totalParsedLines = 0
-  const hunks: GitDiffHunk[] = []
-  let index = 1
-  while (index < lines.length) {
-    const line = lines[index]!
-    if (line.startsWith('@@ ')) break
-    if (line.startsWith('diff --git ')) throw new GitRunError(errorDto('unsupported', 'Git diff contains more than one file.'))
-    if (line.startsWith('rename from ') || line.startsWith('rename to ')) hasRenameHeader = true
-    if (line.startsWith('old mode ') || line.startsWith('new mode ')) hasModeHeader = true
-    index += 1
-  }
-  while (index < lines.length) {
-    if (index === lines.length - 1 && lines[index] === '') break
-    const header = lines[index]!
-    const match = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/.exec(header)
-    if (match === null) throw new GitRunError(errorDto('unsupported', 'Git diff contains an invalid hunk header.'))
-    const oldStart = Number(match[1])
-    const oldLines = match[2] === undefined ? 1 : Number(match[2])
-    const newStart = Number(match[3])
-    const newLines = match[4] === undefined ? 1 : Number(match[4])
-    for (const value of [oldStart, oldLines, newStart, newLines]) {
-      if (!Number.isSafeInteger(value) || value < 0) throw new GitRunError(errorDto('unsupported', 'Git diff contains an invalid hunk range.'))
-    }
-    const normalizedHeader = `@@ -${oldStart},${oldLines} +${newStart},${newLines} @@${match[5] ?? ''}`
-    index += 1
-    let oldLine = oldStart
-    let newLine = newStart
-    let consumedOld = 0
-    let consumedNew = 0
-    const changes: GitDiffLine[] = []
-    if (hunks.length >= maxHunks) throw new GitRunError(errorDto('output-limit', 'Diff exceeds the configured hunk budget.'))
-    while (index < lines.length) {
-      const line = lines[index]!
-      if (line.startsWith('@@ ')) break
-      if (index === lines.length - 1 && line === '') {
-        index += 1
-        break
-      }
-      const prefix = line[0]
-      if (prefix === '+') {
-        changes.push({ kind: 'add', oldLine: null, newLine, content: line.slice(1) })
-        newLine += 1
-        consumedNew += 1
-      } else if (prefix === '-') {
-        changes.push({ kind: 'remove', oldLine, newLine: null, content: line.slice(1) })
-        oldLine += 1
-        consumedOld += 1
-      } else if (prefix === ' ') {
-        changes.push({ kind: 'context', oldLine, newLine, content: line.slice(1) })
-        oldLine += 1
-        newLine += 1
-        consumedOld += 1
-        consumedNew += 1
-      } else if (prefix === '\\') {
-        changes.push({ kind: 'meta', oldLine: null, newLine: null, content: line.slice(1).trim() })
-      } else {
-        throw new GitRunError(errorDto('unsupported', 'Git diff contains an invalid hunk line.'))
-      }
-      index += 1
-      totalParsedLines += 1
-      if (totalParsedLines > maxLines) {
-        throw new GitRunError(errorDto('output-limit', 'Diff exceeds the configured line budget.'))
-      }
-    }
-    if (consumedOld !== oldLines || consumedNew !== newLines) {
-      throw new GitRunError(errorDto('unsupported', 'Git diff hunk counts do not match its content.'))
-    }
-    hunks.push({
-      id: digest(`${kind}\0${path}\0${normalizedHeader}\0${hunks.length}`).slice(0, 24),
-      header: normalizedHeader,
-      oldStart,
-      oldLines,
-      newStart,
-      newLines,
-      lines: changes
-    })
-  }
-  return { hunks, hasRenameHeader, hasModeOnlyChange: hasModeHeader }
-}
-
-function validatedPathspecsForStatusFile(
-  path: string,
-  statusFile: GitFileChange | undefined,
-  repositoryRoot: string
-): string[] {
-  if (
-    statusFile?.originalPath !== null &&
-    statusFile?.originalPath !== undefined &&
-    (statusFile.indexChange === 'renamed' || statusFile.worktreeChange === 'renamed')
-  ) {
-    return [
-      validateRepositoryPath(statusFile.originalPath, repositoryRoot),
-      validateRepositoryPath(path, repositoryRoot)
-    ]
-  }
-  return [validateRepositoryPath(path, repositoryRoot)]
-}
-
-function validateRepositoryPath(path: string, repositoryRoot: string | null): string {
-  if (repositoryRoot === null) throw new GitRunError(errorDto('not-repository', 'Project is not a Git repository.'))
-  if (path.length === 0 || path.includes('\0') || isAbsolute(path)) {
-    throw new GitRunError(errorDto('invalid-path', 'Git path must be a non-empty repository-relative path.'))
-  }
-  if (Buffer.byteLength(path, 'utf8') > GIT_REPOSITORY_RELATIVE_PATH_MAX_UTF8_BYTES) {
-    throw new GitRunError(errorDto(
-      'invalid-path',
-      `Git path exceeds the ${GIT_REPOSITORY_RELATIVE_PATH_MAX_UTF8_BYTES}-byte repository-relative limit.`
-    ))
-  }
-  const segments = path.split('/')
-  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
-    throw new GitRunError(errorDto('invalid-path', 'Git path contains an invalid traversal segment.'))
-  }
-  const absolute = resolve(repositoryRoot, path)
-  const relativePath = relative(repositoryRoot, absolute)
-  if (relativePath.startsWith(`..${sep}`) || relativePath === '..' || isAbsolute(relativePath)) {
-    throw new GitRunError(errorDto('invalid-path', 'Git path resolves outside the repository.'))
-  }
-  return path
-}
-
-function staleError(request: GitDiffRequest, state: GitRepositoryState): GitErrorDto | null {
-  if (
-    state.repositoryRoot !== request.expectedRepositoryRoot ||
-    state.headOid !== request.expectedHeadOid ||
-    state.indexTreeOid !== request.expectedIndexTreeOid ||
-    state.statusRevision !== request.expectedStatusRevision
-  ) {
-    return errorDto('stale', 'Repository state changed before the diff was read.')
-  }
-  return null
-}
-
-function staleMutationError(
-  request: GitFileMutationRequest,
-  state: GitRepositoryState,
-  path: string
-): GitErrorDto | null {
-  const statusFile = state.files.find((file) => file.path === path)
-  if (statusFile === undefined || statusFile.fingerprint !== request.expectedFileFingerprint) {
-    return errorDto('stale', 'Requested file is missing or changed in the current bounded Git status projection.')
-  }
-  if (statusFile.conflicted || statusFile.state === 'conflicted') {
-    return errorDto('unsupported', 'Resolve merge conflicts before staging or unstaging this file.')
-  }
-  if (
-    state.repositoryRoot !== request.expectedRepositoryRoot ||
-    state.headOid !== request.expectedHeadOid ||
-    state.indexTreeOid !== request.expectedIndexTreeOid ||
-    state.indexFingerprint !== request.expectedIndexFingerprint ||
-    state.worktreeFingerprint !== request.expectedWorktreeFingerprint ||
-    state.statusRevision !== request.expectedStatusRevision
-  ) {
-    return errorDto('stale', 'Repository state changed before the Git mutation.')
-  }
-  return null
-}
-
-function sameRepositoryIdentity(before: GitRepositoryState, after: GitRepositoryState): boolean {
-  return before.kind === 'repository' &&
-    after.kind === 'repository' &&
-    before.repositoryRoot === after.repositoryRoot &&
-    before.headOid === after.headOid &&
-    before.indexTreeOid === after.indexTreeOid &&
-    before.indexFingerprint === after.indexFingerprint &&
-    before.worktreeFingerprint === after.worktreeFingerprint &&
-    before.statusRevision === after.statusRevision
-}
-
-function historySnapshotFromState(state: GitRepositoryState): GitHistorySnapshot {
-  if (state.repositoryRoot === null) {
-    throw new GitRunError(errorDto('not-repository', 'Project is not a Git repository.'))
-  }
-  return {
-    repositoryRoot: state.repositoryRoot,
-    headOid: state.headOid,
-    branch: state.branch
-  }
-}
-
-type HistoryAdmission =
-  | { kind: 'ready'; state: GitRepositoryState & { kind: 'repository'; repositoryRoot: string } }
-  | { kind: 'failure'; result: Extract<GitHistoryListResult, { ok: false }> }
-
-function admitHistoryState(
-  state: GitRepositoryState,
-  snapshot: GitHistorySnapshot
-): HistoryAdmission {
-  if (state.kind === 'not-repository' || state.repositoryRoot === null && state.kind !== 'trust-required') {
-    return {
-      kind: 'failure',
-      result: historyListFailure(
-        errorDto('not-repository', 'Project is not a Git repository.'),
-        snapshot,
-        null
-      )
-    }
-  }
-  if (state.kind === 'trust-required') {
-    return {
-      kind: 'failure',
-      result: historyListFailure(trustRequiredError(), snapshot, null)
-    }
-  }
-  if (
-    state.repositoryRoot !== snapshot.repositoryRoot ||
-    state.headOid !== snapshot.headOid ||
-    state.branch !== snapshot.branch
-  ) {
-    return {
-      kind: 'failure',
-      result: historyListFailure(
-        errorDto('stale', 'Repository HEAD identity changed before the history read.'),
-        snapshot,
-        historySnapshotFromState(state)
-      )
-    }
-  }
-  return {
-    kind: 'ready',
-    state: state as GitRepositoryState & { kind: 'repository'; repositoryRoot: string }
-  }
-}
-
-function historyListFailure(
-  error: GitErrorDto,
-  snapshot: GitHistorySnapshot | null,
-  current: GitHistorySnapshot | null
-): Extract<GitHistoryListResult, { ok: false }> {
-  return { ok: false, error, snapshot, current }
-}
-
-function historyDetailFailure(
-  error: GitErrorDto,
-  snapshot: GitHistorySnapshot | null,
-  current: GitHistorySnapshot | null
-): Extract<GitHistoryDetailResult, { ok: false }> {
-  return { ok: false, error, snapshot, current }
-}
-
-function emptyHistoryFileDiff(
-  request: GitHistoryFileDiffRequest,
-  state: GitHistoryFileDiffResult['state'],
-  current: GitHistorySnapshot | null,
-  error: GitErrorDto | null
-): GitHistoryFileDiffResult {
-  return {
-    oid: request.oid,
-    fileId: request.fileId,
-    path: null,
-    originalPath: null,
-    status: null,
-    state,
-    snapshot: null,
-    current,
-    files: [],
-    byteCount: 0,
-    hunkCount: 0,
-    lineCount: 0,
-    error
-  }
-}
-
-function parseHistorySummaries(text: string): GitHistoryCommitSummary[] {
-  if (text.length === 0) return []
-  const lines = text.endsWith('\n') ? text.slice(0, -1).split('\n') : text.split('\n')
-  const commits: GitHistoryCommitSummary[] = []
-  for (const line of lines) {
-    if (line.length === 0) continue
-    const parts = line.split('\0')
-    if (parts.length !== 10) {
-      throw new GitRunError(errorDto('git-error', 'Git returned an invalid history log record.'))
-    }
-    const [
-      oid,
-      shortOid,
-      subject,
-      authorName,
-      authorEmail,
-      authorAtText,
-      committerName,
-      committerEmail,
-      committerAtText,
-      parentsText
-    ] = parts as [string, string, string, string, string, string, string, string, string, string]
-    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(oid) || shortOid.length === 0) {
-      throw new GitRunError(errorDto('git-error', 'Git returned an invalid history commit identity.'))
-    }
-    const authorAt = Number(authorAtText)
-    const committerAt = Number(committerAtText)
-    const authorAtMs = authorAt * 1000
-    const committerAtMs = committerAt * 1000
-    if (
-      !Number.isSafeInteger(authorAt) ||
-      !Number.isSafeInteger(committerAt) ||
-      authorAt < 0 ||
-      committerAt < 0 ||
-      !Number.isSafeInteger(authorAtMs) ||
-      !Number.isSafeInteger(committerAtMs)
-    ) {
-      throw new GitRunError(errorDto('git-error', 'Git returned an invalid history commit timestamp.'))
-    }
-    const parentOids = parentsText.length === 0
-      ? []
-      : parentsText.split(' ').filter((parent) => parent.length > 0)
-    for (const parent of parentOids) {
-      if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(parent)) {
-        throw new GitRunError(errorDto('git-error', 'Git returned an invalid history parent identity.'))
-      }
-    }
-    commits.push({
-      oid,
-      shortOid,
-      subject,
-      authorName,
-      authorEmail,
-      authorAt: authorAtMs,
-      committerName,
-      committerEmail,
-      committerAt: committerAtMs,
-      parentOids
-    })
-  }
-  return commits
-}
-
-function parseHistoryNameStatusRecords(
-  records: readonly HistoryNameStatusRecord[],
-  commitOid: string,
-  repositoryRoot: string
-): GitHistoryFileEntry[] {
-  return records.map((record) => {
-    const statusCode = record[0][0]!
-    if (statusCode === 'R' || statusCode === 'C') {
-      if (record.length !== 3) {
-        throw new GitRunError(errorDto('git-error', 'Git returned an invalid rename/copy history file record.'))
-      }
-      const originalPath = validateRepositoryPath(record[1], repositoryRoot)
-      const path = validateRepositoryPath(record[2], repositoryRoot)
-      const status: GitHistoryFileChange = statusCode === 'R' ? 'renamed' : 'added'
-      return {
-        fileId: historyFileId(commitOid, status, originalPath, path),
-        path,
-        originalPath: statusCode === 'R' ? originalPath : null,
-        status
-      }
-    }
-    if (record.length !== 2) {
-      throw new GitRunError(errorDto('git-error', 'Git returned an invalid history file record.'))
-    }
-    const path = validateRepositoryPath(record[1], repositoryRoot)
-    const status = mapHistoryStatusCode(statusCode)
-    return {
-      fileId: historyFileId(commitOid, status, null, path),
-      path,
-      originalPath: null,
-      status
-    }
-  })
-}
-
-function mapHistoryStatusCode(code: string): GitHistoryFileChange {
-  switch (code) {
-    case 'A':
-      return 'added'
-    case 'M':
-      return 'modified'
-    case 'D':
-      return 'deleted'
-    case 'T':
-      return 'type-changed'
-    default:
-      return 'unknown'
-  }
-}
-
-function historyFileId(
-  commitOid: string,
-  status: GitHistoryFileChange,
-  originalPath: string | null,
-  path: string
-): string {
-  return digest(['history', commitOid, status, originalPath ?? '', path].join('\0')).slice(0, 32)
-}
-
-function historyStatusToDiffChange(
-  status: GitHistoryFileChange
-): Exclude<GitChangeKind, 'unmodified' | 'unmerged' | 'untracked' | 'ignored'> {
-  return status
-}
-
-function boundHistoryMessage(text: string): { message: string; messageTruncated: boolean } {
-  const normalized = text.endsWith('\n') ? text.slice(0, -1) : text
-  if (Buffer.byteLength(normalized, 'utf8') <= GIT_HISTORY_MESSAGE_MAX_UTF8_BYTES) {
-    return { message: normalized, messageTruncated: false }
-  }
-  let end = normalized.length
-  while (end > 0 && Buffer.byteLength(normalized.slice(0, end), 'utf8') > GIT_HISTORY_MESSAGE_MAX_UTF8_BYTES) {
-    end -= 1
-  }
-  return { message: normalized.slice(0, end), messageTruncated: true }
-}
-
-function emptyDiff(
-  request: GitDiffRequest,
-  stateValue: GitDiffResult['state'],
-  state: GitRepositoryState | null,
-  error: GitErrorDto | null
-): GitDiffResult {
-  return emptyDiffFromPath(request.kind, request.path, stateValue, state, error)
-}
-
-function emptyDiffFromPath(
-  kind: GitDiffKind,
-  path: string,
-  stateValue: GitDiffResult['state'],
-  state: GitRepositoryState | null,
-  error: GitErrorDto | null
-): GitDiffResult {
-  return {
-    kind,
-    path,
-    state: stateValue,
-    revision: null,
-    headOid: state?.headOid ?? null,
-    indexTreeOid: state?.indexTreeOid ?? null,
-    worktreeFingerprint: state?.worktreeFingerprint ?? '',
-    files: [],
-    byteCount: 0,
-    fileCount: 0,
-    hunkCount: 0,
-    lineCount: 0,
-    error
-  }
-}
-
-function notRepositoryState(projectRoot: string): GitRepositoryState {
-  return {
-    kind: 'not-repository',
-    projectRoot,
-    repositoryRoot: null,
-    headOid: null,
-    branch: null,
-    detached: false,
-    upstream: null,
-    ahead: 0,
-    behind: 0,
-    indexTreeOid: null,
-    indexFingerprint: digest('not-repository'),
-    worktreeFingerprint: digest('not-repository'),
-    statusRevision: digest(`not-repository\0${projectRoot}`),
-    files: [],
-    truncated: false,
-    refreshedAt: Date.now(),
-    lastError: null
-  }
-}
-
-function trustRequiredState(projectRoot: string, repositoryRoot: string): GitRepositoryState {
-  const error = trustRequiredError()
-  return {
-    kind: 'trust-required',
-    projectRoot,
-    repositoryRoot,
-    headOid: null,
-    branch: null,
-    detached: false,
-    upstream: null,
-    ahead: 0,
-    behind: 0,
-    indexTreeOid: null,
-    indexFingerprint: digest(`trust-required\0${projectRoot}\0${repositoryRoot}`),
-    worktreeFingerprint: digest(`trust-required\0${projectRoot}\0${repositoryRoot}`),
-    statusRevision: digest(`trust-required\0${projectRoot}\0${repositoryRoot}`),
-    files: [],
-    truncated: false,
-    refreshedAt: Date.now(),
-    lastError: error
-  }
-}
-
-function trustRequiredError(): GitErrorDto {
-  return errorDto('trust-required', 'The Project is inside a different repository root and requires exact Main authorization.')
-}
-
-function trustRequiredErrorPublic(): GitErrorDto {
-  return errorDto('trust-required', 'Git repository authorization is required.')
-}
-
-function snapshotFromState(state: GitRepositoryState): GitCommitSnapshot {
-  if (state.kind !== 'repository' || state.repositoryRoot === null || state.branch === null || state.indexTreeOid === null) {
-    throw new GitRunError(errorDto('unsupported', 'Repository is not ready for commit.'))
-  }
-  return {
-    repositoryRoot: state.repositoryRoot,
-    headOid: state.headOid,
-    branch: state.branch,
-    indexTreeOid: state.indexTreeOid,
-    indexFingerprint: state.indexFingerprint
-  }
-}
-
-function assertCommitAdmission(state: GitRepositoryState, request: GitCommitExecutionRequest): void {
-  if (state.kind !== 'repository' || state.repositoryRoot === null) {
-    throw new GitRunError(
-      state.kind === 'trust-required'
-        ? trustRequiredError()
-        : errorDto('not-repository', 'Project is not a Git repository.')
-    )
-  }
-  if (state.detached || state.branch === null) {
-    throw new GitRunError(errorDto('unsupported', 'Commit requires a named branch; detached HEAD is unsupported.'))
-  }
-  if (state.indexTreeOid === null || state.files.some((file) => file.conflicted)) {
-    throw new GitRunError(errorDto('conflict', 'Git repository has unresolved conflicts.'))
-  }
-  if (state.truncated) {
-    throw new GitRunError(errorDto('unsupported', 'Git status is truncated; commit is blocked until status is complete.'))
-  }
-  if (request.mode === 'amend' && state.headOid === null) {
-    throw new GitRunError(errorDto('unsupported', 'Amend requires an existing HEAD commit.'))
-  }
-  if (
-    state.repositoryRoot !== request.snapshot.repositoryRoot ||
-    state.branch !== request.snapshot.branch ||
-    state.headOid !== request.snapshot.headOid ||
-    state.indexTreeOid !== request.snapshot.indexTreeOid ||
-    state.indexFingerprint !== request.snapshot.indexFingerprint
-  ) {
-    throw new GitRunError(errorDto('stale', 'Repository state changed before the commit.'))
-  }
-}
-
-function assertPushTargetFence(
-  mode: GitCommitExecutionRequest['mode'],
-  expected: GitPushTarget | null,
-  actual: GitPushTarget | null
-): void {
-  if (mode === 'commit-and-push' && actual === null) {
-    throw new GitRunError(errorDto('unsupported', 'Commit and push requires a configured upstream branch.'))
-  }
-  if (
-    expected?.remote !== actual?.remote ||
-    expected?.branch !== actual?.branch ||
-    (expected === null) !== (actual === null)
-  ) {
-    throw new GitRunError(errorDto('stale', 'Upstream push target changed before the commit.'))
-  }
-}
-
-function validateCommitMessage(message: string): string {
-  if (message.includes('\0')) {
-    throw new GitRunError(errorDto('unsupported', 'Commit message must not contain NUL bytes.'))
-  }
-  if (message.trim().length === 0) {
-    throw new GitRunError(errorDto('unsupported', 'Commit message must contain non-whitespace content.'))
-  }
-  if (Buffer.byteLength(message, 'utf8') > 64 * 1024) {
-    throw new GitRunError(errorDto('unsupported', 'Commit message exceeds the configured byte limit.'))
-  }
-  return message
-}
-
-function suggestCommitMessage(paths: string[]): string {
-  const sorted = [...paths].sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
-  if (sorted.length === 1) return `Update ${sorted[0]}`
-  if (sorted.length <= 5) return `Update ${sorted.join(', ')}`
-  return `Update ${sorted.length} files`
-}
-
-function failedCommitExecution(
-  mode: GitCommitExecutionRequest['mode'],
-  error: GitErrorDto,
-  postState: GitRefreshResult
-): GitCommitExecutionResult {
-  return {
-    mode,
-    commit: { status: 'failed', error },
-    push: null,
-    postState
-  }
-}
-
-function failedBranchSyncExecution(
-  action: GitBranchSyncExecutionRequest['action'],
-  error: GitErrorDto,
-  postView: GitBranchSyncPrepareResult
-): GitBranchSyncExecutionResult {
-  if (action === 'create-and-switch' || action === 'switch') {
-    return {
-      action,
-      branch: { status: 'failed', error },
-      fetch: null,
-      fastForward: null,
-      push: null,
-      postView
-    }
-  }
-  if (action === 'fetch') {
-    return {
-      action,
-      branch: null,
-      fetch: { status: 'failed', remote: '', error },
-      fastForward: null,
-      push: null,
-      postView
-    }
-  }
-  if (action === 'pull') {
-    return {
-      action,
-      branch: null,
-      fetch: { status: 'failed', remote: '', error },
-      fastForward: null,
-      push: null,
-      postView
-    }
-  }
-  return {
-    action,
-    branch: null,
-    fetch: null,
-    fastForward: null,
-    push: { status: 'failed', remote: '', branch: '', error },
-    postView
-  }
-}
-
-function splitNonEmptyLines(text: string): string[] {
-  if (text.length === 0) return []
-  const normalized = text.endsWith('\n') ? text.slice(0, -1) : text
-  if (normalized.length === 0) return []
-  return normalized.split('\n').filter((line) => line.length > 0)
-}
-
-function isNetworkOutcomeUnknown(error: GitErrorDto): boolean {
-  return error.code === 'timeout' || error.code === 'aborted'
-}
-
-function assertRepositoryRootFence(state: GitRepositoryState, repositoryRoot: string): asserts state is GitRepositoryState & {
-  kind: 'repository'
-  repositoryRoot: string
-} {
-  if (state.kind === 'trust-required') {
-    throw new GitRunError(trustRequiredError())
-  }
-  if (state.kind !== 'repository' || state.repositoryRoot === null) {
-    throw new GitRunError(errorDto('not-repository', 'Project is not a Git repository.'))
-  }
-  if (state.repositoryRoot !== repositoryRoot) {
-    throw new GitRunError(errorDto('stale', 'Repository identity changed before the Git operation.'))
-  }
-}
-
-function assertCleanNamedBranchState(state: GitRepositoryState): asserts state is GitRepositoryState & {
-  kind: 'repository'
-  repositoryRoot: string
-  branch: string
-  headOid: string
-} {
-  if (state.kind === 'trust-required') {
-    throw new GitRunError(trustRequiredError())
-  }
-  if (state.kind !== 'repository' || state.repositoryRoot === null) {
-    throw new GitRunError(errorDto('not-repository', 'Project is not a Git repository.'))
-  }
-  if (state.detached || state.branch === null || state.headOid === null) {
-    throw new GitRunError(errorDto(
-      'unsupported',
-      'Branch mutation requires a named non-unborn branch; detached or unborn HEAD is unsupported.'
-    ))
-  }
-  if (state.files.some((file) => file.conflicted) || state.indexTreeOid === null) {
-    throw new GitRunError(errorDto('conflict', 'Git repository has unresolved conflicts.'))
-  }
-  if (state.truncated) {
-    throw new GitRunError(errorDto('unsupported', 'Git status is truncated; branch mutation is blocked until status is complete.'))
-  }
-  if (state.files.length > 0) {
-    throw new GitRunError(errorDto('unsupported', 'Branch mutation requires a clean index and worktree.'))
-  }
-}
-
-function assertBranchMutationAdmission(
-  state: GitRepositoryState,
-  snapshot: GitBranchSyncSnapshot
-): asserts state is GitRepositoryState & {
-  kind: 'repository'
-  repositoryRoot: string
-  branch: string
-  headOid: string
-} {
-  assertCleanNamedBranchState(state)
-  if (
-    state.repositoryRoot !== snapshot.repositoryRoot ||
-    state.headOid !== snapshot.headOid ||
-    state.branch !== snapshot.branch ||
-    state.indexTreeOid !== snapshot.indexTreeOid ||
-    state.indexFingerprint !== snapshot.indexFingerprint ||
-    state.worktreeFingerprint !== snapshot.worktreeFingerprint ||
-    state.statusRevision !== snapshot.statusRevision
-  ) {
-    throw new GitRunError(errorDto('stale', 'Repository identity changed before the branch mutation.'))
-  }
-}
-
-function assertUpstreamFence(
-  state: GitRepositoryState & { branch: string; headOid: string; repositoryRoot: string },
-  snapshot: GitBranchSyncSnapshot
-): void {
-  if (snapshot.upstreamRemote === null || snapshot.upstreamBranch === null) {
-    throw new GitRunError(errorDto('unsupported', 'Configured upstream is required.'))
-  }
-  if (
-    state.repositoryRoot !== snapshot.repositoryRoot ||
-    state.branch !== snapshot.branch ||
-    state.headOid !== snapshot.headOid
-  ) {
-    throw new GitRunError(errorDto('stale', 'Repository identity changed before the upstream operation.'))
-  }
-}
-
-function assertPushBranchAdmission(
-  state: GitRepositoryState,
-  snapshot: GitBranchSyncSnapshot
-): asserts state is GitRepositoryState & {
-  kind: 'repository'
-  repositoryRoot: string
-  branch: string
-  headOid: string
-} {
-  if (state.kind === 'trust-required') {
-    throw new GitRunError(trustRequiredError())
-  }
-  if (state.kind !== 'repository' || state.repositoryRoot === null) {
-    throw new GitRunError(errorDto('not-repository', 'Project is not a Git repository.'))
-  }
-  if (state.detached || state.branch === null || state.headOid === null) {
-    throw new GitRunError(errorDto(
-      'unsupported',
-      'Push requires a named non-unborn branch; detached or unborn HEAD is unsupported.'
-    ))
-  }
-  if (state.files.some((file) => file.conflicted) || state.indexTreeOid === null) {
-    throw new GitRunError(errorDto('conflict', 'Git repository has unresolved conflicts.'))
-  }
-  if (state.truncated) {
-    throw new GitRunError(errorDto('unsupported', 'Git status is truncated; push is blocked until status is complete.'))
-  }
-  if (snapshot.upstreamRemote === null || snapshot.upstreamBranch === null) {
-    throw new GitRunError(errorDto('unsupported', 'Push requires a configured upstream branch.'))
-  }
-  if (
-    state.repositoryRoot !== snapshot.repositoryRoot ||
-    state.headOid !== snapshot.headOid ||
-    state.branch !== snapshot.branch
-  ) {
-    throw new GitRunError(errorDto('stale', 'Repository identity changed before push.'))
-  }
-}
-
-function diffRevision(kind: GitDiffKind, state: GitRepositoryState, path: string, patch: string): string {
-  return digest([kind, state.headOid ?? 'unborn', state.indexTreeOid ?? 'unmerged-index', state.worktreeFingerprint, path, patch].join('\0'))
-}
-
-function trimNullable(value: string | null): string | null {
-  if (value === null) return null
-  const trimmed = value.trim()
-  return trimmed.length === 0 ? null : trimmed
-}
-
-function digest(value: string): string {
-  return createHash('sha256').update(value).digest('hex')
-}
-
-function errorDto(code: GitErrorCode, message: string, stderrCharacters = 0): GitErrorDto {
-  return {
-    code,
-    message: Array.from(message).slice(0, MAX_ERROR_MESSAGE_CHARACTERS).join(''),
-    stderrCharacters: Number.isFinite(stderrCharacters)
-      ? Math.max(0, Math.min(MAX_ERROR_STDERR_CHARACTERS, Math.trunc(stderrCharacters)))
-      : 0
-  }
-}
-
-function toErrorDto(error: unknown): GitErrorDto {
-  if (error instanceof GitRunError) return error.dto
-  return errorDto('git-error', 'Git service failed.', stderrLength(error))
-}
-
-function toPublicErrorDto(error: unknown): GitErrorDto {
-  const dto = toErrorDto(error)
-  const message: Record<GitErrorCode, string> = {
-    'not-repository': 'Project is not a Git repository.',
-    'trust-required': 'Git repository authorization is required.',
-    'invalid-path': 'Git path validation failed.',
-    stale: 'Git repository state changed.',
-    conflict: 'Git repository has unresolved conflicts.',
-    aborted: 'Git operation was aborted.',
-    timeout: 'Git operation timed out.',
-    'output-limit': 'Git output exceeded the configured limit.',
-    unsupported: 'Git operation is unsupported.',
-    'git-error': 'Git operation failed.'
-  }
-  return errorDto(dto.code, message[dto.code], dto.stderrCharacters)
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-function boundedGitMessage(error: unknown): string {
-  const message = errorMessage(error).replace(/[\r\n]+/g, ' ').trim()
-  return message.length === 0 ? 'Git command failed.' : message
-}
-
-function stderrLength(error: unknown): number {
-  if (typeof error !== 'object' || error === null) return 0
-  if ('stderr' in error) {
-    const stderr = error.stderr
-    if (typeof stderr === 'string') return stderr.length
-    if (stderr instanceof Uint8Array) return stderr.byteLength
-  }
-  return errorMessage(error).length
-}
-
-function isActualNotRepositoryError(error: unknown): boolean {
-  return error instanceof GitRunError &&
-    error.dto.code === 'git-error' &&
-    /(?:^|\b)not a git repository(?:\b|$)/i.test(error.message)
-}
-
-function isFileNotFoundError(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
-}
-
-function assertNotAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) throw new GitRunError(errorDto('aborted', 'Git operation was aborted.'))
-}
-
-function assertPositiveOptions(options: ResolvedOptions): void {
-  for (const [name, value] of Object.entries(options)) {
-    if (name === 'gitBinary' || name === 'authorizedRepositoryRoot') {
-      if (value !== undefined && (typeof value !== 'string' || value.length === 0)) throw new Error(`${name} must not be empty.`)
-      continue
-    }
-    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
-      throw new Error(`${name} must be a positive safe integer.`)
-    }
-  }
-}
-
-async function mapWithConcurrency<T, R>(
-  values: readonly T[],
-  concurrency: number,
-  mapper: (value: T) => Promise<R>
-): Promise<R[]> {
-  const results = new Array<R>(values.length)
-  let nextIndex = 0
-  let stopped = false
-  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
-    while (!stopped) {
-      const index = nextIndex
-      nextIndex += 1
-      if (index >= values.length) return
-      try {
-        results[index] = await mapper(values[index]!)
-      } catch (error) {
-        stopped = true
-        throw error
-      }
-    }
-  })
-  await Promise.all(workers)
-  return results
-}
-
-async function readBounded(handle: FileHandle, maxBytes: number, signal?: AbortSignal): Promise<Uint8Array | null> {
-  const buffer = Buffer.allocUnsafe(maxBytes + 1)
-  let offset = 0
-  while (offset < buffer.length) {
-    assertNotAborted(signal)
-    const length = Math.min(64 * 1024, buffer.length - offset)
-    const { bytesRead } = await handle.read(buffer, offset, length, offset)
-    if (bytesRead === 0) break
-    offset += bytesRead
-  }
-  assertNotAborted(signal)
-  return offset > maxBytes ? null : buffer.subarray(0, offset)
-}
-
-function toFileIdentity(stat: {
-  dev: number | bigint
-  ino: number | bigint
-  mode: number | bigint
-  size: number | bigint
-  mtimeMs?: number | bigint
-  ctimeMs?: number | bigint
-  mtimeNs?: bigint
-  ctimeNs?: bigint
-}): FileIdentity {
-  return {
-    dev: String(stat.dev),
-    ino: String(stat.ino),
-    mode: String(stat.mode),
-    size: String(stat.size),
-    mtime: stat.mtimeNs === undefined ? String(stat.mtimeMs) : String(stat.mtimeNs),
-    ctime: stat.ctimeNs === undefined ? String(stat.ctimeMs) : String(stat.ctimeNs)
-  }
-}
-
-function sameFileIdentity(left: FileIdentity, right: FileIdentity): boolean {
-  return left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mode === right.mode &&
-    left.size === right.size &&
-    left.mtime === right.mtime &&
-    left.ctime === right.ctime
-}
-
-function serializeFileIdentity(identity: FileIdentity): string {
-  return [identity.dev, identity.ino, identity.mode, identity.size, identity.mtime, identity.ctime].join(':')
-}
-
-function assertSafeNoFollowPlatform(): void {
-  if (process.platform !== 'linux' || !Number.isSafeInteger(fsConstants.O_NOFOLLOW) || fsConstants.O_NOFOLLOW === 0) {
-    throw new GitRunError(errorDto('unsupported', 'Safe no-follow Git worktree reads require Linux O_NOFOLLOW support.'))
-  }
-}
-
-async function readStableSymbolicLink(absolutePath: string, expectedIdentity: FileIdentity): Promise<Buffer> {
-  let bytes: Buffer
-  try {
-    bytes = await readlink(absolutePath, { encoding: 'buffer' })
-  } catch (error) {
-    if (isNoFollowRaceError(error) || isInvalidFileTypeError(error)) {
-      throw new GitRunError(errorDto('stale', 'Git symbolic-link identity changed while its link text was read.'))
-    }
-    throw error
-  }
-  await assertPathIdentityUnchanged(absolutePath, expectedIdentity)
-  return bytes
-}
-
-async function assertPathIdentityUnchanged(absolutePath: string, expectedIdentity: FileIdentity): Promise<void> {
-  let after
-  try {
-    after = await lstat(absolutePath, { bigint: true })
-  } catch (error) {
-    if (isFileNotFoundError(error)) {
-      throw new GitRunError(errorDto('stale', 'Git worktree path disappeared while it was read.'))
-    }
-    throw error
-  }
-  if (!sameFileIdentity(expectedIdentity, toFileIdentity(after))) {
-    throw new GitRunError(errorDto('stale', 'Git worktree path identity changed while it was read.'))
-  }
-}
-
-function worktreeFileKind(stat: {
-  isBlockDevice(): boolean
-  isCharacterDevice(): boolean
-  isDirectory(): boolean
-  isFIFO(): boolean
-  isSocket(): boolean
-}): string {
-  if (stat.isDirectory()) return 'directory'
-  if (stat.isFIFO()) return 'fifo'
-  if (stat.isSocket()) return 'socket'
-  if (stat.isBlockDevice()) return 'block-device'
-  if (stat.isCharacterDevice()) return 'character-device'
-  return 'unknown'
-}
-
-function isNoFollowRaceError(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error &&
-    (error.code === 'ELOOP' || error.code === 'ENOENT' || error.code === 'ENOTDIR')
-}
-
-function isInvalidFileTypeError(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'EINVAL'
-}
-
-async function writeHashChunk(child: ChildProcessWithoutNullStreams, chunk: Uint8Array): Promise<void> {
-  await new Promise<void>((resolveWrite, rejectWrite) => {
-    child.stdin.write(chunk, (error) => error === null || error === undefined ? resolveWrite() : rejectWrite(error))
-  })
-}
-
-async function endHashInput(child: ChildProcessWithoutNullStreams): Promise<void> {
-  await new Promise<void>((resolveEnd, rejectEnd) => {
-    child.stdin.end((error?: Error | null) => error === null || error === undefined ? resolveEnd() : rejectEnd(error))
-  })
-}
-
-function killHashChild(child: ChildProcessWithoutNullStreams): void {
-  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return
-  try {
-    process.kill(-child.pid, 'SIGKILL')
-  } catch (error) {
-    if (!(typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH')) throw error
   }
 }
