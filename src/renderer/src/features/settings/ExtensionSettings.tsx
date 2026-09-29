@@ -57,7 +57,7 @@ export function ExtensionSettings({
   return (
     <>
       <SettingsPageHeading
-        title="拓展"
+        title="扩展"
         description="安装或卸载后，将在下一次新建或重新打开对话时生效"
       />
       <AdaptedExtensionPackageControl
@@ -68,9 +68,9 @@ export function ExtensionSettings({
         description="提供后台上下文压缩与跨会话记忆"
         notice={(
           <>
-            拓展显示“已开启”只表示拓展已启用，不代表配置或健康状态已验证。
+            扩展显示“已开启”只表示扩展已启用，不代表配置或健康状态已验证。
             安装后仍需手动运行 <code>npx @cortexkit/magic-context@latest setup --harness pi</code>；
-            新建或显式重载 Session 后生效。运行态可用 <code>/ctx-status</code>，
+            新建或重新载入对话后生效。运行态可用 <code>/ctx-status</code>，
             健康检查请运行 <code>npx @cortexkit/magic-context@latest doctor --harness pi</code>。
           </>
         )}
@@ -100,10 +100,10 @@ export function ExtensionSettings({
         <div className="settings-resource-list">
           <article className="settings-resource-row">
             <div className="settings-resource-copy">
-              <h3>安装本地拓展</h3>
+              <h3>安装本地扩展</h3>
               <p>
-                第三方拓展拥有完整系统权限。选择后，其路径会写入 Pi 用户设置的 extensions；
-                卸载只移除配置，不删除拓展源码
+                第三方扩展拥有完整系统权限。选择后，其路径会写入 Pi 用户设置的 extensions；
+                卸载只移除配置，不删除扩展源码
               </p>
             </div>
             <div className="settings-resource-actions settings-extension-install-actions">
@@ -135,7 +135,7 @@ export function ExtensionSettings({
         )}
         {extensions.length === 0 ? (
           <div className="settings-empty-state" role="status">
-            <h3>暂无本地拓展</h3>
+            <h3>暂无本地扩展</h3>
           </div>
         ) : (
           <div className="settings-resource-list">
@@ -149,8 +149,8 @@ export function ExtensionSettings({
                   <button
                     className="settings-extension-remove"
                     type="button"
-                    aria-label={`卸载拓展 ${extension.name}`}
-                    data-tooltip="仅从 Pi 用户设置中移除此路径，不删除拓展源码。"
+                    aria-label={`卸载扩展 ${extension.name}`}
+                    data-tooltip="仅从 Pi 用户设置中移除此路径，不删除扩展源码。"
                     disabled={busy}
                     onClick={() => {
                       void confirm({

@@ -37,7 +37,7 @@ export function RemoteSettings({
 }): React.JSX.Element {
   return (
     <>
-      <SettingsPageHeading title="远程访问" />
+      <SettingsPageHeading title="连接" />
       <RemoteAccessPanel
         busy={busy}
         onGetStatus={onGetRemoteAccessStatus}

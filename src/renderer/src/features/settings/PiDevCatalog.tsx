@@ -74,18 +74,18 @@ export function PiDevCatalog({
     const action = pkg.installed ? '卸载' : '安装'
     const confirmed = await confirm(pkg.installed
       ? {
-          title: `卸载 Package「${pkg.name}」？`,
+          title: `卸载插件「${pkg.name}」？`,
           description: kind === 'extension'
-            ? '其中的 Extension 及其他资源会一并移除。'
-            : '将从 Pi 用户级 Package 中移除。',
+            ? '其中的扩展及其他资源会一并移除。'
+            : '将从 Pi 用户级插件中移除。',
           confirmLabel: '卸载',
           danger: true
         }
       : {
           title: kind === 'extension'
-            ? `安装含 Extension 资源的 Package「${pkg.name}」？`
-            : `安装 Package「${pkg.name}」？`,
-          description: '第三方 Package 会以当前用户的完整系统权限运行，请先审查源码。',
+            ? `安装含扩展的插件「${pkg.name}」？`
+            : `安装插件「${pkg.name}」？`,
+          description: '第三方插件会以当前用户的完整系统权限运行，请先审查源码。',
           confirmLabel: '安装'
         })
     if (!confirmed) return
@@ -110,7 +110,7 @@ export function PiDevCatalog({
     const job = [...packageInstallJobs].reverse().find((candidate) => candidate.name === name)
     return job?.status === 'queued' || job?.status === 'running'
   }
-  const catalogLabel = kind === 'extension' ? 'Extension 类型 Package' : 'Package'
+  const catalogLabel = kind === 'extension' ? '含扩展的插件' : '插件'
   const catalogUrl = kind === 'extension'
     ? 'https://pi.dev/packages?type=extension'
     : 'https://pi.dev/packages'
@@ -166,7 +166,7 @@ export function PiDevCatalog({
         )}
 
         {!catalogLoading && catalog !== null && catalog.packages.length === 0 ? (
-          <div className="settings-feedback" role="status">没有匹配的{catalogLabel}。</div>
+          <div className="settings-feedback" role="status">没有匹配的{catalogLabel}</div>
         ) : null}
 
         {catalog === null ? null : (

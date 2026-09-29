@@ -105,7 +105,7 @@ export function ShortcutSettingsPanel({
 
   return (
     <>
-      <SettingsPageHeading title="快捷键">
+      <SettingsPageHeading title="键盘快捷键">
         <button
           className="shortcut-restore-defaults"
           type="button"
@@ -115,7 +115,7 @@ export function ShortcutSettingsPanel({
             void saveSettings(copyShortcutSettings(DEFAULT_SHORTCUT_SETTINGS))
           }}
         >
-          恢复默认
+          恢复默认快捷键
         </button>
       </SettingsPageHeading>
 

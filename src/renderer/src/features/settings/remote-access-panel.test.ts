@@ -67,12 +67,9 @@ test('App passes stable remote admin method references so pairing codes survive 
   assert.doesNotMatch(source, /onGetRemoteAccessStatus=\{\(\) =>/u)
 })
 
-test('Settings navigation exposes a dedicated remote access group', async () => {
+test('Settings navigation exposes remote access as 连接 under 编码 (D-102)', async () => {
   const source = await readFile(NAV_PATH, 'utf8')
-  assert.match(source, /id:\s*'remote'/u)
-  assert.match(source, /section:\s*'remote'/u)
-  assert.match(source, /label:\s*'远程访问'/u)
-  assert.match(source, /icon:\s*'remote'/u)
+  assert.match(source, /id:\s*'coding'[\s\S]*label:\s*'编码'[\s\S]*section:\s*'remote',\s*label:\s*'连接',\s*icon:\s*'remote'/u)
 })
 
 test('preload exposes a narrow piRemote admin bridge', async () => {
