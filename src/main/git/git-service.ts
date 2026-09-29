@@ -1,4 +1,5 @@
 import type { GitServiceCore } from './git-service-core.ts'
+import { GitCommits } from './git-commits.ts'
 import { GitWorktreeContent } from './git-worktree-content.ts'
 import {
   readRepositoryFile,
@@ -49,10 +50,7 @@ import type {
   GitBranchSyncSnapshot,
   GitCommitExecutionRequest,
   GitCommitExecutionResult,
-  GitCommitPreview,
   GitCommitPreviewResult,
-  GitCommitSnapshot,
-  GitCommitWarning,
   GitDiffFile,
   GitDiffHunk,
   GitDiffKind,
@@ -88,11 +86,9 @@ import {
   admitHistoryState,
   assertBranchMutationAdmission,
   assertCleanNamedBranchState,
-  assertCommitAdmission,
   assertNotAborted,
   assertPositiveOptions,
   assertPushBranchAdmission,
-  assertPushTargetFence,
   assertRepositoryRootFence,
   assertUpstreamFence,
   boundedGitMessage,
@@ -100,7 +96,6 @@ import {
   errorDto,
   errorMessage,
   failedBranchSyncExecution,
-  failedCommitExecution,
   historyDetailFailure,
   historyListFailure,
   historySnapshotFromState,
@@ -108,7 +103,6 @@ import {
   isNetworkOutcomeUnknown,
   notRepositoryState,
   sameRepositoryIdentity,
-  snapshotFromState,
   staleError,
   staleMutationError,
   stderrLength,
@@ -116,8 +110,7 @@ import {
   toPublicErrorDto,
   trustRequiredError,
   trustRequiredErrorPublic,
-  trustRequiredState,
-  validateCommitMessage
+  trustRequiredState
 } from './git-admission.ts'
 import {
   boundHistoryMessage,
@@ -133,14 +126,12 @@ import {
   parseSingleFilePatch,
   parseStatus,
   splitNonEmptyLines,
-  suggestCommitMessage,
   trimNullable,
   validateRepositoryPath,
   validatedPathspecsForStatusFile
 } from './git-parsing.ts'
 import {
   CONTENT_HASH_WORKERS,
-  type CommitInspection,
   DEFAULT_MAX_AUTOMATIC_FINGERPRINT_BYTES,
   DEFAULT_MAX_DIFF_BYTES,
   DEFAULT_MAX_DIFF_FILES,
@@ -208,6 +199,7 @@ export class GitService {
   private readonly options: ResolvedOptions
   private readonly testHooks: GitServiceTestHooks
   private readonly branchCapabilitySecret = randomBytes(32)
+  private readonly commits: GitCommits
   private readonly content: GitWorktreeContent
 
   constructor(projectRoot: string, options: GitServiceOptions = {}, testHooks: GitServiceTestHooks = {}) {
@@ -231,6 +223,7 @@ export class GitService {
     this.testHooks = testHooks
     assertPositiveOptions(this.options)
     const core = this.createCore()
+    this.commits = new GitCommits(core)
     this.content = new GitWorktreeContent(core)
   }
 
@@ -244,8 +237,8 @@ export class GitService {
       refreshSafe: (signal) => this.refreshSafe(signal),
       safeRefresh: () => this.safeRefresh(),
       resolveQueue: (repositoryRoot) => this.resolveQueue(repositoryRoot),
-      readPushTarget: (repositoryRoot, branch, signal) => this.readPushTarget(repositoryRoot, branch, signal),
-      readUpstreamTrackingRef: (repositoryRoot, branch, signal) => this.readUpstreamTrackingRef(repositoryRoot, branch, signal)
+      readPushTarget: (repositoryRoot, branch, signal) => this.commits.readPushTarget(repositoryRoot, branch, signal),
+      readUpstreamTrackingRef: (repositoryRoot, branch, signal) => this.commits.readUpstreamTrackingRef(repositoryRoot, branch, signal)
     }
   }
 
@@ -803,39 +796,7 @@ export class GitService {
   }
 
   async prepareCommit(signal?: AbortSignal): Promise<GitCommitPreviewResult> {
-    let discovered: GitRepositoryState
-    try {
-      discovered = await this.refresh(signal)
-    } catch (error) {
-      return { ok: false, error: toPublicErrorDto(error), state: null }
-    }
-    if (discovered.kind !== 'repository' || discovered.repositoryRoot === null) {
-      return {
-        ok: false,
-        error: discovered.kind === 'trust-required'
-          ? trustRequiredErrorPublic()
-          : errorDto('not-repository', 'Project is not a Git repository.'),
-        state: discovered
-      }
-    }
-    return this.resolveQueue(discovered.repositoryRoot).run(async () => {
-      let latest: GitRepositoryState | null = null
-      try {
-        latest = await this.refresh(signal)
-        const preview = await this.buildCommitPreview(latest, signal)
-        return { ok: true, preview }
-      } catch (error) {
-        const dto = toErrorDto(error)
-        const settled = dto.code === 'aborted' || dto.code === 'timeout'
-          ? latest
-          : await this.safeRefresh()
-        return {
-          ok: false,
-          error: toPublicErrorDto(error),
-          state: settled ?? latest
-        }
-      }
-    })
+    return this.commits.prepareCommit(signal)
   }
 
   async prepareBranchSync(signal?: AbortSignal): Promise<GitBranchSyncPrepareResult> {
@@ -923,279 +884,7 @@ export class GitService {
     signal?: AbortSignal,
     assertCurrentBoundary?: () => Promise<void>
   ): Promise<GitCommitExecutionResult> {
-    const mode = request.mode
-    let discovered: GitRepositoryState
-    try {
-      discovered = await this.refresh(signal)
-    } catch (error) {
-      const publicError = toPublicErrorDto(error)
-      return failedCommitExecution(mode, publicError, { ok: false, error: publicError })
-    }
-    if (discovered.kind !== 'repository' || discovered.repositoryRoot === null) {
-      const error = discovered.kind === 'trust-required'
-        ? trustRequiredErrorPublic()
-        : errorDto('not-repository', 'Project is not a Git repository.')
-      return failedCommitExecution(mode, error, { ok: true, state: discovered })
-    }
-    return this.resolveQueue(discovered.repositoryRoot).run(async () => {
-      let latest: GitRepositoryState | null = null
-      let confirmed: GitCommitSnapshot
-      let message: string
-      let pushTarget: GitPushTarget | null
-      try {
-        latest = await this.refresh(signal)
-        assertCommitAdmission(latest, request)
-        message = validateCommitMessage(request.message)
-        pushTarget = await this.readPushTarget(latest.repositoryRoot!, latest.branch!, signal)
-        assertPushTargetFence(mode, request.expectedPushTarget, pushTarget)
-        await this.assertCommitIdentity(latest.repositoryRoot!, signal)
-        const stagedPaths = await this.readStagedPaths(latest.repositoryRoot!, signal)
-        if (stagedPaths.length === 0) {
-          throw new GitRunError(errorDto('unsupported', 'There are no staged changes to commit.'))
-        }
-        if (assertCurrentBoundary !== undefined) {
-          await assertCurrentBoundary()
-          latest = await this.refresh(signal)
-          assertCommitAdmission(latest, request)
-          await assertCurrentBoundary()
-        }
-        assertNotAborted(signal)
-        confirmed = snapshotFromState(latest)
-      } catch (error) {
-        return failedCommitExecution(mode, toPublicErrorDto(error), await this.refreshSafe())
-      }
-
-      let commandError: unknown = null
-      try {
-        await this.runCommit(confirmed.repositoryRoot, mode === 'amend', message, signal)
-      } catch (error) {
-        commandError = error
-      }
-
-      let inspection: CommitInspection | null = null
-      let inspectionUnavailable = false
-      try {
-        inspection = await this.inspectCommitAttempt(confirmed.repositoryRoot, mode, confirmed)
-      } catch {
-        inspectionUnavailable = true
-      }
-      if (commandError !== null && (inspection === null || !inspection.parentMatched)) {
-        return failedCommitExecution(mode, toPublicErrorDto(commandError), await this.refreshSafe())
-      }
-
-      const warnings: GitCommitWarning[] = []
-      if (commandError !== null) warnings.push('command-error-after-landing')
-      if (inspectionUnavailable || inspection === null) {
-        warnings.push('verification-unavailable')
-      } else if (!inspection.snapshotMatched) {
-        warnings.push('confirmed-snapshot-diverged')
-      }
-      const commitStep = {
-        status: 'succeeded' as const,
-        oid: inspection?.oid ?? null,
-        warnings
-      }
-      if (mode !== 'commit-and-push') {
-        return {
-          mode,
-          commit: commitStep,
-          push: null,
-          postState: await this.refreshSafe()
-        }
-      }
-
-      const activeTarget = pushTarget!
-      try {
-        assertNotAborted(signal)
-        const afterCommit = await this.refresh(signal)
-        if (
-          afterCommit.kind !== 'repository' ||
-          afterCommit.repositoryRoot !== confirmed.repositoryRoot ||
-          afterCommit.branch !== confirmed.branch
-        ) {
-          throw new GitRunError(errorDto('stale', 'Repository identity changed after the commit and before push.'))
-        }
-        const liveTarget = await this.readPushTarget(afterCommit.repositoryRoot!, afterCommit.branch!, signal)
-        assertPushTargetFence(mode, request.expectedPushTarget, liveTarget)
-        assertNotAborted(signal)
-        await this.runPush(afterCommit.repositoryRoot!, liveTarget!, signal)
-        return {
-          mode,
-          commit: commitStep,
-          push: { status: 'succeeded', remote: liveTarget!.remote, branch: liveTarget!.branch },
-          postState: await this.refreshSafe()
-        }
-      } catch (error) {
-        return {
-          mode,
-          commit: commitStep,
-          push: {
-            status: 'failed',
-            remote: activeTarget.remote,
-            branch: activeTarget.branch,
-            error: toPublicErrorDto(error)
-          },
-          postState: await this.refreshSafe()
-        }
-      }
-    })
-  }
-
-  private async buildCommitPreview(
-    state: GitRepositoryState,
-    signal?: AbortSignal
-  ): Promise<GitCommitPreview> {
-    if (state.kind !== 'repository' || state.repositoryRoot === null) {
-      throw new GitRunError(
-        state.kind === 'trust-required'
-          ? trustRequiredError()
-          : errorDto('not-repository', 'Project is not a Git repository.')
-      )
-    }
-    if (state.detached || state.branch === null) {
-      throw new GitRunError(errorDto('unsupported', 'Commit requires a named branch; detached HEAD is unsupported.'))
-    }
-    if (state.indexTreeOid === null || state.files.some((file) => file.conflicted)) {
-      throw new GitRunError(errorDto('conflict', 'Git repository has unresolved conflicts.'))
-    }
-    if (state.truncated) {
-      throw new GitRunError(errorDto('unsupported', 'Git status is truncated; commit is blocked until status is complete.'))
-    }
-    await this.assertCommitIdentity(state.repositoryRoot, signal)
-    const stagedPaths = await this.readStagedPaths(state.repositoryRoot, signal)
-    if (stagedPaths.length === 0) {
-      throw new GitRunError(errorDto('unsupported', 'There are no staged changes to commit.'))
-    }
-    const pushTarget = await this.readPushTarget(state.repositoryRoot, state.branch, signal)
-    return {
-      snapshot: snapshotFromState(state),
-      stagedFileCount: stagedPaths.length,
-      pushTarget,
-      amendAvailable: state.headOid !== null,
-      suggestedMessage: suggestCommitMessage(stagedPaths)
-    }
-  }
-
-  private async readStagedPaths(repositoryRoot: string, signal?: AbortSignal): Promise<string[]> {
-    const text = await this.runRaw(repositoryRoot, ['diff', '--cached', '--name-only', '-z'], {
-      signal,
-      maxOutputBytes: this.options.maxStatusBytes
-    })
-    const paths: string[] = []
-    for (const record of text.split('\0')) {
-      if (record.length === 0) continue
-      paths.push(validateRepositoryPath(record, repositoryRoot))
-    }
-    return paths
-  }
-
-  private async readPushTarget(
-    repositoryRoot: string,
-    branch: string,
-    signal?: AbortSignal
-  ): Promise<GitPushTarget | null> {
-    const text = await this.runRaw(
-      repositoryRoot,
-      ['for-each-ref', '--format=%(upstream:remotename)%00%(upstream:remoteref)', `refs/heads/${branch}`],
-      { signal, maxOutputBytes: 64 * 1024 }
-    )
-    const trimmed = text.replace(/\n+$/u, '')
-    if (trimmed.length === 0) return null
-    const parts = trimmed.split('\0')
-    if (parts.length < 2) return null
-    const remote = parts[0]!.trim()
-    const remoteref = parts[1]!.trim()
-    if (remote.length === 0 || remoteref.length === 0) return null
-    if (!isGitRefName(remote)) {
-      throw new GitRunError(errorDto('unsupported', 'Upstream remote name is unsafe for push.'))
-    }
-    if (!remoteref.startsWith('refs/heads/')) {
-      throw new GitRunError(errorDto('unsupported', 'Upstream is not a branch ref and cannot be used for push.'))
-    }
-    const upstreamBranch = remoteref.slice('refs/heads/'.length)
-    if (!isGitRefName(upstreamBranch)) {
-      throw new GitRunError(errorDto('unsupported', 'Upstream branch ref is invalid.'))
-    }
-    return { remote, branch: upstreamBranch }
-  }
-
-  private async readUpstreamTrackingRef(
-    repositoryRoot: string,
-    branch: string,
-    signal?: AbortSignal
-  ): Promise<string> {
-    const text = await this.runRaw(
-      repositoryRoot,
-      ['for-each-ref', '--format=%(upstream)', `refs/heads/${branch}`],
-      { signal, maxOutputBytes: 64 * 1024, env: { ...GIT_BRANCH_SYNC_READ_ENV } }
-    )
-    const upstreamRef = trimNullable(text)
-    if (
-      upstreamRef === null ||
-      !upstreamRef.startsWith('refs/remotes/') ||
-      !isGitRefName(upstreamRef)
-    ) {
-      throw new GitRunError(errorDto(
-        'unsupported',
-        'Configured upstream does not resolve to a safe remote-tracking ref.'
-      ))
-    }
-    return upstreamRef
-  }
-
-  private async assertCommitIdentity(repositoryRoot: string, signal?: AbortSignal): Promise<void> {
-    try {
-      const author = trimNullable(await this.runRaw(repositoryRoot, ['var', 'GIT_AUTHOR_IDENT'], {
-        signal,
-        maxOutputBytes: 16 * 1024
-      }))
-      const committer = trimNullable(await this.runRaw(repositoryRoot, ['var', 'GIT_COMMITTER_IDENT'], {
-        signal,
-        maxOutputBytes: 16 * 1024
-      }))
-      if (author === null || committer === null) {
-        throw new GitRunError(errorDto('unsupported', 'Git author or committer identity is unavailable.'))
-      }
-    } catch (error) {
-      if (error instanceof GitRunError && error.dto.code === 'unsupported') throw error
-      throw new GitRunError(errorDto(
-        'unsupported',
-        'Git author or committer identity is unavailable.',
-        stderrLength(error)
-      ))
-    }
-  }
-
-  private async runCommit(
-    repositoryRoot: string,
-    amend: boolean,
-    message: string,
-    signal?: AbortSignal
-  ): Promise<void> {
-    const args = amend
-      ? ['commit', '--amend', '--file=-', '--cleanup=verbatim']
-      : ['commit', '--file=-', '--cleanup=verbatim']
-    await this.runRaw(repositoryRoot, args, {
-      signal,
-      maxOutputBytes: 1024 * 1024,
-      stdin: message.endsWith('\n') ? message : `${message}\n`
-    })
-  }
-
-  private async runPush(
-    repositoryRoot: string,
-    target: GitPushTarget,
-    signal?: AbortSignal
-  ): Promise<void> {
-    await this.runRaw(
-      repositoryRoot,
-      ['push', '--porcelain', '--', target.remote, `HEAD:refs/heads/${target.branch}`],
-      {
-        signal,
-        maxOutputBytes: 1024 * 1024,
-        env: { ...GIT_NETWORK_ENV }
-      }
-    )
+    return this.commits.executeCommit(request, signal, assertCurrentBoundary)
   }
 
   private async buildBranchSyncView(
@@ -1218,7 +907,7 @@ export class GitService {
       this.listConfiguredRemotes(repositoryRoot, signal),
       state.branch === null || state.headOid === null
         ? Promise.resolve(null)
-        : this.readPushTarget(repositoryRoot, state.branch, signal)
+        : this.commits.readPushTarget(repositoryRoot, state.branch, signal)
     ])
     const localBranchesTruncated = localBranchesRaw.length > GIT_BRANCH_LIST_MAX
     const remoteTrackingBranchesTruncated = remoteTrackingRaw.truncated
@@ -1548,7 +1237,7 @@ export class GitService {
       const latest = await this.refresh()
       assertBranchMutationAdmission(latest, request.snapshot)
       assertUpstreamFence(latest, request.snapshot)
-      const target = await this.readPushTarget(latest.repositoryRoot!, latest.branch!)
+      const target = await this.commits.readPushTarget(latest.repositoryRoot!, latest.branch!)
       if (target === null) {
         throw new GitRunError(errorDto('unsupported', 'Pull requires a configured upstream branch.'))
       }
@@ -1585,7 +1274,7 @@ export class GitService {
         ) {
           throw new GitRunError(errorDto('stale', 'Repository identity changed during pull fetch.'))
         }
-        const liveTarget = await this.readPushTarget(afterFetch.repositoryRoot!, afterFetch.branch!)
+        const liveTarget = await this.commits.readPushTarget(afterFetch.repositoryRoot!, afterFetch.branch!)
         if (
           liveTarget === null ||
           liveTarget.remote !== target.remote ||
@@ -1593,7 +1282,7 @@ export class GitService {
         ) {
           throw new GitRunError(errorDto('stale', 'Upstream changed during pull.'))
         }
-        const upstreamRef = await this.readUpstreamTrackingRef(
+        const upstreamRef = await this.commits.readUpstreamTrackingRef(
           afterFetch.repositoryRoot!,
           afterFetch.branch!
         )
@@ -1688,7 +1377,7 @@ export class GitService {
     try {
       const latest = await this.refresh()
       assertPushBranchAdmission(latest, request.snapshot)
-      const target = await this.readPushTarget(latest.repositoryRoot!, latest.branch!)
+      const target = await this.commits.readPushTarget(latest.repositoryRoot!, latest.branch!)
       if (target === null) {
         throw new GitRunError(errorDto('unsupported', 'Push requires a configured upstream branch.'))
       }
@@ -1700,7 +1389,7 @@ export class GitService {
       }
       const beforePush = await this.refresh()
       assertPushBranchAdmission(beforePush, request.snapshot)
-      const confirmedTarget = await this.readPushTarget(beforePush.repositoryRoot!, beforePush.branch!)
+      const confirmedTarget = await this.commits.readPushTarget(beforePush.repositoryRoot!, beforePush.branch!)
       if (
         confirmedTarget === null ||
         confirmedTarget.remote !== target.remote ||
@@ -1855,46 +1544,6 @@ export class GitService {
         return { status: 'unknown', remote: target.remote, branch: target.branch, error: publicError }
       }
       return { status: 'failed', remote: target.remote, branch: target.branch, error: publicError }
-    }
-  }
-
-  private async inspectCommitAttempt(
-    repositoryRoot: string,
-    mode: GitCommitExecutionRequest['mode'],
-    confirmed: GitCommitSnapshot
-  ): Promise<CommitInspection | null> {
-    const newOid = trimNullable(await this.runRaw(repositoryRoot, ['rev-parse', 'HEAD'], {
-      maxOutputBytes: 64 * 1024
-    }))
-    if (newOid === null || newOid === confirmed.headOid) return null
-    const treeOid = trimNullable(await this.runRaw(repositoryRoot, ['rev-parse', 'HEAD^{tree}'], {
-      maxOutputBytes: 64 * 1024
-    }))
-    const parentsText = await this.runRaw(repositoryRoot, ['rev-list', '--parents', '-n1', 'HEAD'], {
-      maxOutputBytes: 64 * 1024
-    })
-    const tokens = parentsText.trim().split(/\s+/u).filter((token) => token.length > 0)
-    const parents = tokens[0] === newOid ? tokens.slice(1) : []
-    let parentMatched = false
-    if (mode === 'amend' && confirmed.headOid !== null) {
-      const oldParentsText = await this.runRaw(
-        repositoryRoot,
-        ['rev-list', '--parents', '-n1', confirmed.headOid],
-        { maxOutputBytes: 64 * 1024 }
-      )
-      const oldTokens = oldParentsText.trim().split(/\s+/u).filter((token) => token.length > 0)
-      const oldParents = oldTokens.slice(1)
-      parentMatched = parents.length === oldParents.length &&
-        parents.every((parent, index) => parent === oldParents[index])
-    } else if (confirmed.headOid === null) {
-      parentMatched = parents.length === 0
-    } else {
-      parentMatched = parents.length === 1 && parents[0] === confirmed.headOid
-    }
-    return {
-      oid: newOid,
-      parentMatched,
-      snapshotMatched: parentMatched && treeOid === confirmed.indexTreeOid
     }
   }
 
