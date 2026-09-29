@@ -38,6 +38,7 @@ import { createKernelEventForwarder } from '../kernel/kernel-event-forwarder.ts'
 import { AUTO_HIBERNATE_SWEEP_INTERVAL_MS, WorkbenchKernel } from '../kernel/workbench-kernel.ts'
 import type { DesktopHostGateway } from '../remote/desktop-host-gateway.ts'
 import { createKernelCommandHandler, isSubagentPackageEnabled } from './kernel-command-handler.ts'
+import { openHostControl } from './host-control.ts'
 import { startRemoteAccess, type RemoteAccess } from './remote-access.ts'
 import { PiProviderStore } from '../provider/pi-provider-store.ts'
 import { PiProviderAuth } from '../provider/pi-provider-auth.ts'
@@ -235,6 +236,7 @@ export async function startHostApplication(environment: HostEnvironment): Promis
     kernel = null
     sharedPiHost = null
     projectStoreForShutdown = null
+    await control.close()
   }
 
   function requireProviderAuth(): PiProviderAuth {
@@ -264,6 +266,14 @@ export async function startHostApplication(environment: HostEnvironment): Promis
     return environment.desktop
   }
 
+  // One Host per data directory (D-099); the same private socket serves the Host CLI (D-095).
+  const control = await openHostControl({
+    userDataDirectory: environment.userDataDirectory,
+    dispatch: async (command) => {
+      if (remoteAccess === null) throw new Error('The Pi GUI Host is still starting.')
+      return await remoteAccess.dispatchRemoteAdminCommand(command)
+    }
+  })
   const projectStore = new ProjectStore()
   projectStoreForShutdown = projectStore
   const general = await projectStore.loadGeneral()

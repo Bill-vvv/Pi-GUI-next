@@ -54,6 +54,7 @@ import { isGitCommand } from './git/git-command-validation.ts'
 import { isKernelCommand } from './kernel/kernel-command-validation.ts'
 import { createKernelEventForwarder } from './kernel/kernel-event-forwarder.ts'
 import { startHostApplication, type HostApplication, type RendererLifecycle } from './host/host-application.ts'
+import { HostDataDirectoryInUseError } from './host/host-control.ts'
 import { resolvePiExecutable } from './runtime/pi-executable.ts'
 import { probePiRuntimeProcess } from './runtime/pi-runtime-probe.ts'
 import { errorMessage } from './utils/errors.ts'
@@ -655,6 +656,8 @@ if (!canStartApplication) {
   void app.whenReady().then(startApplication).catch((error: unknown) => {
     const message = errorMessage(error)
     console.error(`[Pi GUI] Startup failed: ${message}`)
+    // Another Host owns this data directory (D-099): say so instead of exiting silently.
+    if (error instanceof HostDataDirectoryInUseError) dialog.showErrorBox('Pi GUI 已在运行', message)
     app.exit(1)
   })
 
