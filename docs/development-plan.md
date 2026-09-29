@@ -2,9 +2,10 @@
 
 > 当前阶段：P4 — Remote & Cross-platform Clients
 > 计划版本：10.13
-> 最后更新：2026-09-13
+> 最后更新：2026-09-29
 > 总体状态：In Progress
 > 当前 Slice：P4-4 — WSL Desktop Client（In Progress）
+> 当前执行：[重启与并行实施计划](restart-plan-2026-09-28.md)。2026-09-29 已完成 Pi Runtime 子进程（D-094）、R12 多设备配对本地接入（D-101）与 Linux Host 安装包升级验证；P4-3 真实 SSH 与 Windows 原生验收仍开放，Slice 状态不因此改变。
 
 ## 1. 计划用途
 
@@ -1174,6 +1175,9 @@ Windows 和 Linux/Web 必须从同一仓库/tag 发布。Web Remote 随 Linux Ho
 | 2026-09-13 | P4-4 window chrome | 只合入 Windows hidden titleBarOverlay 与拖拽条，不弹出整份 stash | typecheck、build、setup 通过。WSL `models.json` 增加 `gpt-6`（克隆 `gpt-5.5`）。P4-4 未 Complete |
 
 | 2026-09-29 | 设置页一致性整理（S21 外） | 用户要求参考成熟产品优化设置页。`SettingsPanel` 改为只分发页面，各页统一标题组件；tooltip 中的必要事实改为可见说明；即时生效偏好的保存失败在发起行显示；12 处 `window.confirm` 与两个撤销对话框改为设置页内确认框；开/关设置统一为 switch；模型可见性支持按 Provider 批量开关；自定义 Provider 从凭证页移到模型页；修正吞掉字体控件宽度规则的多余 `}` | typecheck、设置相关定向测试 84/84（含 1280/360px Chromium 交互 fixture）、完整 core 1518 通过 / 6 跳过、build、diff check 通过。未启动 S21：导航收起、设置搜索、deep link、作用域/来源/生效 badge 仍 Planned；Subagent 启停开关按 D-048 仍留在拓展页 |
+| 2026-09-29 | 后端 0b：Pi Runtime 子进程 | 按 D-094/D-098/D-099 将 Shared Pi Host 迁入所有 Session 共用的 Node 子进程，删除旧外部 RPC 链路，`smoke:pi` 改为启动子进程；加入通信上限与生命周期日志 | 完整核心 1466/0 失败；真实 Electron 冒烟与真实模型 bash 链路通过；证据 `release/evidence/pi-runtime-subprocess-20260929/`（worktree） |
+| 2026-09-29 | R12 多设备配对接入 | 按冻结接口实施 D-101：协议 3、无凭证身份核对、逐台撤销与设备列表、设备与 controller 双重绑定、被占用不重连、Windows 计算机名作为设备名称 | 完整核心 1478 项 0 失败（不含浏览器）；设置与连接页 Chromium 测试通过；证据 `release/evidence/r12-multi-device-20260929/` |
+| 2026-09-29 | R12 第二轮 2A：Host 安装包 | R11 包 A 写入版本 1 旧配对后升级到 R12 包 B：同版复用、真实 Electron Host 迁移配对并继续认证旧凭证、回退到 A 被拒绝且数据不变 | 证据 `release/evidence/r12-upgrade-20260929/`；2B 需先在 Windows 安装 Node 26.4.0 |
 | 2026-09-29 | 设置页：pi-subagents 控件迁入 Subagent 页 | 用户确认按 D-100 替代 D-048 对 pi-subagents 的拓展页归属：安装、启停与详情移到 Subagent 页顶部，页面复用控件报告的 Package 状态，不再单独读取；拓展页保留 Magic Context、pi.dev 目录与本地拓展 | typecheck、设置相关定向测试 85/85（含 Chromium fixture）通过；Windows 侧用 Node 24.15 跑 typecheck 与设置测试（含 Chrome fixture）通过，项目锁定的 Node 26.4.0 尚未在 Windows 安装 |
 
 ## 17. 计划变更记录
