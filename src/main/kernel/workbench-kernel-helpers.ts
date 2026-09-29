@@ -614,13 +614,3 @@ export function hasProjectedToolImage(
 export function isSubagentToolName(value: string): boolean {
   return value.trim().toLowerCase().split(/[.:/]/u).at(-1) === 'subagent'
 }
-
-export function toolImageCacheKey(
-  projectPath: string,
-  sessionId: string,
-  sessionKey: string,
-  toolCallId: string,
-  contentIndex: number
-): string {
-  return `${projectPath}\0${sessionId}\0${sessionKey}\0${toolCallId}\0${contentIndex}`
-}

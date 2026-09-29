@@ -143,6 +143,7 @@ import {
   assertExtensionDialogResponse,
   normalizeExtensionDialogRequest
 } from './extension-dialog.ts'
+import { ToolImageCache } from './tool-image-cache.ts'
 import {
   collectValidatedToolImages,
   extractToolResultImage,
@@ -186,15 +187,11 @@ import {
   INITIAL_HOST_STATE,
   INITIAL_SESSION_STATE,
   ARCHIVE_UNDO_DURATION_MS,
-  TOOL_IMAGE_CACHE_TTL_MS,
-  MAX_TOOL_IMAGE_CACHE_ENTRIES,
-  MAX_TOOL_IMAGE_CACHE_BASE64_CHARS,
   RESTART_CONTINUATION_PROMPT,
   type RuntimeFactory,
   type ProjectTrustController,
   type SessionMetadata,
   type WorkbenchKernelOptions,
-  type ToolImageCacheEntry,
   type AskInteraction,
   type SessionPreviewRegistrySource,
   type PendingStaticSessionPreviewRequest,
@@ -256,8 +253,7 @@ import {
   formatExitError,
   contextKey,
   hasProjectedToolImage,
-  isSubagentToolName,
-  toolImageCacheKey
+  isSubagentToolName
 } from './workbench-kernel-helpers.ts'
 
 export { AUTO_HIBERNATE_GRACE_MS, AUTO_HIBERNATE_SWEEP_INTERVAL_MS } from './workbench-kernel-types.ts'
@@ -290,7 +286,7 @@ export class WorkbenchKernel {
    * Bounded Main-only cache for tool result images that completed but may not yet
    * be readable from the Pi transcript. Never enters KernelState / patches / logs.
    */
-  private readonly toolImageCache = new Map<string, ToolImageCacheEntry>()
+  private readonly toolImages = new ToolImageCache(() => this.now())
   private activeContext: RuntimeContext | null = null
   /** The selected runtime is derived; its lifecycle belongs to RuntimeContext. */
   private get runtime(): RuntimeHost | null {
@@ -2419,7 +2415,7 @@ export class WorkbenchKernel {
       const isActive = this.state.activeSessionKey === sessionKey
       const targetContext = this.contextBySessionKey.get(contextKey(project.path, sessionKey)) ?? null
       if (targetContext !== null) await this.stopContext(targetContext)
-      this.clearToolImageCacheForSession(sessionKey)
+      this.toolImages.clearForSession(sessionKey)
       await this.persistArchivedSession(project.path, sessionKey)
       this.sessionReloadRequired.delete(contextKey(project.path, sessionKey))
 
@@ -3632,7 +3628,7 @@ export class WorkbenchKernel {
     context.extensionDialogInteraction = null
     context.state = { ...context.state, extensionDialog: null }
     if (typeof context.state.activeSessionKey === 'string') {
-      this.clearToolImageCacheForSession(context.state.activeSessionKey)
+      this.toolImages.clearForSession(context.state.activeSessionKey)
     }
     const wasActive = this.activeContext === context
     const navigationBeforeStopping = this.projectNavigationState(context.projectPath)
@@ -4624,7 +4620,7 @@ export class WorkbenchKernel {
           typeof previousSessionKey === 'string' &&
           previousSessionKey !== pointer.sessionFile
         ) {
-          this.clearToolImageCacheForSession(previousSessionKey)
+          this.toolImages.clearForSession(previousSessionKey)
         }
         for (const [key, candidate] of this.contextBySessionKey) {
           if (candidate === context) this.contextBySessionKey.delete(key)
@@ -4880,7 +4876,8 @@ export class WorkbenchKernel {
     const toolName = typeof event.toolName === 'string' ? event.toolName : ''
 
     // A terminal event atomically replaces every cached partial/result image for the tool.
-    this.clearToolImageCacheForTool(context.projectPath, sessionId, sessionKey, toolCallId)
+    const owner = { projectPath: context.projectPath, sessionId, sessionKey, toolCallId }
+    this.toolImages.clearForTool(owner)
     if (isSubagentToolName(toolName)) return
     const tool = state.conversation.entries.find(
       (entry): entry is KernelToolEntry =>
@@ -4898,32 +4895,7 @@ export class WorkbenchKernel {
     const images = collectValidatedToolImages(content)
     if (images.length === 0) return
 
-    const cachedAt = this.now()
-    this.pruneToolImageCache(cachedAt)
-    for (const image of images) {
-      const key = toolImageCacheKey(
-        context.projectPath,
-        sessionId,
-        sessionKey,
-        toolCallId,
-        image.contentIndex
-      )
-      this.toolImageCache.set(key, {
-        projectPath: context.projectPath,
-        sessionKey,
-        sessionId,
-        runtime: context.runtime,
-        cachedAt,
-        base64Chars: image.data.length,
-        image: {
-          mimeType: image.mimeType,
-          data: image.data,
-          name: image.name.length > 0 ? image.name : `image-${image.contentIndex + 1}`,
-          path: ''
-        }
-      })
-    }
-    this.pruneToolImageCache(cachedAt)
+    this.toolImages.store(owner, context.runtime, images)
   }
 
   private readCachedToolImage(
@@ -4935,7 +4907,7 @@ export class WorkbenchKernel {
     contentIndex: number
   ): KernelMessageImage {
     const now = this.now()
-    this.pruneToolImageCache(now)
+    this.toolImages.prune(now)
     if (
       sessionId === null ||
       this.state.activeProjectKey !== projectPath ||
@@ -4950,16 +4922,9 @@ export class WorkbenchKernel {
     ) {
       throw new Error('Tool image cache is no longer owned by the displayed Runtime session.')
     }
-    const key = toolImageCacheKey(projectPath, sessionId, sessionKey, toolCallId, contentIndex)
-    const cached = this.toolImageCache.get(key)
-    if (
-      cached === undefined ||
-      cached.runtime !== context.runtime ||
-      cached.cachedAt + TOOL_IMAGE_CACHE_TTL_MS <= now
-    ) {
-      throw new ToolResultMessageNotFoundError(toolCallId)
-    }
-    return { ...cached.image }
+    const image = this.toolImages.read({ projectPath, sessionId, sessionKey, toolCallId }, contentIndex, context.runtime, now)
+    if (image === null) throw new ToolResultMessageNotFoundError(toolCallId)
+    return image
   }
 
   private deleteCachedToolImage(
@@ -4970,43 +4935,7 @@ export class WorkbenchKernel {
     contentIndex: number
   ): void {
     if (sessionId === null) return
-    this.toolImageCache.delete(
-      toolImageCacheKey(projectPath, sessionId, sessionKey, toolCallId, contentIndex)
-    )
-  }
-
-  private clearToolImageCacheForSession(sessionKey: string): void {
-    for (const [key, cached] of this.toolImageCache) {
-      if (cached.sessionKey === sessionKey) this.toolImageCache.delete(key)
-    }
-  }
-
-  private clearToolImageCacheForTool(
-    projectPath: string,
-    sessionId: string,
-    sessionKey: string,
-    toolCallId: string
-  ): void {
-    const prefix = `${projectPath}\0${sessionId}\0${sessionKey}\0${toolCallId}\0`
-    for (const key of this.toolImageCache.keys()) {
-      if (key.startsWith(prefix)) this.toolImageCache.delete(key)
-    }
-  }
-
-  private pruneToolImageCache(now = this.now()): void {
-    for (const [key, cached] of this.toolImageCache) {
-      if (cached.cachedAt + TOOL_IMAGE_CACHE_TTL_MS <= now) this.toolImageCache.delete(key)
-    }
-    let totalBase64Chars = 0
-    for (const cached of this.toolImageCache.values()) totalBase64Chars += cached.base64Chars
-    for (const [key, cached] of this.toolImageCache) {
-      if (
-        this.toolImageCache.size <= MAX_TOOL_IMAGE_CACHE_ENTRIES &&
-        totalBase64Chars <= MAX_TOOL_IMAGE_CACHE_BASE64_CHARS
-      ) break
-      this.toolImageCache.delete(key)
-      totalBase64Chars -= cached.base64Chars
-    }
+    this.toolImages.delete({ projectPath, sessionId, sessionKey, toolCallId }, contentIndex)
   }
 
   private findSessionPointerInRegistry(
