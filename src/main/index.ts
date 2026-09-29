@@ -1,4 +1,3 @@
-import { DesktopAttachmentStore, DesktopAttachmentError } from './remote/desktop-attachment-store.ts'
 import { WindowsAttachmentUploader } from './remote/windows-attachment-uploader.ts'
 import { DESKTOP_ATTACHMENT_CHANNEL, isDesktopAttachmentClientCommand, DESKTOP_ATTACHMENT_COMMAND_TYPES } from '../shared/desktop-attachment-contract.ts'
 import {
@@ -15,7 +14,10 @@ import {
 import { randomUUID } from 'node:crypto'
 import { createWriteStream, existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import {
+  dirname,
+  join
+} from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
@@ -40,7 +42,9 @@ import {
   type KernelProviderAuthEvent
 } from '../shared/kernel-contract.ts'
 import { GIT_COMMAND_CHANNEL } from '../shared/git-contract.ts'
-import { isDesktopHostKernelCommand, type DesktopHostControlIdentity } from '../shared/desktop-host-contract.ts'
+import {
+  isDesktopHostKernelCommand
+} from '../shared/desktop-host-contract.ts'
 import {
   DESKTOP_CLIENT_COMMAND_CHANNEL,
   DESKTOP_CLIENT_STATUS_CHANNEL,
@@ -52,14 +56,11 @@ import {
   isRemoteAdminCommand,
   type DesktopHostAccessStatus,
   type RemoteAccessStatus,
-  type RemoteAdminCommand,
   type RemotePairingCode,
-  type TailscaleRemoteMode,
   type TailscaleRemoteStatus
 } from '../shared/remote-admin-contract.ts'
 import {
-  isRemoteKernelCommand,
-  type RemoteKernelCommand
+  isRemoteKernelCommand
 } from '../shared/remote-contract.ts'
 import { normalizeOpenTarget } from '../shared/external-url.ts'
 import { PiExtensionStore } from './extension/pi-extension-store.ts'
@@ -81,32 +82,7 @@ import {
   AUTO_HIBERNATE_SWEEP_INTERVAL_MS,
   WorkbenchKernel
 } from './kernel/workbench-kernel.ts'
-import { assertRemoteKernelCommandPolicy, assertDesktopHostKernelCommandPolicy } from './remote/remote-command-policy.ts'
-import { loadDesktopHostConfig } from './remote/desktop-host-config.ts'
-import {
-  startDesktopHostGateway,
-  type DesktopHostGateway
-} from './remote/desktop-host-gateway.ts'
-import {
-  loadRemoteConfig,
-  readRemoteTokenFile,
-  type RemoteEnabledConfig
-} from './remote/remote-config.ts'
-import {
-  openRemoteDeviceStore,
-  type RemoteDeviceStore
-} from './remote/remote-device-store.ts'
-import { openDesktopDeviceStore } from './remote/desktop-device-store.ts'
-import {
-  startRemoteGateway,
-  type RemoteGateway,
-  type RemoteGatewayHandlers
-} from './remote/remote-gateway.ts'
-import {
-  createTailscaleRemoteGatewayConfig,
-  openTailscaleRemoteManager,
-  type TailscaleRemoteManager
-} from './remote/tailscale-remote.ts'
+import { startRemoteAccess, type RemoteAccess } from './host/remote-access.ts'
 import { readPromptAttachments } from './prompt/prompt-attachment-selection.ts'
 import { PiProviderStore } from './provider/pi-provider-store.ts'
 import { PiProviderAuth } from './provider/pi-provider-auth.ts'
@@ -207,19 +183,11 @@ let projectStoreForShutdown: ProjectStore | null = null
 let providerAuth: PiProviderAuth | null = null
 let desktopNotificationBroker: DesktopNotificationBroker | null = null
 let sharedPiHost: PiRuntimeProcessHost | null = null
-let remoteGateway: RemoteGateway | null = null
-let remoteGatewaySource: 'manual' | 'tailscale' | null = null
-let remoteGatewayCleanupError: Error | null = null
-let remoteGatewayHandlers: RemoteGatewayHandlers | null = null
-let tailscaleRemoteManager: TailscaleRemoteManager | null = null
-let desktopHostGateway: DesktopHostGateway | null = null
-let desktopAttachmentStore: DesktopAttachmentStore | null = null
-let remoteDeviceStore: RemoteDeviceStore | null = null
+let remoteAccess: RemoteAccess | null = null
 let shutdownPromise: Promise<void> | null = null
 let autoHibernateTimer: ReturnType<typeof setInterval> | null = null
 let allowQuit = false
 let packageInstallDrain: Promise<void> = Promise.resolve()
-let tailscaleRemoteMutationDrain: Promise<void> = Promise.resolve()
 
 const MAX_PACKAGE_INSTALL_JOBS = 32
 const STARTUP_READY_NONCE_PATTERN = /^[0-9a-f]{32}$/
@@ -608,162 +576,23 @@ async function startApplication(): Promise<void> {
   }, AUTO_HIBERNATE_SWEEP_INTERVAL_MS)
   autoHibernateTimer.unref()
 
-  const assertRemoteCommandPolicy = async (command: RemoteKernelCommand): Promise<void> => {
-    const activeKernel = kernel
-    if (activeKernel === null) throw new Error('Workbench kernel is unavailable.')
-    await assertRemoteKernelCommandPolicy(command, { kernel: activeKernel })
-  }
-  const dispatchRemoteCommand = async (
-    command: RemoteKernelCommand,
-    assertCurrentBoundary?: () => Promise<void>
-  ): Promise<unknown> => {
-    const activeKernel = kernel
-    if (activeKernel === null) throw new Error('Workbench kernel is unavailable.')
-    const result = await dispatchTerminalKernelCommand(command, {
-      kernel: activeKernel,
-      projectStore,
-      assertCurrentPolicy: async () => {
-        await assertCurrentBoundary?.()
-        await assertRemoteKernelCommandPolicy(command, { kernel: activeKernel })
-      }
-    })
-    if (command.type !== 'kernel.activate-project') return result
-    await activeKernel.refreshWorkspaceMetadata(command.projectKey)
-    return activeKernel.acknowledge()
-  }
-
-  remoteGatewayHandlers = {
-    assertCommandPolicy: assertRemoteCommandPolicy,
-    dispatchCommand: dispatchRemoteCommand
-  }
-
-  const uid = process.getuid?.()
-  if (uid !== undefined) {
-    tailscaleRemoteManager = await openTailscaleRemoteManager({
-      configPath: join(app.getPath('userData'), 'tailscale-remote.json'),
-      tokenFile: join(app.getPath('userData'), 'tailscale-remote.token'),
-      uid
-    })
-  }
-
-  const remoteConfig = await loadRemoteConfig(process.env)
-  const managedTailscaleConfig = tailscaleRemoteManager?.getManagedConfig() ?? null
-  if (remoteConfig.enabled && managedTailscaleConfig !== null) {
-    throw new Error('Manual Remote and Tailscale one-click Remote cannot be enabled together.')
-  }
-  if (remoteConfig.enabled) {
-    await startApplicationRemoteGateway(remoteConfig, 'manual')
-  } else if (managedTailscaleConfig !== null) {
-    if (uid === undefined || tailscaleRemoteManager === null) {
-      throw new Error('Tailscale Remote ownership can only be verified when process.getuid is available.')
-    }
-    const prepared = await tailscaleRemoteManager.prepareEnable(managedTailscaleConfig.mode)
-    const token = await readRemoteTokenFile(tailscaleRemoteManager.tokenFile, uid)
-    await startApplicationRemoteGateway(
-      createTailscaleRemoteGatewayConfig({
-        publicOrigin: prepared.publicOrigin,
-        port: managedTailscaleConfig.port,
-        token,
-        tokenFile: tailscaleRemoteManager.tokenFile
-      }),
-      'tailscale'
-    )
-    await tailscaleRemoteManager.activate(prepared, managedTailscaleConfig.port)
-  }
-
   const gitController = new GitCapabilityController(
     createActiveRegisteredGitProjectResolver(kernel, projectStore)
   )
 
-  const desktopHostConfig = await loadDesktopHostConfig(process.env)
-  if (desktopHostConfig.enabled) {
-    const uid = process.getuid?.()
-    if (uid === undefined) {
-      throw new Error(
-        'Desktop Host device store ownership can only be verified when process.getuid is available.'
-      )
-    }
-    // R12: Desktop uses the bounded version-2 collection; a version-1 file is migrated atomically.
-    const desktopHostDeviceStore = await openDesktopDeviceStore({
-      path: desktopHostConfig.deviceStorePath,
-      uid
+  remoteAccess = await startRemoteAccess({
+    kernel,
+    projectStore,
+    gitController,
+    userDataDirectory: app.getPath('userData'),
+    remoteStaticRoot: join(mainBundleDirectory, '../remote'),
+    productVersion: app.getVersion(),
+    resolveBuildCommit: () => resolveBuildCommit({
+      identityFilePath: join(mainBundleDirectory, BUILD_IDENTITY_FILE_NAME),
+      ...(!app.isPackaged && process.env.NODE_ENV_ELECTRON_VITE === 'development' ? { developmentRoot: join(mainBundleDirectory, '../..') } : {}),
+      ...(app.isPackaged ? { resourcesRoot: process.resourcesPath } : {})
     })
-    const attachmentStore = new DesktopAttachmentStore({
-      root: join(app.getPath('userData'), 'desktop-attachments'),
-      materialize: (path) => readPromptAttachments([path])
-    })
-    await attachmentStore.start()
-    desktopAttachmentStore = attachmentStore
-    desktopHostGateway = await startDesktopHostGateway({
-      config: desktopHostConfig,
-      productVersion: app.getVersion(),
-      buildCommit: await resolveBuildCommit({
-        identityFilePath: join(mainBundleDirectory, BUILD_IDENTITY_FILE_NAME),
-        ...(!app.isPackaged && process.env.NODE_ENV_ELECTRON_VITE === 'development' ? { developmentRoot: join(mainBundleDirectory, '../..') } : {}),
-        ...(app.isPackaged ? { resourcesRoot: process.resourcesPath } : {})
-      }),
-      deviceStore: desktopHostDeviceStore,
-      handlers: {
-        getControlIdentity: (): DesktopHostControlIdentity => {
-          const activeKernel = kernel
-          if (activeKernel === null) throw new Error('Workbench kernel is unavailable.')
-          const state = activeKernel.getState()
-          return {
-            projectKey: state.activeProjectKey,
-            sessionKey: state.activeSessionKey
-          }
-        },
-        dispatchGitCommand: (command, boundary) => gitController.dispatch(command, undefined, boundary),
-        dispatchAttachmentCommand: async (command, owner, boundary) => {
-          const activeKernel = kernel
-          if (activeKernel === null) throw new Error('Workbench kernel is unavailable.')
-          const assertAttachmentBoundary = async (): Promise<void> => {
-            await boundary()
-            const state = activeKernel.getState()
-            if (!state.projects.some((project) => project.path === owner.projectKey && project.workspaceKind !== 'task')) {
-              throw new DesktopAttachmentError('Attachments require an active registered Project.')
-            }
-            await assertDesktopHostKernelCommandPolicy({ type: 'kernel.steer', message: '' }, { kernel: activeKernel })
-          }
-          return attachmentStore.dispatch(command, owner, assertAttachmentBoundary, async (submission, assertCurrentBoundary) => {
-            if (!isKernelCommand(submission) || (submission.type !== 'kernel.prompt' && submission.type !== 'kernel.steer' && submission.type !== 'kernel.follow-up')) {
-              throw new DesktopAttachmentError('Invalid materialized attachment submission.')
-            }
-            const { attachments: _attachments, ...policyCommand } = submission
-            return dispatchTerminalKernelCommand(submission, {
-              kernel: activeKernel, projectStore,
-              assertCurrentPolicy: async () => {
-                await assertCurrentBoundary()
-                await assertDesktopHostKernelCommandPolicy(policyCommand, { kernel: activeKernel })
-              }
-            })
-          })
-        },
-        assertCommandPolicy: async (command) => {
-          if (kernel === null) throw new Error('Workbench kernel is unavailable.')
-          await assertDesktopHostKernelCommandPolicy(command, { kernel })
-        },
-        dispatchCommand: async (command, assertCurrentBoundary) => {
-          if (isRemoteKernelCommand(command)) return dispatchRemoteCommand(command, assertCurrentBoundary)
-          const activeKernel = kernel
-          if (activeKernel === null) throw new Error('Workbench kernel is unavailable.')
-          return dispatchTerminalKernelCommand(command, {
-            kernel: activeKernel, projectStore,
-            assertCurrentPolicy: async () => {
-              await assertCurrentBoundary?.()
-              await assertDesktopHostKernelCommandPolicy(command, { kernel: activeKernel })
-            }
-          })
-        }
-      }
-    })
-    console.info(
-      `[Pi GUI] Desktop Host gateway listening on ` +
-      `${desktopHostConfig.bindHost}:${desktopHostConfig.port}`
-    )
-  }
-
-
+  })
 
   type StaticSessionPreviewOwner = {
     requestId: string
@@ -837,7 +666,8 @@ async function startApplication(): Promise<void> {
       if (!isRemoteAdminCommand(command)) {
         throw new Error('Unsupported remote admin command.')
       }
-      return await dispatchRemoteAdminCommand(command)
+      if (remoteAccess === null) throw new Error('Remote access is unavailable.')
+      return await remoteAccess.dispatchRemoteAdminCommand(command)
     }
   )
 
@@ -1588,8 +1418,7 @@ function sendKernelEvent(event: KernelEvent): void {
   if (window !== null && !window.isDestroyed()) {
     window.webContents.send(KERNEL_EVENT_CHANNEL, event)
   }
-  remoteGateway?.publish(event)
-  desktopHostGateway?.publish(event)
+  remoteAccess?.publish(event)
 }
 
 function sendDesktopClientStatus(status: DesktopClientStatus): void {
@@ -1649,217 +1478,6 @@ function focusMainWindow(): void {
   window.focus()
 }
 
-async function startApplicationRemoteGateway(
-  config: RemoteEnabledConfig,
-  source: 'manual' | 'tailscale'
-): Promise<void> {
-  if (remoteGateway !== null) throw new Error('Remote gateway is already running.')
-  const handlers = remoteGatewayHandlers
-  if (handlers === null) throw new Error('Remote gateway handlers are unavailable.')
-  const uid = process.getuid?.()
-  if (uid === undefined) {
-    throw new Error('Remote device store ownership can only be verified when process.getuid is available.')
-  }
-  const deviceStore = await openRemoteDeviceStore({
-    path: config.deviceStorePath,
-    uid
-  })
-  const gateway = await startRemoteGateway({
-    config,
-    staticRoot: join(mainBundleDirectory, '../remote'),
-    deviceStore,
-    handlers
-  })
-  remoteDeviceStore = deviceStore
-  remoteGateway = gateway
-  remoteGatewaySource = source
-  remoteGatewayCleanupError = null
-  console.info(
-    `[Pi GUI] Remote gateway listening on ${gateway.bindHost}:${gateway.port}`
-  )
-}
-
-async function runTailscaleRemoteMutation<T>(operation: () => Promise<T>): Promise<T> {
-  const run = tailscaleRemoteMutationDrain.then(operation, operation)
-  tailscaleRemoteMutationDrain = run.then(
-    () => undefined,
-    () => undefined
-  )
-  return await run
-}
-
-async function enableTailscaleRemote(
-  mode: Exclude<TailscaleRemoteMode, 'off'>
-): Promise<TailscaleRemoteStatus> {
-  const manager = tailscaleRemoteManager
-  if (manager === null) {
-    throw new Error('Tailscale one-click Remote is unavailable on this platform.')
-  }
-  if (remoteGatewaySource === 'manual') {
-    throw new Error('Manual Remote is already enabled; disable it before using Tailscale one-click Remote.')
-  }
-  if (remoteGatewayCleanupError !== null) {
-    throw new Error(
-      `A previous Remote gateway cleanup failed; restart Pi GUI before retrying: ${remoteGatewayCleanupError.message}`
-    )
-  }
-
-  const prepared = await manager.prepareEnable(mode)
-  if (remoteGateway === null) {
-    const token = await manager.ensureToken()
-    try {
-      await startApplicationRemoteGateway(
-        createTailscaleRemoteGatewayConfig({
-          publicOrigin: prepared.publicOrigin,
-          port: 0,
-          token,
-          tokenFile: manager.tokenFile
-        }),
-        'tailscale'
-      )
-    } catch (error) {
-      await manager.discardTokenIfUnconfigured()
-      throw error
-    }
-  }
-
-  const gateway = remoteGateway
-  if (gateway === null || remoteGatewaySource !== 'tailscale') {
-    throw new Error('Tailscale Remote gateway did not start.')
-  }
-  try {
-    return await manager.activate(prepared, gateway.port)
-  } catch (error) {
-    if (manager.getManagedConfig() === null) {
-      const cleanupErrors: unknown[] = []
-      try {
-        await gateway.stop()
-      } catch (cleanupError) {
-        remoteGatewayCleanupError = cleanupError instanceof Error
-          ? cleanupError
-          : new Error(String(cleanupError))
-        cleanupErrors.push(remoteGatewayCleanupError)
-      }
-      if (cleanupErrors.length === 0) {
-        remoteGateway = null
-        remoteGatewaySource = null
-        remoteDeviceStore = null
-        try {
-          await manager.discardTokenIfUnconfigured()
-        } catch (cleanupError) {
-          cleanupErrors.push(cleanupError)
-        }
-      }
-      if (cleanupErrors.length > 0) {
-        throw new AggregateError(
-          [error, ...cleanupErrors],
-          `Tailscale Remote activation failed: ${errorMessage(error)}; ` +
-          `cleanup failed: ${cleanupErrors.map(errorMessage).join('; ')}`
-        )
-      }
-    }
-    throw error
-  }
-}
-
-async function disableTailscaleRemote(): Promise<TailscaleRemoteStatus> {
-  const manager = tailscaleRemoteManager
-  if (manager === null) {
-    throw new Error('Tailscale one-click Remote is unavailable on this platform.')
-  }
-  if (remoteGatewaySource === 'manual') {
-    throw new Error('Manual Remote is not managed by the Tailscale one-click controls.')
-  }
-  if (remoteGatewayCleanupError !== null) {
-    throw new Error(
-      `A previous Remote gateway cleanup failed; restart Pi GUI before retrying: ${remoteGatewayCleanupError.message}`
-    )
-  }
-  const managedConfig = manager.getManagedConfig()
-  if (managedConfig === null) return await manager.getStatus()
-
-  const gateway = remoteGateway
-  if (gateway === null || remoteGatewaySource !== 'tailscale') {
-    throw new Error('Managed Tailscale Remote gateway is unavailable.')
-  }
-
-  await gateway.revokeDevice()
-  await manager.disableRoute()
-  remoteGateway = null
-  remoteGatewaySource = null
-  remoteDeviceStore = null
-  await gateway.stop()
-  await manager.clearManagedFiles()
-  return await manager.getStatus()
-}
-
-async function dispatchRemoteAdminCommand(
-  command: RemoteAdminCommand
-): Promise<RemoteAccessStatus | DesktopHostAccessStatus | RemotePairingCode | TailscaleRemoteStatus> {
-  switch (command.type) {
-    case 'remote-admin.get-status': {
-      const gateway = remoteGateway
-      if (gateway === null) {
-        return { enabled: false }
-      }
-      return gateway.getStatus()
-    }
-    case 'remote-admin.create-pairing-code': {
-      const gateway = remoteGateway
-      if (gateway === null) {
-        throw new Error('Remote access is disabled.')
-      }
-      return gateway.createPairingCode()
-    }
-    case 'remote-admin.revoke-device': {
-      const gateway = remoteGateway
-      if (gateway === null) {
-        throw new Error('Remote access is disabled.')
-      }
-      return await gateway.revokeDevice()
-    }
-    case 'remote-admin.get-tailscale-status': {
-      const manager = tailscaleRemoteManager
-      if (manager === null) {
-        return {
-          installed: false,
-          backendState: null,
-          dnsName: null,
-          authUrl: null,
-          managedMode: 'off',
-          routeState: 'unavailable',
-          publicOrigin: null
-        }
-      }
-      return await manager.getStatus()
-    }
-    case 'remote-admin.enable-tailscale-funnel':
-      return await runTailscaleRemoteMutation(() => enableTailscaleRemote('funnel'))
-    case 'remote-admin.enable-tailscale-serve':
-      return await runTailscaleRemoteMutation(() => enableTailscaleRemote('serve'))
-    case 'remote-admin.disable-tailscale':
-      return await runTailscaleRemoteMutation(disableTailscaleRemote)
-    case 'remote-admin.get-desktop-host-status': {
-      const gateway = desktopHostGateway
-      return gateway === null ? { enabled: false } : gateway.getStatus()
-    }
-    case 'remote-admin.create-desktop-host-pairing-code': {
-      const gateway = desktopHostGateway
-      if (gateway === null) throw new Error('Desktop Host is disabled.')
-      return gateway.createPairingCode()
-    }
-    case 'remote-admin.revoke-desktop-host-device': {
-      const gateway = desktopHostGateway
-      if (gateway === null) throw new Error('Desktop Host is disabled.')
-      return await gateway.revokeDevice(command.deviceId)
-    }
-    default: {
-      const exhaustive: never = command
-      throw new Error(`Unsupported remote admin command: ${JSON.stringify(exhaustive)}`)
-    }
-  }
-}
-
 async function stopKernel(): Promise<void> {
   const remoteSession = windowsRemoteSession
   windowsRemoteSession = null
@@ -1871,20 +1489,9 @@ async function stopKernel(): Promise<void> {
   if (backend !== null) await backend.close()
   wslHostPipe?.close()
   await packageInstallDrain
-  await tailscaleRemoteMutationDrain
-  const gateway = remoteGateway
-  const desktopGateway = desktopHostGateway
-  remoteGateway = null
-  remoteGatewaySource = null
-  remoteGatewayCleanupError = null
-  remoteGatewayHandlers = null
-  desktopHostGateway = null
-  remoteDeviceStore = null
-  if (gateway !== null) await gateway.stop()
-  if (desktopGateway !== null) await desktopGateway.stop()
-  const attachmentStore = desktopAttachmentStore
-  desktopAttachmentStore = null
-  if (attachmentStore !== null) await attachmentStore.close()
+  const access = remoteAccess
+  remoteAccess = null
+  await access?.stop()
   const activeKernel = kernel
   const activeSharedPiHost = sharedPiHost
   const projectStore = projectStoreForShutdown

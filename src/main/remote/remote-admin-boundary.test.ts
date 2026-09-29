@@ -11,6 +11,8 @@ import {
 import { isRemoteKernelCommand } from '../../shared/remote-contract.ts'
 
 const mainIndexPath = join(dirname(fileURLToPath(import.meta.url)), '../index.ts')
+// The Host assembly of remote access moved out of Main so it does not depend on Electron (D-095).
+const remoteAccessPath = join(dirname(fileURLToPath(import.meta.url)), '../host/remote-access.ts')
 
 test('isRemoteAdminCommand accepts only the closed admin command set', () => {
   assert.equal(isRemoteAdminCommand({ type: 'remote-admin.get-status' }), true)
@@ -35,6 +37,7 @@ test('isRemoteAdminCommand accepts only the closed admin command set', () => {
 
 test('Main registers remote admin IPC on its own channel with trusted-sender and type guards', async () => {
   const source = await readFile(mainIndexPath, 'utf8')
+  const remoteAccess = await readFile(remoteAccessPath, 'utf8')
 
   assert.match(source, new RegExp(String.raw`REMOTE_ADMIN_COMMAND_CHANNEL`))
   assert.match(source, /ipcMain\.handle\(\s*REMOTE_ADMIN_COMMAND_CHANNEL/u)
@@ -42,20 +45,20 @@ test('Main registers remote admin IPC on its own channel with trusted-sender and
   assert.match(source, /isRemoteAdminCommand\(command\)/u)
   assert.match(source, /dispatchRemoteAdminCommand\(command\)/u)
 
-  assert.match(source, /case 'remote-admin\.get-status'/u)
-  assert.match(source, /case 'remote-admin\.create-pairing-code'/u)
-  assert.match(source, /case 'remote-admin\.revoke-device'/u)
-  assert.match(source, /case 'remote-admin\.get-tailscale-status'/u)
-  assert.match(source, /case 'remote-admin\.enable-tailscale-funnel'/u)
-  assert.match(source, /case 'remote-admin\.enable-tailscale-serve'/u)
-  assert.match(source, /case 'remote-admin\.disable-tailscale'/u)
-  assert.match(source, /case 'remote-admin\.get-desktop-host-status'/u)
-  assert.match(source, /case 'remote-admin\.create-desktop-host-pairing-code'/u)
-  assert.match(source, /case 'remote-admin\.revoke-desktop-host-device'/u)
+  assert.match(remoteAccess, /case 'remote-admin\.get-status'/u)
+  assert.match(remoteAccess, /case 'remote-admin\.create-pairing-code'/u)
+  assert.match(remoteAccess, /case 'remote-admin\.revoke-device'/u)
+  assert.match(remoteAccess, /case 'remote-admin\.get-tailscale-status'/u)
+  assert.match(remoteAccess, /case 'remote-admin\.enable-tailscale-funnel'/u)
+  assert.match(remoteAccess, /case 'remote-admin\.enable-tailscale-serve'/u)
+  assert.match(remoteAccess, /case 'remote-admin\.disable-tailscale'/u)
+  assert.match(remoteAccess, /case 'remote-admin\.get-desktop-host-status'/u)
+  assert.match(remoteAccess, /case 'remote-admin\.create-desktop-host-pairing-code'/u)
+  assert.match(remoteAccess, /case 'remote-admin\.revoke-desktop-host-device'/u)
 
-  assert.equal(source.includes('Remote access is disabled.'), true)
-  assert.equal(source.includes('Desktop Host is disabled.'), true)
-  assert.match(source, /enabled:\s*false/u)
+  assert.equal(remoteAccess.includes('Remote access is disabled.'), true)
+  assert.equal(remoteAccess.includes('Desktop Host is disabled.'), true)
+  assert.match(remoteAccess, /enabled:\s*false/u)
 
   // Admin path must not be folded into Kernel command dispatch or remote allowlist.
   assert.equal(source.includes('REMOTE_ADMIN_COMMAND_CHANNEL = KERNEL_COMMAND_CHANNEL'), false)
@@ -74,7 +77,7 @@ test('remote Project activation refreshes metadata without exposing the refresh 
     workspaceKey: '/tmp/project'
   }), false)
 
-  const source = await readFile(mainIndexPath, 'utf8')
+  const source = await readFile(remoteAccessPath, 'utf8')
   const dispatchStart = source.indexOf('const dispatchRemoteCommand = async (')
   const dispatchEnd = source.indexOf('\n\n  const remoteConfig', dispatchStart)
   assert.ok(dispatchStart > 0)
@@ -99,7 +102,7 @@ test('remote Project activation refreshes metadata without exposing the refresh 
 })
 
 test('Main validates and restores managed Tailscale ownership around gateway startup', async () => {
-  const source = await readFile(mainIndexPath, 'utf8')
+  const source = await readFile(remoteAccessPath, 'utf8')
   const managedStart = source.indexOf('} else if (managedTailscaleConfig !== null) {')
   const managedEnd = source.indexOf('\n  const desktopHostConfig', managedStart)
   assert.ok(managedStart > 0)
@@ -113,7 +116,7 @@ test('Main validates and restores managed Tailscale ownership around gateway sta
   assert.ok(activateIndex > startIndex)
 
   const cleanupStart = source.indexOf('if (manager.getManagedConfig() === null) {')
-  const cleanupEnd = source.indexOf('\n    }\n    throw error', cleanupStart)
+  const cleanupEnd = source.indexOf('\n      }\n      throw error', cleanupStart)
   assert.ok(cleanupStart > 0)
   assert.ok(cleanupEnd > cleanupStart)
   const cleanupSource = source.slice(cleanupStart, cleanupEnd)
@@ -126,9 +129,9 @@ test('Main validates and restores managed Tailscale ownership around gateway sta
 })
 
 test('Main opens each device store before starting its gateway', async () => {
-  const source = await readFile(mainIndexPath, 'utf8')
+  const source = await readFile(remoteAccessPath, 'utf8')
   const webHelperStart = source.indexOf('async function startApplicationRemoteGateway(')
-  const webHelperEnd = source.indexOf('\n\nasync function enableTailscaleRemote(', webHelperStart)
+  const webHelperEnd = source.indexOf('\n\n  async function enableTailscaleRemote(', webHelperStart)
   assert.ok(webHelperStart > 0)
   assert.ok(webHelperEnd > webHelperStart)
   const webHelper = source.slice(webHelperStart, webHelperEnd)
