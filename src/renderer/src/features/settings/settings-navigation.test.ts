@@ -213,3 +213,16 @@ test('settings copy follows the Codex zh-CN wording', async () => {
   assert.match(subagent, /title="子智能体"/u)
   assert.doesNotMatch(subagent, /(['`>"]|[\u4e00-\u9fff] )Agent\b/u)
 })
+
+test('two- and three-option settings use the segmented pressed-button group', async () => {
+  const [general, appearance, control] = await Promise.all([
+    readFile(new URL('./GeneralSettings.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('./AppearanceSettings.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('./SettingsSegmented.tsx', import.meta.url), 'utf8')
+  ])
+  assert.match(control, /role="group"/u)
+  assert.match(control, /aria-pressed=\{option\.value === value\}/u)
+  assert.match(general, /labelledBy="general-startup-workspace-restore-label"/u)
+  assert.match(appearance, /labelledBy="appearance-text-size-label"/u)
+  assert.match(appearance, /labelledBy="appearance-token-count-format-label"/u)
+})

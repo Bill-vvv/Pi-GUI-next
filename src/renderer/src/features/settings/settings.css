@@ -12,6 +12,7 @@
 .settings-section-heading h2,
 .settings-group-heading,
 .settings-row h4,
+.settings-density-block h4,
 .settings-card h3,
 .settings-empty-state h3,
 .settings-resource-copy h3,
@@ -267,6 +268,7 @@
 }
 
 .settings-prefs .settings-row h4,
+.settings-prefs .settings-density-block h4,
 .settings-prefs .settings-row-copy label {
   font-weight: var(--weight-normal);
 }
@@ -311,6 +313,7 @@
 }
 
 .settings-prefs .settings-switch-control,
+.settings-prefs .settings-segmented-control,
 .settings-prefs .shortcut-settings-actions,
 .settings-prefs .remote-access-actions {
   width: auto;
@@ -444,6 +447,7 @@
 }
 
 .settings-row h4,
+.settings-density-block h4,
 .settings-row-copy label {
   color: var(--color-text-primary);
   font-size: var(--text-body);
@@ -454,7 +458,8 @@
   display: block;
 }
 
-.settings-row p {
+.settings-row p,
+.settings-density-block .settings-row-copy p {
   margin: 4px 0 0;
   color: var(--color-text-muted);
   font-size: var(--text-body-sm);
@@ -466,9 +471,63 @@
   flex: 0 0 auto;
 }
 
-.settings-switch-control {
+.settings-switch-control,
+.settings-segmented-control {
   display: flex;
   justify-content: flex-end;
+}
+
+.settings-segmented {
+  display: inline-flex;
+  gap: 2px;
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-control);
+  padding: 2px;
+  background: var(--color-surface-input);
+}
+
+.settings-segmented button {
+  flex: 1 1 0;
+  min-width: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  color: var(--color-text-soft);
+  background: transparent;
+  font-size: var(--text-control);
+  line-height: var(--line-control);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-duration-control) var(--motion-easing-standard),
+    color var(--motion-duration-control) var(--motion-easing-standard);
+}
+
+.settings-segmented button:hover:not(:disabled):not([aria-pressed='true']) {
+  color: var(--color-text-primary);
+  background: var(--color-hover-subtle);
+}
+
+/* Same selected surface as the theme cubes. */
+.settings-segmented button[aria-pressed='true'] {
+  color: var(--color-text-primary);
+  background: var(--color-surface-subtle-strong);
+}
+
+.settings-segmented button:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 1px;
+}
+
+.settings-segmented button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-segmented button {
+    transition: none;
+  }
 }
 
 .settings-switch {
@@ -1755,6 +1814,10 @@
 }
 
 @media (max-width: 620px) {
+  .settings-segmented {
+    width: 100%;
+  }
+
   .settings-row {
     min-height: 0;
     align-items: stretch;
