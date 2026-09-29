@@ -50,10 +50,10 @@ node scripts/desktop-host.mjs start --build-root /absolute/prepared-linux-build
 ```
 
 - `configure` 创建一次随机机器密钥，随后复用；原子保存不含密钥的 `desktop-host.json`。已有 `desktop-host.token` 和 `.desktop-device` 保留，可复用下方旧手动配置创建的配对。修改端口只影响下一次启动；不解析或执行旧 `.env` 文件。已配置后密钥丢失、配置损坏或权限异常均明确失败，不生成替代密钥或重置配置。
-- `check` 读取准备状态，校验完整构建产物清单、Node 版本、Electron/Pi 依赖版本和 Linux Electron 可执行文件。输出源码与产物摘要；不打印密钥，不代表 Host 已在线或 SSH 已连通。
-- `start` 使用同一配置校验，以该 Linux 构建为 cwd 启动现有 Electron Main。清理继承的 WSL、开发预览、探针和 Node 注入模式；不安装依赖。端口空闲后才启动，最多等待 60 秒无凭证兼容性握手，成功才输出 `ready: true`。已有普通 Pi GUI 占用单实例时，明确报告未就绪，先完整退出旧窗口再启动。
-- 启动命令保持前台运行；关闭 Linux 窗口或中断启动命令时退出。中断沿 Main 既有 `before-quit` 清理，最多等待 15 秒，超时强制终止会明确报错。配置与启动持有同一系统 `flock`，运行中拒绝另一启动或配置操作；不会把遗留锁文件本身当作进程仍在运行。
-- 需要 Linux 图形会话。首次配对仍在 Linux 设置页 **远程访问 → Desktop Host（SSH）** 生成配对码。独立发行目录部署与回退见下文；当前命令不提供无桌面后台服务。
+- `check` 读取准备状态，校验完整构建产物清单、Node 版本、Pi 依赖版本和 Node Host 入口 `out/main/pi-host.js`。输出源码与产物摘要；不打印密钥，不代表 Host 已在线或 SSH 已连通。
+- `start` 使用同一配置校验，以该 Linux 构建为 cwd，用启动器已校验的 Node 运行 Node Host：`node --use-env-proxy out/main/pi-host.js desktop-host`（D-095）。它与 Linux 桌面运行同一套 Host 组装，不需要 Electron、显示器或图形会话；`--use-env-proxy` 让网络请求像原 Electron 一样遵循 `HTTP(S)_PROXY`。清理继承的 WSL、开发预览、探针和 Node 注入模式；不安装依赖。端口空闲后才启动，最多等待 60 秒无凭证兼容性握手，成功才输出 `ready: true`。同一用户的数据目录同时只能由一个 Host 使用：Linux 桌面、WSL 后端或另一个 Desktop Host 已在运行时明确报错退出（D-099）。
+- 启动命令保持前台运行；中断启动命令时退出。中断使 Host 完整停机，最多等待 15 秒，超时强制终止会明确报错。配置与启动持有同一系统 `flock`，运行中拒绝另一启动或配置操作；不会把遗留锁文件本身当作进程仍在运行。
+- 不需要图形会话。Host 运行期间，在同一 Linux 用户下执行 `devices` 列出已配对设备，`pair` 打印 5 分钟有效的 6 位配对码，`revoke --device <设备编号>` 撤销一台设备；它们经数据目录中只有本人可访问的 `host.sock` 调用与 Linux 设置页 **远程访问 → Desktop Host（SSH）** 相同的管理函数。独立发行目录部署与回退见下文；启动命令本身仍在前台运行，不注册系统服务。
 
 `--build-root` 必须是已完成生产构建且装有冻结依赖的 Linux 目录，不能指向 Windows `node_modules`。共同开发场景先运行 `node scripts/workspace.mjs build`，再使用其输出的 Linux development workspace 路径。Windows 客户端必须来自相同源码摘要。
 
@@ -115,7 +115,7 @@ tar -xzf pi-gui-host.tar.gz
 ```
 
 - `install.sh` 直接使用包内 Node，不需要原源码、开发依赖、npm/pnpm 或预装 Node，也不运行联网依赖安装。归档校验值用于核对移交内容。
-- Linux 仍需具备 `/bin/sh`、`dirname`、`flock`、Git，以及 Electron/Node 对应的系统运行库；解压需 `tar`/`gzip`，校验需 `sha256sum`。Host 启动要求可用的 Linux 图形会话。SSH 登录与端口转发仍需在主机配置好 OpenSSH；本安装器不安装操作系统软件，也不设置 SSH 服务。
+- Linux 仍需具备 `/bin/sh`、`dirname`、`flock`、Git 和 Node 对应的系统运行库；解压需 `tar`/`gzip`，校验需 `sha256sum`。安装包不再包含 Electron，Host 启动不需要图形会话（D-095）。SSH 登录与端口转发仍需在主机配置好 OpenSSH；本安装器不安装操作系统软件，也不设置 SSH 服务。
 - 可以传入 `--config-dir`、`--install-dir`、`--port`。默认首次端口为 `18788`；重新安装省略端口时保留现有值。显式传入与现有值不同的端口会报错，先通过 `configure` 修改。密钥、配对和用户数据继续使用原目录。
 - 安装前核对平台、架构、版本、产物清单、完整 payload 摘要、安装脚本及运行依赖清单。损坏包在创建 Host 配置前拒绝；候选还须匹配已核验的包摘要，才能切换当前版本。
 - 安装输出 `nodeExecutable` 与 `launcher` 两个实际绝对路径。用它们执行 `check` / `start` / `rollback`；例如 `/absolute/installation/releases/RELEASE_ID/runtime/node /absolute/installation/host.mjs start`。不要手工删除仍在使用的完整发行目录。安装后可移除解压目录。
@@ -175,7 +175,7 @@ ssh -N -T \
 
 Windows 源码客户端首次进入 SSH 模式，之后恢复上次成功选择的 WSL/SSH 环境；生产窗口提供明确重启切换。SSH Settings 只开放本机外观、快捷键与窗口行为，不扩大 Host 管理命令。`pnpm build` / `pnpm package:win` 写入包含源码和产物摘要的清单；运行时校验清单。源码开发模式自动计算当前源码摘要，同一 Git HEAD 上的不同未提交修改不会被视作同一 build。共同开发与启动命令见 [cross-platform-development.md](cross-platform-development.md)。
 
-连接界面填写 SSH alias、本机端口、Host 端口；首次配对需要 Linux 设置页生成的 6 位配对码。成功后原始凭证写入 Windows Credential Manager，alias/端口写入 userData JSON。已保存凭证时配对码可选。关闭窗口或普通断开只释放连接并保留凭证；Workbench 的“管理 Host 连接”提供独立“取消配对”，仅此动作请求 Host logout 并在确认后清除存储的凭证。隧道或 SSE 意外断开后自动重建隧道、无凭证握手、已存凭证、新 controller SSE 与 snapshot，不重放未确认 mutation。Workbench 只展示 Host 已接通的能力：远程项目选择和 Git 只读审阅按 capability 开放；附件按独立完整 capability 开放；Git 暂存、取消暂存和普通提交在写能力齐全时开放，Host 管理设置仍隐藏，本机外观和快捷键设置可用。
+连接界面填写 SSH alias、本机端口、Host 端口；首次配对需要 Host 生成的 6 位配对码（Linux 设置页或 Host 上的 `pair` 命令）。成功后原始凭证写入 Windows Credential Manager，alias/端口写入 userData JSON。已保存凭证时配对码可选。关闭窗口或普通断开只释放连接并保留凭证；Workbench 的“管理 Host 连接”提供独立“取消配对”，仅此动作请求 Host logout 并在确认后清除存储的凭证。隧道或 SSE 意外断开后自动重建隧道、无凭证握手、已存凭证、新 controller SSE 与 snapshot，不重放未确认 mutation。Workbench 只展示 Host 已接通的能力：远程项目选择和 Git 只读审阅按 capability 开放；附件按独立完整 capability 开放；Git 暂存、取消暂存和普通提交在写能力齐全时开放，Host 管理设置仍隐藏，本机外观和快捷键设置可用。
 
 ### 有界恢复与错误反馈
 
@@ -191,7 +191,7 @@ Windows 源码客户端首次进入 SSH 模式，之后恢复上次成功选择�
 ## 配对与设备凭证
 
 1. SSH 进程成功启动后，Windows client 必须先不携带设备凭证请求握手，并要求 protocol、product version 与非空 build commit 完全一致。
-2. 兼容性通过后，才可在 Linux Pi GUI 设置页生成并由 Windows client 提交 6 位桌面配对码；client 在握手前必须本地拒绝配对。
+2. 兼容性通过后，才可在 Linux Pi GUI 设置页或 Host 的 `pair` 命令生成、并由 Windows client 提交 6 位桌面配对码；client 在握手前必须本地拒绝配对。
 3. 配对请求再次携带预期 product/build，Host 必须在写入新设备前复核。R12 起新设备与已有设备并存，不替换、也不断开当前控制连接；已有 8 台有效设备时拒绝生成配对码，并发配对也会被拒绝。配对请求可带 Windows 计算机名作为设备名称，Host 规范化后保存，名称不合格时按未命名保存，不因名称拒绝配对。配对码 5 分钟、一次有效；重新生成替代旧码，连续错误和每分钟尝试均有界。
 4. `POST /api/desktop-host/pair` 成功后只返回一次高熵桌面设备凭证。
 5. 后续客户端通过 `Authorization: Bearer <credential>` 认证；不得把凭证放入 URL、Renderer、日志或浏览器存储。已有凭证只能在新隧道完成无凭证兼容性握手后，再用 `x-pi-gui-pairing-id` 请求头发送本地凭证派生的公开配对身份，且 Host 回答 `pairingKnown: true` 时才装载进 client。回答不是 `true`（已撤销、已过期或目标 Host 不同）时报告 `credential-target` 并停止恢复，凭证未发送，本地凭证保留，供用户核对主机或重新配对。

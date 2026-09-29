@@ -33,6 +33,8 @@ Main remote http listener
     -> same Workbench Kernel (no second Kernel / no WebSocket)
 ```
 
+Host 组装（`src/main/host/`：Kernel、Pi Runtime 子进程、Git、Package、远程访问、通知中转与 WSL 管道）不依赖 Electron（D-095）。Linux 桌面在 Electron Main 进程内运行它，并提供窗口、IPC、对话框与 shell；WSL 后端与 SSH Desktop Host 以 Node 运行同一套组装（`out/main/pi-host.js wsl|desktop-host`），没有窗口与图形会话。每个 Host 启动时绑定数据目录中的私有 `host.sock`：同一数据目录只能有一个 Host（D-099），Host 命令行经它调用 Desktop Host 设备管理（D-095）。以下 “Main” 指运行 Host 组装的进程。
+
 Linux Electron Main 是唯一 control plane；会话执行主路径是 Main 按需启动的一个 Pi Runtime 子进程，其中运行未改动的 `SharedPiHost`（D-094）。多个 Session 拥有独立 Runtime handle、driver 与 canonical session file，但共用这个子进程：一个会话出问题仍可能影响其他会话，但不再波及 UI、Git、远程网关和通知。子进程退出时，其全部 Runtime 进入既有崩溃状态，进行中的 prompt 与工具调用不重放；下一次需要 Runtime 时才重新启动子进程，2 分钟内最多启动 3 次。每次启动带新编号，旧编号的事件丢弃、命令拒绝。可选的私有远程呈现面（默认关闭）在同一 Main/Kernel 上提供 SSE + JSON POST，详见 [`remote-access.md`](remote-access.md)；默认入口由 Main 通过窄 RemoteAdmin IPC 管理系统 Tailscale Funnel/Serve，并让 Gateway 只监听 loopback，手动 Lucky 环境变量模式继续作为互斥的高级入口。两种入口都不是第二 control plane，也不把 electron-vite 开发服务器对外暴露。
 
 统一远程产品拓扑如下；P4-1 已实现 Linux loopback Desktop Gateway，P4-2 已接通 Windows remote-only Main/preload、Credential Manager、断线重连与 capability gating；P4-3 已打出并安装 Windows 包，真实 SSH gate 由用户暂缓，完成前不能宣称 Windows 已受支持：

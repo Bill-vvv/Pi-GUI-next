@@ -44,7 +44,7 @@ node scripts/workspace.mjs wsl
 
 SSH 握手中既有的 `buildCommit` 字段承载源码摘要，开发模式直接计算当前源码摘要；运行生产产物时先检查产物清单。`PI_GUI_BUILD_COMMIT` 不再覆盖或绕过内容校验。旧的仅含 commit 的清单需要重新构建。
 
-WSL 同步整套产物，握手使用产物摘要；校验覆盖 Main、独立 worker、preload、Renderer、Web Remote、锁文件和应用打包的扩展资源。后端先安装到 `~/.local/share/pi-gui-next-wsl/releases/release.*`，安装、清单验证与 Electron 可执行检查全部成功后，原子替换 `current` symlink。失败保留原版本；成功后保留当前和上一版本。旧版 `app` 目录在首次迁移时保留，不作为新启动入口。
+WSL 同步整套产物，握手使用产物摘要；校验覆盖 Main、独立 worker、preload、Renderer、Web Remote、锁文件和应用打包的扩展资源。后端先安装到 `~/.local/share/pi-gui-next-wsl/releases/release.*`，安装、清单验证与 Node Host 入口检查全部成功后，原子替换 `current` symlink。WSL 后端以随附的 Node 26.4.0 运行 `out/main/pi-host.js wsl`（D-095），不下载 Electron，也不依赖 WSLg。失败保留原版本；成功后保留当前和上一版本。旧版 `app` 目录在首次迁移时保留，不作为新启动入口。
 
 ## 操作与桌面能力的归属
 
