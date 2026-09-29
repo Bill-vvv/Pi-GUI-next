@@ -7,7 +7,7 @@
   "type": "module",
   "main": "./out/main/index.js",
   "desktopHost": {
-    "deviceStoreVersions": [1]
+    "deviceStoreVersions": [1, 2]
   },
   "engines": {
     "node": "26.4.0",

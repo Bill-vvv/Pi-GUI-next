@@ -13,6 +13,7 @@ import type {
 import {
   DESKTOP_HOST_API_PATHS,
   DESKTOP_HOST_KERNEL_COMMAND_TYPES,
+  DESKTOP_HOST_PAIRING_ID_HEADER,
   DESKTOP_HOST_PROTOCOL_VERSION
 } from '../../shared/desktop-host-contract.ts'
 import {
@@ -23,7 +24,7 @@ import {
 } from './desktop-host-client.ts'
 import type { DesktopHostEnabledConfig } from './desktop-host-config.ts'
 import { startDesktopHostGateway } from './desktop-host-gateway.ts'
-import { openRemoteDeviceStore } from './remote-device-store.ts'
+import { openDesktopDeviceStore } from './desktop-device-store.ts'
 import { createWindowsRemoteSession } from './windows-remote-session.ts'
 import { createMemoryDesktopDeviceCredentialStore } from './desktop-device-credential-store.ts'
 import type { SystemSshTunnel } from './system-ssh-tunnel.ts'
@@ -47,7 +48,7 @@ test('Desktop Host client rejects protocol, product, and known build mismatches'
       protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION + 1,
       productVersion: '1.0.0',
       buildCommit: 'host-build',
-      authenticated: false, pairingId: desktopPairingId('d'.repeat(43)),
+      authenticated: false, pairingKnown: true,
       capabilities: { kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES }
     }), {
       status: 200,
@@ -60,7 +61,7 @@ test('Desktop Host client rejects protocol, product, and known build mismatches'
     protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
     productVersion: '1.0.0',
     buildCommit: 'host-build',
-    authenticated: false, pairingId: desktopPairingId('d'.repeat(43)),
+    authenticated: false, pairingKnown: true,
     capabilities: { kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES }
   } as const
   assert.throws(
@@ -75,16 +76,18 @@ test('Desktop Host client rejects protocol, product, and known build mismatches'
 
 test('Desktop Host client requires an unauthenticated exact-build handshake before credentials or pairing', async () => {
   let authorization: string | null = null
+  let claimedPairingId: string | null = null
   const client = new DesktopHostClient({
     localPort: 18788,
     compatibility: { productVersion: '1.0.0', buildCommit: 'host-build' },
     fetchImpl: async (_url, init) => {
       authorization = new Headers(init?.headers).get('authorization')
+      claimedPairingId = new Headers(init?.headers).get(DESKTOP_HOST_PAIRING_ID_HEADER)
       return new Response(JSON.stringify({
         protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
         productVersion: '1.0.0',
         buildCommit: 'host-build',
-        authenticated: false, pairingId: desktopPairingId('d'.repeat(43)),
+        authenticated: false, pairingKnown: true,
         capabilities: { kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES }
       }), {
         status: 200,
@@ -93,12 +96,17 @@ test('Desktop Host client requires an unauthenticated exact-build handshake befo
     }
   })
 
-  assert.throws(() => client.setCredential('d'.repeat(43)), /compatibility must be verified/)
+  await assert.rejects(client.setCredential('d'.repeat(43)), /compatibility must be verified/)
   await assert.rejects(() => client.pair('123456'), /compatibility must be verified/)
   await client.verifyCompatibility()
   assert.equal(authorization, null)
-  client.setCredential('d'.repeat(43))
+  assert.equal(claimedPairingId, null)
+  await client.setCredential('d'.repeat(43))
+  // The identity check carries only the public pairing identity, never the credential.
+  assert.equal(authorization, null)
+  assert.equal(claimedPairingId, desktopPairingId('d'.repeat(43)))
   await client.getSession()
+  assert.equal(claimedPairingId, null)
   assert.equal(authorization, `Bearer ${'d'.repeat(43)}`)
 
   await client.verifyCompatibility()
@@ -131,13 +139,16 @@ test('saved credentials cannot cross two real Hosts with the same version and bu
     await secondClient.pair('123456')
     target = second
     const handshake = await client.verifyCompatibility()
-    assert.equal(handshake.pairingId, desktopPairingId('e'.repeat(43)))
-    assert.throws(() => client.setCredential(paired.credential), (error) => error instanceof DesktopHostClientError && error.code === 'credential-target')
+    assert.equal(handshake.pairingKnown, null)
+    await assert.rejects(client.setCredential(paired.credential), (error) => error instanceof DesktopHostClientError && error.code === 'credential-target')
     await assert.rejects(client.getState(CONTROLLER_ID), (error) => error instanceof DesktopHostClientError && error.code === 'unauthorized')
-    assert.deepEqual(sent.filter((request) => request.port === second.port), [{ port: second.port, path: '/api/desktop-host/session', authorization: null }])
+    assert.deepEqual(sent.filter((request) => request.port === second.port), [
+      { port: second.port, path: '/api/desktop-host/session', authorization: null },
+      { port: second.port, path: '/api/desktop-host/session', authorization: null }
+    ])
     target = first
     await client.verifyCompatibility()
-    client.setCredential(paired.credential)
+    await client.setCredential(paired.credential)
     assert.equal((await client.getSession()).authenticated, true)
     assert.equal(sent.at(-1)!.authorization, `Bearer ${paired.credential}`)
   } finally {
@@ -146,18 +157,23 @@ test('saved credentials cannot cross two real Hosts with the same version and bu
   }
 })
 
-test('missing, malformed or inconsistent pairing identities fail the protocol boundary', async () => {
-  for (const pairingId of [undefined, 'short', 'X'.repeat(64), 12, [], {}]) {
+test('missing or malformed pairing checks and version-2 Hosts fail before any credential is sent', async () => {
+  for (const pairingKnown of [undefined, 'yes', 1, [], {}]) {
     const client = new DesktopHostClient({ localPort: 18788, compatibility: { productVersion: '1.0.0', buildCommit: 'test-build' },
       fetchImpl: async () => Response.json({ protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION, productVersion: '1.0.0', buildCommit: 'test-build',
-        authenticated: false, pairingId, capabilities: { kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES } }) })
+        authenticated: false, pairingKnown, capabilities: { kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES } }) })
     await assert.rejects(client.verifyCompatibility(), DesktopHostClientError)
-    assert.throws(() => client.setCredential('d'.repeat(43)), /compatibility/u)
+    await assert.rejects(client.setCredential('d'.repeat(43)), /compatibility/u)
   }
-  const client = new DesktopHostClient({ localPort: 18788, compatibility: { productVersion: '1.0.0', buildCommit: 'test-build' },
-    fetchImpl: async () => Response.json({ protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION, productVersion: '1.0.0', buildCommit: 'test-build',
-      authenticated: true, pairingId: null, capabilities: { kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES } }) })
-  await assert.rejects(client.verifyCompatibility(), /missing its pairing identity/u)
+  const authorizations: (string | null)[] = []
+  const versionTwo = new DesktopHostClient({ localPort: 18788, compatibility: { productVersion: '1.0.0', buildCommit: 'test-build' },
+    fetchImpl: async (_input, init) => {
+      authorizations.push(new Headers(init?.headers).get('authorization'))
+      return Response.json({ protocolVersion: 2, productVersion: '1.0.0', buildCommit: 'test-build',
+        authenticated: false, pairingId: desktopPairingId('d'.repeat(43)), capabilities: { kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES } })
+    } })
+  await assert.rejects(versionTwo.verifyCompatibility(), /Unsupported Desktop Host protocol version: 2/u)
+  assert.deepEqual(authorizations, [null])
 })
 
 test('Desktop Host client pairs, owns one event controller, reads state, commands, and logs out', linuxHostFixture, async () => {
@@ -221,6 +237,7 @@ test('Desktop Host client pairs, owns one event controller, reads state, command
     )
     const loggedOut = await client.logout()
     assert.equal(loggedOut.authenticated, false)
+    assert.equal(loggedOut.pairingKnown, false)
     await streamClosed
     assert.equal((await client.getSession()).authenticated, false)
   } finally {
@@ -264,12 +281,12 @@ test('Desktop Host client never retries a failed mutation', async () => {
     compatibility: { productVersion: '1.0.0', buildCommit: 'test-build' },
     fetchImpl: async () => {
       attempts += 1
-      if (attempts === 1) {
+      if (attempts <= 2) {
         return new Response(JSON.stringify({
           protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
           productVersion: '1.0.0',
           buildCommit: 'test-build',
-          authenticated: false, pairingId: desktopPairingId('d'.repeat(43)),
+          authenticated: false, pairingKnown: true,
           capabilities: { kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES }
         }), {
           status: 200,
@@ -280,7 +297,7 @@ test('Desktop Host client never retries a failed mutation', async () => {
     }
   })
   await offline.verifyCompatibility()
-  offline.setCredential('d'.repeat(43))
+  await offline.setCredential('d'.repeat(43))
   await assert.rejects(
     () => offline.command(
       CONTROLLER_ID,
@@ -290,7 +307,7 @@ test('Desktop Host client never retries a failed mutation', async () => {
     ),
     (error: unknown) => error instanceof DesktopHostClientError && error.code === 'network'
   )
-  assert.equal(attempts, 2)
+  assert.equal(attempts, 3)
 })
 
 test('Desktop Host client bounds JSON requests and SSE heartbeat silence', async () => {
@@ -311,12 +328,12 @@ test('Desktop Host client bounds JSON requests and SSE heartbeat silence', async
     eventIdleTimeoutMs: 10,
     fetchImpl: async (_url, init) => {
       requestCount += 1
-      if (requestCount === 1) {
+      if (requestCount <= 2) {
         return new Response(JSON.stringify({
           protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
           productVersion: '1.0.0',
           buildCommit: 'test-build',
-          authenticated: false, pairingId: desktopPairingId('d'.repeat(43)),
+          authenticated: false, pairingKnown: true,
           capabilities: { kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES }
         }), {
           status: 200,
@@ -337,7 +354,7 @@ test('Desktop Host client bounds JSON requests and SSE heartbeat silence', async
     }
   })
   await stalledEvents.verifyCompatibility()
-  stalledEvents.setCredential('d'.repeat(43))
+  await stalledEvents.setCredential('d'.repeat(43))
   const stream = await stalledEvents.openEventStream(CONTROLLER_ID, () => undefined)
   await assert.rejects(stream.closed, /idle for 10 milliseconds/)
   await stream.close()
@@ -389,13 +406,14 @@ test('real HTTP/SSE reconnects after Host restart, then stops without resending 
     assert.equal(session.status().phase, 'connected')
     const connectionsBeforeRevoke = connections
     const requestsBeforeRevoke = sent.length
-    await fixture.gateway.revokeDevice()
+    await fixture.gateway.revokeDevice(fixture.gateway.listDevices()[0]!.deviceId)
     await disconnected
     assert.equal(connections, connectionsBeforeRevoke + 1)
     assert.equal(session.status().failureKind, 'credential-target')
     assert.equal(session.status().hasStoredCredential, true)
     assert.equal(await credentialStore.load(), 'c'.repeat(43))
-    assert.deepEqual(sent.slice(requestsBeforeRevoke), [null])
+    // Handshake and identity check only; the revoked credential is never sent again.
+    assert.deepEqual(sent.slice(requestsBeforeRevoke), [null, null])
     assert.deepEqual(fixture.dispatched, ['kernel.get-state', 'kernel.get-state'])
   } finally {
     await session.close()
@@ -403,7 +421,7 @@ test('real HTTP/SSE reconnects after Host restart, then stops without resending 
   }
 })
 
-async function createGatewayFixture(deviceCredential = 'c'.repeat(43)): Promise<{
+async function createGatewayFixture(deviceCredential = 'c'.repeat(43), laterCredentials: string[] = []): Promise<{
   port: number
   gateway: Awaited<ReturnType<typeof startDesktopHostGateway>>
   dispatched: string[]
@@ -426,12 +444,12 @@ async function createGatewayFixture(deviceCredential = 'c'.repeat(43)): Promise<
     config,
     productVersion: '1.0.0',
     buildCommit: 'test-build',
-    deviceStore: await openRemoteDeviceStore({
+    deviceStore: await openDesktopDeviceStore({
       path: config.deviceStorePath,
       uid: process.getuid?.() ?? 0
     }),
     randomPairingCode: () => '123456',
-    randomDeviceCredential: () => deviceCredential,
+    randomDeviceCredential: () => laterCredentials.shift() ?? deviceCredential,
     handlers: {
       getControlIdentity: () => ({
         projectKey: '/project',
@@ -483,7 +501,7 @@ test('Desktop Host Git capability parsing rejects unknown, duplicate or cross-do
     const client = new DesktopHostClient({
       localPort: 18788, compatibility: { productVersion: '1.0.0', buildCommit: 'fixture' },
       fetchImpl: async () => new Response(JSON.stringify({ protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION, productVersion: '1.0.0',
-        buildCommit: 'fixture', authenticated: false, pairingId: desktopPairingId('d'.repeat(43)),
+        buildCommit: 'fixture', authenticated: false, pairingKnown: true,
         capabilities: { kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES, gitCommandTypes }
       }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     })
@@ -496,7 +514,7 @@ test('Desktop Host attachment capability parsing rejects unknown, duplicate and 
     const client = new DesktopHostClient({
       localPort: 18788, compatibility: { productVersion: '1.0.0', buildCommit: 'fixture' },
       fetchImpl: async () => new Response(JSON.stringify({ protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION, productVersion: '1.0.0',
-        buildCommit: 'fixture', authenticated: false, pairingId: desktopPairingId('d'.repeat(43)),
+        buildCommit: 'fixture', authenticated: false, pairingKnown: true,
         capabilities: { kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES, attachmentCommandTypes }
       }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     })
@@ -542,11 +560,11 @@ test('real Host pairing survives normal disconnect and restart, and explicit rev
     assert.equal(await credentials.load(), null)
     assert.equal(sent.filter((entry) => entry.path === DESKTOP_HOST_API_PATHS.logout).length, 1)
     const response = await fetch(`http://127.0.0.1:${fixture.port}${DESKTOP_HOST_API_PATHS.session}`, {
-      headers: { Authorization: `Bearer ${credential}` }
+      headers: { Authorization: `Bearer ${credential}`, [DESKTOP_HOST_PAIRING_ID_HEADER]: desktopPairingId(credential!) }
     })
-    const status = await response.json() as { authenticated: boolean; pairingId: string | null }
+    const status = await response.json() as { authenticated: boolean; pairingKnown: boolean | null }
     assert.equal(status.authenticated, false)
-    assert.equal(status.pairingId, null)
+    assert.equal(status.pairingKnown, false)
   } finally { await session.close(); await fixture.close() }
 })
 
@@ -559,13 +577,88 @@ test('logout must receive explicit compatible unpaired status before clearing it
       requests.push(new Headers(init?.headers).get('authorization'))
       logout = init?.method === 'POST'
       return Response.json({ protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION, productVersion: '1.0.0', buildCommit: 'test-build',
-        authenticated: false, pairingId: desktopPairingId(credential), capabilities: { kernelCommandTypes: [...DESKTOP_HOST_KERNEL_COMMAND_TYPES] } })
+        authenticated: false, pairingKnown: true, capabilities: { kernelCommandTypes: [...DESKTOP_HOST_KERNEL_COMMAND_TYPES] } })
     }
   })
   await client.verifyCompatibility()
-  client.setCredential(credential)
+  await client.setCredential(credential)
   await assert.rejects(client.logout(), /did not confirm pairing revocation/)
   assert.equal(logout, true)
   await client.getSession()
-  assert.deepEqual(requests, [null, `Bearer ${credential}`, `Bearer ${credential}`])
+  assert.deepEqual(requests, [null, null, `Bearer ${credential}`, `Bearer ${credential}`])
+})
+
+function fixtureTunnel(counter: { starts: number }) {
+  return async ({ verifyUnauthenticatedDesktopHost }: { verifyUnauthenticatedDesktopHost(signal: AbortSignal): Promise<void> }) => {
+    counter.starts += 1
+    const controller = new AbortController()
+    let end!: (value: Awaited<SystemSshTunnel['termination']>) => void
+    const termination = new Promise<Awaited<SystemSshTunnel['termination']>>((resolve) => { end = resolve })
+    await verifyUnauthenticatedDesktopHost(controller.signal)
+    return { connectionSignal: controller.signal, termination, async stop() {
+      controller.abort()
+      end({ expected: true, code: 0, signal: null, error: null, stderr: '' })
+    } } as SystemSshTunnel
+  }
+}
+
+test('R12: a second device pairs with its name and is told the Host is occupied', linuxHostFixture, async () => {
+  const fixture = await createGatewayFixture('c'.repeat(43), ['c'.repeat(43), 'e'.repeat(43)])
+  try {
+    const first = new DesktopHostClient({ localPort: fixture.port, compatibility: { productVersion: '1.0.0', buildCommit: 'test-build' } })
+    await first.verifyCompatibility()
+    await first.pair('123456', ' Desk\u0001PC ')
+    const stream = await first.openEventStream(CONTROLLER_ID, () => undefined)
+    try {
+      fixture.gateway.createPairingCode()
+      const second = new DesktopHostClient({ localPort: fixture.port, compatibility: { productVersion: '1.0.0', buildCommit: 'test-build' } })
+      await second.verifyCompatibility()
+      await second.pair('123456', 'Laptop')
+      assert.deepEqual(fixture.gateway.listDevices().map(({ label, controlling }) => ({ label, controlling })), [
+        { label: 'DeskPC', controlling: true },
+        { label: 'Laptop', controlling: false }
+      ])
+      await assert.rejects(second.openEventStream('33333333-3333-4333-8333-333333333333', () => undefined),
+        (error) => error instanceof DesktopHostClientError && error.code === 'occupied' && error.status === 409)
+      assert.deepEqual(await first.getState(CONTROLLER_ID), snapshot, 'the first device keeps control')
+    } finally {
+      await stream.close()
+    }
+  } finally {
+    await fixture.close()
+  }
+})
+
+test('R12: an occupied Host stops the connection attempt without retrying or dropping the credential', linuxHostFixture, async () => {
+  const fixture = await createGatewayFixture('c'.repeat(43), ['c'.repeat(43), 'e'.repeat(43)])
+  const firstTunnels = { starts: 0 }
+  const secondTunnels = { starts: 0 }
+  const secondCredentials = createMemoryDesktopDeviceCredentialStore()
+  const config = { sshHostAlias: 'fixture', localPort: fixture.port, desktopHostPort: fixture.port }
+  const first = createWindowsRemoteSession({ productVersion: '1.0.0', buildCommit: 'test-build', onEvent: () => {},
+    deviceLabel: () => 'Desk PC', startTunnel: fixtureTunnel(firstTunnels) })
+  const second = createWindowsRemoteSession({ productVersion: '1.0.0', buildCommit: 'test-build', onEvent: () => {},
+    deviceLabel: () => 'Laptop', credentialStore: secondCredentials, startTunnel: fixtureTunnel(secondTunnels),
+    waitForRetry: async () => { throw new Error('an occupied Host must not be retried') } })
+  try {
+    await first.connect({ ...config, pairingCode: '123456' })
+    fixture.gateway.createPairingCode()
+    await assert.rejects(second.connect({ ...config, pairingCode: '123456' }), /另一台设备正在使用此 Host/u)
+    assert.equal(second.status().phase, 'disconnected')
+    assert.equal(second.status().failureKind, 'occupied')
+    assert.equal(second.status().hasStoredCredential, true)
+    assert.equal(await secondCredentials.load(), 'e'.repeat(43))
+    assert.equal(secondTunnels.starts, 1)
+    assert.deepEqual(fixture.gateway.listDevices().map(({ label }) => label), ['Desk PC', 'Laptop'])
+
+    // After the first device leaves, the second connects with its stored credential.
+    await first.disconnect()
+    await second.connect(config)
+    assert.equal(second.status().phase, 'connected')
+    assert.equal(fixture.gateway.listDevices().find(({ label }) => label === 'Laptop')?.controlling, true)
+  } finally {
+    await first.close()
+    await second.close()
+    await fixture.close()
+  }
 })

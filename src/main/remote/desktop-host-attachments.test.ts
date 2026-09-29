@@ -13,7 +13,7 @@ import type { WorkbenchKernel } from '../kernel/workbench-kernel.ts'
 import { DesktopAttachmentStore } from './desktop-attachment-store.ts'
 import { DesktopHostClient } from './desktop-host-client.ts'
 import { startDesktopHostGateway } from './desktop-host-gateway.ts'
-import { openRemoteDeviceStore } from './remote-device-store.ts'
+import { openDesktopDeviceStore } from './desktop-device-store.ts'
 import { assertDesktopHostKernelCommandPolicy } from './remote-command-policy.ts'
 import { WindowsAttachmentUploader } from './windows-attachment-uploader.ts'
 
@@ -40,7 +40,7 @@ test('real HTTP/SSE uploads bounded content and accepts only owned references, n
   const gateway = await startDesktopHostGateway({
     config: { enabled: true, bindHost: '127.0.0.1', port, token: 't'.repeat(32), tokenFile: join(root, 'token'), deviceStorePath: join(root, 'device') },
     productVersion: '1.0.0', buildCommit: 'fixture',
-    deviceStore: await openRemoteDeviceStore({ path: join(root, 'device'), uid: process.getuid!() }),
+    deviceStore: await openDesktopDeviceStore({ path: join(root, 'device'), uid: process.getuid!() }),
     randomPairingCode: () => '123456', randomDeviceCredential: () => 'c'.repeat(43),
     handlers: {
       getControlIdentity: () => current,
@@ -87,7 +87,7 @@ test('real HTTP/SSE uploads bounded content and accepts only owned references, n
   await assert.rejects(send({ ...submit, uploadIds: [unfinished[0]!.uploadId] }), /state changed/)
   await assert.rejects(client.command(controllerId, current, { ...submit, uploadIds: [unfinished[0]!.uploadId] }), /another controller or Session/)
   assert.equal(submitted.length, 1)
-  await gateway.revokeDevice()
+  await gateway.revokeDevice(gateway.listDevices()[0]!.deviceId)
   assert.ok(await streamClosed instanceof Error)
   await assert.rejects(send({ type: 'attachment.begin', name: 'revoked', byteCount: 0 }), /Authentication required/)
   await store.close()

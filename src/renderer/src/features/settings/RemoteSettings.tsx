@@ -32,7 +32,7 @@ export function RemoteSettings({
   onDisableTailscale: () => Promise<TailscaleRemoteStatus>
   onGetDesktopHostStatus: () => Promise<DesktopHostAccessStatus>
   onCreateDesktopHostPairingCode: () => Promise<RemotePairingCode>
-  onRevokeDesktopHostDevice: () => Promise<DesktopHostAccessStatus>
+  onRevokeDesktopHostDevice: (deviceId: string) => Promise<DesktopHostAccessStatus>
   onOpenExternal: (url: string) => Promise<void>
 }): React.JSX.Element {
   return (

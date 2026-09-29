@@ -78,6 +78,8 @@ export type DesktopConnectionFailureKind =
   | 'network'
   | 'authentication'
   | 'credential-target'
+  /** Another paired device holds the Host control connection (R12). Never retried automatically. */
+  | 'occupied'
   | 'ssh-authentication'
   | 'host-key'
   | 'protocol'

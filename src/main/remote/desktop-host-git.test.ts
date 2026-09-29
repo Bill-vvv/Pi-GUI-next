@@ -12,7 +12,7 @@ import { createActiveRegisteredGitProjectResolver } from '../git/git-active-proj
 import { ProjectStore } from '../project/project-store.ts'
 import { DesktopHostClient } from './desktop-host-client.ts'
 import { startDesktopHostGateway } from './desktop-host-gateway.ts'
-import { openRemoteDeviceStore } from './remote-device-store.ts'
+import { openDesktopDeviceStore } from './desktop-device-store.ts'
 import { DESKTOP_HOST_GIT_COMMAND_TYPES, DESKTOP_HOST_JSON_RESPONSE_BYTE_LIMIT, type DesktopHostCommand, type DesktopHostGitCommand } from '../../shared/desktop-host-contract.ts'
 import type { GitDiffRequest, GitDiffResponse, GitFileReadResponse, GitRefreshResponse, GitRepositoryState, GitHistoryListResponse, GitHistoryDetailResponse, GitHistoryFileDiffResponse } from '../../shared/git-contract.ts'
 import type { GitFileMutationRequest, GitMutationResponse, GitCommitPreviewResponse, GitCommitExecutionResponse } from '../../shared/git-contract.ts'
@@ -47,7 +47,7 @@ async function fixture(t: TestContext, nestedProject = false) {
   const gateway = await startDesktopHostGateway({
     config: { enabled: true, bindHost: '127.0.0.1', port, token: 't'.repeat(32), tokenFile: join(root, 'token'), deviceStorePath: join(root, 'device') },
     productVersion: '1.0.0', buildCommit: 'fixture',
-    deviceStore: await openRemoteDeviceStore({ path: join(root, 'device'), uid: process.getuid!() }),
+    deviceStore: await openDesktopDeviceStore({ path: join(root, 'device'), uid: process.getuid!() }),
     randomPairingCode: () => '123456', randomDeviceCredential: () => 'c'.repeat(43),
     handlers: {
       getControlIdentity: () => ({ projectKey: activeProject, sessionKey: activeSession }),
@@ -138,7 +138,7 @@ test('Desktop stages, unstages and commits only the confirmed index over HTTP wi
   assert.equal(await git(host.project, ['show', `HEAD:${path}`]), 'staged version\n')
   assert.equal(await readFile(join(host.project, path), 'utf8'), 'unstaged version\n')
   assert.equal((await git(host.project, ['log', '-1', '--format=%s'])).trim(), request.message)
-  await host.gateway.revokeDevice()
+  await host.gateway.revokeDevice(host.gateway.listDevices()[0]!.deviceId)
   assert.ok(await host.streamClosed instanceof Error)
   await assert.rejects(host.command({ type: 'git.execute-commit', projectKey: host.project, request }), /Authentication required/)
   assert.equal((await git(host.project, ['rev-list', '--count', 'HEAD'])).trim(), '2')
@@ -301,7 +301,7 @@ test('Desktop Git discards late read results after navigation or device revocati
   host.intercept(async () => ({ content: 'x'.repeat(DESKTOP_HOST_JSON_RESPONSE_BYTE_LIMIT) }))
   await assert.rejects(host.command({ type: 'git.refresh', projectKey: host.project }), /response size limit/)
   host.intercept(async () => {
-    await host.gateway.revokeDevice()
+    await host.gateway.revokeDevice(host.gateway.listDevices()[0]!.deviceId)
     return { confidential: 'revoked-result' }
   })
   await assert.rejects(host.command({ type: 'git.refresh', projectKey: host.project }), /Authentication required/)

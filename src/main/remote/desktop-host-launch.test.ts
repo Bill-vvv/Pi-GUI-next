@@ -55,7 +55,7 @@ const server = createServer((req, res) => {
   res.setHeader('Content-Type', 'application/json');
   res.end(JSON.stringify({ protocolVersion: ${DESKTOP_HOST_PROTOCOL_VERSION}, productVersion: '0.0.1',
     buildCommit: process.env.PI_GUI_LAUNCH_FIXTURE === 'mismatch' ? 'wrong' : build.sourceDigest,
-    authenticated: false, pairingId: null, capabilities: { kernelCommandTypes: [] } }));
+    authenticated: false, pairingKnown: null, capabilities: { kernelCommandTypes: [] } }));
 });
 server.listen(Number(process.env.PI_GUI_DESKTOP_HOST_PORT), '127.0.0.1');
 process.on('SIGTERM', () => { writeFileSync('stopped', 'SIGTERM'); server.close(() => process.exit(0)); });

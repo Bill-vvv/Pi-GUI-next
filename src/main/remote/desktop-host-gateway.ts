@@ -10,7 +10,7 @@ import {
 
 import type {
   DesktopHostAccessStatus,
-  RemotePairedDevice,
+  DesktopHostDeviceSummary,
   RemotePairingCode
 } from '../../shared/remote-admin-contract.ts'
 import {
@@ -20,7 +20,11 @@ import {
   DESKTOP_HOST_KERNEL_COMMAND_TYPES,
   DESKTOP_HOST_GIT_COMMAND_TYPES,
   DESKTOP_HOST_JSON_RESPONSE_BYTE_LIMIT,
+  DESKTOP_HOST_OCCUPIED_MESSAGE,
+  DESKTOP_HOST_PAIRING_ID_HEADER,
+  DESKTOP_HOST_PAIRING_ID_PATTERN,
   DESKTOP_HOST_PROTOCOL_VERSION,
+  normalizeDesktopDeviceLabel,
   isDesktopHostKernelCommand,
   isDesktopHostGitCommand,
   isDesktopHostControlIdentity,
@@ -42,10 +46,8 @@ import { isGitCommand } from '../git/git-command-validation.ts'
 import { isRecord } from '../utils/guards.ts'
 import { RemoteCommandPolicyError } from './remote-command-policy.ts'
 import type { DesktopHostEnabledConfig } from './desktop-host-config.ts'
-import {
-  hashRemoteDeviceCredential,
-  type RemoteDeviceStore
-} from './remote-device-store.ts'
+import { hashRemoteDeviceCredential } from './remote-device-store.ts'
+import { DESKTOP_DEVICE_LIMIT, type DesktopDeviceRecord, type DesktopDeviceStore } from './desktop-device-store.ts'
 import {
   pairingCodeMatches,
   REMOTE_DEVICE_ABSOLUTE_TTL_MS,
@@ -61,8 +63,10 @@ export type DesktopHostGateway = {
   readonly port: number
   publish(event: KernelEvent): void
   getStatus(): DesktopHostAccessStatus
+  /** Currently valid devices; shared by the Settings page and the future local CLI (D-095). */
+  listDevices(): DesktopHostDeviceSummary[]
   createPairingCode(): RemotePairingCode
-  revokeDevice(): Promise<DesktopHostAccessStatus>
+  revokeDevice(deviceId: string): Promise<DesktopHostAccessStatus>
   stop(): Promise<void>
 }
 
@@ -87,7 +91,7 @@ export type DesktopHostGatewayOptions = {
   config: DesktopHostEnabledConfig
   productVersion: string
   buildCommit: string | null
-  deviceStore: RemoteDeviceStore
+  deviceStore: DesktopDeviceStore
   handlers: DesktopHostGatewayHandlers
   now?: () => number
   randomDeviceCredential?: () => string
@@ -115,6 +119,8 @@ type ActivePairingCode = {
 }
 
 type ActiveSseClient = {
+  /** Authentication hash of the device that owns this control connection. */
+  deviceHash: string
   controllerId: string
   res: ServerResponse
   closed: boolean
@@ -164,20 +170,35 @@ export async function startDesktopHostGateway(
     return run
   }
 
-  const currentPairedDevice = (): RemotePairedDevice | null => {
-    const device = deviceStore.getDevice()
-    if (device === null || now() >= device.expiresAt) return null
-    return { pairedAt: device.pairedAt, expiresAt: device.expiresAt }
+  const validDevices = (): DesktopDeviceRecord[] => {
+    const time = now()
+    return deviceStore.getDevices().filter((device) => device.expiresAt > time)
   }
+
+  const isValidDevice = (credentialHash: string): boolean =>
+    validDevices().some((device) => device.credentialHash === credentialHash)
+
+  const listDevices = (): DesktopHostDeviceSummary[] => validDevices()
+    .sort((left, right) => left.pairedAt - right.pairedAt)
+    .map((device) => ({
+      deviceId: desktopPairingIdFromHash(device.credentialHash),
+      label: device.label,
+      pairedAt: device.pairedAt,
+      expiresAt: device.expiresAt,
+      controlling: activeSseClient !== null && !activeSseClient.closed &&
+        activeSseClient.deviceHash === device.credentialHash
+    }))
 
   const getStatus = (): DesktopHostAccessStatus => ({
     enabled: true,
     endpoint: `http://${config.bindHost}:${config.port}`,
-    device: currentPairedDevice()
+    devices: listDevices()
   })
 
-  const closeActiveController = (): void => {
+  /** Close the control connection, or only when it belongs to the given device. */
+  const closeActiveController = (deviceHash?: string): void => {
     const client = activeSseClient
+    if (client !== null && deviceHash !== undefined && client.deviceHash !== deviceHash) return
     activeSseClient = null
     if (client === null || client.closed) return
     client.closed = true
@@ -185,6 +206,9 @@ export async function startDesktopHostGateway(
   }
 
   const createPairingCode = (): RemotePairingCode => {
+    if (validDevices().length >= DESKTOP_DEVICE_LIMIT) {
+      throw new Error(`Host 已有 ${DESKTOP_DEVICE_LIMIT} 台配对设备，请先撤销一台。`)
+    }
     const code = randomPairingCode()
     if (!isPairingCodeShape(code)) {
       throw new Error('Pairing code generator must produce exactly 6 digits.')
@@ -198,12 +222,15 @@ export async function startDesktopHostGateway(
     return { code, expiresAt }
   }
 
-  const revokeDevice = async (): Promise<DesktopHostAccessStatus> => runAuthMutation(async () => {
-    pairingCode = null
+  const revokeDevice = async (deviceId: string): Promise<DesktopHostAccessStatus> => runAuthMutation(async () => {
+    const device = validDevices().find((entry) => desktopPairingIdFromHash(entry.credentialHash) === deviceId)
+    if (device === undefined) throw new Error('设备不存在或已撤销。')
     try {
-      await deviceStore.clearDevice()
+      // The store denies the device in memory before persisting; a failed write
+      // still leaves it unauthorized and a repeated revoke retries the write.
+      await deviceStore.revokeDevice(device.credentialHash)
     } finally {
-      closeActiveController()
+      closeActiveController(device.credentialHash)
     }
     return getStatus()
   })
@@ -260,14 +287,16 @@ export async function startDesktopHostGateway(
     writeText(res, 404, 'Not Found')
   }
 
-  const isAuthenticatedCredential = (credential: string | null): boolean => {
-    const device = deviceStore.getDevice()
-    if (device === null || now() >= device.expiresAt) return false
-    if (credential === null || credential.length === 0) return false
-    return timingSafeEqualString(
-      hashRemoteDeviceCredential(credential),
-      device.credentialHash
-    )
+  /** Authentication hash of the valid device owning this credential, or null. */
+  const authenticatedDevice = (credential: string | null): string | null => {
+    if (credential === null || credential.length === 0) return null
+    const credentialHash = hashRemoteDeviceCredential(credential)
+    let matched: string | null = null
+    // Compare against every record so timing does not reveal which slot matched.
+    for (const device of validDevices()) {
+      if (timingSafeEqualString(credentialHash, device.credentialHash)) matched = device.credentialHash
+    }
+    return matched
   }
 
   const readBearerCredential = (req: IncomingMessage): string | null => {
@@ -277,8 +306,8 @@ export async function startDesktopHostGateway(
     return match?.[1] ?? null
   }
 
-  const isAuthenticated = (req: IncomingMessage): boolean =>
-    isAuthenticatedCredential(readBearerCredential(req))
+  const requestDevice = (req: IncomingMessage): string | null =>
+    authenticatedDevice(readBearerCredential(req))
 
   const readControllerId = (req: IncomingMessage): string | null => {
     const value = headerValue(req, DESKTOP_HOST_CONTROLLER_HEADER)
@@ -286,7 +315,8 @@ export async function startDesktopHostGateway(
   }
 
   const controllerBoundaryError = (
-    req: IncomingMessage
+    req: IncomingMessage,
+    deviceHash: string
   ): DesktopHostCommandBoundaryError | null => {
     const controllerId = readControllerId(req)
     if (controllerId === null) {
@@ -296,7 +326,9 @@ export async function startDesktopHostGateway(
         400
       )
     }
-    if (activeSseClient === null || activeSseClient.controllerId !== controllerId) {
+    // A controller id is bound to the device that opened it; another device cannot borrow it.
+    if (activeSseClient === null || activeSseClient.controllerId !== controllerId ||
+      activeSseClient.deviceHash !== deviceHash) {
       return new DesktopHostCommandBoundaryError(
         'conflict',
         'Controller event stream is not active.',
@@ -308,9 +340,10 @@ export async function startDesktopHostGateway(
 
   const requireActiveController = (
     req: IncomingMessage,
-    res: ServerResponse
+    res: ServerResponse,
+    deviceHash: string
   ): string | null => {
-    const error = controllerBoundaryError(req)
+    const error = controllerBoundaryError(req, deviceHash)
     if (error !== null) {
       writeText(res, error.status, error.message)
       return null
@@ -318,12 +351,12 @@ export async function startDesktopHostGateway(
     return readControllerId(req)
   }
 
-  const sessionStatus = (authenticated: boolean): DesktopHostSessionStatus => ({
-    pairingId: currentPairedDevice() === null ? null : desktopPairingIdFromHash(deviceStore.getDevice()!.credentialHash),
+  const sessionStatus = (authenticated: boolean, pairingKnown: boolean | null): DesktopHostSessionStatus => ({
     protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
     productVersion: options.productVersion,
     buildCommit: options.buildCommit,
     authenticated,
+    pairingKnown,
     capabilities: {
       kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES,
       ...(options.handlers.dispatchGitCommand ? { gitCommandTypes: DESKTOP_HOST_GIT_COMMAND_TYPES } : {}),
@@ -332,7 +365,17 @@ export async function startDesktopHostGateway(
   })
 
   const handleSession = (req: IncomingMessage, res: ServerResponse): void => {
-    writeJson(res, 200, sessionStatus(isAuthenticated(req)))
+    const claimedPairingId = headerValue(req, DESKTOP_HOST_PAIRING_ID_HEADER)
+    if (req.headers[DESKTOP_HOST_PAIRING_ID_HEADER] !== undefined &&
+      (claimedPairingId === null || !DESKTOP_HOST_PAIRING_ID_PATTERN.test(claimedPairingId))) {
+      writeText(res, 400, 'Bad Request')
+      return
+    }
+    // Answer only for the identity the client already holds; never list other devices.
+    const pairingKnown = claimedPairingId === null
+      ? null
+      : validDevices().some((device) => desktopPairingIdFromHash(device.credentialHash) === claimedPairingId)
+    writeJson(res, 200, sessionStatus(requestDevice(req) !== null, pairingKnown))
   }
 
   const handlePair = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -367,7 +410,7 @@ export async function startDesktopHostGateway(
       return
     }
 
-    const paired = await runAuthMutation(async (): Promise<DesktopHostPairResponse | null> => {
+    const paired = await runAuthMutation(async (): Promise<DesktopHostPairResponse | 'full' | null> => {
       const active = pairingCode
       if (
         active === null ||
@@ -383,6 +426,7 @@ export async function startDesktopHostGateway(
         return null
       }
 
+      if (validDevices().length >= DESKTOP_DEVICE_LIMIT) return 'full'
       pairingCode = null
       const credential = randomDeviceCredential()
       if (!/^[A-Za-z0-9_-]{32,256}$/u.test(credential)) {
@@ -390,12 +434,13 @@ export async function startDesktopHostGateway(
       }
       const pairedAt = now()
       const expiresAt = pairedAt + REMOTE_DEVICE_ABSOLUTE_TTL_MS
-      await deviceStore.replaceDevice({
+      // A new device is added beside existing ones and never takes over the control connection.
+      await deviceStore.addDevice({
         credentialHash: hashRemoteDeviceCredential(credential),
         pairedAt,
-        expiresAt
+        expiresAt,
+        label: normalizeDesktopDeviceLabel(body.label)
       })
-      closeActiveController()
       return {
         protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
         productVersion: options.productVersion,
@@ -410,6 +455,10 @@ export async function startDesktopHostGateway(
       }
     })
 
+    if (paired === 'full') {
+      writeText(res, 409, `Desktop Host already has ${DESKTOP_DEVICE_LIMIT} paired devices. Revoke a device before pairing another.`)
+      return
+    }
     if (paired === null) {
       writeText(res, 401, 'Unauthorized')
       return
@@ -420,11 +469,13 @@ export async function startDesktopHostGateway(
   const handleLogout = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const credential = readBearerCredential(req)
     const revoked = await runAuthMutation(async (): Promise<boolean> => {
-      if (!isAuthenticatedCredential(credential)) return false
+      const deviceHash = authenticatedDevice(credential)
+      if (deviceHash === null) return false
+      // Logout revokes only this device; another device's control connection is unaffected.
       try {
-        await deviceStore.clearDevice()
+        await deviceStore.revokeDevice(deviceHash)
       } finally {
-        closeActiveController()
+        closeActiveController(deviceHash)
       }
       return true
     })
@@ -432,28 +483,24 @@ export async function startDesktopHostGateway(
       writeText(res, 401, 'Unauthorized')
       return
     }
-    writeJson(res, 200, sessionStatus(false))
+    writeJson(res, 200, sessionStatus(false, false))
   }
 
   const handleState = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    if (!isAuthenticated(req)) {
-      writeText(res, 401, 'Unauthorized')
-      return
+    const deviceHash = requestDevice(req)
+    const stillAuthorized = (): boolean => {
+      if (deviceHash === null || requestDevice(req) !== deviceHash) {
+        writeText(res, 401, 'Unauthorized')
+        return false
+      }
+      return requireActiveController(req, res, deviceHash) !== null
     }
-    if (requireActiveController(req, res) === null) return
+    if (!stillAuthorized()) return
     const command = { type: 'kernel.get-state' } as const
     await options.handlers.assertCommandPolicy(command)
-    if (!isAuthenticated(req)) {
-      writeText(res, 401, 'Unauthorized')
-      return
-    }
-    if (requireActiveController(req, res) === null) return
+    if (!stillAuthorized()) return
     const value = await options.handlers.dispatchCommand(command)
-    if (!isAuthenticated(req)) {
-      writeText(res, 401, 'Unauthorized')
-      return
-    }
-    if (requireActiveController(req, res) === null) return
+    if (!stillAuthorized()) return
     writeJson(res, 200, value)
   }
 
@@ -468,11 +515,12 @@ export async function startDesktopHostGateway(
       )
       return
     }
-    if (!isAuthenticated(req)) {
+    const deviceHash = requestDevice(req)
+    if (deviceHash === null) {
       writeCommandError(res, null, 'unauthorized', 'Authentication required.', 401)
       return
     }
-    const initialBoundaryError = controllerBoundaryError(req)
+    const initialBoundaryError = controllerBoundaryError(req, deviceHash)
     if (initialBoundaryError !== null) {
       writeCommandBoundaryError(res, null, initialBoundaryError)
       return
@@ -507,14 +555,14 @@ export async function startDesktopHostGateway(
     }
 
     const assertCurrentController = async (): Promise<void> => {
-      if (!isAuthenticated(req)) {
+      if (requestDevice(req) !== deviceHash) {
         throw new DesktopHostCommandBoundaryError(
           'unauthorized',
           'Authentication required.',
           401
         )
       }
-      const controllerError = controllerBoundaryError(req)
+      const controllerError = controllerBoundaryError(req, deviceHash)
       if (controllerError !== null) throw controllerError
     }
     const assertCurrentBoundary = async (): Promise<void> => {
@@ -568,7 +616,7 @@ export async function startDesktopHostGateway(
         writeCommandBoundaryError(res, requestId, error)
         return
       }
-      if (!isAuthenticated(req)) {
+      if (requestDevice(req) !== deviceHash) {
         writeCommandError(res, requestId, 'unauthorized', 'Authentication required.', 401)
         return
       }
@@ -603,13 +651,19 @@ export async function startDesktopHostGateway(
   }
 
   const handleEvents = (req: IncomingMessage, res: ServerResponse): void => {
-    if (!isAuthenticated(req)) {
+    const deviceHash = requestDevice(req)
+    if (deviceHash === null) {
       writeText(res, 401, 'Unauthorized')
       return
     }
     const controllerId = readControllerId(req)
     if (controllerId === null) {
       writeText(res, 400, 'Bad Request')
+      return
+    }
+    // One control connection at a time: no preemption and no queue (R12).
+    if (activeSseClient !== null && activeSseClient.deviceHash !== deviceHash) {
+      writeText(res, 409, DESKTOP_HOST_OCCUPIED_MESSAGE)
       return
     }
     if (
@@ -628,7 +682,7 @@ export async function startDesktopHostGateway(
     res.setHeader('X-Accel-Buffering', 'no')
     res.write(': connected\n\n')
 
-    const client: ActiveSseClient = { controllerId, res, closed: false }
+    const client: ActiveSseClient = { deviceHash, controllerId, res, closed: false }
     activeSseClient = client
     const close = (): void => {
       if (client.closed) return
@@ -642,7 +696,7 @@ export async function startDesktopHostGateway(
   const publish = (event: KernelEvent): void => {
     const client = activeSseClient
     if (closed || client === null) return
-    if (currentPairedDevice() === null) {
+    if (!isValidDevice(client.deviceHash)) {
       closeActiveController()
       return
     }
@@ -665,7 +719,7 @@ export async function startDesktopHostGateway(
   heartbeatTimer = setInterval(() => {
     const client = activeSseClient
     if (client === null) return
-    if (currentPairedDevice() === null) {
+    if (!isValidDevice(client.deviceHash)) {
       closeActiveController()
       return
     }
@@ -699,6 +753,7 @@ export async function startDesktopHostGateway(
     port: config.port,
     publish,
     getStatus,
+    listDevices,
     createPairingCode,
     revokeDevice,
     async stop() {
@@ -748,8 +803,11 @@ async function readJsonBody(req: IncomingMessage, limit: number): Promise<unknow
 }
 
 function isPairRequest(value: unknown): value is DesktopHostPairRequest {
+  if (!isRecord(value)) return false
+  const keys = Object.keys(value).length
+  // The optional label is normalized later; an unusable name never rejects pairing.
+  if (keys === 5 ? typeof value.label !== 'string' : keys !== 4) return false
   return isRecord(value) &&
-    Object.keys(value).length === 4 &&
     value.protocolVersion === DESKTOP_HOST_PROTOCOL_VERSION &&
     isSafeBuildIdentity(value.productVersion) &&
     isSafeBuildIdentity(value.buildCommit) &&

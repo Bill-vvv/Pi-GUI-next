@@ -16,8 +16,10 @@ import {
   DESKTOP_HOST_KERNEL_COMMAND_TYPES,
   DESKTOP_HOST_GIT_COMMAND_TYPES,
   DESKTOP_HOST_JSON_RESPONSE_BYTE_LIMIT,
+  DESKTOP_HOST_OCCUPIED_MESSAGE,
+  DESKTOP_HOST_PAIRING_ID_HEADER,
   DESKTOP_HOST_PROTOCOL_VERSION,
-  DESKTOP_HOST_PAIRING_ID_PATTERN,
+  normalizeDesktopDeviceLabel,
   type DesktopHostCapabilities,
   type DesktopHostCommandErrorCode,
   type DesktopHostCommandRequest,
@@ -35,6 +37,8 @@ export type DesktopHostClientErrorCode =
   | 'network'
   | 'protocol'
   | 'credential-target'
+  /** Another paired device holds the Host control connection (R12). */
+  | 'occupied'
 
 export class DesktopHostClientError extends Error {
   readonly code: DesktopHostClientErrorCode
@@ -101,7 +105,6 @@ export class DesktopHostClient {
   private readonly requestTimeoutMs: number
   private readonly eventIdleTimeoutMs: number
   private compatibilityVerified = false
-  private pairingId: string | null = null
   private credential: string | null
 
   constructor(options: DesktopHostClientOptions) {
@@ -122,14 +125,24 @@ export class DesktopHostClient {
     this.credential = null
   }
 
-  setCredential(credential: string): void {
+  /**
+   * Adopt a stored credential only after the Host confirms, without receiving it, that this
+   * device's public pairing identity is one of its current pairings (R12).
+   */
+  async setCredential(credential: string, signal?: AbortSignal): Promise<void> {
     this.assertCompatibilityVerified()
     this.credential = null
     if (!DESKTOP_HOST_CREDENTIAL_PATTERN.test(credential)) {
       throw new Error('Desktop Host credential must contain 32 to 256 base64url characters.')
     }
-    if (this.pairingId === null || desktopPairingId(credential) !== this.pairingId) {
-      throw new DesktopHostClientError('已保存凭证与此 Host 当前的配对身份不一致。请核对主机配置，或在目标 Host 生成新配对码。原凭证未发送。', 'credential-target')
+    const { response, payload } = await this.requestJson('GET', DESKTOP_HOST_API_PATHS.session, {
+      credential: 'none', pairingId: desktopPairingId(credential), signal
+    })
+    assertOk(response, 'Desktop Host identity check')
+    const status = parseSessionStatus(payload)
+    assertDesktopHostCompatibility(status, this.compatibility)
+    if (status.pairingKnown !== true) {
+      throw new DesktopHostClientError('此设备在该 Host 上没有有效配对（可能已撤销、已过期，或连接到了另一台 Host）。请在目标 Host 生成新配对码。原凭证未发送。', 'credential-target')
     }
     this.credential = credential
   }
@@ -140,7 +153,6 @@ export class DesktopHostClient {
 
   async verifyCompatibility(signal?: AbortSignal): Promise<DesktopHostSessionStatus> {
     this.compatibilityVerified = false
-    this.pairingId = null
     this.credential = null
     const { response, payload } = await this.requestJson('GET', DESKTOP_HOST_API_PATHS.session, {
       credential: 'none', signal
@@ -149,7 +161,6 @@ export class DesktopHostClient {
     const status = parseSessionStatus(payload)
     assertDesktopHostCompatibility(status, this.compatibility)
     this.compatibilityVerified = true
-    this.pairingId = status.pairingId
     return status
   }
 
@@ -164,17 +175,20 @@ export class DesktopHostClient {
     return status
   }
 
-  async pair(code: string): Promise<DesktopHostPairResponse> {
+  /** `label` is this computer's name for the Host device list; an unusable name is omitted. */
+  async pair(code: string, label?: string | null): Promise<DesktopHostPairResponse> {
     this.assertCompatibilityVerified()
     if (!PAIRING_CODE_PATTERN.test(code)) {
       throw new DesktopHostClientError('Desktop Host pairing code must contain exactly 6 digits.')
     }
+    const deviceLabel = normalizeDesktopDeviceLabel(label)
     const { response, payload } = await this.requestJson('POST', DESKTOP_HOST_API_PATHS.pair, {
       body: {
         protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
         productVersion: this.compatibility.productVersion,
         buildCommit: this.compatibility.buildCommit,
-        code
+        code,
+        ...(deviceLabel === null ? {} : { label: deviceLabel })
       },
       credential: 'none'
     })
@@ -182,7 +196,6 @@ export class DesktopHostClient {
     const paired = parsePairResponse(payload)
     assertDesktopHostCompatibility(paired, this.compatibility)
     this.credential = paired.credential
-    this.pairingId = desktopPairingId(paired.credential)
     return paired
   }
 
@@ -193,9 +206,9 @@ export class DesktopHostClient {
     assertOk(response, 'Desktop Host logout')
     const status = parseSessionStatus(payload)
     assertDesktopHostCompatibility(status, this.compatibility)
-    if (status.authenticated || status.pairingId !== null) throw new DesktopHostClientError('Desktop Host did not confirm pairing revocation.')
+    // The Host answers for the identity it just revoked; anything else is unconfirmed.
+    if (status.authenticated || status.pairingKnown !== false) throw new DesktopHostClientError('Desktop Host did not confirm pairing revocation.')
     this.credential = null
-    this.pairingId = status.pairingId
     return status
   }
 
@@ -276,6 +289,10 @@ export class DesktopHostClient {
       clearTimeout(connectTimeout)
     }
     if (!response.ok) {
+      if (response.status === 409 && await readBoundedText(response, 1024) === DESKTOP_HOST_OCCUPIED_MESSAGE) {
+        controller.abort()
+        throw new DesktopHostClientError('另一台设备正在使用此 Host。', 'occupied', 409)
+      }
       controller.abort()
       throwHttpError(response, 'Desktop Host event stream')
     }
@@ -320,6 +337,8 @@ export class DesktopHostClient {
       body?: unknown
       credential: 'none' | 'optional' | 'required'
       controllerId?: string
+      /** Public pairing identity for the credential-free check; never with a credential. */
+      pairingId?: string
       signal?: AbortSignal
     }
   ): Promise<{ response: Response; payload: unknown }> {
@@ -340,6 +359,7 @@ export class DesktopHostClient {
           accept: 'application/json',
           credential: options.credential,
           controllerId: options.controllerId,
+          pairingId: options.pairingId,
           json: options.body !== undefined
         }),
         body: options.body === undefined ? undefined : JSON.stringify(options.body)
@@ -371,10 +391,15 @@ export class DesktopHostClient {
     accept: string
     credential: 'none' | 'optional' | 'required'
     controllerId?: string
+    pairingId?: string
     json?: boolean
   }): Record<string, string> {
     const headers: Record<string, string> = { Accept: options.accept }
     if (options.json === true) headers['Content-Type'] = 'application/json'
+    if (options.pairingId !== undefined) {
+      if (options.credential !== 'none') throw new Error('A pairing identity check never carries a credential.')
+      headers[DESKTOP_HOST_PAIRING_ID_HEADER] = options.pairingId
+    }
     if (options.controllerId !== undefined) {
       headers[DESKTOP_HOST_CONTROLLER_HEADER] = options.controllerId
     }
@@ -424,32 +449,32 @@ export function desktopHostControlIdentity(snapshot: KernelSnapshot): DesktopHos
 }
 
 function parseSessionStatus(value: unknown): DesktopHostSessionStatus {
+  // Report an older or newer Host as a version mismatch before checking its fields.
+  if (isRecord(value) && value.protocolVersion !== DESKTOP_HOST_PROTOCOL_VERSION) {
+    throw new DesktopHostClientError(
+      `Unsupported Desktop Host protocol version: ${String(value.protocolVersion)}.`
+    )
+  }
   const record = requireExactRecord(value, [
     'protocolVersion',
     'productVersion',
     'buildCommit',
     'authenticated',
-    'pairingId',
+    'pairingKnown',
     'capabilities'
   ], 'Desktop Host session status')
-  if (record.protocolVersion !== DESKTOP_HOST_PROTOCOL_VERSION) {
-    throw new DesktopHostClientError(
-      `Unsupported Desktop Host protocol version: ${String(record.protocolVersion)}.`
-    )
-  }
   if (typeof record.authenticated !== 'boolean') {
     throw new DesktopHostClientError('Desktop Host session authenticated flag is invalid.')
   }
-  if (record.pairingId !== null && (typeof record.pairingId !== 'string' || !DESKTOP_HOST_PAIRING_ID_PATTERN.test(record.pairingId))) {
-    throw new DesktopHostClientError('Desktop Host pairing identity is invalid.')
+  if (record.pairingKnown !== null && typeof record.pairingKnown !== 'boolean') {
+    throw new DesktopHostClientError('Desktop Host pairing check is invalid.')
   }
-  if (record.authenticated && record.pairingId === null) throw new DesktopHostClientError('Authenticated Desktop Host is missing its pairing identity.')
   return {
     protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
     productVersion: parseProductVersion(record.productVersion),
     buildCommit: parseBuildCommit(record.buildCommit),
     authenticated: record.authenticated,
-    pairingId: record.pairingId as string | null,
+    pairingKnown: record.pairingKnown,
     capabilities: parseCapabilities(record.capabilities)
   }
 }
@@ -683,6 +708,29 @@ function parseSseFrame(frame: string, onEvent: (event: KernelEvent) => void): vo
     throw new DesktopHostClientError('Desktop Host event contains invalid JSON.')
   }
   onEvent(parseEventEnvelope(payload).event)
+}
+
+/** Short error body for classification; empty when missing, too long or unreadable. */
+async function readBoundedText(response: Response, maxBytes: number): Promise<string> {
+  if (response.body === null) return ''
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      size += value.byteLength
+      if (size > maxBytes) {
+        await reader.cancel()
+        return ''
+      }
+      chunks.push(value)
+    }
+    return Buffer.concat(chunks).toString('utf8')
+  } catch {
+    return ''
+  }
 }
 
 async function readBoundedJson(response: Response): Promise<unknown> {

@@ -3,9 +3,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import type { KernelSnapshot } from '../../shared/kernel-contract.ts'
-import { DESKTOP_HOST_PROTOCOL_VERSION, DESKTOP_HOST_KERNEL_COMMAND_TYPES, DESKTOP_HOST_GIT_COMMAND_TYPES } from '../../shared/desktop-host-contract.ts'
+import { DESKTOP_HOST_PROTOCOL_VERSION, DESKTOP_HOST_KERNEL_COMMAND_TYPES, DESKTOP_HOST_GIT_COMMAND_TYPES, DESKTOP_HOST_PAIRING_ID_HEADER } from '../../shared/desktop-host-contract.ts'
 import { DesktopHostClient, DesktopHostClientError } from './desktop-host-client.ts'
-import { desktopPairingId } from './desktop-device-binding.ts'
 import { SystemSshTunnelError } from './system-ssh-tunnel.ts'
 import { createMemoryDesktopDeviceCredentialStore } from './desktop-device-credential-store.ts'
 import type { SystemSshTunnel } from './system-ssh-tunnel.ts'
@@ -38,12 +37,14 @@ test('a different Host pairing identity never receives or deletes the cached cre
     createClient: (options) => new DesktopHostClient({ ...options, fetchImpl: async (_input, init) => {
       authorizations.push(new Headers(init?.headers).get('authorization'))
       return Response.json({ protocolVersion: DESKTOP_HOST_PROTOCOL_VERSION, productVersion: '1.0.0', buildCommit: 'fixture',
-        authenticated: false, pairingId: desktopPairingId('B'.repeat(32)), capabilities: { kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES } })
+        authenticated: false, pairingKnown: new Headers(init?.headers).has(DESKTOP_HOST_PAIRING_ID_HEADER) ? false : null,
+        capabilities: { kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES } })
     } }),
     startTunnel: async (options) => { const owned = createFakeTunnel(); await options.verifyUnauthenticatedDesktopHost(owned.connectionSignal); return owned }
   })
   await assert.rejects(session.connect(HOST), (error) => error instanceof DesktopHostClientError && error.code === 'credential-target')
-  assert.deepEqual(authorizations, [null])
+  // Handshake and credential-free identity check only; the credential is never sent.
+  assert.deepEqual(authorizations, [null, null])
   assert.equal(session.status().phase, 'disconnected')
   assert.equal(session.status().failureKind, 'credential-target')
   assert.equal(session.status().hasStoredCredential, true)
@@ -183,7 +184,7 @@ test('Windows remote session fail-closes when compatibility handshake fails', as
         productVersion: '9.9.9',
         buildCommit: 'other-build',
         authenticated: false,
-        pairingId: null,
+        pairingKnown: null,
         capabilities: { kernelCommandTypes: DESKTOP_HOST_KERNEL_COMMAND_TYPES }
       }), {
         status: 200,
