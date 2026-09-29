@@ -226,3 +226,24 @@ test('two- and three-option settings use the segmented pressed-button group', as
   assert.match(appearance, /labelledBy="appearance-text-size-label"/u)
   assert.match(appearance, /labelledBy="appearance-token-count-format-label"/u)
 })
+
+test('settings navigation collapses to the icon rail, which is forced at 500px and below', async () => {
+  const [nav, workbench, styles] = await Promise.all([
+    readFile(NAV_PATH, 'utf8'),
+    readFile(new URL('../../composition/Workbench.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('./settings.css', import.meta.url), 'utf8')
+  ])
+  assert.match(nav, /<nav id=\{SETTINGS_NAV_ID\} className="settings-nav"/u)
+  assert.match(workbench, /const SETTINGS_NAV_RAIL_MEDIA = '\(max-width: 500px\)'/u)
+  assert.match(workbench, /const settingsNavRail = settingsOpen && \(settingsNavCollapsed \|\| settingsNavNarrow\)/u)
+  // The toggle mirrors the Workbench sidebar collapse button and disappears where the rail is forced.
+  assert.match(
+    workbench,
+    /settingsNavNarrow \? null : \([\s\S]*?className="sidebar-collapse-toggle"[\s\S]*?label=\{settingsNavCollapsed \? '展开设置导航' : '收起设置导航'\}[\s\S]*?aria-controls=\{SETTINGS_NAV_ID\}[\s\S]*?aria-expanded=\{!settingsNavCollapsed\}/u
+  )
+  assert.match(styles, /\.app-shell\.settings-open\.settings-nav-rail \{\s*grid-template-columns: var\(--sidebar-rail-width\) minmax\(0, 1fr\);/u)
+  assert.match(styles, /\.app-shell\.settings-nav-rail \.settings-nav button span \{\s*display: none;/u)
+  // The rail rules follow the 700px compact layout so they win over it.
+  assert.ok(styles.lastIndexOf('@media (max-width: 700px)') < styles.indexOf('.app-shell.settings-open.settings-nav-rail'))
+  assert.doesNotMatch(styles, /@media \(max-width: 500px\) \{[^}]*grid-template-columns/u)
+})

@@ -79,7 +79,7 @@ import {
 import { SessionForkDialog } from '../features/session/SessionForkDialog'
 import { SettingsPanel } from '../features/settings/SettingsPanel'
 import { DesktopEnvironmentPanel } from '../features/desktop-client/DesktopEnvironmentPanel'
-import { SettingsNavigation } from '../features/settings/SettingsNavigation'
+import { SETTINGS_NAV_ID, SettingsNavigation } from '../features/settings/SettingsNavigation'
 import { useSettingsWorkspace } from '../features/settings/settings-workspace'
 import { Timeline } from '../features/chat/Timeline'
 import { SubagentTaskDetail } from '../features/chat/SubagentTaskDetail'
@@ -124,6 +124,8 @@ import {
 const TOOL_DISPLAY_DENSITY_STORAGE_KEY = 'pi-workbench.tool-display-density'
 const PINNED_PROJECTS_STORAGE_KEY = 'pi-workbench.pinned-projects'
 const PINNED_SESSIONS_STORAGE_KEY = 'pi-workbench.pinned-sessions'
+/** Below this width the settings navigation is always the icon rail and cannot be expanded. */
+const SETTINGS_NAV_RAIL_MEDIA = '(max-width: 500px)'
 const EDITABLE_TARGET_SHORTCUTS = new Set(
   Object.values(DEFAULT_SHORTCUT_SETTINGS).filter((binding): binding is string => binding !== null)
 )
@@ -400,6 +402,18 @@ export function Workbench({
     onDirtyChange,
     onActiveOperationChange
   } = useSettingsWorkspace()
+  const [settingsNavCollapsed, setSettingsNavCollapsed] = useState(false)
+  const [settingsNavNarrow, setSettingsNavNarrow] = useState(
+    () => window.matchMedia(SETTINGS_NAV_RAIL_MEDIA).matches
+  )
+  useEffect(() => {
+    const narrow = window.matchMedia(SETTINGS_NAV_RAIL_MEDIA)
+    const sync = (): void => setSettingsNavNarrow(narrow.matches)
+    sync()
+    narrow.addEventListener('change', sync)
+    return () => narrow.removeEventListener('change', sync)
+  }, [])
+  const settingsNavRail = settingsOpen && (settingsNavCollapsed || settingsNavNarrow)
   const [shortcutRecording, setShortcutRecording] = useState(false)
   useEffect(() => {
     const compactWorkbench = window.matchMedia('(max-width: 700px)')
@@ -1035,7 +1049,7 @@ export function Workbench({
     return true
   }
   return (
-    <main className={`app-shell${sidebarCollapsed ? ' left-sidebar-collapsed' : ''}${settingsOpen ? ' settings-open' : ''}${rightSidebarOpen ? ' right-sidebar-open' : ''}`}>
+    <main className={`app-shell${sidebarCollapsed ? ' left-sidebar-collapsed' : ''}${settingsOpen ? ' settings-open' : ''}${settingsNavRail ? ' settings-nav-rail' : ''}${rightSidebarOpen ? ' right-sidebar-open' : ''}`}>
       <div className="window-drag-region" aria-hidden="true" />
       {doubleClickBorderMaximize ? (
         <div className="window-edge-hit-layer" aria-hidden="true">
@@ -1200,7 +1214,21 @@ export function Workbench({
           </WorkspaceNavigatorGroup>
         </div>
 
-        {settingsOpen ? null : (
+        {settingsOpen ? (
+          settingsNavNarrow ? null : (
+            <footer className="sidebar-footer">
+              <IconButton
+                className="sidebar-collapse-toggle"
+                icon={settingsNavCollapsed ? 'left-sidebar-open' : 'left-sidebar-close'}
+                iconSize="lg"
+                label={settingsNavCollapsed ? '展开设置导航' : '收起设置导航'}
+                aria-controls={SETTINGS_NAV_ID}
+                aria-expanded={!settingsNavCollapsed}
+                onClick={() => setSettingsNavCollapsed((collapsed) => !collapsed)}
+              />
+            </footer>
+          )
+        ) : (
           <footer className="sidebar-footer">
             <IconButton
               className="sidebar-collapse-toggle"
