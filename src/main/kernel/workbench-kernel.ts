@@ -144,6 +144,7 @@ import {
   normalizeExtensionDialogRequest
 } from './extension-dialog.ts'
 import { RuntimeHibernation } from './runtime-hibernation.ts'
+import { SessionPreviews } from './session-previews.ts'
 import { ToolImageCache } from './tool-image-cache.ts'
 import {
   collectValidatedToolImages,
@@ -195,9 +196,6 @@ import {
   type WorkbenchKernelOptions,
   type AskInteraction,
   type SessionPreviewRegistrySource,
-  type PendingStaticSessionPreviewRequest,
-  type StaticSessionPreviewOperation,
-  type DetachedHistoryLease,
   type ConversationIdentity,
   type ExtensionDialogInteraction,
   type RuntimeContext,
@@ -245,9 +243,6 @@ import {
   parseModelArgument,
   stringValue,
   unsupportedBlockingExtensionUiRequest,
-  assertSessionPreviewRequestId,
-  assertConversationPageRequest,
-  sessionPreviewAbortError,
   isEnoent,
   formatExitError,
   contextKey,
@@ -288,7 +283,6 @@ export class WorkbenchKernel {
     new Map<string, Map<string, KernelSessionStatistics | null>>()
   private readonly workspaceMetadataRefreshGeneration = new Map<string, number>()
   private readonly archiveUndoByToken = new Map<string, ArchiveUndoRecord>()
-  private readonly detachedHistoryLeases = new Map<string, DetachedHistoryLease>()
   private readonly sessionReloadRequired = new Set<string>()
   private readonly restartContinuations = new Map<string, RestartContinuationCandidate>()
   /**
@@ -317,8 +311,20 @@ export class WorkbenchKernel {
     reject: (error: Error) => void
     persistenceInFlight: boolean
   } | null = null
-  private pendingStaticSessionPreview: PendingStaticSessionPreviewRequest | null = null
-  private staticSessionPreview: StaticSessionPreviewOperation | null = null
+  private readonly previews = new SessionPreviews({
+    now: () => this.now(),
+    activeProjectKey: () => this.state.activeProjectKey,
+    configuredProjectPath: () => configuredProject(this.state).path,
+    currentRegistry: () => async () => ({
+      sessions: this.sessionPointers,
+      activeSessionKey: this.state.activeSessionKey
+    }),
+    findPointer: (projectPath, sessionKey, registry) =>
+      this.sessionPointers.find((pointer) => pointer.projectPath === projectPath && pointer.sessionFile === sessionKey) ??
+        this.findSessionPointerInRegistry(projectPath, sessionKey, registry),
+    sessionValidator: () => this.validateSession,
+    transcriptPreparations: () => this.sessionTranscriptPreparations
+  })
   private readonly sessionTranscriptPreparations: SessionTranscriptPreparationCache | null
 
   constructor(
@@ -1440,310 +1446,22 @@ export class WorkbenchKernel {
     requestId: string,
     sessionRegistry?: SessionPreviewRegistrySource
   ): Promise<KernelSessionPreview> {
-    if (!isAbsolute(sessionKey)) throw new Error(`Session key must be absolute: ${sessionKey}`)
-    assertSessionPreviewRequestId(requestId)
-    const pending = this.pendingStaticSessionPreview
-    if (pending !== null) {
-      this.pendingStaticSessionPreview = null
-      pending.controller.abort()
-    }
-
-    const request: PendingStaticSessionPreviewRequest = {
-      requestId,
-      controller: new AbortController()
-    }
-    this.pendingStaticSessionPreview = request
-    let operation: StaticSessionPreviewOperation | null = null
-    try {
-      operation = await this.prepareStaticSessionPreview(sessionKey, sessionRegistry, request)
-      return await operation.tail
-    } catch (error) {
-      const stillOwnsPendingRequest = this.pendingStaticSessionPreview === request
-      if (stillOwnsPendingRequest) this.pendingStaticSessionPreview = null
-      if (operation !== null && this.staticSessionPreview === operation) {
-        this.staticSessionPreview = null
-      }
-      request.controller.abort()
-      if (operation === null && stillOwnsPendingRequest) this.cancelActiveStaticSessionPreview()
-      throw error
-    }
-  }
-
-  private async prepareStaticSessionPreview(
-    sessionKey: string,
-    sessionRegistry: SessionPreviewRegistrySource | undefined,
-    request: PendingStaticSessionPreviewRequest
-  ): Promise<StaticSessionPreviewOperation> {
-    const project = configuredProject(this.state)
-    const registrySource = sessionRegistry ?? (async () => ({
-      sessions: this.sessionPointers,
-      activeSessionKey: this.state.activeSessionKey
-    }))
-    const registry = await this.resolveSessionPreviewRegistry(registrySource)
-    this.assertPendingStaticSessionPreview(request)
-    if (this.state.activeProjectKey !== project.path) {
-      throw new Error('Session preview cancelled because the active project changed.')
-    }
-    const cachedPointer = this.sessionPointers.find(
-      (pointer) => pointer.projectPath === project.path && pointer.sessionFile === sessionKey
-    )
-    const storedPointer = cachedPointer ?? this.findSessionPointerInRegistry(
-      project.path,
-      sessionKey,
-      registry
-    )
-    if (storedPointer === undefined) {
-      throw new Error(`Session is not registered for the active project: ${sessionKey}`)
-    }
-    if (typeof this.validateSession !== 'function') {
-      throw new Error('Session validation is unavailable.')
-    }
-    const preparations = this.sessionTranscriptPreparations
-    if (preparations === null) throw new Error('Session preview is unavailable.')
-
-    const pointer = await this.validateSession(storedPointer)
-    this.assertPendingStaticSessionPreview(request)
-    await this.assertStaticSessionPreviewIdentity(project.path, pointer, registrySource)
-    this.assertPendingStaticSessionPreview(request)
-    const preparation = await preparations.acquire(pointer)
-    this.assertPendingStaticSessionPreview(request)
-
-    let resolveTail!: (preview: KernelSessionPreview) => void
-    let rejectTail!: (error: unknown) => void
-    const tail = new Promise<KernelSessionPreview>((resolve, reject) => {
-      resolveTail = resolve
-      rejectTail = reject
-    })
-    const operation: StaticSessionPreviewOperation = {
-      requestId: request.requestId,
-      previewId: randomUUID(),
-      projectPath: project.path,
-      pointer,
-      registrySource,
-      controller: request.controller,
-      preparation,
-      tail,
-      resolveTail,
-      rejectTail,
-      completion: Promise.resolve(null as unknown as KernelSessionPreview)
-    }
-    const previous = this.staticSessionPreview
-    this.pendingStaticSessionPreview = null
-    this.staticSessionPreview = operation
-    this.rememberDetachedHistoryLease(operation.previewId, pointer, null)
-    if (previous !== null) this.cancelStaticSessionPreviewOperation(previous)
-    operation.completion = this.runStaticSessionPreview(operation)
-    void operation.completion.catch(() => undefined)
-    return operation
-  }
-
-  private assertPendingStaticSessionPreview(request: PendingStaticSessionPreviewRequest): void {
-    if (this.pendingStaticSessionPreview !== request || request.controller.signal.aborted) {
-      throw sessionPreviewAbortError()
-    }
+    return await this.previews.preview(sessionKey, requestId, sessionRegistry)
   }
 
   async completeSessionPreview(requestId: string): Promise<KernelSessionPreview> {
-    assertSessionPreviewRequestId(requestId)
-    const operation = this.staticSessionPreview
-    if (operation === null || operation.requestId !== requestId) {
-      throw new Error('Session preview request is not active.')
-    }
-    try {
-      return await operation.completion
-    } finally {
-      if (this.staticSessionPreview === operation) this.staticSessionPreview = null
-    }
+    return await this.previews.complete(requestId)
   }
 
   cancelSessionPreview(requestId: string): void {
-    assertSessionPreviewRequestId(requestId)
-    const pending = this.pendingStaticSessionPreview
-    if (pending !== null && pending.requestId === requestId) {
-      this.pendingStaticSessionPreview = null
-      pending.controller.abort()
-      return
-    }
-    const operation = this.staticSessionPreview
-    if (operation === null || operation.requestId !== requestId) return
-    this.staticSessionPreview = null
-    this.cancelStaticSessionPreviewOperation(operation)
+    this.previews.cancel(requestId)
   }
 
   async loadEarlierSessionPreview(
     request: KernelSessionPreviewPageRequest,
     sessionRegistry?: SessionPreviewRegistrySource
   ): Promise<KernelConversationPage> {
-    const lease = this.detachedHistoryLeases.get(request.previewId)
-    if (
-      lease === undefined ||
-      lease.pointer.projectPath !== request.projectKey ||
-      lease.pointer.sessionFile !== request.sessionKey ||
-      lease.pointer.sessionId !== request.sessionId
-    ) {
-      throw new Error('Session preview page identity is stale.')
-    }
-    if (lease.archivedExpiresAt !== null) {
-      if (this.now() >= lease.archivedExpiresAt) {
-        this.detachedHistoryLeases.delete(request.previewId)
-        throw new Error('Archived Session preview has expired.')
-      }
-    } else {
-      const registrySource = sessionRegistry ?? (async () => ({
-        sessions: this.sessionPointers,
-        activeSessionKey: this.state.activeSessionKey
-      }))
-      await this.assertStaticSessionPreviewIdentity(request.projectKey, lease.pointer, registrySource)
-    }
-    const preparations = this.sessionTranscriptPreparations
-    if (preparations === null) throw new Error('Session preview is unavailable.')
-    const handle = await preparations.acquire(lease.pointer)
-    try {
-      const phase = await handle.completion
-      const entries = projectTranscriptMessages(phase.messages)
-      assertConversationPageRequest(request, entries)
-      const startIndex = conversationTurnWindowStartIndex(
-        entries,
-        request.beforeIndex,
-        KERNEL_CONVERSATION_PAGE_TURN_COUNT
-      )
-      if (startIndex >= request.beforeIndex) {
-        throw new Error('Session preview has no earlier Conversation page.')
-      }
-      return {
-        projectKey: request.projectKey,
-        sessionKey: request.sessionKey,
-        sessionId: request.sessionId,
-        beforeIndex: request.beforeIndex,
-        beforeEntryId: request.beforeEntryId,
-        startIndex,
-        entries: entries.slice(startIndex, request.beforeIndex)
-      }
-    } finally {
-      handle.release()
-    }
-  }
-
-  private async runStaticSessionPreview(
-    operation: StaticSessionPreviewOperation
-  ): Promise<KernelSessionPreview> {
-    try {
-      const tail = await operation.preparation.tail
-      await this.assertStaticSessionPreviewBoundary(operation)
-      operation.resolveTail(this.projectStaticSessionPreview(operation, tail, false))
-      const full = await operation.preparation.completion
-      await this.assertStaticSessionPreviewBoundary(operation)
-      return this.projectStaticSessionPreview(operation, full, true)
-    } catch (error) {
-      operation.rejectTail(error)
-      throw error
-    } finally {
-      operation.preparation.release()
-    }
-  }
-
-  private projectStaticSessionPreview(
-    operation: StaticSessionPreviewOperation,
-    phase: SessionTranscriptMessagePhase,
-    boundCompletedPreview: boolean
-  ): KernelSessionPreview {
-    const entries = projectTranscriptMessages(phase.messages)
-    const startIndex = boundCompletedPreview
-      ? conversationTurnWindowStartIndex(entries, entries.length, KERNEL_CONVERSATION_PAGE_TURN_COUNT)
-      : 0
-    return {
-      previewId: operation.previewId,
-      projectKey: operation.projectPath,
-      sessionKey: operation.pointer.sessionFile,
-      sessionId: operation.pointer.sessionId,
-      sessionName: operation.pointer.sessionName,
-      conversation: {
-        entries: entries.slice(startIndex),
-        startIndex,
-        activeRunStartIndex: null
-      }
-    }
-  }
-
-  private async assertStaticSessionPreviewBoundary(
-    operation: StaticSessionPreviewOperation
-  ): Promise<void> {
-    if (
-      this.staticSessionPreview !== operation ||
-      operation.controller.signal.aborted
-    ) {
-      throw sessionPreviewAbortError()
-    }
-    await this.assertStaticSessionPreviewIdentity(
-      operation.projectPath,
-      operation.pointer,
-      operation.registrySource
-    )
-    if (
-      this.staticSessionPreview !== operation ||
-      operation.controller.signal.aborted
-    ) {
-      throw sessionPreviewAbortError()
-    }
-  }
-
-  private async assertStaticSessionPreviewIdentity(
-    projectPath: string,
-    pointer: SessionPointer,
-    registrySource: SessionPreviewRegistrySource
-  ): Promise<void> {
-    if (this.state.activeProjectKey !== projectPath) {
-      throw new Error('Session preview cancelled because the active project changed.')
-    }
-    const registry = await this.resolveSessionPreviewRegistry(registrySource)
-    if (
-      this.state.activeProjectKey !== projectPath ||
-      !registry.sessions.some((candidate) =>
-        candidate.projectPath === projectPath &&
-        candidate.sessionFile === pointer.sessionFile &&
-        candidate.sessionId === pointer.sessionId
-      )
-    ) {
-      throw new Error('Session preview cancelled because the Session identity changed.')
-    }
-  }
-
-  private resolveSessionPreviewRegistry(
-    source: SessionPreviewRegistrySource
-  ): Promise<ProjectSessionRegistry> {
-    return typeof source === 'function' ? source() : Promise.resolve(source)
-  }
-
-  private cancelActiveStaticSessionPreview(): void {
-    const pending = this.pendingStaticSessionPreview
-    if (pending !== null) {
-      this.pendingStaticSessionPreview = null
-      pending.controller.abort()
-    }
-    const operation = this.staticSessionPreview
-    if (operation !== null) {
-      this.staticSessionPreview = null
-      this.cancelStaticSessionPreviewOperation(operation)
-    }
-  }
-
-  private cancelStaticSessionPreviewOperation(operation: StaticSessionPreviewOperation): void {
-    operation.controller.abort()
-    operation.preparation.release()
-    operation.rejectTail(sessionPreviewAbortError())
-  }
-
-  private rememberDetachedHistoryLease(
-    previewId: string,
-    pointer: SessionPointer,
-    archivedExpiresAt: number | null
-  ): void {
-    this.detachedHistoryLeases.set(previewId, { previewId, pointer, archivedExpiresAt })
-    while (this.detachedHistoryLeases.size > 16) {
-      const oldest = this.detachedHistoryLeases.keys().next().value as string | undefined
-      if (oldest === undefined) break
-      this.detachedHistoryLeases.delete(oldest)
-    }
+    return await this.previews.loadEarlier(request, sessionRegistry)
   }
 
   async getMessageImage(
@@ -2328,7 +2046,7 @@ export class WorkbenchKernel {
         KERNEL_CONVERSATION_PAGE_TURN_COUNT
       )
       const previewId = randomUUID()
-      this.rememberDetachedHistoryLease(previewId, pointer, record.expiresAt)
+      this.previews.rememberLease(previewId, pointer, record.expiresAt)
       return {
         previewId,
         projectKey: record.receipt.projectKey,
@@ -3317,9 +3035,9 @@ export class WorkbenchKernel {
   }
 
   async stop(): Promise<void> {
-    this.cancelActiveStaticSessionPreview()
+    this.previews.cancelActive()
     this.sessionTranscriptPreparations?.clear()
-    this.detachedHistoryLeases.clear()
+    this.previews.clearLeases()
     if (this.pendingProjectTrust !== null) {
       this.stopAllRequested = true
       this.cancelPendingProjectTrust('Runtime start cancelled.')
