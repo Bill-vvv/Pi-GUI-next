@@ -92,6 +92,8 @@ export type HostEnvironment = {
   resourcesPath: string
   userDataDirectory: string
   logDirectory: string
+  /** JSON Lines log name in logDirectory: main (Electron desktop) or host (Node Host), D-099. */
+  logName: 'main' | 'host'
   productVersion: string
   fetch: typeof fetch
   resolveBuildCommit: () => string | null
@@ -218,12 +220,18 @@ export async function startHostApplication(environment: HostEnvironment): Promis
     await broker?.close()
     await providerAuth?.shutdown()
     const kernelStopError = await kernelStopResult
-    if (kernelStopError !== null) throw kernelStopError
+    if (kernelStopError !== null) {
+      logger.write('error', 'host', 'stop-failed', { stage: 'kernel', message: errorMessage(kernelStopError) })
+      throw kernelStopError
+    }
     const sharedPiHostStopError = await activeSharedPiHost?.dispose().then(
       () => null,
       (error: unknown) => error
     ) ?? null
-    if (sharedPiHostStopError !== null) throw sharedPiHostStopError
+    if (sharedPiHostStopError !== null) {
+      logger.write('error', 'host', 'stop-failed', { stage: 'pi-runtime', message: errorMessage(sharedPiHostStopError) })
+      throw sharedPiHostStopError
+    }
     if (projectStore !== null) {
       try {
         await projectStore.replaceRestartContinuations(restartContinuations)
@@ -237,6 +245,7 @@ export async function startHostApplication(environment: HostEnvironment): Promis
     sharedPiHost = null
     projectStoreForShutdown = null
     await control.close()
+    logger.write('info', 'host', 'stopped')
   }
 
   function requireProviderAuth(): PiProviderAuth {
@@ -266,6 +275,8 @@ export async function startHostApplication(environment: HostEnvironment): Promis
     return environment.desktop
   }
 
+  const logger = createJsonlLogger({ directory: environment.logDirectory, name: environment.logName })
+  logger.write('info', 'host', 'start', { version: environment.productVersion, wsl: environment.wslHostMode })
   // One Host per data directory (D-099); the same private socket serves the Host CLI (D-095).
   const control = await openHostControl({
     userDataDirectory: environment.userDataDirectory,
@@ -403,11 +414,10 @@ export async function startHostApplication(environment: HostEnvironment): Promis
     resourcesPath: environment.resourcesPath
   })
   const quiescenceExtensionPath = runtimeExtensionPaths[0]!
-  const logDirectory = environment.logDirectory
   const runtimeHost = new PiRuntimeProcessHost({
     entryPath: join(environment.mainBundleDirectory, 'pi-runtime-host.js'),
-    logDirectory,
-    logger: createJsonlLogger({ directory: logDirectory, name: 'main' })
+    logDirectory: environment.logDirectory,
+    logger
   })
   sharedPiHost = runtimeHost
   kernel = new WorkbenchKernel(
@@ -504,6 +514,7 @@ export async function startHostApplication(environment: HostEnvironment): Promis
   )
 
   remoteAccess = await startRemoteAccess({
+    logger,
     kernel,
     projectStore,
     gitController,

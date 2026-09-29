@@ -43,6 +43,7 @@ import { isRecord } from '../utils/guards.ts'
 import { RemoteCommandPolicyError } from './remote-command-policy.ts'
 import type { DesktopHostEnabledConfig } from './desktop-host-config.ts'
 import { hashRemoteDeviceCredential } from './remote-device-store.ts'
+import { NOOP_LOGGER, type JsonlLogger, type LogFields, type LogLevel } from '../utils/jsonl-log.ts'
 import { DESKTOP_DEVICE_LIMIT, type DesktopDeviceRecord, type DesktopDeviceStore } from './desktop-device-store.ts'
 import {
   BodyLimitError,
@@ -104,6 +105,8 @@ export type DesktopHostGatewayOptions = {
   buildCommit: string | null
   deviceStore: DesktopDeviceStore
   handlers: DesktopHostGatewayHandlers
+  /** Lifecycle and error metadata only; never credentials, pairing codes or device identities (D-099). */
+  logger?: JsonlLogger
   now?: () => number
   randomDeviceCredential?: () => string
   randomPairingCode?: () => string
@@ -134,6 +137,9 @@ type ActiveSseClient = {
 export async function startDesktopHostGateway(
   options: DesktopHostGatewayOptions
 ): Promise<DesktopHostGateway> {
+  const logger = options.logger ?? NOOP_LOGGER
+  const log = (level: LogLevel, event: string, fields?: LogFields): void =>
+    logger.write(level, 'desktop-host-gateway', event, fields)
   if (
     typeof options.productVersion !== 'string' ||
     options.productVersion.length === 0 ||
@@ -237,6 +243,7 @@ export async function startDesktopHostGateway(
     } finally {
       closeActiveController(device.credentialHash)
     }
+    log('info', 'device-revoked')
     return getStatus()
   })
 
@@ -390,6 +397,7 @@ export async function startDesktopHostGateway(
     }
     pairAttempts = pairAttempts.filter((attemptAt) => now() - attemptAt < PAIR_RATE_LIMIT_WINDOW_MS)
     if (pairAttempts.length >= PAIR_RATE_LIMIT_MAX) {
+      log('warn', 'pair-rejected', { reason: 'rate-limit' })
       writeText(res, 429, 'Too Many Requests')
       return
     }
@@ -411,6 +419,7 @@ export async function startDesktopHostGateway(
       body.productVersion !== options.productVersion ||
       body.buildCommit !== options.buildCommit
     ) {
+      log('warn', 'pair-rejected', { reason: 'incompatible-build' })
       writeText(res, 409, 'Desktop Host build is incompatible.')
       return
     }
@@ -461,13 +470,16 @@ export async function startDesktopHostGateway(
     })
 
     if (paired === 'full') {
+      log('warn', 'pair-rejected', { reason: 'device-limit' })
       writeText(res, 409, `Desktop Host already has ${DESKTOP_DEVICE_LIMIT} paired devices. Revoke a device before pairing another.`)
       return
     }
     if (paired === null) {
+      log('warn', 'pair-rejected', { reason: 'code' })
       writeText(res, 401, 'Unauthorized')
       return
     }
+    log('info', 'paired')
     writeJson(res, 200, paired)
   }
 
@@ -485,9 +497,11 @@ export async function startDesktopHostGateway(
       return true
     })
     if (!revoked) {
+      log('warn', 'auth-failed', { endpoint: 'logout' })
       writeText(res, 401, 'Unauthorized')
       return
     }
+    log('info', 'device-logged-out')
     writeJson(res, 200, sessionStatus(false, false))
   }
 
@@ -635,6 +649,7 @@ export async function startDesktopHostGateway(
       }
       const internalMessage = error instanceof Error ? error.message : String(error)
       console.error(`[Desktop Host] ${body.command.type} failed.`, error)
+      log('error', 'command-failed', { commandType: body.command.type })
       if (/unavailable/iu.test(internalMessage)) {
         writeCommandError(
           res,
@@ -668,6 +683,7 @@ export async function startDesktopHostGateway(
     }
     // One control connection at a time: no preemption and no queue (R12).
     if (activeSseClient !== null && activeSseClient.deviceHash !== deviceHash) {
+      log('info', 'controller-occupied')
       writeText(res, 409, DESKTOP_HOST_OCCUPIED_MESSAGE)
       return
     }
@@ -684,10 +700,12 @@ export async function startDesktopHostGateway(
 
     const client: ActiveSseClient = { deviceHash, controllerId, res, closed: false }
     activeSseClient = client
+    log('info', 'controller-connected')
     const close = (): void => {
       if (client.closed) return
       client.closed = true
       if (activeSseClient === client) activeSseClient = null
+      log('info', 'controller-closed')
     }
     req.on('close', close)
     res.on('close', close)
@@ -737,6 +755,7 @@ export async function startDesktopHostGateway(
   heartbeatTimer.unref?.()
 
   await listenServer(server, config.port, config.bindHost)
+  log('info', 'listening', { port: config.port })
 
   return {
     bindHost: config.bindHost,
