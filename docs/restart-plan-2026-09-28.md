@@ -82,7 +82,7 @@ flowchart TD
 | 2 工作边界 | `68afede` 之前的内容都属于既有工作；0b 和 R12 的改动从这里开始 |
 | 3 工具链 | Linux：Node 26.4.0、pnpm 11.9.0、Git 2.43.0，`workspace.mjs doctor` 全部通过。Windows 侧需要用 Windows Node 另行检查 |
 | 4 兼容性补丁 | 调用链已核对：`check`、`start`、`deploy`（复制前、复制后、切换前）和 `rollback` 都会经过 `inspectDesktopHost`，进而调用 `assertDesktopHostDeviceStoreCompatible`。定向测试 34 项全部通过。**尚未验证：**完整核心回归的日志在 761 行通过、零失败后中断，没有最后的汇总；类型检查日志没有记录退出状态。此后源码又有较大变化，按本计划不单独重跑，统一在集成后的完整回归中覆盖 |
-| 5 共享接口冻结 | 草案见 [R12 共享接口](r12-shared-interfaces.md)，待用户确认后冻结 |
+| 5 共享接口冻结 | 已冻结：[R12 共享接口](r12-shared-interfaces.md)（2026-09-29 用户确认；设备名称采用 Windows 计算机名；A/B/C 由主线依次实施） |
 
 **阶段完成标准：** 三个任务能从同一源码快照、同一接口说明开始；共享文件仅有一个写入者；接口层临时不完整的中间状态不用于构建发布或真实验收。
 

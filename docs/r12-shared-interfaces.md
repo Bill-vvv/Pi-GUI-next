@@ -1,6 +1,6 @@
 # R12 共享接口（阶段 0 第 5 步）
 
-> 状态：草案，待用户确认后冻结。冻结后 A/B/C 只按本文实现；需要改动时由主线修改本文并通知相关任务。
+> 状态：2026-09-29 用户确认，已冻结。A/B/C 只按本文实现；需要改动时由主线修改本文并通知相关任务。
 > 范围：Desktop Host（SSH）多设备配对。Web Remote 的单设备模型、DTO 和协议完全不变。
 
 ## 1. 协议与数据版本
@@ -46,7 +46,7 @@ type DesktopHostSessionStatus = {
 ```ts
 type DesktopHostDeviceSummary = {
   deviceId: string        // 即公开配对身份 pairingId，64 位小写十六进制
-  label: string | null    // 见“待确认 1”
+  label: string | null    // 配对时由 Windows 客户端带上的计算机名；旧记录为 null
   pairedAt: number
   expiresAt: number
   controlling: boolean    // 是否持有当前控制连接
@@ -119,9 +119,6 @@ type DesktopHostAccessStatus =
 | Windows 客户端 | B | 见重启计划 B 行 |
 | 设备管理界面 | C | 见重启计划 C 行 |
 
-## 待确认
+## 设备名称
 
-1. **设备名称（`label`）**：
-   - (a) Windows 客户端配对时自动带上本机计算机名，最长 80 字符，R12 不提供改名（推荐）；
-   - (b) 不带名称，列表按配对时间显示“设备 1、设备 2……”；
-   - (c) 配对时让用户输入名称。
+配对请求增加可选字段 `label`：Windows 客户端自动带上本机计算机名，去掉首尾空白和控制字符后截断到 80 字符，结果为空时不带。Host 按 `desktop-device-store.ts` 的规则校验，不合格时按无名称保存，不因名称拒绝配对。R12 不提供改名。界面在名称为空时显示“未命名设备”。
