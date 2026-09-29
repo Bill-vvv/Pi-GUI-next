@@ -3,6 +3,8 @@ import { join, isAbsolute } from 'node:path'
 import { configureDesktopHost, inspectDesktopHost, startDesktopHost, lockDesktopHostDirectory } from '../src/main/remote/desktop-host-launch.ts'
 import { deployDesktopHost, resolveInstalledDesktopHost, rollbackDesktopHost } from '../src/main/remote/desktop-host-deployment.ts'
 import { packDesktopHost, installDesktopHostBundle } from '../src/main/remote/desktop-host-bundle.ts'
+import { requestHostControl } from '../src/main/host/host-control.ts'
+import { hostUserDataDirectory } from '../src/main/host/host-paths.ts'
 
 const usage = `Usage:
   node scripts/desktop-host.mjs configure [--port 18788] [--config-dir /absolute/directory]
@@ -11,11 +13,14 @@ const usage = `Usage:
   node scripts/desktop-host.mjs deploy --build-root /absolute/linux/build [--install-dir /absolute/directory]
   node scripts/desktop-host.mjs check|start|rollback [--install-dir /absolute/directory]
   node scripts/desktop-host.mjs pack --build-root /absolute/linux/build --output /absolute/host.tar.gz
+  node scripts/desktop-host.mjs devices | pair | revoke --device <device id>
   ./install.sh [--config-dir /absolute/directory] [--install-dir /absolute/directory] [--port 18788]
 
-Requires a prepared Linux build and Node matching package.json. Start owns a foreground
-Linux desktop; generate the pairing code in its Settings > Desktop Host (SSH).
-Configure preserves existing machine tokens and paired-device records. No secrets are printed.`
+Requires a prepared Linux build and Node matching package.json. Start runs the Node Host in
+the foreground; no graphical session is needed. While it runs, devices lists paired Windows
+devices, pair prints a short-lived 6-digit pairing code and revoke removes one device; the
+Linux desktop's Settings > Desktop Host (SSH) offers the same actions.
+Configure preserves existing machine tokens and paired-device records. Only pair prints a secret.`
 
 try {
   const [command, ...args] = process.argv.slice(2)
@@ -28,7 +33,10 @@ try {
       deploy: ['--config-dir', '--build-root', '--install-dir'],
       rollback: ['--config-dir', '--install-dir'],
       pack: ['--build-root', '--output'],
-      install: ['--build-root', '--config-dir', '--install-dir', '--port']
+      install: ['--build-root', '--config-dir', '--install-dir', '--port'],
+      devices: [],
+      pair: [],
+      revoke: ['--device']
     }
     if (!Object.hasOwn(allowed, command)) throw new Error(usage)
     const flags = new Map()
@@ -37,7 +45,16 @@ try {
       if (!allowed[command].includes(key) || flags.has(key) || !value || value.startsWith('--')) throw new Error(usage)
       flags.set(key, value)
     }
-    if (command === 'pack') {
+    if (command === 'devices' || command === 'pair' || command === 'revoke') {
+      // The running Host answers through its private control socket (D-095).
+      const request = command === 'devices'
+        ? { type: 'remote-admin.get-desktop-host-status' }
+        : command === 'pair'
+          ? { type: 'remote-admin.create-desktop-host-pairing-code' }
+          : { type: 'remote-admin.revoke-desktop-host-device', deviceId: flags.get('--device') }
+      if (command === 'revoke' && !/^[0-9a-f]{64}$/u.test(flags.get('--device') ?? '')) throw new Error(usage)
+      console.log(JSON.stringify(await requestHostControl(hostUserDataDirectory(), request), null, 2))
+    } else if (command === 'pack') {
       if (!flags.has('--build-root') || !flags.has('--output')) throw new Error(usage)
       console.log(JSON.stringify(await packDesktopHost({ buildRoot: flags.get('--build-root'), output: flags.get('--output'),
         onProgress: stage => console.error(`[Desktop Host] ${stage}`) }), null, 2))
