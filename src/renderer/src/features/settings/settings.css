@@ -66,6 +66,109 @@
   width: 100%;
 }
 
+.settings-nav[hidden] {
+  display: none;
+}
+
+.settings-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  color: var(--color-text-muted);
+}
+
+.settings-search svg {
+  position: absolute;
+  left: 11px;
+  pointer-events: none;
+}
+
+.settings-search input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-control);
+  padding: 7px 11px 7px 32px;
+  color: var(--color-text-primary);
+  background: var(--color-surface-input);
+  font: inherit;
+  font-size: var(--text-control);
+  line-height: var(--line-control);
+  outline: none;
+}
+
+.settings-search input:focus {
+  border-color: var(--color-border-focus);
+  box-shadow: 0 0 0 3px var(--color-focus-ring);
+}
+
+.settings-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-height: 0;
+}
+
+.settings-search-results [role='listbox'] {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-search-results [role='option'] {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-radius: 8px;
+  padding: 7px 12px;
+  color: var(--color-text-soft);
+  cursor: pointer;
+}
+
+.settings-search-results [role='option'] span {
+  font-size: var(--text-list-item);
+  line-height: var(--line-control);
+}
+
+.settings-search-results [role='option'] small {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--text-caption);
+  line-height: var(--line-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-search-results [role='option'].active {
+  color: var(--color-text-primary);
+  background: var(--color-surface-hover);
+}
+
+.settings-search-results .settings-feedback {
+  padding: 7px 12px;
+}
+
+/*
+ * A settings search result that was just revealed; cleared on the next pointer
+ * or key press. The mark extends past the row edge like resource-row hover.
+ */
+.settings-content [data-settings-search-hit] {
+  position: relative;
+  isolation: isolate;
+}
+
+.settings-content [data-settings-search-hit]::before {
+  content: '';
+  position: absolute;
+  inset: 0 -12px;
+  z-index: -1;
+  border-radius: var(--radius-control);
+  background: var(--color-surface-hover);
+  pointer-events: none;
+}
+
 .settings-nav-group {
   display: flex;
   flex-direction: column;

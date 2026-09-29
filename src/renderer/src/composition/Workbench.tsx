@@ -396,8 +396,10 @@ export function Workbench({
   const {
     settingsOpen,
     settingsSection,
+    settingsJumpTarget,
     openSettings,
     requestSectionChange,
+    requestSettingsTarget,
     requestCloseSettings,
     onDirtyChange,
     onActiveOperationChange
@@ -1099,10 +1101,16 @@ export function Workbench({
             <SettingsNavigation
               clientOnly={!clientSurface.hostSettings}
               section={settingsSection}
+              searchAvailable={!settingsNavRail}
               onSectionChange={(section) => {
                 invalidateRightSidebarFocusRestoration()
                 setSettingsNavOverlayOpen(false)
                 requestSectionChange(section)
+              }}
+              onSearchSelect={(entry) => {
+                invalidateRightSidebarFocusRestoration()
+                setSettingsNavOverlayOpen(false)
+                return requestSettingsTarget(entry.section, entry.target)
               }}
               onBack={() => {
                 if (requestCloseSettings()) restoreSettingsFocusRef.current = true
@@ -1312,6 +1320,7 @@ export function Workbench({
             state={settingsState}
             busy={busy}
             section={settingsSection}
+            jumpTarget={settingsJumpTarget}
             pendingAction={pendingAction}
             extensionActionError={extensionActionError}
             actionError={settingsActionError}
@@ -1755,7 +1764,10 @@ function hasConnectedMeaningfulFocus(mainChat: HTMLElement | null): boolean {
 
 function hasVisibleShortcutBlockingSurface(): boolean {
   return [...document.querySelectorAll<HTMLElement>(
-    '[aria-modal="true"], [role="menu"], [role="listbox"]'
+    // Inline result lists (settings search) are not popups: they only block while
+    // their focused, expanded combobox owns Escape and typing.
+    '[aria-modal="true"], [role="menu"], [role="listbox"]:not([data-inline-listbox]), ' +
+      '[role="combobox"][aria-expanded="true"]:focus'
   )].some((element) => {
     if (element.getAttribute('aria-hidden') === 'true' || element.getClientRects().length === 0) {
       return false
