@@ -797,6 +797,7 @@
 - 原因：Kernel 有 6,408 行、247 个方法，Git 服务有 4,352 行，修改一处就要理解整个文件。Kernel 测试只通过公开方法验证，因此内部拆分的风险可以控制。旧 RPC 链路约 2,800 行，运行时代码里只剩一个探针在调用；它验证的是产品已经不再用于会话的外部 RPC，D-078 也说明这个探针不能代替 SDK 会话验收。改为启动 D-094 子进程后，冒烟测试检查的就是实际的会话运行路径。行数检查脚本推迟到 R12 之后，是因为 R12 要修改的 `desktop-host-gateway.ts` 已有 842 行，“只许减少”会挡住 R12。
 - 影响：同步更新 `architecture.md` 和 README；`smoke:pi` 命令与 WSL 启动脚本里对 `PI_GUI_PROBE_ONLY` 的清理保持不变。拆分完成后，Kernel 和 Git 的全部现有测试必须原样通过。按领域拆分可能暴露内部的循环依赖；这类问题应在拆分时就地解决，不得借此改变行为。
 - 实施记录（2026-09-30）：`workbench-kernel.ts` 6433 → 4251 行，移出常量与类型、纯函数及工具图片缓存、自动休眠、静态会话预览、压缩生命周期、Ask 与 Extension 对话、自动命名 6 个领域；启动、fork、临时会话提交、重启恢复与状态发布共用 Kernel 的上下文集合、前台上下文、指针注册表与启动闸门，拆出只会把这些可变状态原样暴露给新模块，因此保留。`git-service.ts` 4352 → 1081 行，类外声明分入 4 个模块，类方法按领域移入 `GitWorktreeContent`、`GitCommits`、`GitHistory`、`GitBranchSync`，只经 `GitServiceCore` 使用共享操作。两者公开方法签名经脚本比对与拆分前一致，新文件均不超过 800 行。`main/index.ts` 经 D-095 拆分后为 850 行，行数检查脚本在第 5 步为它单独设上限。
+- 行数检查（2026-09-30）：`scripts/check-file-size.mjs`（`pnpm check:size`，并作为 `test:core` 的一部分运行）检查 `src`、`scripts`、`extensions` 下的非测试代码文件（`.ts/.tsx/.mjs/.js/.cjs`，不含测试、fixture 与 test-support；CSS 暂不纳入）：未记录的文件不得超过 800 行，`scripts/file-size-baseline.json` 记录的 25 个超限文件不得超过记录值；文件变小时提示用 `--update` 收紧记录，不作为失败。基线取自与 `wip` 合并后的代码，其中 `Workbench.tsx` 以规则生效前已合入的 1810 行记录。
 
 ## D-099 — 可靠性补强：通信上限、基本日志与数据目录锁
 
@@ -810,6 +811,7 @@
 - 原因：本项目不自动重发，用户手动重发时会生成新的 `requestId`，所以现在做去重拦不住任何重复。Pi 追加消息的排队本来就在内存里；D-094 已经规定崩溃后不重跑，持久化队列也就没有用处。两个网关和 Kernel 已经有连接数、缓冲区和会话状态等上限；真正新增的缺口有两个：D-094 子进程的事件积压没有上限，D-095 之后 Electron 的单实例锁看不到 Node Host，两者可能同时写同一个数据目录。目前整个 `src/main` 只有 32 处 `console` 输出，拆成多个进程后，没有落盘的日志就无法排查问题。
 - 影响：日志文件的位置、大小上限和轮换数量写入实施文档。验收要求：模拟积压超过上限时，按子进程故障处理；两个进程争用同一个数据目录时，后启动的一方明确失败；检查日志里没有对话内容和凭证。
 - 实施记录（2026-09-30）：数据目录锁用 Host 启动时在 `<userData>/host.sock` 绑定的 Unix socket 实现，而非锁文件：绑定失败时先探测连接，另一 Host 仍在监听则报 `HostDataDirectoryInUseError` 退出，Linux 桌面以错误对话框说明；无人监听的遗留文件被替换。进程结束时由内核释放，崩溃后无需等待过期。已知限制：只有“存在遗留文件且两个 Host 同时启动”时存在极小的竞争窗口。同一 socket 兼作 D-095 的 Host 命令通道（目录 0700、socket 0600）。子进程通信上限与子进程日志已在 0b 完成；网关、Host 与 WSL 后端的日志扩展尚未实施。
+- 日志扩展（2026-09-30）：Host 组装统一创建日志器，Linux 桌面写 `main.jsonl`、Node Host 写 `host.jsonl`（均在 `<userData>/logs`），Pi 子进程监管、两个网关与 Host 生命周期共用。记录：Host `start`/`stopped`/`stop-failed`（阶段与错误信息）；两个网关的 `listening`、配对成功与被拒原因（`rate-limit`/`incompatible-build`/`device-limit`/`code`）、带凭证的登出失败、控制连接或事件流的建立与关闭、被占用、登出与撤销、命令失败（只记命令类型）。测试与端到端脚本核对日志不含设备凭证及其哈希、配对码、设备编号与设备名称。Windows 客户端的 `wsl-backend.log` 改为追加写入，每次启动写带时间的分隔行，超过 5 MiB 时保留一代 `.1`。
 
 ## D-100 — pi-subagents 的安装与启停移到 Subagent 页
 
