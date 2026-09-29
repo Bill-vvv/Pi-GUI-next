@@ -6,7 +6,6 @@ import type {
   KernelCommandEntry,
   KernelExtensionDescriptor,
   KernelExtensionDialogRequest,
-  KernelMessageImage,
   KernelProjectState,
   KernelSessionSummary,
   KernelSessionPreview,
