@@ -85,9 +85,6 @@ export const AUTOMATIC_SESSION_NAME_MODEL_IDS = [
 ] as const
 
 export const ARCHIVE_UNDO_DURATION_MS = 5_000
-export const TOOL_IMAGE_CACHE_TTL_MS = 60_000
-export const MAX_TOOL_IMAGE_CACHE_ENTRIES = 8
-export const MAX_TOOL_IMAGE_CACHE_BASE64_CHARS = 24 * 1024 * 1024
 export const RESTART_CONTINUATION_PROMPT =
   '请继续完成因 GUI 重启而中断的上一项任务。先根据当前会话记录核对已完成步骤和工具结果，不要重复已经完成的有副作用操作；如果无法安全判断下一步，请先说明风险并等待确认。'
 
@@ -183,16 +180,6 @@ export type ProvisionalSession = {
   initialPrompt: string | null
   sessionNameAttempted: boolean
   activityAt: number
-}
-
-export type ToolImageCacheEntry = {
-  projectPath: string
-  sessionKey: string
-  sessionId: string
-  runtime: RuntimeHost
-  cachedAt: number
-  base64Chars: number
-  image: KernelMessageImage
 }
 
 export type AskInteraction = {
