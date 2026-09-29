@@ -1951,11 +1951,19 @@
 
 /*
  * Icon rail: the user collapsed the settings navigation, or the window is at
- * most 500px wide (Workbench sets `settings-nav-rail` for both). Placed after
- * the 700px block so it wins over the compact two-column layout.
+ * most 500px wide (Workbench sets `settings-nav-rail` for both). At 500px and
+ * below the toggle opens `settings-nav-overlay` instead: the column keeps the
+ * rail width and the full navigation floats over the page until a section is
+ * chosen. Placed after the 700px block so it wins over the compact layout.
  */
-.app-shell.settings-open.settings-nav-rail {
+.app-shell.settings-open.settings-nav-rail,
+.app-shell.settings-open.settings-nav-overlay {
   grid-template-columns: var(--sidebar-rail-width) minmax(0, 1fr);
+}
+
+.app-shell.settings-nav-overlay .left-sidebar {
+  width: min(220px, calc(100vw - (var(--app-shell-padding) * 2)));
+  box-shadow: var(--shadow-popover);
 }
 
 .app-shell.settings-nav-rail .settings-sidebar-content {
