@@ -1,6 +1,4 @@
-import type {
-  ChildProcessWithoutNullStreams
-} from 'node:child_process'
+import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 
 /* Limits, environments and internal record types of GitService (moved unchanged, D-098). */
 

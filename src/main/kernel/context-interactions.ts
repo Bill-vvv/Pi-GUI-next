@@ -1,22 +1,9 @@
-import type {
-  KernelAskAnswer,
-  KernelExtensionDialogRequest
-} from '../../shared/kernel-contract.ts'
-import type {
-  PiRpcEvent
-} from '../pi-rpc/pi-rpc-data.ts'
-import type {
-  RuntimeHost
-} from '../runtime/runtime-host.ts'
-import {
-  errorMessage
-} from '../utils/errors.ts'
-import {
-  adaptedExtensionCommandAllowsBlockingUi
-} from './command-catalog.ts'
-import {
-  projectPiEvent
-} from './conversation-projection.ts'
+import type { KernelAskAnswer, KernelExtensionDialogRequest } from '../../shared/kernel-contract.ts'
+import type { PiRpcEvent } from '../pi-rpc/pi-rpc-data.ts'
+import type { RuntimeHost } from '../runtime/runtime-host.ts'
+import { errorMessage } from '../utils/errors.ts'
+import { adaptedExtensionCommandAllowsBlockingUi } from './command-catalog.ts'
+import { projectPiEvent } from './conversation-projection.ts'
 import {
   askUiRequestMatchesStep,
   createAskResponsePlan,
@@ -25,19 +12,14 @@ import {
   normalizeAskUiRequest,
   projectAskQuestions
 } from './ask-tool.ts'
-import {
-  assertExtensionDialogResponse,
-  normalizeExtensionDialogRequest
-} from './extension-dialog.ts'
+import { assertExtensionDialogResponse, normalizeExtensionDialogRequest } from './extension-dialog.ts'
 import {
   type AskInteraction,
   type ExtensionDialogInteraction,
   type RuntimeContext,
   type ProjectNavigationState
 } from './workbench-kernel-types.ts'
-import {
-  unsupportedBlockingExtensionUiRequest
-} from './workbench-kernel-helpers.ts'
+import { unsupportedBlockingExtensionUiRequest } from './workbench-kernel-helpers.ts'
 
 /** What Ask and Extension dialog interactions need from the Kernel. */
 export type ContextInteractionsHost = {

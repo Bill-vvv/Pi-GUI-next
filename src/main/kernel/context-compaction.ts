@@ -1,16 +1,8 @@
-import type {
-  KernelCompactionReason,
-  KernelEvent,
-  KernelSessionStatistics
-} from '../../shared/kernel-contract.ts'
+import type { KernelCompactionReason, KernelEvent, KernelSessionStatistics } from '../../shared/kernel-contract.ts'
 import type { PiRpcEvent } from '../pi-rpc/pi-rpc-data.ts'
 import { errorMessage } from '../utils/errors.ts'
 import type { RuntimeSessionState } from './runtime-session-state.ts'
-import {
-  toKernelSession,
-  toKernelSessionStatistics,
-  toKernelSessionUsage
-} from './session-projection.ts'
+import { toKernelSession, toKernelSessionStatistics, toKernelSessionUsage } from './session-projection.ts'
 import {
   assertSessionStatisticsIdentity,
   compactionReason,
@@ -19,11 +11,7 @@ import {
   isOptionalCompactionResult,
   stringValue
 } from './workbench-kernel-helpers.ts'
-import type {
-  CompactionLifecycle,
-  ProjectNavigationState,
-  RuntimeContext
-} from './workbench-kernel-types.ts'
+import type { CompactionLifecycle, ProjectNavigationState, RuntimeContext } from './workbench-kernel-types.ts'
 
 /** What the compaction lifecycle needs from the Kernel. */
 export type ContextCompactionHost = {

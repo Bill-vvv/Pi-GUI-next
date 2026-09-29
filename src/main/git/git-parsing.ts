@@ -1,9 +1,4 @@
-import {
-  isAbsolute,
-  relative,
-  resolve,
-  sep
-} from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import {
   GIT_HISTORY_MESSAGE_MAX_UTF8_BYTES,
   GIT_REPOSITORY_RELATIVE_PATH_MAX_UTF8_BYTES
@@ -26,16 +21,8 @@ import type {
   GitHistorySnapshot,
   GitRepositoryState
 } from '../../shared/git-contract.ts'
-import {
-  GitRunError,
-  digest,
-  errorDto
-} from './git-admission.ts'
-import type {
-  HistoryNameStatusRecord,
-  IndexEntry,
-  StatusRecord
-} from './git-service-types.ts'
+import { GitRunError, digest, errorDto } from './git-admission.ts'
+import type { HistoryNameStatusRecord, IndexEntry, StatusRecord } from './git-service-types.ts'
 
 /* Parsers and projections of Git command output (moved unchanged from git-service.ts, D-098). */
 

@@ -24,29 +24,13 @@ import {
   copyGeneralSettings,
   copySubagentSettings
 } from '../../shared/workbench-settings.ts'
-import {
-  copyShortcutSettings
-} from '../../shared/shortcut-settings.ts'
-import type {
-  PiRpcEvent,
-  PiRpcSessionStats
-} from '../pi-rpc/pi-rpc-data.ts'
-import {
-  isAbsolute
-} from 'node:path'
-import type {
-  ProjectSessionRegistry,
-  SessionPointer
-} from '../project/session-pointer.ts'
-import {
-  createCommandCatalog
-} from './command-catalog.ts'
-import {
-  toKernelRuntime
-} from './runtime-session-state.ts'
-import {
-  UNAVAILABLE_ADVISOR_STATE
-} from './advisor-projection.ts'
+import { copyShortcutSettings } from '../../shared/shortcut-settings.ts'
+import type { PiRpcEvent, PiRpcSessionStats } from '../pi-rpc/pi-rpc-data.ts'
+import { isAbsolute } from 'node:path'
+import type { ProjectSessionRegistry, SessionPointer } from '../project/session-pointer.ts'
+import { createCommandCatalog } from './command-catalog.ts'
+import { toKernelRuntime } from './runtime-session-state.ts'
+import { UNAVAILABLE_ADVISOR_STATE } from './advisor-projection.ts'
 import {
   INITIAL_HOST_STATE,
   INITIAL_SESSION_STATE,

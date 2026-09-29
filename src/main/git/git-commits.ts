@@ -1,6 +1,4 @@
-import {
-  resolve
-} from 'node:path'
+import { resolve } from 'node:path'
 import type {
   GitCommitExecutionRequest,
   GitCommitExecutionResult,
@@ -11,9 +9,7 @@ import type {
   GitPushTarget,
   GitRepositoryState
 } from '../../shared/git-contract.ts'
-import {
-  isGitRefName
-} from './git-command-validation.ts'
+import { isGitRefName } from './git-command-validation.ts'
 import {
   GitRunError,
   assertCommitAdmission,
@@ -29,16 +25,8 @@ import {
   trustRequiredErrorPublic,
   validateCommitMessage
 } from './git-admission.ts'
-import {
-  suggestCommitMessage,
-  trimNullable,
-  validateRepositoryPath
-} from './git-parsing.ts'
-import {
-  type CommitInspection,
-  GIT_BRANCH_SYNC_READ_ENV,
-  GIT_NETWORK_ENV
-} from './git-service-types.ts'
+import { suggestCommitMessage, trimNullable, validateRepositoryPath } from './git-parsing.ts'
+import { type CommitInspection, GIT_BRANCH_SYNC_READ_ENV, GIT_NETWORK_ENV } from './git-service-types.ts'
 import type { GitServiceCore } from './git-service-core.ts'
 
 /** Commit preview, commit execution and push-target reads for GitService (moved unchanged, D-098). */
