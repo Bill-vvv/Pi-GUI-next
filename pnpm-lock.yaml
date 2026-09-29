@@ -11,6 +11,9 @@ importers:
       '@earendil-works/pi-coding-agent':
         specifier: 0.83.0
         version: 0.83.0(ws@8.21.3)(zod@4.4.3)
+      '@silvia-odwyer/photon-node':
+        specifier: 0.3.4
+        version: 0.3.4
       '@tanstack/react-virtual':
         specifier: 3.14.9
         version: 3.14.9(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
