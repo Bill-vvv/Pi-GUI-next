@@ -64,7 +64,9 @@ R3：源码实现与本地自动化验证完成，真实 SSH 主机验收待进�
 
 R12 存储阶段已实现独立的版本 2 集合及版本 1 迁移，最多 8 个设备；共同私有文件读写入口已供原单设备存储使用。新集合暂未接入 Main/Gateway，正式协议仍为版本 2；握手、多设备授权/撤销、管理入口及数据格式回退兼容检查继续实施，不将本阶段计为多设备功能完成。
 
-2026-09-29 R12 本地接入完成（D-101，接口见 [R12 共享接口](r12-shared-interfaces.md)）：Main/Gateway 使用版本 2 集合，Desktop 协议升为 3；无凭证身份核对、逐台撤销与设备列表、设备与 controller 双重绑定、被占用时不抢占不重连、客户端只撤销自身，以及 Windows 计算机名作为设备名称均已接通，`deviceStoreVersions` 为 `[1, 2]`。自动化覆盖真实 HTTP/SSE Gateway 与真实浏览器界面；Windows 原生 Credential Manager、真实 Windows→SSH→Linux 验收和安装包迁移/回退仍按重启计划第二、三轮开放。
+2026-09-29 R12 本地接入完成（D-101，接口见 [R12 共享接口](r12-shared-interfaces.md)）：Main/Gateway 使用版本 2 集合，Desktop 协议升为 3；无凭证身份核对、逐台撤销与设备列表、设备与 controller 双重绑定、被占用时不抢占不重连、客户端只撤销自身，以及 Windows 计算机名作为设备名称均已接通，`deviceStoreVersions` 为 `[1, 2]`。自动化覆盖真实 HTTP/SSE Gateway 与真实浏览器界面；Windows 原生 Credential Manager 与真实 Windows→SSH→Linux 验收仍按重启计划第二、三轮开放。
+
+2026-09-29 2A 安装包验证通过：以 R11 包 A 安装并写入版本 1 旧配对，用 R12 候选包 B（源码摘要 `a48ac1b…`）升级、同版复用，启动真实 Electron Host B 后配对文件迁移为版本 2、旧凭证继续认证、协议 3 身份核对正确；回退到只读版本 1 的 A 被拒绝，安装选择、配对文件与机器密钥均不变。未连接 SSH。
 
 ## 验证记录
 
