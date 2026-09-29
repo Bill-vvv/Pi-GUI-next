@@ -57,11 +57,13 @@ export async function runBrowserChecks(t: TestContext, options: {
     if (spawnError) throw spawnError
     try {
       port = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0]
-      break
+      // Chromium may still be writing the file; wait for a complete port line.
+      if (port) break
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-      await delay(50)
+      // Windows reports a file Chromium is writing as locked rather than missing.
+      if (!['ENOENT', 'EBUSY', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
     }
+    await delay(50)
   }
   assert.ok(port, 'Chromium did not open its local debugging endpoint')
   const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json() as Array<{
