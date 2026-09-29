@@ -143,6 +143,7 @@ import {
   assertExtensionDialogResponse,
   normalizeExtensionDialogRequest
 } from './extension-dialog.ts'
+import { RuntimeHibernation } from './runtime-hibernation.ts'
 import { ToolImageCache } from './tool-image-cache.ts'
 import {
   collectValidatedToolImages,
@@ -200,8 +201,6 @@ import {
   type ConversationIdentity,
   type ExtensionDialogInteraction,
   type RuntimeContext,
-  AUTO_HIBERNATE_GRACE_MS,
-  HIBERNATE_HOST_COMMAND_GENERATION,
   type CompactionLifecycle,
   type ProjectNavigationState,
   type ArchiveUndoRecord,
@@ -272,7 +271,17 @@ export class WorkbenchKernel {
   /** Monotonic counter for RuntimeContext.runtimeGeneration values (process lifetime). */
   private nextRuntimeGeneration = 1
   /** Non-overlapping automatic hibernation sweep gate. */
-  private autoHibernateSweepInFlight: Promise<void> | null = null
+  private readonly hibernation = new RuntimeHibernation({
+    now: () => this.now(),
+    managedContexts: () => this.contexts,
+    isManaged: (context) => this.contexts.has(context),
+    isForeground: (context) => this.activeContext === context,
+    foregroundSessionKey: () => this.state.activeSessionKey,
+    hasPersistedPointer: (projectPath, sessionKey) =>
+      (this.sessionPointersByProject.get(projectPath) ?? []).some((pointer) => pointer.sessionFile === sessionKey),
+    withLaunchGate: (operation) => this.beginLaunch(operation),
+    stopContext: (context) => this.stopContext(context)
+  })
   private readonly sessionPointersByProject = new Map<string, SessionPointer[]>()
   private readonly sessionActivityByProject = new Map<string, Map<string, number | null>>()
   private readonly sessionStatisticsByProject =
@@ -2195,205 +2204,7 @@ export class WorkbenchKernel {
     skippedCount: number
     failedCount: number
   }> {
-    if (this.autoHibernateSweepInFlight !== null) {
-      await this.autoHibernateSweepInFlight
-      return { attempted: 0, hibernatedCount: 0, skippedCount: 0, failedCount: 0 }
-    }
-
-    const summary = {
-      attempted: 0,
-      hibernatedCount: 0,
-      skippedCount: 0,
-      failedCount: 0
-    }
-    const run = this.runAutomaticHibernationSweep(options, summary)
-    this.autoHibernateSweepInFlight = run.then(
-      () => undefined,
-      () => undefined
-    )
-    try {
-      await run
-      return summary
-    } finally {
-      this.autoHibernateSweepInFlight = null
-    }
-  }
-
-  private async runAutomaticHibernationSweep(
-    options: { graceMs?: number; nowMs?: number } | undefined,
-    summary: {
-      attempted: number
-      hibernatedCount: number
-      skippedCount: number
-      failedCount: number
-    }
-  ): Promise<void> {
-    const graceMs =
-      typeof options?.graceMs === 'number' &&
-      Number.isFinite(options.graceMs) &&
-      options.graceMs >= 0
-        ? options.graceMs
-        : AUTO_HIBERNATE_GRACE_MS
-    const nowMs =
-      typeof options?.nowMs === 'number' && Number.isFinite(options.nowMs)
-        ? options.nowMs
-        : this.now()
-
-    const backgroundReady: RuntimeContext[] = []
-    for (const context of this.contexts) {
-      if (this.activeContext === context) continue
-      if (context.state.runtime.status !== 'ready') continue
-      backgroundReady.push(context)
-    }
-
-    if (backgroundReady.length <= 1) {
-      // Keep the single warm background Runtime (or none).
-      summary.skippedCount += backgroundReady.length
-      return
-    }
-
-    // Keep the most-recent background ready Runtime warm.
-    let warmContext = backgroundReady[0]!
-    for (const context of backgroundReady) {
-      if (context.lastWarmUseAt > warmContext.lastWarmUseAt) {
-        warmContext = context
-      }
-    }
-
-    const candidates = backgroundReady
-      .filter((context) => context !== warmContext)
-      .filter((context) => nowMs - context.lastWarmUseAt >= graceMs)
-      .sort((left, right) => left.lastWarmUseAt - right.lastWarmUseAt)
-
-    // Count the intentionally retained warm Runtime plus ready Runtimes that
-    // have not yet aged past the grace period. Non-ready contexts are outside
-    // the automatic-idle candidate set rather than misleading "skips".
-    summary.skippedCount += backgroundReady.length - candidates.length
-
-    for (const context of candidates) {
-      const outcome = await this.tryAutomaticHibernateContext(context)
-      summary.attempted += 1
-      if (outcome === 'hibernated') summary.hibernatedCount += 1
-      else if (outcome === 'failed') summary.failedCount += 1
-      else summary.skippedCount += 1
-    }
-  }
-
-  private async tryAutomaticHibernateContext(
-    context: RuntimeContext
-  ): Promise<'hibernated' | 'skipped' | 'failed'> {
-    if (!this.contexts.has(context)) return 'skipped'
-    if (this.activeContext === context) return 'skipped'
-
-    const sessionKey = context.state.activeSessionKey
-    if (sessionKey === null) return 'skipped'
-    const sessionId = context.state.session.id
-    if (typeof sessionId !== 'string' || sessionId.length === 0) return 'skipped'
-
-    // Kernel busy gate remains a necessary outer condition.
-    if (this.hibernateBlockReason(context.projectPath, sessionKey, context) !== null) {
-      return 'skipped'
-    }
-
-    // RuntimeContext generation protects Kernel identity across replacement. The host
-    // command generation is process-local; the in-process bridge separately advances
-    // owner/provider generations on every Pi session_start.
-    const runtimeGeneration = context.runtimeGeneration
-    const providerGeneration = HIBERNATE_HOST_COMMAND_GENERATION
-    const attemptId = randomUUID()
-    let token: string | null = null
-    const release = async (): Promise<void> => {
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const result = await context.runtime.releaseHibernation({
-          sessionId,
-          generation: providerGeneration,
-          attemptId,
-          token: token!
-        })
-        if (result.ok) return
-      }
-      throw new Error('Runtime hibernation lease release failed.')
-    }
-
-    try {
-      const prepared = await context.runtime.prepareHibernation({
-        sessionId,
-        generation: providerGeneration,
-        attemptId
-      })
-      if (!prepared.ok || typeof prepared.token !== 'string') {
-        return 'skipped'
-      }
-      token = prepared.token
-
-      // Recheck exact Kernel context identity after provider prepare/drain.
-      if (
-        !this.contexts.has(context) ||
-        this.activeContext === context ||
-        context.runtimeGeneration !== runtimeGeneration ||
-        this.hibernateBlockReason(context.projectPath, sessionKey, context) !== null ||
-        context.state.session.id !== sessionId
-      ) {
-        await release()
-        return 'skipped'
-      }
-
-      const committed = await context.runtime.commitHibernation({
-        sessionId,
-        generation: providerGeneration,
-        attemptId,
-        token
-      })
-      if (!committed.ok) {
-        await release()
-        return 'skipped'
-      }
-
-      // Serialize the final check + stop with activate/reload/start. Once this
-      // gate is acquired, a foreground activation cannot attach to a Context
-      // that stopContext is about to remove.
-      let stopEntered = false
-      try {
-        await this.beginLaunch(async () => {
-          if (
-            !this.contexts.has(context) ||
-            this.activeContext === context ||
-            context.runtimeGeneration !== runtimeGeneration ||
-            this.hibernateBlockReason(context.projectPath, sessionKey, context) !== null ||
-            context.state.session.id !== sessionId
-          ) {
-            return
-          }
-          stopEntered = true
-          await this.stopContext(context)
-        })
-        if (!stopEntered) {
-          await release()
-          return 'skipped'
-        }
-        return 'hibernated'
-      } catch {
-        // A competing launch rejected the automatic stop, or stop itself failed.
-        // If the process may remain owned, roll back the exact provider token.
-        if (this.contexts.has(context) && context.runtimeGeneration === runtimeGeneration) {
-          try {
-            await release()
-          } catch {
-            // Ownership retention is handled by stopContext; a later sweep retries.
-          }
-        }
-        return stopEntered ? 'failed' : 'skipped'
-      }
-    } catch {
-      if (token !== null && this.contexts.has(context)) {
-        try {
-          await release()
-        } catch {
-          // Best-effort release.
-        }
-      }
-      return 'skipped'
-    }
+    return await this.hibernation.sweep(options)
   }
 
   async archiveSession(
@@ -2634,80 +2445,8 @@ export class WorkbenchKernel {
     sessionKey: string,
     context: RuntimeContext
   ): void {
-    const blocker = this.hibernateBlockReason(projectPath, sessionKey, context)
+    const blocker = this.hibernation.blockReason(projectPath, sessionKey, context)
     if (blocker !== null) throw new Error(blocker)
-  }
-
-  private hibernateBlockReason(
-    projectPath: string,
-    sessionKey: string,
-    context: RuntimeContext
-  ): string | null {
-    if (context.projectPath !== projectPath) {
-      return 'Cannot hibernate a session that is not owned by the requested project.'
-    }
-    if (!(this.sessionPointersByProject.get(projectPath) ?? []).some((pointer) =>
-      pointer.sessionFile === sessionKey
-    )) {
-      return 'Cannot hibernate a session without a persisted pointer.'
-    }
-    if (this.activeContext === context || this.state.activeSessionKey === sessionKey) {
-      return 'Cannot hibernate the active foreground session.'
-    }
-    if (
-      context.provisionalSession !== null ||
-      context.provisionalCommit !== null ||
-      context.state.activeSessionKey === null
-    ) {
-      return 'Cannot hibernate a provisional session.'
-    }
-    const runtimeStatus = context.state.runtime.status
-    if (
-      runtimeStatus === 'starting' ||
-      runtimeStatus === 'running' ||
-      runtimeStatus === 'stopping'
-    ) {
-      return `Cannot hibernate a session while runtime is ${runtimeStatus}.`
-    }
-    if (!context.state.session.settled) {
-      return 'Cannot hibernate a session that is not settled.'
-    }
-    if (
-      context.state.session.compaction !== null ||
-      (context.compactionLifecycle !== null && !context.compactionLifecycle.settled)
-    ) {
-      return 'Hibernate is unavailable while compaction is in progress.'
-    }
-    if (context.launchCommitting) {
-      return 'Cannot hibernate a session while launch is committing.'
-    }
-    if (context.deferredEvents !== null) {
-      return 'Cannot hibernate a session while a deferred identity commit is in progress.'
-    }
-    if (context.sessionNameOperation !== null || context.pendingSessionName !== null) {
-      return 'Cannot hibernate a session while session naming is in progress.'
-    }
-    if (context.stopRequested) {
-      return 'Cannot hibernate a session while stop is in progress.'
-    }
-    if (context.sessionUsageRefreshInFlight || context.sessionUsageRefreshRequested) {
-      return 'Cannot hibernate a session while session usage refresh is in progress.'
-    }
-    if (
-      context.askInteraction !== null ||
-      (context.state.extensionDialog !== null && context.state.extensionDialog !== undefined)
-    ) {
-      return 'Cannot hibernate a session while waiting for a user reply.'
-    }
-    const session = context.state.session
-    if (
-      session.pendingMessageCount > 0 ||
-      session.pendingSteeringMessages.length > 0 ||
-      session.pendingFollowUpMessages.length > 0
-    ) {
-      return 'Cannot hibernate a session while messages are queued.'
-    }
-    return null
   }
 
   private async failForkedContext(
