@@ -413,7 +413,26 @@ export function Workbench({
     narrow.addEventListener('change', sync)
     return () => narrow.removeEventListener('change', sync)
   }, [])
-  const settingsNavRail = settingsOpen && (settingsNavCollapsed || settingsNavNarrow)
+  // At 500px and below the navigation stays an icon rail; its toggle opens the
+  // full navigation as an overlay instead of widening the column.
+  const [settingsNavOverlayOpen, setSettingsNavOverlayOpen] = useState(false)
+  const settingsNavOverlay = settingsOpen && settingsNavNarrow && settingsNavOverlayOpen
+  const settingsNavRail = settingsOpen && (settingsNavCollapsed || settingsNavNarrow) && !settingsNavOverlay
+  const settingsNavExpanded = settingsNavNarrow ? settingsNavOverlay : !settingsNavCollapsed
+  const leftSidebarRef = useRef<HTMLElement>(null)
+  const settingsNavToggleRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (!settingsOpen || !settingsNavNarrow) setSettingsNavOverlayOpen(false)
+  }, [settingsNavNarrow, settingsOpen])
+  useEffect(() => {
+    if (!settingsNavOverlay) return
+    const closeOnOutsidePointer = (event: PointerEvent): void => {
+      if (event.target instanceof Node && leftSidebarRef.current?.contains(event.target)) return
+      setSettingsNavOverlayOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointer, true)
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer, true)
+  }, [settingsNavOverlay])
   const [shortcutRecording, setShortcutRecording] = useState(false)
   useEffect(() => {
     const compactWorkbench = window.matchMedia('(max-width: 700px)')
@@ -556,6 +575,13 @@ export function Workbench({
         shortcutRecording ||
         hasVisibleShortcutBlockingSurface()
       ) return
+      if (settingsNavOverlay && event.key === 'Escape') {
+        setSettingsNavOverlayOpen(false)
+        settingsNavToggleRef.current?.focus()
+        event.preventDefault()
+        event.stopPropagation()
+        return
+      }
       if (settingsOpen && event.key === 'Escape') {
         if (requestCloseSettings()) restoreSettingsFocusRef.current = true
         event.preventDefault()
@@ -1049,7 +1075,7 @@ export function Workbench({
     return true
   }
   return (
-    <main className={`app-shell${sidebarCollapsed ? ' left-sidebar-collapsed' : ''}${settingsOpen ? ' settings-open' : ''}${settingsNavRail ? ' settings-nav-rail' : ''}${rightSidebarOpen ? ' right-sidebar-open' : ''}`}>
+    <main className={`app-shell${sidebarCollapsed ? ' left-sidebar-collapsed' : ''}${settingsOpen ? ' settings-open' : ''}${settingsNavRail ? ' settings-nav-rail' : ''}${settingsNavOverlay ? ' settings-nav-overlay' : ''}${rightSidebarOpen ? ' right-sidebar-open' : ''}`}>
       <div className="window-drag-region" aria-hidden="true" />
       {doubleClickBorderMaximize ? (
         <div className="window-edge-hit-layer" aria-hidden="true">
@@ -1059,7 +1085,15 @@ export function Workbench({
           <div className="window-edge-hit left" onDoubleClick={handleWindowEdgeDoubleClick} />
         </div>
       ) : null}
-      <aside className="left-sidebar" aria-label={settingsOpen ? '设置导航' : '项目与任务'}>
+      <aside
+        ref={leftSidebarRef}
+        className="left-sidebar"
+        aria-label={settingsOpen ? '设置导航' : '项目与任务'}
+        onBlur={settingsNavOverlay ? (event) => {
+          const next = event.relatedTarget
+          if (next instanceof Node && !event.currentTarget.contains(next)) setSettingsNavOverlayOpen(false)
+        } : undefined}
+      >
         <div className={`sidebar-content${settingsOpen ? ' settings-sidebar-content' : ''}`}>
           {settingsOpen ? (
             <SettingsNavigation
@@ -1067,6 +1101,7 @@ export function Workbench({
               section={settingsSection}
               onSectionChange={(section) => {
                 invalidateRightSidebarFocusRestoration()
+                setSettingsNavOverlayOpen(false)
                 requestSectionChange(section)
               }}
               onBack={() => {
@@ -1215,19 +1250,21 @@ export function Workbench({
         </div>
 
         {settingsOpen ? (
-          settingsNavNarrow ? null : (
-            <footer className="sidebar-footer">
-              <IconButton
-                className="sidebar-collapse-toggle"
-                icon={settingsNavCollapsed ? 'left-sidebar-open' : 'left-sidebar-close'}
-                iconSize="lg"
-                label={settingsNavCollapsed ? '展开设置导航' : '收起设置导航'}
-                aria-controls={SETTINGS_NAV_ID}
-                aria-expanded={!settingsNavCollapsed}
-                onClick={() => setSettingsNavCollapsed((collapsed) => !collapsed)}
-              />
-            </footer>
-          )
+          <footer className="sidebar-footer">
+            <IconButton
+              ref={settingsNavToggleRef}
+              className="sidebar-collapse-toggle"
+              icon={settingsNavExpanded ? 'left-sidebar-close' : 'left-sidebar-open'}
+              iconSize="lg"
+              label={settingsNavExpanded ? '收起设置导航' : '展开设置导航'}
+              aria-controls={SETTINGS_NAV_ID}
+              aria-expanded={settingsNavExpanded}
+              onClick={() => {
+                if (settingsNavNarrow) setSettingsNavOverlayOpen((open) => !open)
+                else setSettingsNavCollapsed((collapsed) => !collapsed)
+              }}
+            />
+          </footer>
         ) : (
           <footer className="sidebar-footer">
             <IconButton
