@@ -191,6 +191,7 @@ D-095 完成后，第三轮中“Host 需具备图形会话”和“真实 Elect
 
 - **1 Kernel 拆分完成**：`workbench-kernel.ts` 6433 → 4251 行。移出类外常量与类型（`workbench-kernel-types.ts`）、纯函数（`workbench-kernel-helpers.ts`），以及 6 个领域：工具图片缓存（`tool-image-cache.ts`）、自动休眠（`runtime-hibernation.ts`）、静态会话预览（`session-previews.ts`）、压缩生命周期（`context-compaction.ts`）、Ask 与 Extension 对话（`context-interactions.ts`）、自动命名（`session-naming.ts`）。启动、fork、临时会话提交、重启恢复与状态发布共用 Kernel 的核心可变状态（上下文集合、前台上下文、指针注册表、启动闸门），拆出只会把这些状态原样暴露给新模块，本轮保留在 Kernel 内。61 个公开方法签名与拆分前一致；Kernel 与 Desktop Host 测试 412/412。
 - **2 Git 拆分完成**：`git-service.ts` 4352 → 1081 行。类外声明移入 `git-service-types.ts`、`git-admission.ts`、`git-parsing.ts`、`git-worktree-io.ts`；类方法按领域移入 `GitWorktreeContent`、`GitCommits`、`GitHistory`、`GitBranchSync`，它们只通过 `GitServiceCore`（`git-service-core.ts`）使用共享操作。公开方法签名与拆分前一致；Git 测试 114/114。新文件均不超过 800 行。
+- **3 网关按修订后的 D-097 完成**：逐字相同或行为等价的部分移入 `remote/gateway-common.ts`（117 行）；`remote-gateway.ts` 906 → 828 行，`desktop-host-gateway.ts` 900 → 852 行；认证、推送与请求边界各自保持原样。`remote` 测试 251 项：248 通过、0 失败、3 项仅 Windows 跳过。
 
 
 **本轮可先交付的结果：** 可恢复且可追溯的开发基线、完成接线的 R12 本地候选、可用的 Host 包与客户端，以及准确的真实 SSH 待验清单。正式跨平台交付以第三轮实际通过为准。

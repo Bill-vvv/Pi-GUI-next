@@ -1,24 +1,10 @@
-import {
-  createHash,
-  createHmac,
-  randomBytes,
-  randomInt,
-  timingSafeEqual
-} from 'node:crypto'
+import { randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { lstat, realpath } from 'node:fs/promises'
-import {
-  createServer,
-  type IncomingMessage,
-  type ServerResponse
-} from 'node:http'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { extname, relative, resolve, sep } from 'node:path'
 
-import type {
-  RemoteAccessStatus,
-  RemotePairedDevice,
-  RemotePairingCode
-} from '../../shared/remote-admin-contract.ts'
+import type { RemoteAccessStatus, RemotePairedDevice, RemotePairingCode } from '../../shared/remote-admin-contract.ts'
 import type { KernelEvent } from '../../shared/kernel-contract.ts'
 import {
   REMOTE_API_PATHS,
@@ -37,11 +23,32 @@ import {
 import { isKernelCommand } from '../kernel/kernel-command-validation.ts'
 import { isRecord } from '../utils/guards.ts'
 import { RemoteCommandPolicyError } from './remote-command-policy.ts'
-import type { RemoteEnabledConfig } from './remote-config.ts'
 import {
-  hashRemoteDeviceCredential,
-  type RemoteDeviceStore
-} from './remote-device-store.ts'
+  BodyLimitError,
+  COMMAND_BODY_LIMIT_BYTES,
+  PAIR_BODY_LIMIT_BYTES,
+  PAIR_RATE_LIMIT_MAX,
+  PAIR_RATE_LIMIT_WINDOW_MS,
+  REMOTE_DEVICE_ABSOLUTE_TTL_MS,
+  REMOTE_PAIRING_CODE_TTL_MS,
+  REMOTE_PAIRING_MAX_FAILED_ATTEMPTS,
+  SSE_HEARTBEAT_MS,
+  SSE_MAX_BUFFERED_BYTES,
+  applySecurityHeaders,
+  closeServer,
+  digestPairingCode,
+  headerValue,
+  isPairingCodeShape,
+  listenServer,
+  normalizePeerAddress,
+  openEventStream,
+  pairingCodeMatches,
+  timingSafeEqualString,
+  writeJson,
+  writeText
+} from './gateway-common.ts'
+import type { RemoteEnabledConfig } from './remote-config.ts'
+import { hashRemoteDeviceCredential, type RemoteDeviceStore } from './remote-device-store.ts'
 
 export type RemoteGateway = {
   readonly port: number
@@ -68,17 +75,17 @@ export type RemoteGatewayOptions = {
   randomPairingCode?: () => string
 }
 
-const PAIR_BODY_LIMIT_BYTES = 4 * 1024
-const COMMAND_BODY_LIMIT_BYTES = 1 * 1024 * 1024
-const PAIR_RATE_LIMIT_WINDOW_MS = 60_000
-const PAIR_RATE_LIMIT_MAX = 5
-export const REMOTE_DEVICE_ABSOLUTE_TTL_MS = 30 * 24 * 60 * 60 * 1000
-export const REMOTE_PAIRING_CODE_TTL_MS = 5 * 60 * 1000
-export const REMOTE_PAIRING_MAX_FAILED_ATTEMPTS = 5
+export {
+  REMOTE_DEVICE_ABSOLUTE_TTL_MS,
+  REMOTE_PAIRING_CODE_TTL_MS,
+  REMOTE_PAIRING_MAX_FAILED_ATTEMPTS,
+  digestPairingCode,
+  normalizePeerAddress,
+  pairingCodeMatches,
+  timingSafeEqualString
+} from './gateway-common.ts'
 /** @deprecated Use REMOTE_DEVICE_ABSOLUTE_TTL_MS */
 export const REMOTE_SESSION_ABSOLUTE_TTL_MS = REMOTE_DEVICE_ABSOLUTE_TTL_MS
-const SSE_HEARTBEAT_MS = 15_000
-const SSE_MAX_BUFFERED_BYTES = 1 * 1024 * 1024
 const SSE_MAX_CLIENTS = 4
 const SECURITY_HEADERS = {
   'Cache-Control': 'no-store',
@@ -200,7 +207,7 @@ export async function startRemoteGateway(options: RemoteGatewayOptions): Promise
   })
 
   const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    applySecurityHeaders(res)
+    applySecurityHeaders(res, SECURITY_HEADERS)
 
     const peer = normalizePeerAddress(req.socket.remoteAddress)
     if (peer === null || peer !== config.trustedProxyIp) {
@@ -519,12 +526,7 @@ export async function startRemoteGateway(options: RemoteGatewayOptions): Promise
       writeText(res, 429, 'Too Many Requests')
       return
     }
-    res.statusCode = 200
-    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
-    res.setHeader('Cache-Control', 'no-cache, no-transform')
-    res.setHeader('Connection', 'keep-alive')
-    res.setHeader('X-Accel-Buffering', 'no')
-    res.write(': connected\n\n')
+    openEventStream(res)
 
     const client: SseClient = { res, closed: false }
     sseClients.add(client)
@@ -641,17 +643,7 @@ export async function startRemoteGateway(options: RemoteGatewayOptions): Promise
   }, SSE_HEARTBEAT_MS)
   heartbeatTimer.unref?.()
 
-  await new Promise<void>((resolveListen, rejectListen) => {
-    const onError = (error: Error): void => {
-      server.off('error', onError)
-      rejectListen(error)
-    }
-    server.once('error', onError)
-    server.listen(config.port, config.bindHost, () => {
-      server.off('error', onError)
-      resolveListen()
-    })
-  })
+  await listenServer(server, config.port, config.bindHost)
 
   const address = server.address()
   if (address === null || typeof address === 'string') {
@@ -675,39 +667,9 @@ export async function startRemoteGateway(options: RemoteGatewayOptions): Promise
       }
       closeSseClients()
       pairingCode = null
-      await new Promise<void>((resolveClose, rejectClose) => {
-        server.close((error) => {
-          if (error) rejectClose(error)
-          else resolveClose()
-        })
-      })
+      await closeServer(server)
     }
   }
-}
-
-class BodyLimitError extends Error {
-  constructor() {
-    super('Request body too large.')
-    this.name = 'BodyLimitError'
-  }
-}
-
-function applySecurityHeaders(res: ServerResponse): void {
-  for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
-    res.setHeader(name, value)
-  }
-}
-
-function writeText(res: ServerResponse, statusCode: number, body: string): void {
-  res.statusCode = statusCode
-  res.setHeader('Content-Type', 'text/plain; charset=utf-8')
-  res.end(body)
-}
-
-function writeJson(res: ServerResponse, statusCode: number, body: unknown): void {
-  res.statusCode = statusCode
-  res.setHeader('Content-Type', 'application/json; charset=utf-8')
-  res.end(JSON.stringify(body))
 }
 
 function writeCommandError(
@@ -728,26 +690,10 @@ function writeCommandError(
   res.end(JSON.stringify(response))
 }
 
-function headerValue(req: IncomingMessage, name: string): string | null {
-  const value = req.headers[name]
-  if (typeof value === 'string') return value
-  if (Array.isArray(value) && value.length === 1 && typeof value[0] === 'string') return value[0]
-  return null
-}
-
 function isJsonRequest(req: IncomingMessage): boolean {
   const contentType = headerValue(req, 'content-type')
   return contentType !== null &&
     contentType.split(';', 1)[0]?.trim().toLowerCase() === 'application/json'
-}
-
-export function normalizePeerAddress(address: string | undefined): string | null {
-  if (address === undefined || address.length === 0) return null
-  if (address.startsWith('::ffff:')) {
-    return address.slice('::ffff:'.length)
-  }
-  if (address === '::1') return '127.0.0.1'
-  return address
 }
 
 function checkPairRateLimit(
@@ -790,10 +736,6 @@ function isPairRequest(value: unknown): value is RemotePairRequest {
     isPairingCodeShape(value.code)
 }
 
-function isPairingCodeShape(code: string): boolean {
-  return new RegExp(`^[0-9]{${REMOTE_PAIRING_CODE_LENGTH}}$`, 'u').test(code)
-}
-
 function isCommandRequest(value: unknown): value is RemoteCommandRequest {
   return isRecord(value) &&
     value.protocolVersion === REMOTE_PROTOCOL_VERSION &&
@@ -804,26 +746,6 @@ function isCommandRequest(value: unknown): value is RemoteCommandRequest {
     isRecord(value.command) &&
     typeof value.command.type === 'string' &&
     Object.keys(value).length === 3
-}
-
-export function digestPairingCode(machineSecret: string, code: string): Buffer {
-  return createHmac('sha256', machineSecret).update(code, 'utf8').digest()
-}
-
-export function pairingCodeMatches(
-  machineSecret: string,
-  code: string,
-  expectedDigest: Buffer
-): boolean {
-  const actual = digestPairingCode(machineSecret, code)
-  if (actual.length !== expectedDigest.length) return false
-  return timingSafeEqual(actual, expectedDigest)
-}
-
-export function timingSafeEqualString(left: string, right: string): boolean {
-  const leftHash = createHash('sha256').update(left).digest()
-  const rightHash = createHash('sha256').update(right).digest()
-  return timingSafeEqual(leftHash, rightHash)
 }
 
 function timingSafeEqualHex(left: string, right: string): boolean {
