@@ -10,7 +10,6 @@ import type {
   KernelProviderCredential
 } from '../../../../shared/kernel-contract'
 import { useModalDialog } from '../../components/useModalDialog'
-import { SettingsPageHeading } from './SettingsPageHeading'
 import './credentials-panel.css'
 
 type CredentialsPanelProps = {
@@ -287,14 +286,16 @@ export function CredentialsPanel({
 
   return (
     <>
-      <SettingsPageHeading title="凭证" />
-      <section className="settings-group credentials-panel" aria-labelledby="provider-credentials-heading">
-        <h3 id="provider-credentials-heading" className="settings-group-heading">Provider 凭证</h3>
+      <section
+        className="settings-group settings-group-inline credentials-panel"
+        aria-labelledby="provider-credentials-heading"
+      >
+        <h3 id="provider-credentials-heading" className="settings-group-heading">凭证</h3>
         {status === null ? null : (
-          <p className="settings-feedback settings-feedback-inset" role="status" aria-live="polite">{status}</p>
+          <p className="settings-feedback" role="status" aria-live="polite">{status}</p>
         )}
         {error === null ? null : (
-          <p className="settings-feedback settings-feedback-error settings-feedback-inset" role="alert">{error}</p>
+          <p className="settings-feedback settings-feedback-error" role="alert">{error}</p>
         )}
         {operation === null ? null : (
           <AuthOperationStatus

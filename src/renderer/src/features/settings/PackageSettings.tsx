@@ -38,8 +38,8 @@ export function PackageSettings({
   return (
     <>
       <SettingsPageHeading
-        title="Package"
-        description="安装或卸载后，将在下一次新建或重新打开对话时生效"
+        title="插件"
+        description="即 Pi Package，可包含扩展、技能与提示模板。安装或卸载后，将在下一次新建或重新打开对话时生效"
       />
       <InstalledPackages
         busy={busy}

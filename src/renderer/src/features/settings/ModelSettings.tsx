@@ -21,7 +21,8 @@ type ModelSettingsProps = {
     models: ReadonlyArray<{ provider: string; modelId: string }>,
     visible: boolean
   ) => void
-  /** Custom Provider management, composed by the settings router. */
+  /** Provider login and custom Provider management, composed by the settings router. */
+  credentials: React.ReactNode
   customProviders: React.ReactNode
 }
 
@@ -34,6 +35,7 @@ export function ModelSettings({
   hiddenModelKeys,
   onSetModel,
   onSetModelsVisible,
+  credentials,
   customProviders
 }: ModelSettingsProps): React.JSX.Element | null {
   const [selectedProvider, setSelectedProvider] = useState(
@@ -99,7 +101,7 @@ export function ModelSettings({
 
           <div className="settings-row">
             <div className="settings-row-copy">
-              <h4>Model</h4>
+              <h4>模型</h4>
             </div>
             <div className="settings-row-control">
               <Select
@@ -193,6 +195,8 @@ export function ModelSettings({
           })}
         </div>
       </section>
+
+      {credentials}
 
       <section
         className="settings-group settings-group-inline"

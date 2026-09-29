@@ -248,7 +248,7 @@ function SkillCommandCatalog({
               options: [
                 { value: 'all', label: '全部来源' },
                 { value: 'top-level', label: '独立 Skill' },
-                { value: 'package', label: 'Package' }
+                { value: 'package', label: '插件' }
               ]
             }]}
             onValueChange={(value) => {
@@ -288,7 +288,7 @@ function SkillCommandCatalog({
               {command.sourceInfo === null ? null : (
                 <div className="settings-resource-meta">
                   <span>{skillScopeLabel(command.sourceInfo.scope)}</span>
-                  <span>{command.sourceInfo.origin === 'package' ? 'Package' : '独立'}</span>
+                  <span>{command.sourceInfo.origin === 'package' ? '插件' : '独立'}</span>
                 </div>
               )}
             </article>

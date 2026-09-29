@@ -66,7 +66,7 @@ export function InstalledPackages({
 
   async function removePackage(source: string): Promise<void> {
     if (!(await confirm({
-      title: `卸载 Package「${source}」？`,
+      title: `卸载插件「${source}」？`,
       description: '其中启用的所有资源都会一并移除。',
       confirmLabel: '卸载',
       danger: true
@@ -108,13 +108,13 @@ export function InstalledPackages({
 
       <div className="settings-group-card settings-package-manager">
         {packages === null && error === null ? (
-          <p className="settings-feedback" role="status">正在读取已安装 Package…</p>
+          <p className="settings-feedback" role="status">正在读取已安装插件…</p>
         ) : null}
         {error === null ? null : (
           <p className="settings-feedback settings-feedback-error" role="alert">{error}</p>
         )}
         {packages?.length === 0 ? (
-          <div className="settings-feedback" role="status">尚未安装用户级 Package。</div>
+          <div className="settings-feedback" role="status">尚未安装用户级插件</div>
         ) : null}
         {packages === null || packages.length === 0 ? null : (
           <div className="settings-resource-list">

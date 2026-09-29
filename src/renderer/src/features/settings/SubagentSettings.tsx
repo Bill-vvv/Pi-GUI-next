@@ -69,7 +69,7 @@ type SubagentSettingsProps = {
 
 const DISCARD_AGENT_DRAFT = {
   title: '放弃尚未保存的修改？',
-  description: '当前 Agent 的修改尚未保存，继续后将丢失。',
+  description: '当前智能体的修改尚未保存，继续后将丢失。',
   confirmLabel: '放弃修改',
   danger: true
 } as const
@@ -199,7 +199,7 @@ export function SubagentSettings({
     } catch (loadError) {
       if (definitionRequestRevision.current !== revision) return
       setDefinitions([])
-      setDefinitionsError(`读取 Agent 失败：${errorMessage(loadError)}`)
+      setDefinitionsError(`读取智能体失败：${errorMessage(loadError)}`)
       selectDefinitionImmediately(null)
     } finally {
       if (definitionRequestRevision.current === revision) setDefinitionsLoading(false)
@@ -318,7 +318,7 @@ export function SubagentSettings({
       return
     }
     if (draft.description.trim().length === 0) {
-      setActionError('请填写 Agent 用途。')
+      setActionError('请填写智能体用途。')
       return
     }
     setActing(true)
@@ -346,7 +346,7 @@ export function SubagentSettings({
     if (selectedDefinition === null || draft === null) return
     if (dirty && !(await confirm({
       ...DISCARD_AGENT_DRAFT,
-      description: '启停会立即保存。当前 Agent 尚未保存的修改将被放弃。',
+      description: '启停会立即保存。当前智能体尚未保存的修改将被放弃。',
       confirmLabel: '放弃修改并继续'
     }))) return
     setActing(true)
@@ -364,8 +364,8 @@ export function SubagentSettings({
       if (nextSelected !== null && nextSelected.enabled !== enabled) {
         setActionError(
           enabled
-            ? '该 Agent 仍被另一个作用域关闭。'
-            : '该 Agent 仍被更高优先级的作用域开启。'
+            ? '该智能体仍被另一个作用域关闭。'
+            : '该智能体仍被更高优先级的作用域开启。'
         )
       }
     } catch (enabledError) {
@@ -378,7 +378,7 @@ export function SubagentSettings({
   async function removeDefinition(): Promise<void> {
     if (selectedDefinition === null || !selectedDefinition.editable) return
     if (!(await confirm({
-      title: `删除 Subagent「${selectedDefinition.name}」？`,
+      title: `删除子智能体「${selectedDefinition.name}」？`,
       description: '此操作会删除对应的定义文件。',
       confirmLabel: '删除',
       danger: true
@@ -403,7 +403,7 @@ export function SubagentSettings({
   async function restoreBuiltinDefinition(): Promise<void> {
     if (selectedDefinition === null || !hasBuiltinDefault) return
     if (!(await confirm({
-      title: `恢复 Subagent「${selectedDefinition.name}」的默认设置？`,
+      title: `恢复子智能体「${selectedDefinition.name}」的默认设置？`,
       description: '所有同名的用户级和项目级覆盖都会被删除。',
       confirmLabel: '恢复默认',
       danger: true
@@ -519,12 +519,12 @@ export function SubagentSettings({
             definition.enabled !== requestedEnabled
           ).length
       if (unresolvedCount > 0) {
-        setActionError(`${unresolvedCount} 个 Agent 仍受其他作用域的启停设置影响。`)
+        setActionError(`${unresolvedCount} 个智能体仍受其他作用域的启停设置影响。`)
       } else {
         setBatchStatus(
           updatedCount === 0
-            ? '所选 Agent 已经是这个设置。'
-            : `已更新 ${updatedCount} 个 Agent。`
+            ? '所选智能体已经是这个设置。'
+            : `已更新 ${updatedCount} 个智能体。`
         )
       }
     } catch (batchError) {
@@ -538,7 +538,7 @@ export function SubagentSettings({
       setActionError(
         updatedCount === 0
           ? `批量修改失败：${errorMessage(batchError)}`
-          : `已更新 ${updatedCount} 个 Agent，随后失败：${errorMessage(batchError)}`
+          : `已更新 ${updatedCount} 个智能体，随后失败：${errorMessage(batchError)}`
       )
     } finally {
       setActing(false)
@@ -551,7 +551,7 @@ export function SubagentSettings({
 
   const formDisabled = busy || acting
   const modelOptions = [
-    { value: 'inherit', label: '继承父 Session' },
+    { value: 'inherit', label: '继承父对话' },
     ...availableModels.map((model) => ({
       value: `${model.provider}/${model.id}`,
       label: `${model.provider}/${model.name}`
@@ -572,7 +572,7 @@ export function SubagentSettings({
     { value: 'inheritProjectContext', label: '继承项目指令' },
     { value: 'inheritSkills', label: '继承 Skills' },
     { value: 'defaultAsync', label: '默认执行方式' },
-    { value: 'maxSubagentDepth', label: '单 Agent 嵌套上限' }
+    { value: 'maxSubagentDepth', label: '单智能体嵌套上限' }
   ]
   const batchValueOptions = batchField === 'scope'
     ? [
@@ -615,7 +615,7 @@ export function SubagentSettings({
 
   return (
     <>
-      <SettingsPageHeading title="Subagent" className="settings-subagent-heading">
+      <SettingsPageHeading title="子智能体" className="settings-subagent-heading">
         <span className="settings-subagent-status" data-state={packageState}>
           {packageState === 'enabled'
             ? '已安装并开启'
@@ -630,12 +630,12 @@ export function SubagentSettings({
       </SettingsPageHeading>
 
       <AdaptedExtensionPackageControl
-        heading="拓展"
+        heading="扩展"
         idPrefix="settings-subagent-package"
         packageName={SUBAGENT_PACKAGE_NAME}
         detailUrl="https://pi.dev/packages/pi-subagents"
-        description="为 Pi 提供可委派的 Subagent Extension"
-        notice="安装与启停会在新建或显式重载 Session 后生效。"
+        description="为 Pi 提供可委派的子智能体"
+        notice="安装与启停在新建或重新载入对话后生效"
         busy={packageBusy}
         packageInstallJobs={packageInstallJobs}
         onListPiPackages={onListPiPackages}
@@ -648,7 +648,7 @@ export function SubagentSettings({
       <section className="settings-group" aria-labelledby="settings-subagent-agents-heading">
         <div className="settings-group-heading-row">
           <h3 id="settings-subagent-agents-heading" className="settings-group-heading">
-            Agent 管理
+            智能体管理
           </h3>
           <div className="settings-subagent-heading-actions">
             <button
@@ -666,7 +666,7 @@ export function SubagentSettings({
               disabled={busy || acting || managerDisabled}
               onClick={() => void startCreate()}
             >
-              新增 Agent
+              新建智能体
             </button>
           </div>
         </div>
@@ -674,13 +674,13 @@ export function SubagentSettings({
           className="settings-group-card settings-subagent-manager"
           data-editor-revealed={editorRevealed}
         >
-          <aside className="settings-subagent-browser" aria-label="Subagent 列表">
+          <aside className="settings-subagent-browser" aria-label="子智能体列表">
             <div className="settings-subagent-browser-header">
               <input
                 ref={searchInputRef}
                 type="search"
-                aria-label="搜索 Subagent"
-                placeholder="搜索 Agent"
+                aria-label="搜索子智能体"
+                placeholder="搜索智能体"
                 value={query}
                 onChange={(event) => {
                   setQuery(event.target.value)
@@ -755,14 +755,14 @@ export function SubagentSettings({
               ) : null}
             </div>
             {definitionsLoading ? (
-              <p className="settings-subagent-list-status" role="status">正在读取 Agent…</p>
+              <p className="settings-subagent-list-status" role="status">正在读取智能体…</p>
             ) : definitionsError !== null ? (
               <div className="settings-subagent-list-status">
                 <p role="alert">{definitionsError}</p>
                 <button type="button" onClick={() => void loadDefinitions()}>重试</button>
               </div>
             ) : visibleDefinitions.length === 0 ? (
-              <p className="settings-subagent-list-status">没有匹配的 Agent。</p>
+              <p className="settings-subagent-list-status">没有匹配的智能体。</p>
             ) : (
               <div className="settings-subagent-list">
                 {visibleDefinitions.map((definition) => multiSelect ? (
@@ -796,7 +796,7 @@ export function SubagentSettings({
               </div>
             )}
             {!definitionsLoading && definitionsError === null && filteredDefinitions.length > 0 ? (
-              <nav className="settings-subagent-pagination" aria-label="Subagent 分页">
+              <nav className="settings-subagent-pagination" aria-label="子智能体分页">
                 <IconButton
                   className="settings-subagent-page-button"
                   icon="chevron-left"
@@ -822,7 +822,7 @@ export function SubagentSettings({
             {multiSelect ? (
               batchSelectedDefinitions.length === 0 ? (
                 <div className="settings-subagent-editor-empty">
-                  <h4>选择 Agent</h4>
+                  <h4>选择智能体</h4>
                 </div>
               ) : (
                 <>
@@ -831,10 +831,10 @@ export function SubagentSettings({
                       ref={editorBackRef}
                       className="settings-subagent-editor-back"
                       icon="arrow-left"
-                      label="返回 Agent 列表"
+                      label="返回智能体列表"
                       onClick={() => void closeEditor()}
                     />
-                    <h4>批量修改 · {batchSelectedDefinitions.length} 个 Agent</h4>
+                    <h4>批量修改 · {batchSelectedDefinitions.length} 个智能体</h4>
                   </div>
                   <div className="settings-subagent-editor-body">
                     <div className="settings-subagent-field-grid">
@@ -886,7 +886,7 @@ export function SubagentSettings({
                         disabled={busy || acting}
                         onClick={() => void applyBatchUpdate()}
                       >
-                        {acting ? '应用中…' : `应用到 ${batchSelectedDefinitions.length} 个 Agent`}
+                        {acting ? '应用中…' : `应用到 ${batchSelectedDefinitions.length} 个智能体`}
                       </button>
                     </div>
                   </div>
@@ -894,7 +894,7 @@ export function SubagentSettings({
               )
             ) : draft === null ? (
               <div className="settings-subagent-editor-empty">
-                <h4>选择一个 Agent</h4>
+                <h4>选择一个智能体</h4>
               </div>
             ) : (
               <>
@@ -903,16 +903,16 @@ export function SubagentSettings({
                     ref={editorBackRef}
                     className="settings-subagent-editor-back"
                     icon="arrow-left"
-                    label="返回 Agent 列表"
+                    label="返回智能体列表"
                     onClick={() => void closeEditor()}
                   />
-                  <h4>{editorState === 'create' ? '新增 Agent' : draft.name}</h4>
+                  <h4>{editorState === 'create' ? '新建智能体' : draft.name}</h4>
                 </div>
 
                 <div
                   className="settings-subagent-editor-tabs"
                   role="group"
-                  aria-label="Agent 设置层级"
+                  aria-label="智能体设置层级"
                 >
                   <button
                     type="button"
@@ -998,7 +998,7 @@ export function SubagentSettings({
                           id="settings-subagent-description"
                           value={draft.description}
                           disabled={formDisabled}
-                          placeholder="告诉主 Agent 什么时候应该委派给它"
+                          placeholder="告诉主智能体什么时候应该委派给它"
                           onChange={(event) => updateDraft({ description: event.target.value })}
                         />
                       </SettingsField>
@@ -1075,7 +1075,7 @@ export function SubagentSettings({
                               options: [
                                 { value: 'unset', label: '调用时决定' },
                                 { value: 'fresh', label: '全新上下文' },
-                                { value: 'fork', label: '继承当前 Session' }
+                                { value: 'fork', label: '继承当前对话' }
                               ]
                             }]}
                             onValueChange={(value) => updateDraft({
@@ -1152,7 +1152,7 @@ export function SubagentSettings({
                             })}
                           />
                         </SettingsField>
-                        <SettingsField label="单 Agent 嵌套上限" htmlFor="settings-subagent-agent-depth">
+                        <SettingsField label="单智能体嵌套上限" htmlFor="settings-subagent-agent-depth">
                           <Select
                             id="settings-subagent-agent-depth"
                             value={draft.maxSubagentDepth === null
@@ -1263,7 +1263,7 @@ export function SubagentSettings({
                       disabled={busy || acting || !dirty}
                       onClick={() => void saveDefinition()}
                     >
-                      {acting ? '保存中…' : '保存 Agent'}
+                      {acting ? '保存中…' : '保存智能体'}
                     </button>
                   </div>
                 </div>
