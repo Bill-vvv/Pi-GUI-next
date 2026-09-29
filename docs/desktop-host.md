@@ -35,7 +35,7 @@ Desktop Host 默认关闭。只有同时设置以下变量时才启动：
 | `PI_GUI_DESKTOP_HOST_TOKEN_FILE` | Main 内部机器密钥；绝对路径、本人所有、常规非 symlink、严格 `0600`、单行 32–4096 字符 |
 | 构建身份 | 自动从内容清单取得源码摘要；开发模式计算当前源码摘要。旧 `PI_GUI_BUILD_COMMIT` 环境覆盖已退出，双方摘要必须非空且完全一致 |
 
-绑定地址不是配置项，固定为 `127.0.0.1`。设备记录写入 `${PI_GUI_DESKTOP_HOST_TOKEN_FILE}.desktop-device`，只保存桌面设备凭证的 SHA-256 哈希与配对/到期时间；原始凭证只在首次配对响应中返回。
+绑定地址不是配置项，固定为 `127.0.0.1`。设备记录写入 `${PI_GUI_DESKTOP_HOST_TOKEN_FILE}.desktop-device`，R12 起为最多 8 台设备的版本 2 集合，每条只保存桌面设备凭证的 SHA-256 哈希、配对/到期时间和可空的设备名称（Windows 计算机名）；原始凭证只在首次配对响应中返回。
 
 任一启用配置或文件权限非法时 Main 必须 Fail Fast，不得改绑 wildcard、退回 Web Remote 或跳过设备认证。
 

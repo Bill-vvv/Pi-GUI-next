@@ -2,7 +2,7 @@
 
 Windows GUI + WSL2 体验版安装及打包说明见 [Windows + WSL 安装版](docs/windows-wsl-install.md)。
 
-Pi GUI 是面向本地 Pi Coding Agent 的 Linux 桌面工作台。P1 Linux Core Chain / v0.0.1 已完成，P2（Workbench Foundation）已完成 S10 多 Session，下一 Slice 为 S11 Pi 基础命令与 slash command，执行事实以 [`docs/development-plan.md`](docs/development-plan.md) 为准。
+Pi GUI 是面向本地 Pi Coding Agent 的 Linux 桌面工作台。当前按 [重启与并行实施计划](docs/restart-plan-2026-09-28.md) 推进：Pi Runtime 已迁入独立子进程（D-094），R12 多设备配对已在本地接通并完成 Linux Host 安装包升级验证（D-101）；Windows 原生验收与真实 SSH 验收仍开放。各阶段状态以 [`docs/development-plan.md`](docs/development-plan.md) 为准。
 
 ## 工具链
 
@@ -22,7 +22,7 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-Windows 首次启动 SSH Desktop Client，通过系统 OpenSSH 连接 Linux Host；之后恢复上次成功选择的 WSL/SSH 环境，生产窗口在连接页或设置常规页提供重启切换。双方使用实际源码内容摘要校验构建身份，无需设置 `PI_GUI_BUILD_COMMIT`。连接界面可保存和切换多套 SSH Host 配置，每套配置独立保存设备凭证；新主机先保存配置，再使用 Linux 设置页生成的 6 位配对码连接。关闭窗口或普通断开保留配对；通过“管理 Host 连接”中的“取消配对”才撤销设备。
+Windows 首次启动 SSH Desktop Client，通过系统 OpenSSH 连接 Linux Host；之后恢复上次成功选择的 WSL/SSH 环境，生产窗口在连接页或设置常规页提供重启切换。双方使用实际源码内容摘要校验构建身份，无需设置 `PI_GUI_BUILD_COMMIT`。连接界面可保存和切换多套 SSH Host 配置，每套配置独立保存设备凭证；新主机先保存配置，再使用 Linux 设置页生成的 6 位配对码连接。每台 Linux Host 最多保留 8 台已配对的 Windows 设备，同一时刻只有一台控制；另一台正在使用时会明确提示，不会抢占。关闭窗口或普通断开保留配对；通过“管理 Host 连接”中的“取消配对”只撤销本设备，Linux 设置页可逐台撤销。Windows 客户端与 Linux Host 必须来自同一源码摘要。
 
 Linux Host 可用 `node scripts/desktop-host.mjs configure --port 18788` 准备私有配置，再用 `check` / `start --build-root /absolute/prepared-linux-build` 校验或前台启动已有 Linux 构建（两者都需 `--build-root`）。入口保留既有配对，握手通过才报告就绪；需要图形会话。`deploy` 支持独立发行目录、升级、同版本复用和 `rollback`；`pack` 可生成携带 Node 和精简运行依赖的 Linux 归档，解压后通过 `install.sh` 首次安装，无需原源码或预装 Node。详见 [Host 配置与启动](docs/desktop-host.md#统一配置与启动命令r11) 和 [可分发包与首次安装](docs/desktop-host.md#可分发包与首次安装r11)。
 

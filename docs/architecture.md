@@ -65,6 +65,8 @@ R9 的 `desktop-host-preflight` 复用 System SSH transport 与 DesktopHostClien
 
 R10 的配对身份核对由共同 DesktopHostClient 入口拥有，普通断开/关闭与显式取消配对由 WindowsRemoteSession 的同一收尾 owner 串行处理。收尾期间拒绝新连接和命令，等待正在建立的连接、恢复及残留进程清理；只在明确的远端撤销确认后删除本地凭证。Renderer 根据连接状态统一清除旧 Kernel 投影，异步操作返回不再重复清空下一连接。见 D-086、D-087。WindowsRemoteHostManager 进一步拥有多配置列表、迁移/删除待办与当前 Session，凭证按独立槽隔离；列表 revision 约束配置变更和连接，独立连接编号约束 Kernel/Git/附件/撤销的本机 IPC。原生附件操作捕获所属连接，不能在选择器迟到返回后改用新 Host；preload 状态观察器拒绝迟到状态读覆盖新连接，见 D-088。
 
+R12 起每台 Linux Host 由 Desktop Gateway 持有最多 8 台设备的集合（D-101）。无凭证握手只回答客户端自己提交的公开配对身份是否有效；控制连接同时绑定设备与 controller identity，另一台设备得到明确的“被占用”并停止，不抢占。设备列表与逐台撤销由 Gateway 的 `listDevices` / `revokeDevice` 提供，Linux 设置页经 RemoteAdmin IPC 调用；SSH 客户端只能撤销自身。接口见 [R12 共享接口](r12-shared-interfaces.md)。
+
 ## 所有权
 
 R8 的 SSH 主机发现属于 Windows Main 本机连接配置；无参数的 `desktop-client.list-ssh-hosts` 返回静态别名、来源和诊断，不进入 Linux Kernel 或 Desktop Gateway。Main 对配置读取与 Include 递归设界限，不执行 OpenSSH 配置命令；Renderer 复用共享 Select 并维护读取请求生命周期，最终连接仍由既有 System OpenSSH transport 验证，见 D-084。

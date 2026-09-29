@@ -53,7 +53,7 @@ flowchart TD
 | 0b Pi Runtime 子进程 | 本地完成，待合并（分支 `codex/pi-runtime-subprocess`，证据 `release/evidence/pi-runtime-subprocess-20260929/`） | 0 完成 | 按 D-094 迁出 Shared Pi Host；按 D-098 删除旧 RPC 链路，并把 `smoke:pi` 改为启动子进程；按 D-099 加入子进程通信上限，并先接入子进程相关日志；提供对应的定向验证证据 |
 | A / B / C | 本地完成，待合并（主线依次实施；分支 `codex/r12-multi-device`，证据 `release/evidence/r12-multi-device-20260929/`） | 0、0b 完成 | 三份互不覆盖的实现及必要定向证据 |
 | 1 集成 | Pending | A、B、C 完成 | 同一源码候选，Main/preload/Renderer/Host 全部接通 |
-| 2A / 2B / 2C | 2A 本地完成（证据 `release/evidence/r12-upgrade-20260929/`）；2B、2C 待进行 | 1 完成 | 平台与包验证、准确的操作文档和验收差项 |
+| 2A / 2B / 2C | 2A、2C 已完成（见“第二轮执行记录”）；2B 待 Windows 安装 Node 26.4.0 | 1 完成 | 平台与包验证、准确的操作文档和验收差项 |
 | 3 真实 SSH | Pending | 2 完成、指定 Host 已就绪 | 同一候选的真实开发闭环与发布证据 |
 
 ## 0：主线先完成的串行准备
@@ -120,6 +120,26 @@ flowchart TD
 | **2C 文档与只读核对** | README 当前阶段、Host 操作说明、开发计划、产物/源码身份和未验收项 | 此时主线转交明确的文档写入权；核对源码能力、实际包、已安装版本和真实验收四者，交付差异与准确使用步骤，不重复运行整套测试 |
 
 第二轮冻结生产源码。发现缺陷时暂停受影响的验收，回到原 owner 修复，并为变化后的候选重新生成对应产物和证据。Linux 临时显示与 Windows 桌面可独立验证；涉及同一 Windows 桌面或同一 Host 控制连接的操作必须串行。
+
+### 第二轮执行记录（2026-09-29）
+
+**2A 已完成**：见 `release/evidence/r12-upgrade-20260929/`（worktree）。候选包 `pi-gui-host-linux-x64-20260929-r12.tar.gz` 放在 worktree 的 `release/`，源码摘要 `a48ac1b…`，SHA-256 `592976…72a5`。
+
+**2C 核对结果**（只读，未重跑测试）：
+
+| 对象 | 实际版本 | 与当前源码的关系 |
+| --- | --- | --- |
+| 当前源码 `wip/local-snapshot-20260929` | 含 D-094 子进程、R12（协议 3）；最近完整回归与构建见 R12 证据 | 基准 |
+| R12 候选包 B | 源码摘要 `a48ac1b…`（`5c5e267`；其后仅文档提交） | 与当前源码一致 |
+| 本机已安装 WSL 后端 `current` | 09-28 发行版，源码摘要 `378f9f6…`（基于 `7993b8d` 的工作区） | 不含 D-094 与 R12，Desktop 协议为 2 |
+| 本机 Windows 安装包 | `pi-gui-next-0.0.1-wsl.20260928-win-x64-setup.exe`（09-28）及 R11 前的 `0.0.1-win-x64-setup.exe` | 协议 2，与 R12 Host 不兼容 |
+| 真实验收 | 本地自动化与 Linux 包升级已通过 | Windows 原生（2B）与真实 SSH（第三轮）未进行 |
+
+已修正的文档差异：README 当前阶段、开发计划表头与进展日志、Host 设备记录说明、架构中的 R12 边界。
+
+**要在两台机器上使用 R12，必须同时满足**：Linux Host 用 R12 包（或同一源码构建）经 `install.sh` 升级，首次启动会迁移配对文件且此后不能回退到 R11；Windows 客户端从同一源码重新构建并安装。任一端仍是 09-28 或更早的版本时，匿名握手即报协议不兼容，凭证不会发送。
+
+**2B 前置条件**：Windows 上目前只有 fnm 管理的 Node 24.15.0，项目的 `workspace.mjs` 要求 Node 26.4.0 与 pnpm 11.9.0；需先安装，Windows 平台测试（含 Credential Manager 原生测试）才能按项目入口运行。worktree 的 `.git` 指向 Linux 路径，Windows 端的检查需从主工作区运行。
 
 ## 第三轮：真实 SSH 验收与发布收口
 
