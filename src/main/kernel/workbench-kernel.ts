@@ -10,7 +10,6 @@ import type {
   KernelConversationPageRequest,
   KernelConversationState,
   KernelExtensionStatusEntry,
-  KernelCompactionReason,
   KernelEvent,
   KernelExtensionDescriptor,
   KernelExtensionDialogRequest,
@@ -143,6 +142,7 @@ import {
   assertExtensionDialogResponse,
   normalizeExtensionDialogRequest
 } from './extension-dialog.ts'
+import { ContextCompaction } from './context-compaction.ts'
 import { RuntimeHibernation } from './runtime-hibernation.ts'
 import { SessionPreviews } from './session-previews.ts'
 import { ToolImageCache } from './tool-image-cache.ts'
@@ -199,7 +199,6 @@ import {
   type ConversationIdentity,
   type ExtensionDialogInteraction,
   type RuntimeContext,
-  type CompactionLifecycle,
   type ProjectNavigationState,
   type ArchiveUndoRecord,
   type ForkTarget,
@@ -230,10 +229,6 @@ import {
   sameGeneralSettings,
   sameSubagentSettings,
   sameShortcutSettings,
-  createCompactionLifecycle,
-  compactionReason,
-  isCompactionResult,
-  isOptionalCompactionResult,
   normalizeGeneratedSessionName,
   firstUserMessage,
   lastAssistantMessage,
@@ -311,6 +306,19 @@ export class WorkbenchKernel {
     reject: (error: Error) => void
     persistenceInFlight: boolean
   } | null = null
+  private readonly compaction = new ContextCompaction({
+    isManaged: (context) => this.contexts.has(context),
+    projectNavigationState: (projectPath) => this.projectNavigationState(projectPath),
+    publishContextState: (context, navigationBefore, publication) =>
+      this.publishContextState(context, navigationBefore, publication),
+    emitKernelEvent: (event) => this.emitKernelEvent(event),
+    recordSessionStatistics: (projectPath, sessionKey, statistics) => {
+      const statisticsByKey = new Map(this.sessionStatisticsByProject.get(projectPath) ?? [])
+      statisticsByKey.set(sessionKey, statistics)
+      this.sessionStatisticsByProject.set(projectPath, statisticsByKey)
+      if (this.state.activeProjectKey === projectPath) this.sessionStatisticsByKey = statisticsByKey
+    }
+  })
   private readonly previews = new SessionPreviews({
     now: () => this.now(),
     activeProjectKey: () => this.state.activeProjectKey,
@@ -3079,7 +3087,7 @@ export class WorkbenchKernel {
     const provisionalCommit = context.provisionalCommit
     if (provisionalCommit !== null) await provisionalCommit
     if (!this.contexts.has(context)) return
-    this.cancelContextCompaction(context)
+    this.compaction.cancel(context)
     context.askInteraction = null
     context.extensionCommandInvocation = null
     context.extensionDialogInteraction = null
@@ -3687,326 +3695,6 @@ export class WorkbenchKernel {
     const navigationBefore = this.projectNavigationState(context.projectPath)
     context.askInteraction = null
     return navigationBefore
-  }
-
-  private handleCompactionStarted(context: RuntimeContext, event: PiRpcEvent): void {
-    const reason = compactionReason(event.reason)
-    const projectKey = context.projectPath
-    const sessionKey = context.state.activeSessionKey
-    const sessionId = context.state.session.id
-    if (reason === null || sessionKey === null || sessionId === null) return
-
-    const existingLifecycle = context.compactionLifecycle
-    if (existingLifecycle !== null && !existingLifecycle.settled) {
-      const currentReason = context.state.session.compaction?.reason ?? null
-      if (currentReason === reason) return
-      if (currentReason !== null) {
-        this.rejectCompactionLifecycle(
-          context,
-          existingLifecycle,
-          { projectKey, sessionKey, sessionId, reason: currentReason },
-          'failed',
-          false,
-          'Runtime emitted a conflicting compaction start before the previous lifecycle settled.'
-        )
-      } else {
-        existingLifecycle.settled = true
-        existingLifecycle.reject(new Error(
-          'Runtime emitted a compaction start while an invalid lifecycle was still pending.'
-        ))
-      }
-      return
-    }
-    context.compactionRevision += 1
-    context.compactionLifecycle = createCompactionLifecycle(context.compactionRevision)
-    const navigationBefore = this.projectNavigationState(projectKey)
-    const nextState: RuntimeSessionState = {
-      ...context.state,
-      session: { ...context.state.session, compaction: { reason } }
-    }
-    context.state = nextState
-    // Inactive start: lifecycle only unless navigation truly changes.
-    // Active start: always publishes (active branch of publishContextNavigationChange).
-    this.publishContextState(context, navigationBefore, 'snapshot')
-    this.emitKernelEvent({
-      type: 'kernel.compaction-started',
-      projectKey,
-      sessionKey,
-      reason
-    })
-  }
-
-  private handleCompactionEnded(context: RuntimeContext, event: PiRpcEvent): void {
-    const compaction = context.state.session.compaction
-    const sessionKey = context.state.activeSessionKey
-    const sessionId = context.state.session.id
-    const lifecycle = context.compactionLifecycle
-    if (
-      compaction === null ||
-      sessionKey === null ||
-      sessionId === null ||
-      lifecycle === null ||
-      lifecycle.settled
-    ) return
-    const identity = {
-      projectKey: context.projectPath,
-      sessionKey,
-      sessionId,
-      reason: compaction.reason
-    }
-    if (
-      compactionReason(event.reason) !== compaction.reason ||
-      typeof event.willRetry !== 'boolean' ||
-      typeof event.aborted !== 'boolean' ||
-      !isOptionalCompactionResult(event.result)
-    ) {
-      this.rejectCompactionLifecycle(
-        context,
-        lifecycle,
-        identity,
-        'failed',
-        false,
-        'Runtime emitted an invalid compaction lifecycle.'
-      )
-      return
-    }
-    if (isCompactionResult(event.result)) {
-      void this.completeCompaction(context, lifecycle, identity, event.willRetry)
-      return
-    }
-    if (event.willRetry) {
-      this.emitKernelEvent({
-        type: 'kernel.compaction-ended',
-        projectKey: identity.projectKey,
-        sessionKey,
-        reason: identity.reason,
-        outcome: 'retrying',
-        willRetry: true
-      })
-      return
-    }
-
-    const outcome = event.aborted ? 'cancelled' : 'failed'
-    this.rejectCompactionLifecycle(
-      context,
-      lifecycle,
-      identity,
-      outcome,
-      false,
-      outcome === 'cancelled' ? 'Compaction was cancelled.' : 'Compaction failed.'
-    )
-  }
-
-  private async completeCompaction(
-    context: RuntimeContext,
-    lifecycle: CompactionLifecycle,
-    identity: {
-      projectKey: string
-      sessionKey: string
-      sessionId: string
-      reason: KernelCompactionReason
-    },
-    willRetry: boolean
-  ): Promise<void> {
-    try {
-      const stateResult = await context.runtime.send({ type: 'get_state' })
-      this.assertCompactionIdentity(context, lifecycle, identity)
-      if (stateResult.type !== 'state') throw new Error('Runtime did not return session state.')
-      const projectedSession = toKernelSession(
-        stateResult.state,
-        context.state.session.resumeAvailable,
-        null,
-        context.state.session.openAiFastMode
-      )
-      const sessionFile = stringValue(stateResult.state.sessionFile)
-      if (projectedSession.id !== identity.sessionId || sessionFile !== identity.sessionKey) {
-        throw new Error('Runtime returned compacted state for a different session.')
-      }
-
-      const messagesResult = await context.runtime.send({ type: 'get_messages' })
-      this.assertCompactionIdentity(context, lifecycle, identity)
-      if (messagesResult.type !== 'messages') {
-        throw new Error('Runtime did not return conversation messages.')
-      }
-
-      const statisticsResult = await context.runtime.send({ type: 'get_session_stats' })
-      this.assertCompactionIdentity(context, lifecycle, identity)
-      if (statisticsResult.type !== 'session-statistics') {
-        throw new Error('Runtime did not return session statistics.')
-      }
-      assertSessionStatisticsIdentity(
-        statisticsResult.statistics,
-        identity.sessionKey,
-        identity.sessionId
-      )
-      const usage = toKernelSessionUsage(
-        statisticsResult.statistics,
-        stateResult.state.model?.contextWindow
-      )
-      const statistics = toKernelSessionStatistics(statisticsResult.statistics)
-      // Compaction changes the model context, not the visible active-branch transcript.
-      // Rebuilding from get_messages would discard pre-compaction history, so retain the
-      // complete canonical Conversation already owned by this RuntimeContext.
-      const entries = context.state.conversation.entries
-      const nextContextState: RuntimeSessionState = {
-        ...context.state,
-        session: {
-          ...toKernelSession(
-            stateResult.state,
-            context.state.session.resumeAvailable,
-            usage,
-            context.state.session.openAiFastMode
-          ),
-          compaction: null
-        },
-        conversation: {
-          entries,
-          startIndex: 0,
-          activeRunStartIndex: stateResult.state.isStreaming === true ? entries.length : null
-        }
-      }
-      this.assertCompactionIdentity(context, lifecycle, identity)
-
-      const navigationBefore = this.projectNavigationState(identity.projectKey)
-      const statisticsByKey = new Map(
-        this.sessionStatisticsByProject.get(identity.projectKey) ?? []
-      )
-      statisticsByKey.set(identity.sessionKey, statistics)
-      this.sessionStatisticsByProject.set(identity.projectKey, statisticsByKey)
-      context.state = nextContextState
-      if (this.state.activeProjectKey === identity.projectKey) {
-        this.sessionStatisticsByKey = statisticsByKey
-      }
-      // Terminal ownership and Promise settlement are committed before synchronous
-      // listener callbacks so reentrancy receives a fresh lifecycle and listener
-      // failures cannot strand the completed command.
-      lifecycle.settled = true
-      lifecycle.resolve()
-      this.publishContextState(context, navigationBefore, 'snapshot')
-      this.emitKernelEvent({
-        type: 'kernel.compaction-ended',
-        projectKey: identity.projectKey,
-        sessionKey: identity.sessionKey,
-        reason: identity.reason,
-        outcome: 'completed',
-        willRetry
-      })
-    } catch (error) {
-      const failure = error instanceof Error ? error : new Error(errorMessage(error))
-      if (lifecycle.settled) return
-      if (!this.contexts.has(context) || context.compactionLifecycle !== lifecycle) {
-        lifecycle.settled = true
-        lifecycle.reject(failure)
-        return
-      }
-      this.rejectCompactionLifecycle(
-        context,
-        lifecycle,
-        identity,
-        'failed',
-        willRetry,
-        failure.message
-      )
-    }
-  }
-
-  private cancelContextCompaction(context: RuntimeContext): void {
-    this.settleContextCompaction(
-      context,
-      'cancelled',
-      'Compaction was cancelled because the runtime stopped.'
-    )
-  }
-
-  private failContextCompaction(context: RuntimeContext, message: string): void {
-    this.settleContextCompaction(
-      context,
-      'failed',
-      message.length > 0 ? message : 'Runtime process terminated during compaction.'
-    )
-  }
-
-  private settleContextCompaction(
-    context: RuntimeContext,
-    outcome: 'cancelled' | 'failed',
-    message: string
-  ): void {
-    const lifecycle = context.compactionLifecycle
-    const compaction = context.state.session.compaction
-    const sessionKey = context.state.activeSessionKey
-    const sessionId = context.state.session.id
-    if (
-      lifecycle === null ||
-      lifecycle.settled ||
-      compaction === null ||
-      sessionKey === null ||
-      sessionId === null
-    ) return
-    this.rejectCompactionLifecycle(
-      context,
-      lifecycle,
-      {
-        projectKey: context.projectPath,
-        sessionKey,
-        sessionId,
-        reason: compaction.reason
-      },
-      outcome,
-      false,
-      message
-    )
-  }
-
-  private rejectCompactionLifecycle(
-    context: RuntimeContext,
-    lifecycle: CompactionLifecycle,
-    identity: {
-      projectKey: string
-      sessionKey: string
-      sessionId: string
-      reason: KernelCompactionReason
-    },
-    outcome: 'cancelled' | 'failed',
-    willRetry: boolean,
-    message: string
-  ): void {
-    if (lifecycle.settled) return
-    const navigationBefore = this.projectNavigationState(identity.projectKey)
-    const failedState = {
-      ...context.state,
-      session: { ...context.state.session, compaction: null }
-    }
-    context.state = failedState
-    // Mark terminal and reject before synchronous publication callbacks can reenter;
-    // listener failures must not strand the originating command.
-    lifecycle.settled = true
-    lifecycle.reject(new Error(message))
-    this.publishContextState(context, navigationBefore, 'snapshot')
-    this.emitKernelEvent({
-      type: 'kernel.compaction-ended',
-      projectKey: identity.projectKey,
-      sessionKey: identity.sessionKey,
-      reason: identity.reason,
-      outcome,
-      willRetry
-    })
-  }
-
-  private assertCompactionIdentity(
-    context: RuntimeContext,
-    lifecycle: CompactionLifecycle,
-    identity: { projectKey: string, sessionKey: string, sessionId: string }
-  ): void {
-    if (
-      lifecycle.settled ||
-      !this.contexts.has(context) ||
-      context.compactionLifecycle !== lifecycle ||
-      context.projectPath !== identity.projectKey ||
-      context.state.activeSessionKey !== identity.sessionKey ||
-      context.state.session.id !== identity.sessionId
-    ) {
-      throw new Error('Compaction projection cancelled because the session changed.')
-    }
   }
 
   private emitKernelEvent(event: KernelEvent): void {
@@ -4819,7 +4507,7 @@ export class WorkbenchKernel {
       const message = event.type === 'process-exit'
         ? formatExitError(event.code, event.signal)
         : event.message
-      this.failContextCompaction(context, message || 'Runtime process terminated during compaction.')
+      this.compaction.fail(context, message || 'Runtime process terminated during compaction.')
       this.cancelSessionNameGeneration(context.runtime)
       context.extensionCommandInvocation = null
       context.extensionDialogInteraction = null
@@ -4840,11 +4528,11 @@ export class WorkbenchKernel {
     }
     const askNavigationBefore = this.clearAskInteractionForEvent(context, event)
     if (event.type === 'compaction_start') {
-      this.handleCompactionStarted(context, event)
+      this.compaction.started(context, event)
       return
     }
     if (event.type === 'compaction_end') {
-      this.handleCompactionEnded(context, event)
+      this.compaction.ended(context, event)
       return
     }
     if (event.type === 'agent_settled' && context.provisionalSession !== null) {
