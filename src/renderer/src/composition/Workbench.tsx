@@ -1240,16 +1240,6 @@ export function Workbench({
         aria-label={`${projectName}${navigatorKind === 'task' ? '' : ' 对话'}工作区`}
       >
         {operationNotifications}
-        {sidebarCollapsed ? (
-          <div className="left-sidebar-bottom-triggers">
-            <IconButton
-              className="left-sidebar-trigger"
-              icon="left-sidebar-open"
-              label="展开侧边栏"
-              onClick={() => setSidebarCollapsed(false)}
-            />
-          </div>
-        ) : null}
         {settingsOpen ? (
           <SettingsPanel
             clientOnly={!clientSurface.hostSettings}
@@ -1329,6 +1319,15 @@ export function Workbench({
           <>
         <header className="workbench-session-header">
           <div className="workbench-session-primary">
+            {sidebarCollapsed ? (
+              <IconButton
+                className="workbench-header-left-sidebar-toggle"
+                icon="left-sidebar-open"
+                iconSize="lg"
+                label="展开侧边栏"
+                onClick={() => setSidebarCollapsed(false)}
+              />
+            ) : null}
             <div className="workbench-session-heading">
               <span className="workbench-session-scope">
                 {navigatorKind === 'task' ? '任务' : projectName}
