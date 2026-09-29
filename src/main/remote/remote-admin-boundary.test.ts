@@ -13,6 +13,7 @@ import { isRemoteKernelCommand } from '../../shared/remote-contract.ts'
 const mainIndexPath = join(dirname(fileURLToPath(import.meta.url)), '../index.ts')
 // The Host assembly of remote access moved out of Main so it does not depend on Electron (D-095).
 const remoteAccessPath = join(dirname(fileURLToPath(import.meta.url)), '../host/remote-access.ts')
+const hostApplicationPath = join(dirname(fileURLToPath(import.meta.url)), '../host/host-application.ts')
 
 test('isRemoteAdminCommand accepts only the closed admin command set', () => {
   assert.equal(isRemoteAdminCommand({ type: 'remote-admin.get-status' }), true)
@@ -38,12 +39,19 @@ test('isRemoteAdminCommand accepts only the closed admin command set', () => {
 test('Main registers remote admin IPC on its own channel with trusted-sender and type guards', async () => {
   const source = await readFile(mainIndexPath, 'utf8')
   const remoteAccess = await readFile(remoteAccessPath, 'utf8')
+  const hostApplication = await readFile(hostApplicationPath, 'utf8')
 
   assert.match(source, new RegExp(String.raw`REMOTE_ADMIN_COMMAND_CHANNEL`))
   assert.match(source, /ipcMain\.handle\(\s*REMOTE_ADMIN_COMMAND_CHANNEL/u)
   assert.match(source, /assertTrustedIpcSender\(event, rendererTarget\)/u)
-  assert.match(source, /isRemoteAdminCommand\(command\)/u)
-  assert.match(source, /dispatchRemoteAdminCommand\(command\)/u)
+  // Every Host business channel reaches local IPC only through the trusted-sender wrapper.
+  assert.match(
+    source,
+    /registerIpcHandler: \(channel, handler\) => \{\s*ipcMain\.handle\(channel, \(event, value: unknown\) => \{\s*assertTrustedIpcSender\(event, rendererTarget\)/u
+  )
+  assert.match(hostApplication, /registerBackendHandler\(\s*REMOTE_ADMIN_COMMAND_CHANNEL,/u)
+  assert.match(hostApplication, /isRemoteAdminCommand\(command\)/u)
+  assert.match(hostApplication, /dispatchRemoteAdminCommand\(command\)/u)
 
   assert.match(remoteAccess, /case 'remote-admin\.get-status'/u)
   assert.match(remoteAccess, /case 'remote-admin\.create-pairing-code'/u)
