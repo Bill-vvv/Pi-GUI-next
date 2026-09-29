@@ -93,16 +93,13 @@ import {
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 const piRuntimeEntryPath = join(mainBundleDirectory, 'pi-runtime-host.js')
-const wslHostMode = process.env.PI_GUI_WSL_HOST === '1'
 let wslDistribution = process.env.PI_GUI_WSL_DISTRO
 let currentDesktopEnvironment: DesktopEnvironment | null = null
 let switchingEnvironment = false
 const desktopSettings = createDesktopSettingsStore(join(app.getPath('appData'), 'pi-gui-next-desktop', 'settings.json'))
-if (wslHostMode) {
-  if (process.platform !== 'linux' || wslDistribution !== undefined) throw new Error('WSL Host requires Linux and cannot also be a client.')
-  // Stdout is exclusively the private parent pipe in Host mode.
-  console.log = console.error
-  console.info = console.error
+if (process.env.PI_GUI_WSL_HOST === '1') {
+  // The WSL backend runs the Node Host (out/main/pi-host.js wsl, D-095), never the Electron shell.
+  throw new Error('The WSL backend runs under Node. Start it with the installed start-host.sh.')
 }
 if (wslDistribution !== undefined) {
   if (process.platform !== 'win32') throw new Error('WSL Client requires Windows.')
@@ -288,7 +285,7 @@ async function startApplication(): Promise<void> {
     rendererFilePath: join(mainBundleDirectory, '../renderer/index.html')
   })
   const activeHost = await startHostApplication({
-    wslHostMode,
+    wslHostMode: false,
     mainBundleDirectory,
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
@@ -311,25 +308,21 @@ async function startApplication(): Promise<void> {
       const window = mainWindow
       if (window !== null && !window.isDestroyed()) window.webContents.send(channel, value)
     },
-    // The WSL Host serves a Windows client that binds its own dialogs and opens links itself.
-    desktop: wslHostMode
-      ? null
-      : {
-          pickOpenDirectory,
-          pickSaveHtmlPath,
-          pickExtensionPath,
-          pickAttachmentFiles,
-          openPath: (path) => shell.openPath(path),
-          openExternal: (url) => shell.openExternal(url),
-          focusWindow: focusMainWindow
-        },
+    desktop: {
+      pickOpenDirectory,
+      pickSaveHtmlPath,
+      pickExtensionPath,
+      pickAttachmentFiles,
+      openPath: (path) => shell.openPath(path),
+      openExternal: (url) => shell.openExternal(url),
+      focusWindow: focusMainWindow
+    },
     onWslPipeClosed: () => { if (!allowQuit) app.quit() }
   })
   host = activeHost
   registerDesktopClientHandlers(rendererTarget)
   registerWindowHandlers(rendererTarget)
-  if (wslHostMode) await activeHost.serveWslPipe()
-  else await createMainWindow(rendererTarget)
+  await createMainWindow(rendererTarget)
   await activeHost.refreshSessionActivities()
 }
 
@@ -644,12 +637,6 @@ function registerDesktopClientHandlers(rendererTarget: RendererTarget): void {
 const probeOnly = process.env.PI_GUI_PROBE_ONLY === '1'
 const canStartApplication = probeOnly || app.requestSingleInstanceLock()
 
-if (process.platform === 'linux' && process.env.PI_GUI_DESKTOP_HOST_MANAGED === '1' && process.env.PI_GUI_DESKTOP_HOST_ENABLED === '1') {
-  // The foreground Host launcher uses the existing before-quit drain on interruption.
-  process.on('SIGINT', () => app.quit())
-  process.on('SIGTERM', () => app.quit())
-}
-
 if (!canStartApplication) {
   allowQuit = true
   app.exit(0)
@@ -672,7 +659,7 @@ if (!canStartApplication) {
   })
 
   app.on('window-all-closed', () => {
-    if (!wslHostMode) app.quit()
+    app.quit()
   })
 
   app.on('before-quit', (event) => {
@@ -736,7 +723,6 @@ async function pickAttachmentFiles(): Promise<string[] | null> {
 }
 
 async function pickOpenDirectory(): Promise<string | null> {
-  if (wslHostMode) return null
   const selection = mainWindow === null
     ? await dialog.showOpenDialog({ properties: ['openDirectory'] })
     : await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
@@ -794,7 +780,6 @@ async function bindWslClientDialogCommand(
 }
 
 async function pickExtensionPath(kind: KernelExtensionSelectionKind): Promise<string | null> {
-  if (wslHostMode) return null
   const options: OpenDialogOptions = kind === 'file'
     ? {
         title: '选择 Pi Extension 文件',

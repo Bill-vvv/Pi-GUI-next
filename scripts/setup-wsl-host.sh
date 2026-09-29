@@ -37,26 +37,15 @@ tar -xf "$archive" -C "$candidate"
 cd "$candidate"
 node scripts/verify-build.mjs
 if [ -L "$base/current" ] && cmp -s out/main/build-identity.json "$base/current/out/main/build-identity.json"; then
-  (cd "$base/current" && node scripts/verify-build.mjs && ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/electron -e 'process.exit(0)')
+  (cd "$base/current" && node scripts/verify-build.mjs && test -f out/main/pi-host.js)
   echo "Reusing verified WSL backend: $base/start-host.sh"
   exit 0
 fi
 # Each release owns its dependencies; the active release is never installed into.
+# The WSL backend runs the Node Host (D-095); it needs no Electron binary and no WSLg display.
 ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install --frozen-lockfile
-if [ ! -x node_modules/electron/dist/electron ]; then
-  # Use a bounded system download; @electron/get can stall on this host's network.
-  command -v unzip >/dev/null
-  expected=$(node -p "require('./node_modules/electron/checksums.json')['electron-v43.1.1-linux-x64.zip']")
-  if ! printf '%s  %s\n' "$expected" "$base/downloads/electron.zip" | sha256sum -c - >/dev/null 2>&1; then
-    echo 'Downloading the pinned Electron binary...'
-    curl -fL --retry 2 --connect-timeout 20 --max-time 300 -o "$base/downloads/electron.zip" https://github.com/electron/electron/releases/download/v43.1.1/electron-v43.1.1-linux-x64.zip
-  fi
-  printf '%s  %s\n' "$expected" "$base/downloads/electron.zip" | sha256sum -c -
-  unzip -q -o "$base/downloads/electron.zip" -d node_modules/electron/dist
-  printf electron > node_modules/electron/path.txt
-fi
 node scripts/verify-build.mjs
-ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/electron -e 'console.log("Electron runtime ready")'
+test -f out/main/pi-host.js
 cp scripts/start-wsl-host.sh "$base/start-host.next.sh"
 chmod 700 "$base/start-host.next.sh"
 previous=''

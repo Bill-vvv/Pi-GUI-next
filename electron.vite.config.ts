@@ -23,7 +23,8 @@ export default defineConfig({
           index: resolve('src/main/index.ts'),
           'desktop-host-cli': resolve('scripts/desktop-host.mjs'),
           'pi-capability-inventory-worker': resolve('src/main/extension/pi-capability-inventory-worker.ts'),
-          'pi-runtime-host': resolve('src/main/runtime/pi-runtime-host-process.ts')
+          'pi-runtime-host': resolve('src/main/runtime/pi-runtime-host-process.ts'),
+          'pi-host': resolve('src/main/host/pi-host.ts')
         },
         output: {
           entryFileNames: '[name].js'
