@@ -47,13 +47,14 @@ export function GeneralSettings({
         ...(!selectedNamingModelAvailable && selectedNamingModel !== null
           ? [{
               value: namingValue,
-              label: `${selectedNamingModel.provider}/${selectedNamingModel.modelId}（当前不可用）`,
+              label: `${selectedNamingModel.modelId} · ${selectedNamingModel.provider}（当前不可用）`,
               disabled: true
             }]
           : []),
         ...availableModels.map((model) => ({
           value: sessionNamingModelValue(model.provider, model.id),
-          label: `${model.provider}/${model.name}`
+          // Model first: the narrow control truncates the tail, so a long provider must not hide the model.
+          label: `${model.name} · ${model.provider}`
         }))
       ]
     }
