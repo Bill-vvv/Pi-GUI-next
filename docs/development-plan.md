@@ -581,7 +581,7 @@ S20 明确不以“更多动画”为目标，不让位移或 pulse 成为 runni
 | 阶段 | 状态 | 范围 | 完成门槛 |
 | --- | --- | --- | --- |
 | S21-1 Information Architecture | `Complete` | 当前导航按 D-102 对齐 Codex：“个人：常规/外观/键盘快捷键/模型”“集成：插件/扩展/技能/子智能体”“编码：连接”；Context 只有在 S24 有真实内容时加入。分组、删除偏好、导航收起与窄窗口覆盖式导航均已落地（2026-09-30） | 既有功能和 dirty draft 保护无回退；窄窗口使用可访问的单页/覆盖式导航；Context 只有在 S24 有真实内容时出现；不恢复 Advisor 分类 |
-| S21-2 Search & Deep Link | `Pending` | 扩展窄 typed section/group metadata，索引真实设置名称、组和人工同义词；搜索结果跳到稳定应用内目标 | 不索引 credential、endpoint、Agent prompt 或日志；Enter/Escape、焦点恢复和无结果状态通过；不注册 OS URL protocol，不建立插件 registry |
+| S21-2 Search & Deep Link | `Complete` | 扩展窄 typed section/group metadata，索引真实设置名称、组和人工同义词；搜索结果跳到稳定应用内目标 | 不索引 credential、endpoint、Agent prompt 或日志；Enter/Escape、焦点恢复和无结果状态通过；不注册 OS URL protocol，不建立插件 registry |
 | S21-3 Scope, Source & Activation | `Pending` | 为重要设置表达 application/user/project/session 作用域、GUI/Pi/Extension 事实来源与 immediate/next-session/reload 生效时机；区分 saved config 与当前 Runtime loaded config | Package installed、Extension enabled、当前 Session loaded、健康 verified 四层状态不混淆；设置保存不静默重启，reload 失败不伪装已应用 |
 
 设置行不机械堆叠三个 badge；默认立即生效项保持简洁，只在特殊作用域、外部事实源或需 reload 时提高可见性。`settings-redesign-preview.html` 只作为交互参考，模拟状态和未接通选项不是生产事实。
@@ -1185,6 +1185,7 @@ Windows 和 Linux/Web 必须从同一仓库/tag 发布。Web Remote 随 Linux Ho
 | 2026-09-30 | S21-1 设置导航收起 | 用户要求推进 S21 并先做导航收起。设置导航底部新增“收起设置导航 / 展开设置导航”，位置与图标沿用工作台侧边栏收起按钮；收起后复用原 ≤500px 的 icon rail 样式（改为由 `settings-nav-rail` 类驱动，Workbench 在收起或窗口 ≤500px 时设置），≤500px 不显示该按钮；收起状态不持久化，不卸载设置页面，dirty draft 保护不变 | typecheck、设置与 composition 定向测试 74/74（含 Chromium fixture）、build、diff check 通过；预览在 1280/640/420px 核对展开、收起、键盘焦点保留、rail 内切换页面且无横向溢出。窄窗口覆盖式导航见下一条 |
 | 2026-09-30 | S21-1 窄窗口覆盖式设置导航，S21-1 完成 | 用户确认窄窗口改为覆盖式导航。≤500px 时 icon rail 底部同一按钮打开完整导航浮层（列宽保持 rail，内容区不移动），选择页面、Escape、外点、焦点移出或窗口变宽时关闭；Escape 先关浮层并把焦点还给按钮，不再关闭设置页 | typecheck、设置与 composition 定向测试 74/74（含 Chromium fixture）、build、diff check 通过；预览 420px 逐项核对打开、选页、Escape、外点、Tab 移出与放宽到 900px。S21-1 标记 Complete；S21-2/S21-3 仍 Pending |
 | 2026-09-30 | Tooltip 跟随目标改名 | 切换按钮（设置导航收起、左右侧栏）点击后会改 `aria-label`/`data-tooltip`，但已显示的 tooltip 仍保留点击前文字。`TooltipProvider` 显示期间额外观察当前目标的 `data-tooltip`、`data-tooltip-placement`、`data-tooltip-variant`，变化时原地更新并重新定位，清空时关闭 | typecheck、tooltip Chromium fixture 19/19、components 与设置定向测试 25/25、build、diff check 通过；预览中悬停“收起设置导航”后连续点击，提示依次变为“展开设置导航”“收起设置导航” |
+| 2026-09-30 | S21-2 设置搜索与应用内跳转，S21-2 完成 | 设置导航顶部新增搜索（combobox + 内联 listbox，方向键/Enter/Escape、无结果状态）；`settings-search.ts` 静态索引固定设置名、分组与人工同义词（快捷键动作由同一标签表生成），每条指向页面实际渲染的 id，SSH 客户端只索引其可见项；选中后经 settings workspace 切页并由 `useSettingsJump` 滚动、聚焦、标记目标，异步页面等待目标出现且用户接管即停止。快捷键标签移到 `shortcut-labels.ts`，为工作过程密度、技能新建与技能搜索补 id。不注册 OS URL protocol、不建立 registry、不索引凭证/地址/提示词/日志 | typecheck、设置/composition/renderer 定向测试 177/177（新增 22 项 Chromium 搜索 fixture、目标 id 存在性与敏感词排除单测）、build、diff check 通过；预览 1280px 核对跨页跳转、连接页异步目标、Escape 先清空后关闭设置。S21-2 标记 Complete，S21-3 仍 Pending |
 
 ## 17. 计划变更记录
 

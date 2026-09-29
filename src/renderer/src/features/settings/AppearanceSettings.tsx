@@ -161,7 +161,7 @@ export function AppearanceSettings({
           </div>
           <div className="settings-density-block">
             <div className="settings-row-copy">
-              <h4>工作过程密度</h4>
+              <h4 id="appearance-tool-density-label">工作过程密度</h4>
               <p>调整思考与操作在对话中的显示程度</p>
             </div>
             <div className="settings-density-examples" role="group" aria-label="工作过程密度">

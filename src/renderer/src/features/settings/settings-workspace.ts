@@ -43,17 +43,27 @@ export function canLeaveSettingsPage(
   return message === null || confirmLeave(message)
 }
 
+/** A settings search result to reveal; `revision` distinguishes repeated jumps to one target. */
+export type SettingsJumpTarget = {
+  id: string
+  revision: number
+}
+
 export function useSettingsWorkspace(): {
   settingsOpen: boolean
   settingsSection: SettingsSection
+  settingsJumpTarget: SettingsJumpTarget | null
   openSettings: () => void
   requestSectionChange: (nextSection: SettingsSection) => boolean
+  requestSettingsTarget: (section: SettingsSection, targetId: string) => boolean
   requestCloseSettings: () => boolean
   onDirtyChange: (dirty: boolean) => void
   onActiveOperationChange: (active: boolean) => void
 } {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
+  const [settingsJumpTarget, setSettingsJumpTarget] = useState<SettingsJumpTarget | null>(null)
+  const jumpRevisionRef = useRef(0)
   const pageLifecycleRef = useRef<SettingsPageLifecycle>(EMPTY_PAGE_LIFECYCLE)
 
   const resetPageLifecycle = useCallback(() => {
@@ -78,12 +88,20 @@ export function useSettingsWorkspace(): {
     if (nextSection === settingsSection) return true
     if (!canLeaveSettingsPage(pageLifecycleRef.current, confirmSettingsLeave)) return false
     resetPageLifecycle()
+    setSettingsJumpTarget(null)
     setSettingsSection(nextSection)
     return true
   }, [resetPageLifecycle, settingsSection])
+  const requestSettingsTarget = useCallback((section: SettingsSection, targetId: string): boolean => {
+    if (!requestSectionChange(section)) return false
+    jumpRevisionRef.current += 1
+    setSettingsJumpTarget({ id: targetId, revision: jumpRevisionRef.current })
+    return true
+  }, [requestSectionChange])
   const requestCloseSettings = useCallback((): boolean => {
     if (!canLeaveSettingsPage(pageLifecycleRef.current, confirmSettingsLeave)) return false
     resetPageLifecycle()
+    setSettingsJumpTarget(null)
     setSettingsOpen(false)
     return true
   }, [resetPageLifecycle])
@@ -91,8 +109,10 @@ export function useSettingsWorkspace(): {
   return {
     settingsOpen,
     settingsSection,
+    settingsJumpTarget,
     openSettings,
     requestSectionChange,
+    requestSettingsTarget,
     requestCloseSettings,
     onDirtyChange,
     onActiveOperationChange
