@@ -84,12 +84,14 @@ export async function runSettingsInteractionChecks(): Promise<string[]> {
   try {
     // Immediate-apply rows report failures on the row that started the save.
     let saves = 0
+    let lastSaved: GeneralSettingsValue | null = null
     let failNext = true
     await act(async () => root.render(
       <StrictMode>
         <GeneralHarness
-          onSave={async () => {
+          onSave={async (next) => {
             saves += 1
+            lastSaved = next
             if (failNext) throw new Error('磁盘不可写')
           }}
         />
@@ -119,6 +121,21 @@ export async function runSettingsInteractionChecks(): Promise<string[]> {
     await act(async () => { doubleClick.click() })
     await act(async () => { await Promise.resolve() })
     check(doubleClick.checked && saves === 3, 'Switch toggles again through its native activation')
+    const startup = container.querySelector<HTMLElement>('[aria-labelledby="general-startup-workspace-restore-label"]')!
+    const segments = [...startup.querySelectorAll<HTMLButtonElement>('button')]
+    check(startup.getAttribute('role') === 'group' &&
+      document.getElementById('general-startup-workspace-restore-label')?.textContent === '启动后显示' &&
+      segments.map((button) => button.getAttribute('aria-pressed')).join() === 'true,false',
+      'Short choices render as a labelled pressed-button group')
+    check(startup.getBoundingClientRect().right <= window.innerWidth && startup.scrollWidth <= startup.clientWidth + 1,
+      'Segmented choice fits the row without horizontal overflow')
+    await act(async () => { segments[1]!.click() })
+    await act(async () => { await Promise.resolve() })
+    check(saves === 4 && (lastSaved as GeneralSettingsValue | null)?.startupWorkspaceRestore === 'none' &&
+      segments[1]!.getAttribute('aria-pressed') === 'true',
+      'Choosing a segment saves once and moves the pressed state')
+    await act(async () => { segments[1]!.click() })
+    check(saves === 4, 'Choosing the current segment does not save again')
     await act(async () => root.unmount())
 
     // In-app confirmation replaces window.confirm.
