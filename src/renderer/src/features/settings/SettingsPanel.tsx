@@ -257,6 +257,19 @@ export function SettingsPanel({
           hiddenModelKeys={hiddenModelKeys}
           onSetModel={onSetModel}
           onSetModelsVisible={onSetModelsVisible}
+          credentials={(
+            <CredentialsPanel
+              busy={busy}
+              onListProviderCredentials={onListProviderCredentials}
+              onLoginProvider={onLoginProvider}
+              onSubmitProviderAuthPrompt={onSubmitProviderAuthPrompt}
+              onCancelProviderLogin={onCancelProviderLogin}
+              onLogoutProvider={onLogoutProvider}
+              onSubscribeProviderAuth={onSubscribeProviderAuth}
+              onOpenExternal={onOpenExternal}
+              onActiveOperationChange={onActiveOperationChange}
+            />
+          )}
           customProviders={(
             <ProviderSettings
               busy={busy}
@@ -270,20 +283,6 @@ export function SettingsPanel({
             />
           )}
         />
-
-        {section === 'credentials' ? (
-          <CredentialsPanel
-            busy={busy}
-            onListProviderCredentials={onListProviderCredentials}
-            onLoginProvider={onLoginProvider}
-            onSubmitProviderAuthPrompt={onSubmitProviderAuthPrompt}
-            onCancelProviderLogin={onCancelProviderLogin}
-            onLogoutProvider={onLogoutProvider}
-            onSubscribeProviderAuth={onSubscribeProviderAuth}
-            onOpenExternal={onOpenExternal}
-            onActiveOperationChange={onActiveOperationChange}
-          />
-        ) : null}
 
         {section === 'remote' ? (
           <RemoteSettings

@@ -141,7 +141,7 @@ export function AppearanceSettings({
         className="settings-group settings-group-inline settings-prefs"
         aria-labelledby="appearance-conversation-heading"
       >
-        <h3 id="appearance-conversation-heading" className="settings-group-heading">Agent 对话</h3>
+        <h3 id="appearance-conversation-heading" className="settings-group-heading">对话</h3>
         <div className="settings-group-card">
           <div className="settings-row">
             <div className="settings-row-copy">
@@ -202,7 +202,7 @@ export function AppearanceSettings({
         <div className="settings-group-card">
           <div className="settings-row">
             <div className="settings-row-copy">
-              <h4>字号大小</h4>
+              <h4>界面字号</h4>
               <p>调整界面与对话文字的大小</p>
               <SettingsRowError message={errorFor('text-size')} />
             </div>
@@ -277,7 +277,7 @@ const THEME_CUBES: ReadonlyArray<{
 }> = [
   { value: 'light', label: '浅色' },
   { value: 'dark', label: '深色' },
-  { value: 'system', label: '跟随系统' }
+  { value: 'system', label: '系统' }
 ]
 
 function ThemeCubeIcon({ theme }: { theme: AppearanceSettingsValue['theme'] }): React.JSX.Element {

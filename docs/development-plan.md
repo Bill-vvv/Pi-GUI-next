@@ -468,7 +468,7 @@ P2 先用一个短 Slice 固定结构，再实现基础功能，随后在真实�
 | S18 | OMP 多 Advisor Extension 与 GUI 适配 | `Paused` | S18-1 至 S18-4 已完成；S18-5 可观测性与发布作为非阻塞 backlog 保留，后续只有在恢复 Advisor 产品范围时继续，不阻塞 P2 完成或 P3-1 |
 | S19 | Subagent 任务详情侧栏 | `Complete` | Canonical clean commit `b9562b4` 的正式 `pnpm verify:linux` 已通过完整 P1/P2 回归与 S19：3 路并行 worker 同时 running、运行中选择、Escape 优先级、live→completed、宽屏第三列、窄屏替换、关闭/返回/Escape 焦点恢复和 reduced-motion。AppImage SHA-256 为 `4bbe45a505f601966c75ba8c3b4074f793ee88a7aff88e83bf00af03f039c29d`，证据位于 `release/evidence/2026-07-27T16-45-59-798Z-b9562b4ca6c3/` |
 | S20 | 动效与交互基础 | `Paused` | S20-1 与 S20-2 已完成；S20-3 作为非阻塞交互 backlog 保留，仅在真实一致性缺陷出现或对应产品面继续实施时恢复 |
-| S21 | Settings Workspace 2.0 | `Planned` | 设置导航按“应用 / 模型 / 远程访问 / Agent / 生态”分组，增加收起、真实设置搜索和应用内 deep link；统一作用域、事实来源、生效时间及 saved/loaded 差异，不建立通用设置 registry，不静默 reload Runtime |
+| S21 | Settings Workspace 2.0 | `Planned` | 设置导航按“个人 / 集成 / 编码”分组（D-102），增加收起、真实设置搜索和应用内 deep link；统一作用域、事实来源、生效时间及 saved/loaded 差异，不建立通用设置 registry，不静默 reload Runtime |
 | S22 | Personalization v1 | `Planned` | 第一批只增加用户级的对话阅读宽度、Navigator 密度和动效偏好；使用有限语义枚举与统一 token，窄窗口、触控命中和 OS reduced-motion 继续拥有更高约束，不提供任意 CSS、像素或颜色编辑 |
 | S23 | Subagent Effective State 与任务一致性 | `Planned` | Main 投影 effective Agent definition、覆盖来源、最终启停/depth、Package/Extension/当前 Runtime 加载及 reload 状态；任务详情补同 run participant 切换、汇总和实时→历史恢复一致性，不读取 child transcript/artifact，不提前加入 GUI 运行控制 |
 | S24 | Magic Context 状态可见性 | `Planned` | 安装/启停继续留在拓展页，独立 Context 页只读展示 Package、Extension、当前 Session loaded、真实 `/ctx-status`、状态时间与过期语义，并提供复制 setup/doctor 命令和上游文档入口；不解析 SQLite 或把“已开启”冒充健康 |
@@ -580,7 +580,7 @@ S20 明确不以“更多动画”为目标，不让位移或 pulse 成为 runni
 
 | 阶段 | 状态 | 范围 | 完成门槛 |
 | --- | --- | --- | --- |
-| S21-1 Information Architecture | `Pending` | 当前导航分组为“应用：常规/外观/快捷键”“模型：模型/凭证”“远程访问：远程访问”“Agent：Subagent/Context”“生态：Package/拓展/技能”；分组与删除偏好已落地，本阶段剩余导航可收起 | 既有功能和 dirty draft 保护无回退；窄窗口使用可访问的单页/覆盖式导航；Context 只有在 S24 有真实内容时出现；不恢复 Advisor 分类 |
+| S21-1 Information Architecture | `Pending` | 当前导航按 D-102 对齐 Codex：“个人：常规/外观/键盘快捷键/模型”“集成：插件/扩展/技能/子智能体”“编码：连接”；Context 只有在 S24 有真实内容时加入。分组与删除偏好已落地，本阶段剩余导航可收起 | 既有功能和 dirty draft 保护无回退；窄窗口使用可访问的单页/覆盖式导航；Context 只有在 S24 有真实内容时出现；不恢复 Advisor 分类 |
 | S21-2 Search & Deep Link | `Pending` | 扩展窄 typed section/group metadata，索引真实设置名称、组和人工同义词；搜索结果跳到稳定应用内目标 | 不索引 credential、endpoint、Agent prompt 或日志；Enter/Escape、焦点恢复和无结果状态通过；不注册 OS URL protocol，不建立插件 registry |
 | S21-3 Scope, Source & Activation | `Pending` | 为重要设置表达 application/user/project/session 作用域、GUI/Pi/Extension 事实来源与 immediate/next-session/reload 生效时机；区分 saved config 与当前 Runtime loaded config | Package installed、Extension enabled、当前 Session loaded、健康 verified 四层状态不混淆；设置保存不静默重启，reload 失败不伪装已应用 |
 
@@ -1179,6 +1179,7 @@ Windows 和 Linux/Web 必须从同一仓库/tag 发布。Web Remote 随 Linux Ho
 | 2026-09-29 | R12 多设备配对接入 | 按冻结接口实施 D-101：协议 3、无凭证身份核对、逐台撤销与设备列表、设备与 controller 双重绑定、被占用不重连、Windows 计算机名作为设备名称 | 完整核心 1478 项 0 失败（不含浏览器）；设置与连接页 Chromium 测试通过；证据 `release/evidence/r12-multi-device-20260929/` |
 | 2026-09-29 | R12 第二轮 2A：Host 安装包 | R11 包 A 写入版本 1 旧配对后升级到 R12 包 B：同版复用、真实 Electron Host 迁移配对并继续认证旧凭证、回退到 A 被拒绝且数据不变 | 证据 `release/evidence/r12-upgrade-20260929/`；2B 需先在 Windows 安装 Node 26.4.0 |
 | 2026-09-29 | 设置页：pi-subagents 控件迁入 Subagent 页 | 用户确认按 D-100 替代 D-048 对 pi-subagents 的拓展页归属：安装、启停与详情移到 Subagent 页顶部，页面复用控件报告的 Package 状态，不再单独读取；拓展页保留 Magic Context、pi.dev 目录与本地拓展 | typecheck、设置相关定向测试 85/85（含 Chromium fixture）通过；Windows 侧用 Node 24.15 跑 typecheck 与设置测试（含 Chrome fixture）通过，项目锁定的 Node 26.4.0 尚未在 Windows 安装 |
+| 2026-09-29 | 设置页对齐 Codex 分类与措辞（D-102） | 用户要求对齐 Codex 或 Cursor 的设置风格。从本机 Codex 26.924 与 Cursor 3.19.7 安装包读取导航结构与简体中文文案后，导航改为“个人 / 集成 / 编码”，凭证并入模型页，Package→插件、拓展→扩展、Subagent→子智能体、远程访问→连接、快捷键→键盘快捷键，页内措辞按 Codex 统一，实验性开关集中到“实验性功能” | typecheck、设置相关定向测试 96/96（含 Chromium fixture 与客户端模式）通过，预览截图核对导航、模型页与插件页。视觉样式（卡片/分隔线）未改，待取得 Codex 设置页截图；设置搜索与导航收起仍属 S21 |
 
 ## 17. 计划变更记录
 
