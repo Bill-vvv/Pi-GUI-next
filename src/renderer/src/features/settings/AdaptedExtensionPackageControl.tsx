@@ -203,7 +203,7 @@ export function AdaptedExtensionPackageControl({
           </p>
         )}
       </div>
-      <p className="settings-feedback settings-feedback-inset">{notice}</p>
+      <p className="settings-feedback">{notice}</p>
       {confirmDialog}
     </section>
   )
