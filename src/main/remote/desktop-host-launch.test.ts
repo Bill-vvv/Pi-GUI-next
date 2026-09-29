@@ -33,20 +33,18 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   await write(join(build, 'package.json'), JSON.stringify({ name: 'pi-gui-next', version: '0.0.1', type: 'module', main: './out/main/index.js',
     engines: { node: process.versions.node }, build: { extraResources: [] },
     dependencies: { '@earendil-works/pi-coding-agent': '0.83.0' }, devDependencies: { electron: '43.1.1' } }))
-  await write(join(build, 'node_modules/electron/package.json'), JSON.stringify({ version: '43.1.1' }))
   await write(join(build, 'node_modules/@earendil-works/pi-coding-agent/package.json'), JSON.stringify({ version: '0.83.0' }))
   await write(join(build, 'node_modules/@earendil-works/pi-coding-agent/dist/cli.js'), '// fixture\n')
-  await mkdir(join(build, 'node_modules/electron/dist'), { recursive: true })
-  // A real Linux child process and HTTP server, explicitly substituting for Electron.
-  await symlink(process.execPath, join(build, 'node_modules/electron/dist/electron'))
-  await write(join(build, 'out/main/index.js'), `
+  await write(join(build, 'out/main/index.js'), 'fixture\n')
+  // A real Node child process and HTTP server, substituting for the Node Host entry.
+  await write(join(build, 'out/main/pi-host.js'), `
 import { createServer } from 'node:http';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 const build = JSON.parse(readFileSync('out/main/build-identity.json'));
 writeFileSync('launch-observed.json', JSON.stringify({ cwd: process.cwd(), pid: process.pid,
   enabled: process.env.PI_GUI_DESKTOP_HOST_ENABLED, tokenFile: process.env.PI_GUI_DESKTOP_HOST_TOKEN_FILE,
-  pi: process.env.PI_GUI_PI_EXECUTABLE, managed: process.env.PI_GUI_DESKTOP_HOST_MANAGED,
+  pi: process.env.PI_GUI_PI_EXECUTABLE, argv: process.argv.slice(2), execArgv: process.execArgv, display: process.env.DISPLAY ?? null,
   nodeVersion: execFileSync('node', ['-p', 'process.versions.node'], {encoding:'utf8'}).trim(),
   leaked: ['PI_GUI_WSL_HOST','PI_GUI_WSL_DISTRO','PI_GUI_PROBE_ONLY','ELECTRON_RUN_AS_NODE','NODE_OPTIONS','ELECTRON_RENDERER_URL'].filter(key => process.env[key] !== undefined) }));
 if (process.env.PI_GUI_LAUNCH_FIXTURE === 'early-exit') process.exit(0);
@@ -125,7 +123,8 @@ test('offline bundle extracts and installs independently, preserves existing con
   const f = await deploymentFixture(t)
   const output = join(f.temp, 'host.tar.gz')
   const bundle = await packDesktopHost({ buildRoot: f.build, output })
-  assert.equal(bundle.packageCount, 2)
+  // Only the Pi package: the Node Host bundle carries no Electron (D-095).
+  assert.equal(bundle.packageCount, 1)
   const checksum = spawnSync('sha256sum', ['--check', basename(output) + '.sha256'], { cwd: f.temp, encoding: 'utf8' })
   assert.equal(checksum.status, 0, checksum.stderr)
   const unpack = spawnSync('tar', ['-xzf', output, '-C', f.temp], { encoding: 'utf8' })
@@ -223,13 +222,12 @@ test('inspection validates actual artifacts, pinned dependencies and Linux runti
   assert.equal(result.port, 18788)
   assert.equal(result.root, f.build)
   assert.ok(!JSON.stringify(result).includes((await readFile(join(f.directory, 'desktop-host.token'), 'utf8')).trim()))
-  await writeFile(join(f.build, 'node_modules/electron/package.json'), JSON.stringify({ version: 'wrong' }))
-  await assert.rejects(inspectDesktopHost(f.directory, f.build), /Installed electron does not match/)
-  await writeFile(join(f.build, 'node_modules/electron/package.json'), JSON.stringify({ version: '43.1.1' }))
-  await unlink(join(f.build, 'node_modules/electron/dist/electron'))
-  await assert.rejects(inspectDesktopHost(f.directory, f.build), /Linux Electron binary is missing/)
-  await writeFile(join(f.build, 'node_modules/electron/dist/electron'), 'MZ-windows-runtime', { mode: 0o700 })
-  await assert.rejects(inspectDesktopHost(f.directory, f.build), /Linux ELF/)
+  const piPackage = join(f.build, 'node_modules/@earendil-works/pi-coding-agent/package.json')
+  await writeFile(piPackage, JSON.stringify({ version: 'wrong' }))
+  await assert.rejects(inspectDesktopHost(f.directory, f.build), /Installed @earendil-works\/pi-coding-agent does not match/)
+  await writeFile(piPackage, JSON.stringify({ version: '0.83.0' }))
+  // No Electron runtime is needed for the Host (D-095).
+  assert.equal(result.hostEntry, join(f.build, 'out/main/pi-host.js'))
   await writeFile(join(f.build, 'out/main/index.js'), 'corrupted')
   await assert.rejects(inspectDesktopHost(f.directory, f.build), /Build artifact changed/)
 })
@@ -238,7 +236,8 @@ test('foreground launch waits for compatible HTTP, holds a real flock, and drain
   const f = await fixture(t)
   const port = await freePort()
   await configureDesktopHost(f.directory, port)
-  environment(t, { DISPLAY: ':fixture', PATH: '/usr/bin:/bin', PI_GUI_WSL_HOST: '1', PI_GUI_WSL_DISTRO: 'wrong', PI_GUI_PROBE_ONLY: '1',
+  // No display: the Node Host is headless (D-095).
+  environment(t, { DISPLAY: undefined, WAYLAND_DISPLAY: undefined, PATH: '/usr/bin:/bin', PI_GUI_WSL_HOST: '1', PI_GUI_WSL_DISTRO: 'wrong', PI_GUI_PROBE_ONLY: '1',
     ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: '--this-option-must-not-reach-child', ELECTRON_RENDERER_URL: 'http://invalid' })
   const controller = new AbortController()
   t.after(() => controller.abort(new Error('test cleanup')))
@@ -248,7 +247,10 @@ test('foreground launch waits for compatible HTTP, holds a real flock, and drain
   const rejected = assert.rejects(running, /test stop/)
   await Promise.race([readyPromise, running])
   const observed = JSON.parse(await readFile(join(f.build, 'launch-observed.json'), 'utf8'))
-  assert.equal(observed.enabled, '1'); assert.equal(observed.managed, '1')
+  assert.equal(observed.enabled, '1')
+  assert.deepEqual(observed.argv, ['desktop-host'])
+  assert.deepEqual(observed.execArgv, ['--use-env-proxy'])
+  assert.equal(observed.display, null)
   assert.deepEqual(observed.leaked, [])
   assert.equal(observed.cwd, f.build)
   assert.equal(observed.nodeVersion, process.versions.node)
@@ -262,14 +264,11 @@ test('foreground launch waits for compatible HTTP, holds a real flock, and drain
   await configureDesktopHost(f.directory, port)
 })
 
-test('missing display, occupied port and pre-cancelled start do not launch a child', linux, async t => {
+test('occupied port and pre-cancelled start do not launch a child', linux, async t => {
   const f = await fixture(t)
   const port = await freePort()
   await configureDesktopHost(f.directory, port)
-  environment(t, { DISPLAY: undefined, WAYLAND_DISPLAY: undefined })
   const start = (signal = new AbortController().signal) => startDesktopHost({ directory: f.directory, buildRoot: f.build, signal, onReady: () => assert.fail('must not become ready') })
-  await assert.rejects(start(), /graphical session/)
-  process.env.DISPLAY = ':fixture'
   const occupied = createServer()
   await new Promise<void>(resolve => occupied.listen(port, '127.0.0.1', resolve))
   try { await assert.rejects(start(), { code: 'EADDRINUSE' }) }
@@ -308,8 +307,6 @@ test('CLI rejects unknown/duplicate options and prints only sanitized configurat
 
 async function deploymentFixture(t: { after: (fn: () => Promise<void>) => void }) {
   const f = await fixture(t)
-  await unlink(join(f.build, 'node_modules/electron/dist/electron'))
-  await copyFile(process.execPath, join(f.build, 'node_modules/electron/dist/electron'))
   await writeFile(join(f.build, 'out/main/desktop-host-cli.js'), 'console.log(JSON.stringify({ delegated: true, args: process.argv.slice(2) }))\n')
   const refresh = async (revision: string) => {
     await writeFile(join(f.build, 'src/revision.ts'), revision)

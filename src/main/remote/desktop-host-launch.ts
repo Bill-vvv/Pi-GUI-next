@@ -158,31 +158,22 @@ export async function inspectDesktopHostBuild(buildRoot: string) {
   if (pkg.name !== 'pi-gui-next' || pkg.main !== './out/main/index.js') throw new Error('Expected a Pi GUI Linux build.')
   const deviceStoreVersions = desktopHostDeviceStoreVersions(pkg)
   if (process.versions.node !== pkg.engines?.node) throw new Error(`Use Node ${pkg.engines?.node} for this build.`)
-  for (const [name, version] of [['electron', pkg.devDependencies?.electron], ['@earendil-works/pi-coding-agent', pkg.dependencies?.['@earendil-works/pi-coding-agent']]]) {
-    const installed = JSON.parse(await readFile(join(root, 'node_modules', name, 'package.json'), 'utf8'))
-    if (typeof version !== 'string' || installed.version !== version) throw new Error(`Installed ${name} does not match the build. Install its frozen dependencies on Linux.`)
-  }
-  let executable: string
-  try { executable = await realpath(join(root, 'node_modules/electron/dist/electron')) }
+  const piVersion = pkg.dependencies?.['@earendil-works/pi-coding-agent']
+  const installed = JSON.parse(await readFile(join(root, 'node_modules/@earendil-works/pi-coding-agent/package.json'), 'utf8'))
+  if (typeof piVersion !== 'string' || installed.version !== piVersion) throw new Error('Installed @earendil-works/pi-coding-agent does not match the build. Install its frozen dependencies on Linux.')
+  // The Host runs under this validated Node (D-095); the build only needs its Node Host entry.
+  const hostEntry = join(root, 'out/main/pi-host.js')
+  try { await access(hostEntry, constants.R_OK) }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    throw new Error('Linux Electron binary is missing. Install the pinned Electron runtime in this Linux build before starting.')
+    throw new Error('This build has no Node Host entry (out/main/pi-host.js). Build it from a current source.')
   }
-  const binary = await open(executable, 'r')
-  try {
-    const header = Buffer.alloc(4)
-    await binary.read(header, 0, 4, 0)
-    if (!(await binary.stat()).isFile() || !header.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) {
-      throw new Error('The Electron runtime must be a Linux ELF executable. Do not use Windows node_modules.')
-    }
-  } finally { await binary.close() }
-  await access(executable, constants.X_OK)
   const piExecutable = await realpath(join(root, 'node_modules/@earendil-works/pi-coding-agent/dist/cli.js'))
   return { root, sourceDigest: identity.sourceDigest,
-    artifactDigest: identity.artifactDigest, productVersion: pkg.version as string, executable, piExecutable, deviceStoreVersions }
+    artifactDigest: identity.artifactDigest, productVersion: pkg.version as string, hostEntry, piExecutable, deviceStoreVersions }
 }
 
-/** Own one foreground Electron process and report ready only after the real handshake. */
+/** Own one foreground Node Host process and report ready only after the real handshake. */
 export async function startDesktopHost(options: {
   directory: string; buildRoot: string | (() => Promise<string>); signal: AbortSignal;
   onReady: (status: Awaited<ReturnType<typeof inspectDesktopHost>>) => void;
@@ -193,16 +184,16 @@ export async function startDesktopHost(options: {
     const root = typeof options.buildRoot === 'string' ? options.buildRoot : await options.buildRoot()
     const inspected = await inspectDesktopHost(options.directory, root)
     options.signal.throwIfAborted()
-    if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) throw new Error('Desktop Host currently requires a Linux graphical session. Start from that session; headless service mode is not available.')
     await checkLocalPort(inspected.port, options.signal)
     const env = { ...process.env, ...hostEnvironment(options.directory, { schemaVersion: 1, port: inspected.port }),
-      PI_GUI_PI_EXECUTABLE: inspected.piExecutable, PI_GUI_DESKTOP_HOST_MANAGED: '1',
+      PI_GUI_PI_EXECUTABLE: inspected.piExecutable,
       // Pi's Linux entry uses /usr/bin/env node. Use the launcher's validated
       // Node for it too, including installations without a system Node.
       PATH: `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ''}` }
     for (const name of ['ELECTRON_RUN_AS_NODE', 'PI_GUI_WSL_HOST', 'PI_GUI_WSL_DISTRO', 'PI_GUI_WSL_LAUNCHER',
       'PI_GUI_PROBE_ONLY', 'ELECTRON_RENDERER_URL', 'NODE_ENV_ELECTRON_VITE', 'NODE_OPTIONS']) delete (env as NodeJS.ProcessEnv)[name]
-    const child = spawn(inspected.executable, [inspected.root], { cwd: inspected.root, env, stdio: ['inherit', 'inherit', 'inherit', lock.fd] })
+    // --use-env-proxy lets Node fetch honor HTTP(S)_PROXY like Chromium did under Electron.
+    const child = spawn(process.execPath, ['--use-env-proxy', inspected.hostEntry, 'desktop-host'], { cwd: inspected.root, env, stdio: ['inherit', 'inherit', 'inherit', lock.fd] })
     let ended = false
     const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null; error?: Error }>((resolve) => {
       child.once('error', (error) => { ended = true; resolve({ code: null, signal: null, error }) })

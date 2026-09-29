@@ -39,7 +39,7 @@ test('runtime graph preserves cyclic pnpm bindings, aliases, extension peers and
   const f = await fixture(t)
   await f.write(join(f.root, 'node_modules/.pnpm/leaf@1/node_modules/leaf/assets/template.md'), 'runtime asset')
   const plan = await planHostRuntimePackages(f.root)
-  assert.equal(plan.packages.length, 4)
+  assert.equal(plan.packages.length, 3)
   assert.deepEqual(plan.extensions, ['extensions/shipped'])
   assert.deepEqual(plan.missingOptional, [{ from: 'node_modules/.pnpm/alpha@1/node_modules/alpha', name: 'absent' }])
   const digest = await hostRuntimePackageDigest(plan)
@@ -51,6 +51,8 @@ test('runtime graph preserves cyclic pnpm bindings, aliases, extension peers and
   assert.deepEqual(require('./extensions/shipped'), ['leaf', 'peer'])
   assert.equal(await readFile(join(f.output, 'node_modules/.pnpm/leaf@1/node_modules/leaf/assets/template.md'), 'utf8'), 'runtime asset')
   await assert.rejects(stat(join(f.output, 'node_modules/unused')), { code: 'ENOENT' })
+  // The Node Host bundle carries no Electron (D-095).
+  await assert.rejects(stat(join(f.output, 'node_modules/electron')), { code: 'ENOENT' })
   await assert.rejects(stat(join(f.output, 'extensions/unshipped')), { code: 'ENOENT' })
 })
 

@@ -63,7 +63,6 @@ export async function planHostRuntimePackages(buildRoot: string): Promise<HostRu
     }
   }
   await visitManifest(root, application)
-  await visitDependency(root, 'electron', false)
   for (const extension of extensions) {
     let manifest: PackageManifest
     try { manifest = JSON.parse(await readFile(join(root, extension, 'package.json'), 'utf8')) }

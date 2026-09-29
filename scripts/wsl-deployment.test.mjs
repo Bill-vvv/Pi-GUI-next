@@ -16,16 +16,14 @@ test('WSL deployment retains the working release on failure and removes deleted 
   const write = (path, text, mode) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text, { mode }) }
   mkdirSync(join(base, 'node/bin'), { recursive: true })
   symlinkSync(process.execPath, join(base, 'node/bin/node'))
-  write(join(base, 'tooling/node_modules/.bin/pnpm'), '#!/bin/sh\nset -eu\n[ "${PI_GUI_TEST_FAIL:-0}" != 1 ]\nmkdir -p node_modules/electron/dist\ncp "$PI_GUI_TEST_ELECTRON" node_modules/electron/dist/electron\n', 0o700)
-  const electron = join(temp, 'electron')
-  write(electron, '#!/bin/sh\nexit 0\n', 0o700)
+  write(join(base, 'tooling/node_modules/.bin/pnpm'), '#!/bin/sh\nset -eu\n[ "${PI_GUI_TEST_FAIL:-0}" != 1 ]\n', 0o700)
   const candidate = join(temp, 'source')
   for (const path of ['src/main/build-identity.ts', 'scripts/verify-build.mjs', 'scripts/start-wsl-host.sh']) {
     mkdirSync(dirname(join(candidate, path)), { recursive: true })
     cpSync(join(root, path), join(candidate, path))
   }
   mkdirSync(join(candidate, 'extensions'), { recursive: true })
-  for (const path of ['pnpm-lock.yaml', 'pnpm-workspace.yaml', 'electron.vite.config.ts', 'vite.remote.config.ts', 'out/main/index.js', 'out/preload/index.cjs', 'out/renderer/index.html']) write(join(candidate, path), 'fixture\n')
+  for (const path of ['pnpm-lock.yaml', 'pnpm-workspace.yaml', 'electron.vite.config.ts', 'vite.remote.config.ts', 'out/main/index.js', 'out/main/pi-host.js', 'out/preload/index.cjs', 'out/renderer/index.html']) write(join(candidate, path), 'fixture\n')
   write(join(candidate, 'package.json'), JSON.stringify({ build: { extraResources: [] } }))
   write(join(candidate, 'out/removed.js'), 'old\n')
   const archive = join(temp, 'app.tar')
@@ -35,7 +33,7 @@ test('WSL deployment retains the working release on failure and removes deleted 
     execFileSync('tar', ['-cf', archive, '-C', candidate, '.'])
   }
   const deploy = (fail) => spawnSync('sh', [join(root, 'scripts/setup-wsl-host.sh'), archive], {
-    encoding: 'utf8', env: { ...process.env, XDG_DATA_HOME: data, PI_GUI_TEST_ELECTRON: electron, PI_GUI_TEST_FAIL: fail ? '1' : '0' }
+    encoding: 'utf8', env: { ...process.env, XDG_DATA_HOME: data, PI_GUI_TEST_FAIL: fail ? '1' : '0' }
   })
   pack()
   let result = deploy(false)
