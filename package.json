@@ -18,7 +18,7 @@
     "dev": "node -e \"require('electron')\" && electron-vite dev",
     "preview:browser": "vite --config vite.browser-preview.config.ts",
     "typecheck": "tsc --noEmit",
-    "test:core": "node --test scripts/memory-event-metrics.test.mjs src/main/build-identity.test.ts src/main/desktop/*.test.ts src/preload/*.test.ts scripts/wsl-deployment.test.mjs scripts/workspace-cache.test.mjs src/main/export/*.test.ts src/main/extension/*.test.ts src/main/git/*.test.ts src/main/pi-rpc/*.test.ts src/main/runtime/*.test.ts src/main/kernel/*.test.ts src/main/notification/*.test.ts src/main/project/*.test.ts src/main/provider/*.test.ts src/main/remote/*.test.ts src/main/security/*.test.ts src/main/subagent/*.test.ts src/main/utils/*.test.ts src/renderer/src/*.test.ts src/renderer/src/composition/*.test.ts src/renderer/src/features/chat/*.test.ts src/renderer/src/features/composer/*.test.ts src/renderer/src/features/desktop-client/*.test.ts src/renderer/src/features/extensions/*.test.ts src/renderer/src/features/git/*.test.ts src/renderer/src/features/project/*.test.ts src/renderer/src/features/settings/*.test.ts src/remote/*.test.ts src/shared/*.test.ts extensions/pi-gui-runtime-quiescence/tests/*.test.mjs extensions/pi-gui-history-navigation/tests/*.test.ts extensions/pi-gui-multi-advisor/tests/quiescence-provider.test.mjs extensions/pi-gui-task-notify/tests/quiescence-provider.test.mjs extensions/pi-gui-ask/tests/quiescence-provider.test.mjs extensions/pi-gui-openai-fast-mode/tests/*.test.ts",
+    "test:core": "node --test scripts/memory-event-metrics.test.mjs src/main/build-identity.test.ts src/main/desktop/*.test.ts src/preload/*.test.ts scripts/wsl-deployment.test.mjs scripts/workspace-cache.test.mjs src/main/export/*.test.ts src/main/extension/*.test.ts src/main/git/*.test.ts src/main/pi-rpc/*.test.ts src/main/runtime/*.test.ts src/main/kernel/*.test.ts src/main/notification/*.test.ts src/main/project/*.test.ts src/main/prompt/*.test.ts src/main/provider/*.test.ts src/main/remote/*.test.ts src/main/security/*.test.ts src/main/subagent/*.test.ts src/main/utils/*.test.ts src/renderer/src/*.test.ts src/renderer/src/composition/*.test.ts src/renderer/src/features/chat/*.test.ts src/renderer/src/features/composer/*.test.ts src/renderer/src/features/desktop-client/*.test.ts src/renderer/src/features/extensions/*.test.ts src/renderer/src/features/git/*.test.ts src/renderer/src/features/project/*.test.ts src/renderer/src/features/settings/*.test.ts src/remote/*.test.ts src/shared/*.test.ts extensions/pi-gui-runtime-quiescence/tests/*.test.mjs extensions/pi-gui-history-navigation/tests/*.test.ts extensions/pi-gui-multi-advisor/tests/quiescence-provider.test.mjs extensions/pi-gui-task-notify/tests/quiescence-provider.test.mjs extensions/pi-gui-ask/tests/quiescence-provider.test.mjs extensions/pi-gui-openai-fast-mode/tests/*.test.ts",
     "bench:markdown": "node scripts/benchmark-streaming-markdown.ts",
     "smoke:pi": "pnpm build && PI_GUI_PROBE_ONLY=1 electron .",
     "build:remote": "vite build --config vite.remote.config.ts",
@@ -116,6 +116,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.83.0",
+    "@silvia-odwyer/photon-node": "0.3.4",
     "@tanstack/react-virtual": "3.14.9",
     "ignore": "7.0.5",
     "katex": "0.16.47",

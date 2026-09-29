@@ -1,6 +1,6 @@
 import { open, readFile, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
-import { nativeImage } from 'electron'
+import { PhotonImage, SamplingFilter, resize } from '@silvia-odwyer/photon-node'
 
 import type {
   KernelPromptAttachment,
@@ -59,80 +59,104 @@ async function readFileHead(path: string, size: number): Promise<Buffer> {
   }
 }
 
+/*
+ * Decoding, resizing and encoding use Photon (WASM, the codec Pi itself uses) instead of
+ * Electron nativeImage so the Host assembly also runs under plain Node (D-095). The size
+ * policy, candidate order, JPEG quality ladder, hints and errors are unchanged.
+ */
 function processImage(
   bytes: Buffer,
   mimeType: SupportedImageMimeType,
   path: string
 ): { image: KernelPromptImage; hints: string[] } {
-  const decoded = nativeImage.createFromBuffer(bytes)
-  if (decoded.isEmpty()) throw new Error(`Could not decode image file: ${path}`)
-  const original = decoded.getSize()
-  if (original.width <= 0 || original.height <= 0) {
-    throw new Error(`Image has invalid dimensions: ${path}`)
+  let decoded: PhotonImage
+  try {
+    decoded = PhotonImage.new_from_byteslice(bytes)
+  } catch {
+    throw new Error(`Could not decode image file: ${path}`)
   }
-  const canKeepOriginal = mimeType !== 'image/bmp' &&
-    original.width <= MAX_WIDTH &&
-    original.height <= MAX_HEIGHT &&
-    base64Size(bytes) < MAX_BASE64_BYTES
-  if (canKeepOriginal) {
-    return {
-      image: { type: 'image', mimeType, data: bytes.toString('base64') },
-      hints: []
+  try {
+    const original = { width: decoded.get_width(), height: decoded.get_height() }
+    if (original.width <= 0 || original.height <= 0) {
+      throw new Error(`Image has invalid dimensions: ${path}`)
     }
-  }
-
-  let width = original.width
-  let height = original.height
-  if (width > MAX_WIDTH) {
-    height = Math.round((height * MAX_WIDTH) / width)
-    width = MAX_WIDTH
-  }
-  if (height > MAX_HEIGHT) {
-    width = Math.round((width * MAX_HEIGHT) / height)
-    height = MAX_HEIGHT
-  }
-
-  while (true) {
-    const resized = width === original.width && height === original.height
-      ? decoded
-      : decoded.resize({ width, height, quality: 'best' })
-    if (resized.isEmpty()) throw new Error(`Could not resize image file: ${path}`)
-    const candidates: Array<{ bytes: Buffer; mimeType: 'image/png' | 'image/jpeg' }> = [
-      { bytes: resized.toPNG(), mimeType: 'image/png' },
-      ...[80, 85, 70, 55, 40].map((quality) => ({
-        bytes: resized.toJPEG(quality),
-        mimeType: 'image/jpeg' as const
-      }))
-    ]
-    const candidate = candidates.find(({ bytes: output }) =>
-      output.length > 0 && base64Size(output) < MAX_BASE64_BYTES
-    )
-    if (candidate !== undefined) {
-      const hints: string[] = []
-      if (mimeType === 'image/bmp') {
-        hints.push(`[Image converted from image/bmp to ${candidate.mimeType}.]`)
-      }
-      if (width !== original.width || height !== original.height) {
-        const scale = original.width / width
-        hints.push(
-          `[Image: original ${original.width}x${original.height}, displayed at ` +
-          `${width}x${height}. Multiply coordinates by ${scale.toFixed(2)} to map to original image.]`
-        )
-      }
+    const canKeepOriginal = mimeType !== 'image/bmp' &&
+      original.width <= MAX_WIDTH &&
+      original.height <= MAX_HEIGHT &&
+      base64Size(bytes) < MAX_BASE64_BYTES
+    if (canKeepOriginal) {
       return {
-        image: {
-          type: 'image',
-          mimeType: candidate.mimeType,
-          data: candidate.bytes.toString('base64')
-        },
-        hints
+        image: { type: 'image', mimeType, data: bytes.toString('base64') },
+        hints: []
       }
     }
-    if (width === 1 && height === 1) break
-    width = width === 1 ? 1 : Math.max(1, Math.floor(width * 0.75))
-    height = height === 1 ? 1 : Math.max(1, Math.floor(height * 0.75))
+
+    let width = original.width
+    let height = original.height
+    if (width > MAX_WIDTH) {
+      height = Math.round((height * MAX_WIDTH) / width)
+      width = MAX_WIDTH
+    }
+    if (height > MAX_HEIGHT) {
+      width = Math.round((width * MAX_HEIGHT) / height)
+      height = MAX_HEIGHT
+    }
+
+    while (true) {
+      const resized = width === original.width && height === original.height
+        ? decoded
+        : resize(decoded, width, height, SamplingFilter.Lanczos3)
+      let candidate: { bytes: Buffer; mimeType: 'image/png' | 'image/jpeg' } | undefined
+      try {
+        if (resized.get_width() <= 0 || resized.get_height() <= 0) {
+          throw new Error(`Could not resize image file: ${path}`)
+        }
+        const encoders: Array<{ mimeType: 'image/png' | 'image/jpeg'; encode: () => Uint8Array }> = [
+          { mimeType: 'image/png', encode: () => resized.get_bytes() },
+          ...[80, 85, 70, 55, 40].map((quality) => ({
+            mimeType: 'image/jpeg' as const,
+            encode: () => resized.get_bytes_jpeg(quality)
+          }))
+        ]
+        for (const encoder of encoders) {
+          const output = Buffer.from(encoder.encode())
+          if (output.length > 0 && base64Size(output) < MAX_BASE64_BYTES) {
+            candidate = { bytes: output, mimeType: encoder.mimeType }
+            break
+          }
+        }
+      } finally {
+        if (resized !== decoded) resized.free()
+      }
+      if (candidate !== undefined) {
+        const hints: string[] = []
+        if (mimeType === 'image/bmp') {
+          hints.push(`[Image converted from image/bmp to ${candidate.mimeType}.]`)
+        }
+        if (width !== original.width || height !== original.height) {
+          const scale = original.width / width
+          hints.push(
+            `[Image: original ${original.width}x${original.height}, displayed at ` +
+            `${width}x${height}. Multiply coordinates by ${scale.toFixed(2)} to map to original image.]`
+          )
+        }
+        return {
+          image: {
+            type: 'image',
+            mimeType: candidate.mimeType,
+            data: candidate.bytes.toString('base64')
+          },
+          hints
+        }
+      }
+      if (width === 1 && height === 1) break
+      width = width === 1 ? 1 : Math.max(1, Math.floor(width * 0.75))
+      height = height === 1 ? 1 : Math.max(1, Math.floor(height * 0.75))
+    }
+    throw new Error(`Could not resize image below the inline size limit: ${path}`)
+  } finally {
+    decoded.free()
   }
-  throw new Error(`Could not resize image below the inline size limit: ${path}`)
 }
 
 type SupportedImageMimeType =
