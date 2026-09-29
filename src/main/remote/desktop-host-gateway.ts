@@ -2,11 +2,7 @@ import { randomBytes, randomInt } from 'node:crypto'
 import { desktopPairingIdFromHash } from './desktop-device-binding.ts'
 import { DESKTOP_ATTACHMENT_COMMAND_TYPES, isDesktopAttachmentCommand, type DesktopAttachmentCommand } from '../../shared/desktop-attachment-contract.ts'
 import { DesktopAttachmentError, type DesktopAttachmentOwner } from './desktop-attachment-store.ts'
-import {
-  createServer,
-  type IncomingMessage,
-  type ServerResponse
-} from 'node:http'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 
 import type {
   DesktopHostAccessStatus,
@@ -49,14 +45,29 @@ import type { DesktopHostEnabledConfig } from './desktop-host-config.ts'
 import { hashRemoteDeviceCredential } from './remote-device-store.ts'
 import { DESKTOP_DEVICE_LIMIT, type DesktopDeviceRecord, type DesktopDeviceStore } from './desktop-device-store.ts'
 import {
-  pairingCodeMatches,
+  BodyLimitError,
+  COMMAND_BODY_LIMIT_BYTES,
+  PAIR_BODY_LIMIT_BYTES,
+  PAIR_RATE_LIMIT_MAX,
+  PAIR_RATE_LIMIT_WINDOW_MS,
   REMOTE_DEVICE_ABSOLUTE_TTL_MS,
   REMOTE_PAIRING_CODE_TTL_MS,
   REMOTE_PAIRING_MAX_FAILED_ATTEMPTS,
+  SSE_HEARTBEAT_MS,
+  SSE_MAX_BUFFERED_BYTES,
+  applySecurityHeaders,
+  closeServer,
   digestPairingCode,
+  headerValue,
+  isPairingCodeShape,
+  listenServer,
   normalizePeerAddress,
-  timingSafeEqualString
-} from './remote-gateway.ts'
+  openEventStream,
+  pairingCodeMatches,
+  timingSafeEqualString,
+  writeJson,
+  writeText
+} from './gateway-common.ts'
 
 export type DesktopHostGateway = {
   readonly bindHost: string
@@ -98,12 +109,6 @@ export type DesktopHostGatewayOptions = {
   randomPairingCode?: () => string
 }
 
-const PAIR_BODY_LIMIT_BYTES = 4 * 1024
-const COMMAND_BODY_LIMIT_BYTES = 1 * 1024 * 1024
-const PAIR_RATE_LIMIT_WINDOW_MS = 60_000
-const PAIR_RATE_LIMIT_MAX = 5
-const SSE_HEARTBEAT_MS = 15_000
-const SSE_MAX_BUFFERED_BYTES = 1 * 1024 * 1024
 const SECURITY_HEADERS = {
   'Cache-Control': 'no-store',
   'Pragma': 'no-cache',
@@ -247,7 +252,7 @@ export async function startDesktopHostGateway(
   })
 
   const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    applySecurityHeaders(res)
+    applySecurityHeaders(res, SECURITY_HEADERS)
     const peer = normalizePeerAddress(req.socket.remoteAddress)
     if (peer !== config.bindHost) {
       writeText(res, 403, 'Forbidden')
@@ -675,12 +680,7 @@ export async function startDesktopHostGateway(
     }
     if (activeSseClient !== null) closeActiveController()
 
-    res.statusCode = 200
-    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
-    res.setHeader('Cache-Control', 'no-cache, no-transform')
-    res.setHeader('Connection', 'keep-alive')
-    res.setHeader('X-Accel-Buffering', 'no')
-    res.write(': connected\n\n')
+    openEventStream(res)
 
     const client: ActiveSseClient = { deviceHash, controllerId, res, closed: false }
     activeSseClient = client
@@ -736,17 +736,7 @@ export async function startDesktopHostGateway(
   }, SSE_HEARTBEAT_MS)
   heartbeatTimer.unref?.()
 
-  await new Promise<void>((resolveListen, rejectListen) => {
-    const onError = (error: Error): void => {
-      server.off('error', onError)
-      rejectListen(error)
-    }
-    server.once('error', onError)
-    server.listen(config.port, config.bindHost, () => {
-      server.off('error', onError)
-      resolveListen()
-    })
-  })
+  await listenServer(server, config.port, config.bindHost)
 
   return {
     bindHost: config.bindHost,
@@ -765,24 +755,9 @@ export async function startDesktopHostGateway(
       }
       closeActiveController()
       pairingCode = null
-      await new Promise<void>((resolveClose, rejectClose) => {
-        server.close((error) => error ? rejectClose(error) : resolveClose())
-      })
+      await closeServer(server)
     }
   }
-}
-
-function applySecurityHeaders(res: ServerResponse): void {
-  for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
-    res.setHeader(name, value)
-  }
-}
-
-function headerValue(req: IncomingMessage, name: string): string | null {
-  const value = req.headers[name]
-  if (typeof value === 'string') return value
-  if (Array.isArray(value) && value.length === 1) return value[0] ?? null
-  return null
 }
 
 function isJsonRequest(req: IncomingMessage): boolean {
@@ -820,10 +795,6 @@ function isSafeBuildIdentity(value: unknown): value is string {
     value.length > 0 &&
     value.length <= 128 &&
     !/[\r\n\0]/u.test(value)
-}
-
-function isPairingCodeShape(code: string): boolean {
-  return code.length === REMOTE_PAIRING_CODE_LENGTH && /^\d+$/u.test(code)
 }
 
 function isCommandRequest(value: unknown): value is DesktopHostCommandRequest {
@@ -868,18 +839,6 @@ function writeCommandError(
   writeJson(res, status, response)
 }
 
-function writeJson(res: ServerResponse, status: number, value: unknown): void {
-  res.statusCode = status
-  res.setHeader('Content-Type', 'application/json; charset=utf-8')
-  res.end(JSON.stringify(value))
-}
-
-function writeText(res: ServerResponse, status: number, value: string): void {
-  res.statusCode = status
-  res.setHeader('Content-Type', 'text/plain; charset=utf-8')
-  res.end(value)
-}
-
 class DesktopHostCommandBoundaryError extends Error {
   readonly code: DesktopHostCommandErrorCode
   readonly status: number
@@ -889,12 +848,5 @@ class DesktopHostCommandBoundaryError extends Error {
     this.name = 'DesktopHostCommandBoundaryError'
     this.code = code
     this.status = status
-  }
-}
-
-class BodyLimitError extends Error {
-  constructor() {
-    super('Request body too large.')
-    this.name = 'BodyLimitError'
   }
 }
