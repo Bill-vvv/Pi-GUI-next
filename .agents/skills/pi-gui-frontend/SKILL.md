@@ -58,15 +58,21 @@ After reviewing the final diff, check whether it makes any factual statement in 
 
 ## Validate
 
+This checkout is shared by Windows and WSL, and the `node_modules` inside the source directory belongs to Windows. Never run `pnpm typecheck` or `pnpm build` directly in the source directory from WSL. Use the workspace entry from `docs/cross-platform-development.md`, which syncs sources into a per-platform cache. Node 26.4.0 and pnpm 11.9.0 must be active (on Windows, fnm provides Node 26.4.0 with pnpm installed for that version).
+
 For normal frontend source changes, run:
 
 ```bash
-pnpm typecheck
-pnpm build
+node scripts/workspace.mjs typecheck
+node scripts/workspace.mjs build
 git diff --check
 ```
 
-Add relevant existing tests when the change affects an established interaction, accessibility, layout, motion, virtualization, or content contract.
+Add relevant existing tests when the change affects an established interaction, accessibility, layout, motion, virtualization, or content contract:
+
+- Run targeted tests with `node --test <files>` inside the `-checks` cache directory printed by the workspace entry.
+- `node scripts/workspace.mjs test` (full core suite) runs only on WSL/Linux; on Windows run `node scripts/workspace.mjs test-platform`.
+- Real-browser fixtures (`*.fixture.tsx` driven by `runBrowserChecks`) are skipped unless `PI_GUI_TEST_BROWSER` points to a local Chromium, such as `/usr/bin/google-chrome` in WSL or `C:\Program Files\Google\Chrome\Application\chrome.exe` on Windows. Set it whenever the change touches an established interaction, focus path or narrow-window layout.
 
 Do not start the application or take screenshots unless the task requires real visual evidence or the user asks for it.
 
