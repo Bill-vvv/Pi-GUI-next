@@ -1,23 +1,8 @@
-import type {
-  ChildProcessWithoutNullStreams
-} from 'node:child_process'
-import {
-  constants as fsConstants
-} from 'node:fs'
-import {
-  lstat,
-  readlink,
-  type FileHandle
-} from 'node:fs/promises'
-import {
-  GitRunError,
-  assertNotAborted,
-  errorDto,
-  isFileNotFoundError
-} from './git-admission.ts'
-import type {
-  FileIdentity
-} from './git-service-types.ts'
+import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { constants as fsConstants } from 'node:fs'
+import { lstat, readlink, type FileHandle } from 'node:fs/promises'
+import { GitRunError, assertNotAborted, errorDto, isFileNotFoundError } from './git-admission.ts'
+import type { FileIdentity } from './git-service-types.ts'
 
 /* Bounded, no-follow worktree file reads and content hashing helpers (moved unchanged from git-service.ts, D-098). */
 

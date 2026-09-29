@@ -1,6 +1,4 @@
-import {
-  createHash
-} from 'node:crypto'
+import { createHash } from 'node:crypto'
 import type {
   GitBranchSyncExecutionRequest,
   GitBranchSyncExecutionResult,
@@ -20,13 +18,8 @@ import type {
   GitRefreshResult,
   GitRepositoryState
 } from '../../shared/git-contract.ts'
-import {
-  MAX_ERROR_MESSAGE_CHARACTERS,
-  MAX_ERROR_STDERR_CHARACTERS
-} from './git-service-types.ts'
-import type {
-  ResolvedOptions
-} from './git-service.ts'
+import { MAX_ERROR_MESSAGE_CHARACTERS, MAX_ERROR_STDERR_CHARACTERS } from './git-service-types.ts'
+import type { ResolvedOptions } from './git-service.ts'
 
 /* Repository state snapshots, mutation admission fences and Git error mapping (moved unchanged from git-service.ts, D-098). */
 

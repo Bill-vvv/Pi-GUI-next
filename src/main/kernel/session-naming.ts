@@ -1,19 +1,8 @@
-import type {
-  KernelState
-} from '../../shared/kernel-contract.ts'
-import {
-  type SessionPointer
-} from '../project/session-pointer.ts'
-import type {
-  RuntimeHost
-} from '../runtime/runtime-host.ts'
-import type {
-  SessionNameGenerator
-} from '../runtime/session-name-generator.ts'
-import {
-  type RuntimeContext,
-  type ProjectNavigationState
-} from './workbench-kernel-types.ts'
+import type { KernelState } from '../../shared/kernel-contract.ts'
+import { type SessionPointer } from '../project/session-pointer.ts'
+import type { RuntimeHost } from '../runtime/runtime-host.ts'
+import type { SessionNameGenerator } from '../runtime/session-name-generator.ts'
+import { type RuntimeContext, type ProjectNavigationState } from './workbench-kernel-types.ts'
 import {
   selectSessionNameModel,
   normalizeGeneratedSessionName,

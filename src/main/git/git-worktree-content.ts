@@ -1,17 +1,7 @@
-import {
-  spawn
-} from 'node:child_process'
-import {
-  constants as fsConstants
-} from 'node:fs'
-import {
-  lstat,
-  open,
-  type FileHandle
-} from 'node:fs/promises'
-import {
-  resolve
-} from 'node:path'
+import { spawn } from 'node:child_process'
+import { constants as fsConstants } from 'node:fs'
+import { lstat, open, type FileHandle } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import {
   GitRunError,
   assertNotAborted,
@@ -20,10 +10,7 @@ import {
   isFileNotFoundError,
   toErrorDto
 } from './git-admission.ts'
-import {
-  parseIndexEntries,
-  validateRepositoryPath
-} from './git-parsing.ts'
+import { parseIndexEntries, validateRepositoryPath } from './git-parsing.ts'
 import {
   CONTENT_HASH_WORKERS,
   type ExactWorktreeContent,

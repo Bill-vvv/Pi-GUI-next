@@ -15,39 +15,19 @@ import type {
   ShortcutSettings,
   SubagentSettings
 } from '../../shared/kernel-contract.ts'
-import type {
-  RestartContinuationCandidate
-} from '../project/restart-continuation.ts'
-import type {
-  SessionTranscriptPreparationHandle
-} from '../project/session-transcript-preparation-cache.ts'
+import type { RestartContinuationCandidate } from '../project/restart-continuation.ts'
+import type { SessionTranscriptPreparationHandle } from '../project/session-transcript-preparation-cache.ts'
 import type {
   ReadSessionMessagesTailFirstOptions,
   SessionTranscriptGeneration,
   SessionTranscriptMessagePhase
 } from '../project/session-transcript-tail.ts'
-import type {
-  ProjectSessionRegistry,
-  SessionPointer
-} from '../project/session-pointer.ts'
-import type {
-  RuntimeHost,
-  RuntimeHostEvent,
-  RuntimeHostState
-} from '../runtime/runtime-host.ts'
-import type {
-  LinuxProcessMemoryReadResult
-} from '../runtime/linux-process-memory.ts'
-import type {
-  SessionNameGenerator
-} from '../runtime/session-name-generator.ts'
-import type {
-  AskResponseStep,
-  AskUiRequest
-} from './ask-tool.ts'
-import type {
-  RuntimeSessionState
-} from './runtime-session-state.ts'
+import type { ProjectSessionRegistry, SessionPointer } from '../project/session-pointer.ts'
+import type { RuntimeHost, RuntimeHostEvent, RuntimeHostState } from '../runtime/runtime-host.ts'
+import type { LinuxProcessMemoryReadResult } from '../runtime/linux-process-memory.ts'
+import type { SessionNameGenerator } from '../runtime/session-name-generator.ts'
+import type { AskResponseStep, AskUiRequest } from './ask-tool.ts'
+import type { RuntimeSessionState } from './runtime-session-state.ts'
 
 /* Constants and internal types shared by WorkbenchKernel and its helpers (moved unchanged, D-098). */
 
