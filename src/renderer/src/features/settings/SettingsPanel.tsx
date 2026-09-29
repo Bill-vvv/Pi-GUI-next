@@ -308,7 +308,15 @@ export function SettingsPanel({
             activeProjectKey={state.activeProjectKey}
             availableModels={state.availableModels}
             busy={busy}
+            packageBusy={busy || packageInstallActive}
+            packageInstallJobs={packageInstallJobs}
             onListPiPackages={onListPiPackages}
+            onInstallPiDevPackage={async (name) => {
+              await onInstallPiDevPackage(name)
+              bumpPackageRevision()
+            }}
+            onSetSubagentEnabled={onSetSubagentEnabled}
+            onOpenExternal={onOpenExternal}
             onListSubagentDefinitions={onListSubagentDefinitions}
             onSaveSubagentDefinition={onSaveSubagentDefinition}
             onSetSubagentDefinitionEnabled={onSetSubagentDefinitionEnabled}
@@ -350,7 +358,6 @@ export function SettingsPanel({
             onSearchPiDevExtensions={onSearchPiDevExtensions}
             onInstallPiDevPackage={onInstallPiDevPackage}
             onRemovePiPackage={onRemovePiPackage}
-            onSetSubagentEnabled={onSetSubagentEnabled}
             onSetMagicContextEnabled={onSetMagicContextEnabled}
             onOpenExternal={onOpenExternal}
           />

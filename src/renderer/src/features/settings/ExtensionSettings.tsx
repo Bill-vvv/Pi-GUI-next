@@ -1,9 +1,6 @@
 import { useState } from 'react'
 
-import {
-  MAGIC_CONTEXT_PACKAGE_NAME,
-  SUBAGENT_PACKAGE_NAME
-} from '../../../../shared/kernel-contract'
+import { MAGIC_CONTEXT_PACKAGE_NAME } from '../../../../shared/kernel-contract'
 import type {
   KernelExtensionSelectionKind,
   KernelInstalledPackage,
@@ -31,7 +28,6 @@ export function ExtensionSettings({
   onSearchPiDevExtensions,
   onInstallPiDevPackage,
   onRemovePiPackage,
-  onSetSubagentEnabled,
   onSetMagicContextEnabled,
   onOpenExternal
 }: {
@@ -48,7 +44,6 @@ export function ExtensionSettings({
   onSearchPiDevExtensions: (query: string) => Promise<KernelPiDevCatalog>
   onInstallPiDevPackage: (name: string) => Promise<void>
   onRemovePiPackage: (source: string) => Promise<void>
-  onSetSubagentEnabled: (enabled: boolean) => Promise<void>
   onSetMagicContextEnabled: (enabled: boolean) => Promise<void>
   onOpenExternal: (url: string) => Promise<void>
 }): React.JSX.Element {
@@ -64,20 +59,6 @@ export function ExtensionSettings({
       <SettingsPageHeading
         title="拓展"
         description="安装或卸载后，将在下一次新建或重新打开对话时生效"
-      />
-      <AdaptedExtensionPackageControl
-        heading="已适配拓展"
-        idPrefix="settings-extensions-subagent"
-        packageName={SUBAGENT_PACKAGE_NAME}
-        detailUrl="https://pi.dev/packages/pi-subagents"
-        description="为 Pi 提供可委派的 Subagent Extension"
-        notice="安装与启停会在新建或显式重载 Session 后生效。"
-        busy={busy}
-        packageInstallJobs={packageInstallJobs}
-        onListPiPackages={onListPiPackages}
-        onInstallPiDevPackage={installPiDevPackage}
-        onSetEnabled={onSetSubagentEnabled}
-        onOpenExternal={onOpenExternal}
       />
       <AdaptedExtensionPackageControl
         heading="Magic Context"
