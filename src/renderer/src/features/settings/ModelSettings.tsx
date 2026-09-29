@@ -194,11 +194,14 @@ export function ModelSettings({
         </div>
       </section>
 
-      <section className="settings-group" aria-labelledby="custom-provider-settings-heading">
+      <section
+        className="settings-group settings-group-inline"
+        aria-labelledby="custom-provider-settings-heading"
+      >
         <h3 id="custom-provider-settings-heading" className="settings-group-heading">
-          自定义 Provider 配置
+          自定义 Provider
         </h3>
-        {customProviders}
+        <div>{customProviders}</div>
       </section>
     </>
   )
