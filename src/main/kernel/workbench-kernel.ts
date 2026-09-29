@@ -130,6 +130,7 @@ import {
 import { ContextCompaction } from './context-compaction.ts'
 import { ContextInteractions } from './context-interactions.ts'
 import { RuntimeHibernation } from './runtime-hibernation.ts'
+import { SessionNaming } from './session-naming.ts'
 import { SessionPreviews } from './session-previews.ts'
 import { ToolImageCache } from './tool-image-cache.ts'
 import {
@@ -207,15 +208,12 @@ import {
   workspaceKind,
   assertProjectRegistry,
   sameSessionUsage,
-  selectSessionNameModel,
   sameSessionNamingSettings,
   sameAppearanceSettings,
   sameGeneralSettings,
   sameSubagentSettings,
   sameShortcutSettings,
-  normalizeGeneratedSessionName,
   firstUserMessage,
-  lastAssistantMessage,
   lastAssistantFinalAnswer,
   thinkingLevel,
   assertNoCommandArgument,
@@ -289,6 +287,24 @@ export class WorkbenchKernel {
     reject: (error: Error) => void
     persistenceInFlight: boolean
   } | null = null
+  private readonly naming = new SessionNaming({
+    isManaged: (context) => this.contexts.has(context),
+    managedContexts: () => this.contexts,
+    generator: () => this.generateSessionName,
+    sessionNamingSettings: () => this.state.sessionNaming,
+    pointersForProject: (projectPath) => this.sessionPointersByProject.get(projectPath) ?? (
+      this.state.activeProjectKey === projectPath ? this.sessionPointers : []
+    ),
+    persistSession: (pointer) => this.persistSession(pointer),
+    storeRenamedPointer: (projectPath, renamed, fallback) => {
+      const pointers = upsertSessionPointer(this.sessionPointersByProject.get(projectPath) ?? fallback, renamed)
+      this.sessionPointersByProject.set(projectPath, pointers)
+      if (this.state.activeProjectKey === projectPath) this.sessionPointers = pointers
+    },
+    projectNavigationState: (projectPath) => this.projectNavigationState(projectPath),
+    publishContextState: (context, navigationBefore, publication) =>
+      this.publishContextState(context, navigationBefore, publication)
+  })
   private readonly interactions = new ContextInteractions({
     activeContext: () => this.activeContext,
     activeRuntime: () => this.runtime,
@@ -1615,7 +1631,7 @@ export class WorkbenchKernel {
           throw new Error('Fork entry is not an eligible user message on the active path.')
         }
 
-        this.cancelSessionNameGeneration(target.runtime)
+        this.naming.cancel(target.runtime)
         forkAttempted = true
         const forkResult = await target.runtime.send({ type: 'fork', entryId })
         if (forkResult.type !== 'forked') {
@@ -2485,13 +2501,13 @@ export class WorkbenchKernel {
           this.contextBySessionKey.delete(contextKey(project.path, launchOptions.sessionFile))
         }
         this.contextBySessionKey.set(contextKey(project.path, canonicalPointer.sessionFile), context)
-        this.queueSessionNameGeneration(
+        this.naming.queue(
           context,
           canonicalPointer,
           firstUserMessage(projectedMessages)
         )
         this.emitState()
-        this.beginContextSessionNameGeneration(context)
+        this.naming.begin(context)
         if (claimedRestartContinuation !== null) {
           await this.prompt(RESTART_CONTINUATION_PROMPT, [], canonicalPointer.sessionFile)
         }
@@ -2646,9 +2662,9 @@ export class WorkbenchKernel {
         !provisional.sessionNameAttempted
       ) {
         provisional.sessionNameAttempted = true
-        this.queueSessionNameGeneration(context, provisional.pointer, provisional.initialPrompt)
+        this.naming.queue(context, provisional.pointer, provisional.initialPrompt)
       }
-      this.beginContextSessionNameGeneration(context)
+      this.naming.begin(context)
     } catch (error) {
       const navigationBeforeFailure = this.projectNavigationState(context.projectPath)
       if (provisional !== null && context.provisionalSession === provisional) {
@@ -2746,7 +2762,7 @@ export class WorkbenchKernel {
 
     const nextSettings = copySessionNamingSettings(settings)
     await this.persistSessionNaming(nextSettings)
-    this.cancelSessionNameGeneration()
+    this.naming.cancel()
     this.state = { ...this.state, sessionNaming: nextSettings }
     this.emitState()
 
@@ -2760,12 +2776,12 @@ export class WorkbenchKernel {
       this.state.session.name === null &&
       activePointer !== undefined
     ) {
-      this.queueSessionNameGeneration(
+      this.naming.queue(
         context,
         activePointer,
         firstUserMessage(this.state.conversation.entries)
       )
-      this.beginContextSessionNameGeneration(context)
+      this.naming.begin(context)
     }
   }
 
@@ -2867,7 +2883,7 @@ export class WorkbenchKernel {
       const name = argument.trim()
       if (name.length === 0) throw new Error('Session name must not be empty.')
       const runtime = this.requireRuntime('ready')
-      this.cancelSessionNameGeneration(runtime)
+      this.naming.cancel(runtime)
       await runtime.send({ type: 'set_session_name', name })
       await this.refreshRenamedSession(runtime)
       this.appendCommandEcho(command, argument)
@@ -3455,7 +3471,7 @@ export class WorkbenchKernel {
               context.state.runtime.status === 'ready' ||
               context.state.runtime.status === 'running'
             ) {
-              this.beginContextSessionNameGeneration(context)
+              this.naming.begin(context)
             }
           }
         }
@@ -3508,134 +3524,6 @@ export class WorkbenchKernel {
     }
   }
 
-  private beginContextSessionNameGeneration(context: RuntimeContext): void {
-    const pending = context.pendingSessionName
-    if (!this.contexts.has(context) || pending === null || context.sessionNameOperation !== null) return
-    const state = context.state
-    if (this.generateSessionName === undefined) {
-      context.pendingSessionName = null
-      return
-    }
-    if (
-      state.runtime.status !== 'ready' &&
-      state.runtime.status !== 'running'
-    ) return
-    if (state.session.name !== null) {
-      context.pendingSessionName = null
-      return
-    }
-
-    const model = selectSessionNameModel(
-      this.state.sessionNaming,
-      state.availableModels,
-      state.session.model?.provider ?? null
-    )
-    const executable = context.runtime.getState().executable
-    if (model === null || executable === null) {
-      context.pendingSessionName = null
-      return
-    }
-
-    const controller = new AbortController()
-    const operation = { runtime: context.runtime, controller }
-    context.sessionNameOperation = operation
-
-    void this.generateSessionName({
-      executable,
-      cwd: context.projectPath,
-      provider: model.provider,
-      modelId: model.id,
-      userMessage: pending.userMessage,
-      assistantMessage: lastAssistantMessage(state.conversation.entries),
-      signal: controller.signal
-    }).then(async (generated) => {
-      const name = normalizeGeneratedSessionName(generated)
-      if (
-        name === null ||
-        controller.signal.aborted ||
-        context.sessionNameOperation !== operation ||
-        context.pendingSessionName !== pending ||
-        !this.contexts.has(context) ||
-        (
-          context.state.runtime.status !== 'ready' &&
-          context.state.runtime.status !== 'running'
-        ) ||
-        context.state.session.name !== null
-      ) return
-
-      await context.runtime.send({ type: 'set_session_name', name })
-      if (
-        controller.signal.aborted ||
-        context.sessionNameOperation !== operation ||
-        context.pendingSessionName !== pending ||
-        !this.contexts.has(context)
-      ) return
-
-      const pointersForProject = this.sessionPointersByProject.get(context.projectPath) ?? (
-        this.state.activeProjectKey === context.projectPath ? this.sessionPointers : []
-      )
-      const pointer = pointersForProject.find(({ sessionFile }) => sessionFile === pending.sessionFile)
-      if (pointer === undefined || controller.signal.aborted) return
-
-      const renamed = { ...pointer, sessionName: name }
-      await this.persistSession(renamed)
-      if (
-        controller.signal.aborted ||
-        context.sessionNameOperation !== operation ||
-        !this.contexts.has(context)
-      ) return
-
-      const navigationBefore = this.projectNavigationState(context.projectPath)
-      const pointers = upsertSessionPointer(
-        this.sessionPointersByProject.get(context.projectPath) ?? pointersForProject,
-        renamed
-      )
-      this.sessionPointersByProject.set(context.projectPath, pointers)
-      context.state = {
-        ...context.state,
-        session: { ...context.state.session, name }
-      }
-
-      if (this.state.activeProjectKey === context.projectPath) {
-        this.sessionPointers = pointers
-      }
-      // Emit only after the name is persisted so navigation and durable index stay aligned.
-      this.publishContextState(context, navigationBefore, 'snapshot')
-    }).catch(() => {
-      // Automatic naming remains best-effort metadata enrichment.
-    }).finally(() => {
-      if (context.sessionNameOperation === operation) context.sessionNameOperation = null
-      if (context.pendingSessionName === pending) context.pendingSessionName = null
-    })
-  }
-
-  private queueSessionNameGeneration(
-    context: RuntimeContext,
-    pointer: SessionPointer,
-    userMessage: string | null
-  ): void {
-    const pending = pointer.sessionName === null && userMessage !== null
-      ? {
-          runtime: context.runtime,
-          sessionFile: pointer.sessionFile,
-          sessionId: pointer.sessionId,
-          userMessage
-        }
-      : null
-    context.pendingSessionName = pending
-  }
-
-  private cancelSessionNameGeneration(runtime?: RuntimeHost): void {
-    for (const context of this.contexts) {
-      if (runtime !== undefined && context.runtime !== runtime) continue
-      if (context.pendingSessionName !== null) context.pendingSessionName = null
-      if (context.sessionNameOperation !== null) {
-        const operation = context.sessionNameOperation
-        context.sessionNameOperation = null
-        operation.controller.abort()
-      }
-    }
-  }
 
   private cacheToolImagesFromEvent(
     context: RuntimeContext,
@@ -4142,7 +4030,7 @@ export class WorkbenchKernel {
         ? formatExitError(event.code, event.signal)
         : event.message
       this.compaction.fail(context, message || 'Runtime process terminated during compaction.')
-      this.cancelSessionNameGeneration(context.runtime)
+      this.naming.cancel(context.runtime)
       context.extensionCommandInvocation = null
       context.extensionDialogInteraction = null
       context.state = {
@@ -4216,8 +4104,8 @@ export class WorkbenchKernel {
       this.beginContextProvisionalCommit(context)
     }
     if (event.type === 'agent_settled') {
-      this.ensureContextSessionNameGenerationQueued(context)
-      this.beginContextSessionNameGeneration(context)
+      this.naming.ensureQueued(context)
+      this.naming.begin(context)
     }
   }
 
@@ -4244,21 +4132,6 @@ export class WorkbenchKernel {
       context.provisionalSession.activityAt = activityAt
     }
     return state
-  }
-
-  private ensureContextSessionNameGenerationQueued(context: RuntimeContext): void {
-    const state = context.state
-    if (state.session.name !== null) return
-    if (context.pendingSessionName !== null) return
-    if (context.provisionalSession?.runtime === context.runtime) return
-    const sessionFile = state.activeSessionKey
-    if (sessionFile === null) return
-    const pointers =
-      this.sessionPointersByProject.get(context.projectPath) ??
-      (this.state.activeProjectKey === context.projectPath ? this.sessionPointers : [])
-    const pointer = pointers.find((candidate) => candidate.sessionFile === sessionFile)
-    if (pointer === undefined || pointer.sessionName !== null) return
-    this.queueSessionNameGeneration(context, pointer, firstUserMessage(state.conversation.entries))
   }
 
   /** Publish the selected Session or bounded background navigation, never swap selection. */
