@@ -49,7 +49,25 @@ export function TooltipProvider({ children }: { children: ReactNode }): React.JS
   useEffect(() => {
     let hoverWarmUntil = 0
     const targetObserver = new MutationObserver(() => {
-      if (activeRef.current !== null && !activeRef.current.target.isConnected) hideTooltip()
+      const current = activeRef.current
+      if (current === null) return
+      if (!current.target.isConnected) {
+        hideTooltip()
+        return
+      }
+      // A toggle may relabel itself while its tooltip is showing; follow the target.
+      const next = activeTooltipFor(current.target)
+      if (next === null) {
+        hideTooltip()
+        return
+      }
+      if (
+        next.content === current.content &&
+        next.requestedPlacement === current.requestedPlacement &&
+        next.mono === current.mono
+      ) return
+      activeRef.current = next
+      setActive(next)
     })
     let activeFromPointer = false
 
@@ -93,19 +111,15 @@ export function TooltipProvider({ children }: { children: ReactNode }): React.JS
       pendingTargetRef.current = target
       const activate = (): void => {
         if (!target.isConnected || pendingTargetRef.current !== target) return
-        const currentContent = target.dataset.tooltip?.trim()
-        if (!currentContent) return
-        const next: ActiveTooltip = {
-          target,
-          content: currentContent,
-          requestedPlacement: tooltipPlacement(target.dataset.tooltipPlacement),
-          mono: target.dataset.tooltipVariant === 'mono'
-        }
+        const next = activeTooltipFor(target)
+        if (next === null) return
         pendingTargetRef.current = null
         showTimerRef.current = null
         activeRef.current = next
         activeFromPointer = !immediate
+        targetObserver.disconnect()
         targetObserver.observe(document.body, { childList: true, subtree: true })
+        targetObserver.observe(target, { attributes: true, attributeFilter: TOOLTIP_ATTRIBUTES })
         setPosition(null)
         setActive(next)
       }
@@ -223,6 +237,19 @@ export function TooltipProvider({ children }: { children: ReactNode }): React.JS
   )
 
   return <>{children}{tooltip}</>
+}
+
+const TOOLTIP_ATTRIBUTES = ['data-tooltip', 'data-tooltip-placement', 'data-tooltip-variant']
+
+function activeTooltipFor(target: HTMLElement): ActiveTooltip | null {
+  const content = target.dataset.tooltip?.trim()
+  if (!content) return null
+  return {
+    target,
+    content,
+    requestedPlacement: tooltipPlacement(target.dataset.tooltipPlacement),
+    mono: target.dataset.tooltipVariant === 'mono'
+  }
 }
 
 function tooltipTarget(eventTarget: EventTarget | null): HTMLElement | null {

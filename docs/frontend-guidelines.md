@@ -115,7 +115,7 @@ App / composition
 | `IconButton` | 无文字图标按钮；强制 `label`，写入 `aria-label` 和 `data-tooltip`，并通过 `iconSize` 透传三档图标尺寸，默认 `type="button"`。有常驻文字或复杂内容时使用普通 button。 |
 | `Select` | 已知有限选项的共享 listbox；支持分组、禁用、选中态、可选的单行次级详情及其语义色调、外点关闭以及 Arrow/Home/End/Enter/Space/Escape/Tab。次级详情必须同时提供文字，不能只靠颜色表达；模型级联菜单、slash 命令菜单等不同语义不得强塞进它。 |
 | `FontSelect` | 系统字体专用的可搜索 listbox，支持 UI/code 预览、不可用当前值和键盘选择；不是通用 searchable select。 |
-| `TooltipProvider` | 顶层统一 tooltip：读取 `data-tooltip`，首次 hover 等待 360ms，已显示的指针提示离开后 800ms 内连续查看其他目标可跳过等待；focus 立即显示但不启动指针连续查看。离开立即关闭，Escape（含待显示提示）、滚动和缩放清除等待与连续查看状态；自动视口避让，使用短淡入，通过 portal 渲染并维护 `aria-describedby`。tooltip 只放补充说明，不承载完成任务所必需的信息或操作。 |
+| `TooltipProvider` | 顶层统一 tooltip：读取 `data-tooltip`，首次 hover 等待 360ms，已显示的指针提示离开后 800ms 内连续查看其他目标可跳过等待；focus 立即显示但不启动指针连续查看。离开立即关闭，Escape（含待显示提示）、滚动和缩放清除等待与连续查看状态；显示期间目标的 `data-tooltip`（及位置/变体属性）变化时原地更新，文字被清空或目标移除时关闭；自动视口避让，使用短淡入，通过 portal 渲染并维护 `aria-describedby`。tooltip 只放补充说明，不承载完成任务所必需的信息或操作。 |
 | `useViewportPopoverPosition` | 为 portal popover 计算 fixed 定位、视口边距、上下翻转或左右级联、限宽限高，并监听 viewport resize、scroll 和触发器尺寸变化；它只解决定位，不替调用方实现焦点、外点、Escape、ARIA 或选择语义。 |
 | `useModalDialog` | 管理当前最上层 modal 的初始焦点、可见可聚焦项、Tab/Shift+Tab 环、Escape、busy 时关闭阻断和关闭后的焦点恢复。调用方继续拥有 portal、dialog label/description、`aria-busy`、可聚焦 root、backdrop 点击策略、视觉壳与领域异步状态。 |
 

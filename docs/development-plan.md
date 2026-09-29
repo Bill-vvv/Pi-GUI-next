@@ -1184,6 +1184,7 @@ Windows 和 Linux/Web 必须从同一仓库/tag 发布。Web Remote 随 Linux Ho
 | 2026-09-30 | 左侧栏“展开侧边栏”入口固定到 Session Header | 原入口绝对定位在 Composer 测量高度之上，随输入框高度浮动并压在对话末尾。收起后改在 Header 标题前显示，与右侧栏入口左右对称，复用同一 32px 图标按钮样式；删除旧浮动容器样式 | typecheck、composition 定向测试 50/50、build、diff check 通过；预览在 1400px 与 640px 截图核对位置并验证点击后展开。设置页打开时侧栏强制展开，不受影响 |
 | 2026-09-30 | S21-1 设置导航收起 | 用户要求推进 S21 并先做导航收起。设置导航底部新增“收起设置导航 / 展开设置导航”，位置与图标沿用工作台侧边栏收起按钮；收起后复用原 ≤500px 的 icon rail 样式（改为由 `settings-nav-rail` 类驱动，Workbench 在收起或窗口 ≤500px 时设置），≤500px 不显示该按钮；收起状态不持久化，不卸载设置页面，dirty draft 保护不变 | typecheck、设置与 composition 定向测试 74/74（含 Chromium fixture）、build、diff check 通过；预览在 1280/640/420px 核对展开、收起、键盘焦点保留、rail 内切换页面且无横向溢出。窄窗口覆盖式导航见下一条 |
 | 2026-09-30 | S21-1 窄窗口覆盖式设置导航，S21-1 完成 | 用户确认窄窗口改为覆盖式导航。≤500px 时 icon rail 底部同一按钮打开完整导航浮层（列宽保持 rail，内容区不移动），选择页面、Escape、外点、焦点移出或窗口变宽时关闭；Escape 先关浮层并把焦点还给按钮，不再关闭设置页 | typecheck、设置与 composition 定向测试 74/74（含 Chromium fixture）、build、diff check 通过；预览 420px 逐项核对打开、选页、Escape、外点、Tab 移出与放宽到 900px。S21-1 标记 Complete；S21-2/S21-3 仍 Pending |
+| 2026-09-30 | Tooltip 跟随目标改名 | 切换按钮（设置导航收起、左右侧栏）点击后会改 `aria-label`/`data-tooltip`，但已显示的 tooltip 仍保留点击前文字。`TooltipProvider` 显示期间额外观察当前目标的 `data-tooltip`、`data-tooltip-placement`、`data-tooltip-variant`，变化时原地更新并重新定位，清空时关闭 | typecheck、tooltip Chromium fixture 19/19、components 与设置定向测试 25/25、build、diff check 通过；预览中悬停“收起设置导航”后连续点击，提示依次变为“展开设置导航”“收起设置导航” |
 
 ## 17. 计划变更记录
 
