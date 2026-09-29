@@ -237,13 +237,15 @@ App / composition
 
 ## 10. 最小验证
 
-常规前端修改的最小验证为：
+常规前端修改的最小验证为（在已启用 Node 26.4.0 与 pnpm 11.9.0 的终端中，从源码仓库执行）：
 
 ```bash
-pnpm typecheck
-pnpm build
+node scripts/workspace.mjs typecheck
+node scripts/workspace.mjs build
 git diff --check
 ```
+
+同一 checkout 由 Windows 与 WSL 共用，源码目录内的 `node_modules` 属于 Windows，不能在 WSL 中直接执行 `pnpm typecheck` / `pnpm build`；统一入口会把源码同步到各平台自己的缓存目录再校验，细节见 `cross-platform-development.md`。定向测试在入口打印的 `-checks` 目录中用 `node --test <文件>` 执行。完整核心测试 `node scripts/workspace.mjs test` 只在 WSL/Linux 执行，Windows 执行 `test-platform`。使用 `runBrowserChecks` 的真实浏览器 fixture 只在 `PI_GUI_TEST_BROWSER` 指向本机 Chromium（例如 WSL 的 `/usr/bin/google-chrome`、Windows 的 `C:\Program Files\Google\Chrome\Application\chrome.exe`）时运行，否则跳过；改动已有交互、焦点或窄窗口布局时应设置该变量。
 
 评审 touched CSS 时额外核对：是否新增可映射到现有 token 的 raw color/radius/motion，是否复制了已有 focus/disabled/portal 协议，是否在 feature 外覆盖公共组件内部结构。仓库中尚存的历史直接值属于后续清理清单，不能成为新增偏离的理由，也不把一次功能修改扩大成无关的全库重绘。
 
