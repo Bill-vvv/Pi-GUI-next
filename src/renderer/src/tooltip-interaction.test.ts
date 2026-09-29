@@ -6,6 +6,6 @@ test('tooltip hover exploration preserves delay, dismissal and focus contracts',
 }, async (t) => {
   await runBrowserChecks(t, {
     fixture: 'src/renderer/src/components/tooltip-interaction.fixture.tsx',
-    exportName: 'runTooltipInteractionChecks', expectedChecks: 17
+    exportName: 'runTooltipInteractionChecks', expectedChecks: 19
   })
 })

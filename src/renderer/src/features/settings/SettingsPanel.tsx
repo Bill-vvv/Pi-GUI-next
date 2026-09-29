@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
+
 import type {
   AppearanceSettings as AppearanceSettingsValue,
   GeneralSettings as GeneralSettingsValue,
@@ -42,6 +43,8 @@ import type { SettingsSection } from './SettingsNavigation'
 import { ShortcutSettingsPanel } from './ShortcutSettingsPanel'
 import { SkillSettings } from './SkillSettings'
 import { SubagentSettings } from './SubagentSettings'
+import { useSettingsJump } from './settings-jump'
+import type { SettingsJumpTarget } from './settings-workspace'
 
 type SettingsPanelProps = {
   state: KernelState
@@ -49,6 +52,8 @@ type SettingsPanelProps = {
   environmentPanel?: React.ReactNode
   busy: boolean
   section: SettingsSection
+  /** Search result to reveal in the current section. */
+  jumpTarget?: SettingsJumpTarget | null
   pendingAction: WorkbenchOperation | null
   extensionActionError: string | null
   actionError: string | null
@@ -135,6 +140,7 @@ export function SettingsPanel({
   environmentPanel,
   busy,
   section,
+  jumpTarget = null,
   pendingAction,
   extensionActionError,
   actionError,
@@ -199,6 +205,8 @@ export function SettingsPanel({
     job.status === 'queued' || job.status === 'running'
   )
   const bumpPackageRevision = (): void => setPackageRevision((revision) => revision + 1)
+  const contentRef = useRef<HTMLDivElement>(null)
+  useSettingsJump(contentRef, jumpTarget)
 
   useEffect(() => {
     for (const job of packageInstallJobs) {
@@ -211,7 +219,7 @@ export function SettingsPanel({
 
   return (
     <section className="settings-screen" aria-label="设置">
-      <div className="settings-content">
+      <div className="settings-content" ref={contentRef}>
         {actionError === null ? null : (
           <p className="settings-feedback settings-feedback-error" role="alert">{actionError}</p>
         )}

@@ -49,6 +49,7 @@ export function SkillSettings({
     <>
       <SettingsPageHeading title="技能" description={createUnavailableReason}>
         <button
+          id="settings-skill-create"
           className="settings-skill-create-toggle"
           type="button"
           disabled={busy || createUnavailableReason !== undefined}
@@ -198,6 +199,7 @@ function SkillCommandCatalog({
     <section className="settings-skill-catalog" aria-label="已发现的技能">
       <div className="settings-skill-catalog-toolbar">
         <input
+          id="settings-skill-search"
           type="search"
           value={query}
           aria-label="搜索技能"

@@ -1,5 +1,6 @@
 .app-shell {
   --sidebar-width: 332px;
+  --sidebar-rail-width: 54px;
   --app-panel-gap: 0px;
   --window-chrome-top: 0px;
   --window-chrome-caption-width: 0px;
@@ -347,27 +348,6 @@
   margin-left: 0;
 }
 
-.left-sidebar-bottom-triggers {
-  position: absolute;
-  left: var(--conversation-padding-left);
-  bottom: calc(var(--composer-clearance, var(--composer-reserved-space)) + 0.35rem);
-  z-index: 5;
-}
-
-.left-sidebar-trigger {
-  width: 30px;
-  height: 30px;
-  color: var(--color-text-muted);
-  opacity: 0.82;
-}
-
-.left-sidebar-trigger:hover:not(:disabled) {
-  border-color: transparent;
-  background: transparent;
-  color: var(--color-text-primary);
-  opacity: 1;
-}
-
 .workbench-session-header {
   display: grid;
   gap: 0.5rem;
@@ -409,6 +389,7 @@
   white-space: nowrap;
 }
 
+.workbench-header-left-sidebar-toggle,
 .workbench-header-right-sidebar-toggle {
   width: 32px;
   height: 32px;
@@ -418,6 +399,7 @@
   color: var(--color-text-muted);
 }
 
+.workbench-header-left-sidebar-toggle:hover:not(:disabled),
 .workbench-header-right-sidebar-toggle:hover:not(:disabled),
 .workbench-header-right-sidebar-toggle[aria-expanded='true'] {
   border-color: transparent;
@@ -678,7 +660,6 @@
     .app-shell {
       --composer-bottom-offset: 4px;
       --composer-reserved-space: clamp(9.75rem, 27dvh, 11.75rem);
-      --sidebar-rail-width: 54px;
       grid-template-columns: minmax(220px, var(--sidebar-width)) minmax(0, 1fr);
     }
 
