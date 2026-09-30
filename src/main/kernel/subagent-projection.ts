@@ -18,6 +18,7 @@ const MAX_CUSTOM_ID_CHARS = 256
 
 const SUBAGENT_NOTICE_TYPES = {
   'subagent-notify': 'completion',
+  'pi-gui-agent-message': 'agent-message',
   subagent_control_notice: 'control',
   subagent_steering_notice: 'steering',
   subagent_supervisor_request: 'request',
@@ -28,7 +29,8 @@ const SUBAGENT_SLASH_RESULT_TYPE = 'subagent-slash-result'
 const SUBAGENT_WATCHDOG_TYPE = 'subagent_watchdog_warning'
 
 export function isSubagentToolName(name: string): boolean {
-  return name.trim().toLowerCase().split(/[.:/]/u).at(-1) === 'subagent'
+  const leaf = name.trim().toLowerCase().split(/[.:/]/u).at(-1)
+  return leaf !== undefined && ['subagent', 'task', 'taskwait', 'tasklist', 'taskstop'].includes(leaf)
 }
 
 export function projectSubagentRun(
@@ -87,6 +89,25 @@ export function projectSubagentCustomMessage(
 ): boolean {
   const { customType, content, details, display, timestamp, historicalIdentity } = args
 
+  if (customType === 'pi-gui-native-subagent-progress') {
+    const run = projectSubagentRun(undefined, details)
+    if (run === null || run.runId === null) return true
+    const record = parseRecordValue(details)
+    const toolCallId = stringValue(record?.toolCallId) ?? `native-task:${run.runId}`
+    const existing = sink.findTool(toolCallId)
+    const participant = run.participants[0]
+    sink.upsert({
+      id: existing?.id ?? `tool:${toolCallId}`,
+      kind: 'tool', toolCallId, name: 'Task',
+      status: participant?.status === 'failed' ? 'error'
+        : participant?.status === 'completed' || participant?.status === 'paused' ? 'success' : 'running',
+      args: existing?.args ?? '', output: existing?.output ?? '', details: '',
+      truncated: false, timestamp: existing?.timestamp ?? timestamp,
+      durationMs: participant?.durationMs ?? null, subagent: run
+    })
+    return true
+  }
+
   if (customType === SUBAGENT_SLASH_RESULT_TYPE) {
     const requestId = slashRequestId(details)
     const text = limitText(textFromContent(content)).text
@@ -139,7 +160,7 @@ export function projectSubagentCustomMessage(
     text
   )
   const completion = noticeType === 'completion'
-    ? projectSubagentCompletion(text)
+    ? participantsFromDetails(parseRecordValue(details))[0] ?? projectSubagentCompletion(text)
     : undefined
   upsertSubagentNotice(sink, {
     id: projectedCoordination?.id ?? (historicalIdentity === undefined
@@ -457,10 +478,12 @@ function participantsFromDetails(
     )
     return {
       index,
+      ...(stringValue(progress?.nativeTaskId) ?? stringValue(result?.nativeTaskId)
+        ? { nativeTaskId: (stringValue(progress?.nativeTaskId) ?? stringValue(result?.nativeTaskId))! } : {}),
       agent: stringValue(progress?.agent) ?? stringValue(result?.agent) ?? 'subagent',
       status,
       task: limitedSubagentText(stringValue(progress?.task) ?? stringValue(result?.task) ?? ''),
-      model: nullableLimitedSubagentText(nonEmptyStringValue(result?.model)),
+      model: nullableLimitedSubagentText(nonEmptyStringValue(progress?.model) ?? nonEmptyStringValue(result?.model)),
       usage,
       currentTool: stringValue(progress?.currentTool),
       currentPath: stringValue(progress?.currentPath),

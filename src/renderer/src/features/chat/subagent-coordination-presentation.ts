@@ -69,7 +69,11 @@ export function subagentCoordinationNoticePresentation(
 export function isInternalSubagentCoordinationTool(entry: KernelToolEntry): boolean {
   const name = toolLeafName(entry.name)
   const args = parseToolArgs(entry.args)
-  if (name === 'subagent_wait') return true
+  if (name === 'subagent_wait' || name === 'tasklist' || name === 'taskwait') return true
+  if (name === 'sessiontask') {
+    const action = stringValue(args?.action)
+    return action === 'list' || action === 'status' || action === 'result'
+  }
   if (name === 'subagent') {
     const action = stringValue(args?.action)
     return action === 'list' || action === 'status'
@@ -85,6 +89,22 @@ export function subagentCoordinationToolPresentation(
   if (isInternalSubagentCoordinationTool(entry)) return null
   const name = toolLeafName(entry.name)
   const args = parseToolArgs(entry.args)
+
+  if (name === 'sessiontask') {
+    const action = stringValue(args?.action)
+    const labels = action === 'send'
+      ? ['正在向其他对话发送消息', '已向其他对话发送消息', '发送对话消息失败', '发送对话消息']
+      : action === 'spawn'
+        ? ['正在创建后台对话任务', '已创建后台对话任务', '创建后台对话任务失败', '创建后台对话任务']
+        : action === 'cancel'
+          ? ['正在取消对话投递', '已取消对话投递', '取消对话投递失败', '取消对话投递']
+          : null
+    if (labels === null) return null
+    return {
+      text: statusText(entry, { running: labels[0]!, success: labels[1]!, error: labels[2]! }),
+      groupLabel: labels[3]!
+    }
+  }
 
   if (name === 'subagent_supervisor' || name === 'intercom') {
     const action = stringValue(args?.action)
@@ -108,8 +128,8 @@ export function subagentCoordinationToolPresentation(
     }
   }
 
-  if (name !== 'subagent') return null
-  const action = stringValue(args?.action)
+  if (name !== 'subagent' && name !== 'taskstop') return null
+  const action = name === 'taskstop' ? 'stop' : stringValue(args?.action)
   const labels = action === 'steer'
     ? ['正在调整子任务', '已调整子任务', '调整子任务失败', '调整子任务']
     : action === 'resume'
@@ -157,4 +177,16 @@ function parseToolArgs(value: string): Record<string, unknown> | null {
 
 function stringValue(value: unknown): string | null {
   return typeof value === 'string' ? value : null
+}
+
+export function subagentNoticeTitle(noticeType: KernelSubagentNoticeEntry['noticeType']): string {
+  if (noticeType === 'agent-message') return '其他对话消息'
+  if (noticeType === 'completion') return 'Subagent 完成通知'
+  if (noticeType === 'control') return 'Subagent 需要关注'
+  if (noticeType === 'steering') return 'Subagent 调整通知'
+  if (noticeType === 'request') return 'Subagent 请求'
+  if (noticeType === 'admin') return 'Subagent 管理'
+  if (noticeType === 'command') return 'Subagent 命令'
+  if (noticeType === 'watchdog-blocker') return 'Subagent Watchdog · 阻断'
+  return 'Subagent Watchdog · 关注'
 }

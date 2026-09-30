@@ -1,3 +1,5 @@
+import type { AgentCollaborationOperation, AgentCollaborationResult } from '../../shared/agent-collaboration-contract.ts'
+import { SessionCollaborationRuntime } from './session-collaboration-runtime.ts'
 import type {
   AppearanceSettings,
   GeneralSettings,
@@ -16,6 +18,7 @@ import type {
   KernelMessageImage,
   KernelMutationAck,
   KernelSnapshot,
+  KernelSubagentTranscript,
   KernelProjectState,
   KernelPromptAttachment,
   KernelProjectTrustChoice,
@@ -231,6 +234,44 @@ export type { RuntimeFactory, ProjectTrustController, WorkbenchKernelOptions } f
 
 export class WorkbenchKernel {
   private readonly createRuntime: RuntimeFactory
+  private readonly collaboration = new SessionCollaborationRuntime({
+    state: () => this.state,
+    activeContext: () => this.activeContext,
+    contexts: () => this.contexts,
+    sessions: () => this.sessionPointersByProject,
+    contextForSession: (projectPath, sessionFile) => this.contextBySessionKey.get(contextKey(projectPath, sessionFile)),
+    admissionOpen: () => !this.shutdownRequested && !this.stopAllRequested,
+    assertLaunchActive: () => this.assertLaunchActive(),
+    assertRegisteredProject: (path) => this.assertRegisteredProject(path),
+    createRuntime: (project, options) => this.createRuntime(project, options),
+    inspectProjectTrust: (path) => this.projectTrust.inspect(path),
+    validateSession: (pointer) => {
+      if (this.validateSession === undefined) throw new Error('Session validation is unavailable.')
+      return this.validateSession(pointer)
+    },
+    persistSession: (pointer) => this.persistSession(pointer),
+    registerPointer: (pointer) => {
+      const pointers = upsertSessionPointer(this.sessionPointersByProject.get(pointer.projectPath) ?? [], pointer)
+      this.sessionPointersByProject.set(pointer.projectPath, pointers)
+      if (this.state.activeProjectKey === pointer.projectPath) this.sessionPointers = pointers
+    },
+    registerContext: (context) => {
+      this.contexts.add(context)
+      this.contextByRuntime.set(context.runtime, context)
+      if (context.state.activeSessionKey !== null) this.contextBySessionKey.set(contextKey(context.projectPath, context.state.activeSessionKey), context)
+      context.unsubscribeRuntime = context.runtime.subscribe((event) => this.handleContextEvent(context, event))
+    },
+    registerIdentity: (context, key) => this.contextBySessionKey.set(contextKey(context.projectPath, key), context),
+    retireContext: (context, wasActive, navigationBefore) => this.retireContext(context, wasActive, navigationBefore),
+    allocateIdentity: () => ({ runtimeId: this.allocateRuntimeId(), runtimeGeneration: this.allocateRuntimeGeneration() }),
+    touchWarmUse: (context) => this.touchWarmUse(context),
+    cancelCompaction: (context) => this.compaction.cancel(context),
+    clearToolImages: (key) => this.toolImages.clearForSession(key),
+    projectNavigationState: (path) => this.projectNavigationState(path),
+    publishContextState: (context, navigationBefore, publication) => this.publishContextState(context, navigationBefore, publication),
+    acknowledge: () => this.acknowledge(),
+    now: () => this.now()
+  })
   private readonly listeners = new Set<(event: KernelEvent) => void>()
   private sessionActivityAtByKey = new Map<string, number | null>()
   private sessionStatisticsByKey = new Map<string, KernelSessionStatistics | null>()
@@ -251,7 +292,8 @@ export class WorkbenchKernel {
     hasPersistedPointer: (projectPath, sessionKey) =>
       (this.sessionPointersByProject.get(projectPath) ?? []).some((pointer) => pointer.sessionFile === sessionKey),
     withLaunchGate: (operation) => this.beginLaunch(operation),
-    stopContext: (context) => this.stopContext(context)
+    stopContext: (context) => this.stopContext(context, true),
+    hasPendingCollaboration: (context) => context.state.session.id !== null && this.collaboration.hasPending(context.state.session.id)
   })
   private readonly sessionPointersByProject = new Map<string, SessionPointer[]>()
   private readonly sessionActivityByProject = new Map<string, Map<string, number | null>>()
@@ -466,6 +508,22 @@ export class WorkbenchKernel {
   private readonly now: () => number
   private readonly readProcessMemory: (pid: number) => Promise<LinuxProcessMemoryReadResult>
   private readonly readSharedRuntimeHostPid: (() => number | null) | undefined
+
+  getAgentCollaboration(): AgentCollaborationResult {
+    return this.collaboration.getAgentCollaboration()
+  }
+
+  async agentCollaboration(operation: AgentCollaborationOperation, expectedSessionKey: string): Promise<AgentCollaborationResult> {
+    return this.collaboration.agentCollaboration(operation, expectedSessionKey)
+  }
+
+  async getSubagentTranscript(taskId: string, expectedSessionKey: string): Promise<KernelSubagentTranscript> {
+    return this.collaboration.getSubagentTranscript(taskId, expectedSessionKey)
+  }
+
+  async controlSubagent(taskId: string, expectedSessionKey: string, action: 'stop' | 'continue', message?: string): Promise<KernelMutationAck> {
+    return this.collaboration.controlSubagent(taskId, expectedSessionKey, action, message)
+  }
 
   getActiveProjectPath(): string {
     return configuredProject(this.state).path
@@ -1876,7 +1934,7 @@ export class WorkbenchKernel {
       if (targetContext === undefined) return
 
       this.assertInactiveRuntimeReclaimTarget(projectPath, sessionKey, targetContext)
-      await this.stopContext(targetContext)
+      await this.stopContext(targetContext, true)
       reclaimed = true
     })
     return reclaimed
@@ -2275,31 +2333,7 @@ export class WorkbenchKernel {
       subagent: copySubagentSettings(this.state.subagent),
       fastExtensionLoading: this.state.general.fastExtensionLoading
     })
-    const context: RuntimeContext = {
-      runtimeId: this.allocateRuntimeId(),
-      runtimeGeneration: this.allocateRuntimeGeneration(),
-      lastWarmUseAt: this.now(),
-      projectPath: project.path,
-      runtime,
-      state: runtimeSessionState(this.state),
-      commandEntries: [],
-      unsubscribeRuntime: null,
-      stopRequested: false,
-      launchCommitting: false,
-      provisionalSession: null,
-      provisionalCommit: null,
-      provisionalSettled: false,
-      sessionUsageRefreshInFlight: false,
-      sessionUsageRefreshRequested: false,
-      pendingSessionName: null,
-      sessionNameOperation: null,
-      compactionRevision: 0,
-      compactionLifecycle: null,
-      askInteraction: null,
-      extensionCommandInvocation: null,
-      extensionDialogInteraction: null,
-      deferredEvents: null
-    }
+    const context = this.collaboration.createContext(project.path, runtime, runtimeSessionState(this.state))
     this.contexts.add(context)
     this.contextByRuntime.set(runtime, context)
     if (launchOptions.sessionFile !== undefined) {
@@ -3047,58 +3081,11 @@ export class WorkbenchKernel {
     if (firstError !== null) throw firstError
   }
 
-  private async stopContext(context: RuntimeContext): Promise<void> {
-    if (!this.contexts.has(context)) return
-    // A successful provisional persistence is the durable commit point. Keep the
-    // owning Context alive until its continuation synchronously reconciles the
-    // project registries, then stop/remove it.
-    const provisionalCommit = context.provisionalCommit
-    if (provisionalCommit !== null) await provisionalCommit
-    if (!this.contexts.has(context)) return
-    this.compaction.cancel(context)
-    context.askInteraction = null
-    context.extensionCommandInvocation = null
-    context.extensionDialogInteraction = null
-    context.state = { ...context.state, extensionDialog: null }
-    if (typeof context.state.activeSessionKey === 'string') {
-      this.toolImages.clearForSession(context.state.activeSessionKey)
-    }
-    const wasActive = this.activeContext === context
-    const navigationBeforeStopping = this.projectNavigationState(context.projectPath)
-    context.stopRequested = true
-    context.sessionNameOperation?.controller.abort()
-    context.pendingSessionName = null
-    context.sessionNameOperation = null
-    context.state = {
-      ...context.state,
-      runtime: toKernelRuntime('stopping', context.runtime.getState())
-    }
-    this.publishContextState(context, navigationBeforeStopping, 'snapshot')
-    try {
-      await context.runtime.stop()
-    } catch (error) {
-      // Retain ownership when stop fails so a potentially live process stays tracked.
-      // Publish crashed navigation, clear the in-progress stop flag for retry, and throw.
-      const navigationBeforeCrash = this.projectNavigationState(context.projectPath)
-      context.stopRequested = false
-      context.state = {
-        ...context.state,
-        extensionDialog: null,
-        runtime: toKernelRuntime('crashed', context.runtime.getState(), errorMessage(error))
-      }
-      this.publishContextState(context, navigationBeforeCrash, 'snapshot')
-      throw error
-    }
-    context.unsubscribeRuntime?.()
-    context.unsubscribeRuntime = null
-    // Capture while still `stopping` so the stopping→stopped/removed transition is visible.
-    const navigationBeforeRemoval = this.projectNavigationState(context.projectPath)
-    context.state = {
-      ...context.state,
-      commands: createCommandCatalog(),
-      advisor: { ...UNAVAILABLE_ADVISOR_STATE },
-      runtime: toKernelRuntime('stopped', context.runtime.getState())
-    }
+  private async stopContext(context: RuntimeContext, hibernating = false): Promise<void> {
+    await this.collaboration.stopContext(context, hibernating)
+  }
+
+  private retireContext(context: RuntimeContext, wasActive: boolean, navigationBeforeRemoval: ProjectNavigationState): void {
     this.contexts.delete(context)
     this.contextByRuntime.delete(context.runtime)
     for (const [key, candidate] of this.contextBySessionKey) {
@@ -3481,7 +3468,10 @@ export class WorkbenchKernel {
         this.sessionActivityAtByKey = activities
         this.sessionStatisticsByKey = statisticsByKey
       }
-      if (stillOwned) this.publishContextState(context, navigationBefore, 'snapshot')
+      if (stillOwned) {
+        this.publishContextState(context, navigationBefore, 'snapshot')
+        if (context.state.session.settled && context.state.session.id !== null) this.collaboration.ready(context.state.session.id)
+      }
       else this.publishProjectNavigationChange(context.projectPath, navigationBefore)
     } catch (error) {
       if (!this.contexts.has(context) || context.provisionalSession !== provisional) return
@@ -3993,6 +3983,11 @@ export class WorkbenchKernel {
 
   private deliverContextEvent(context: RuntimeContext, event: RuntimeHostEvent): void {
     if (!this.contexts.has(context)) return
+    if (event.type === 'agent-collaboration-request') {
+      this.collaboration.handleRequest(context, event)
+      return
+    }
+    if (event.type === 'diagnostic' && event.kind !== 'stderr' && context.collaborationRunStartIndex !== undefined) context.collaborationRunError = event.message
     const previous = context.state
     const stopping = this.stopAllRequested || context.stopRequested || previous.runtime.status === 'stopping'
     if (event.type === 'pi-event') {
@@ -4021,6 +4016,7 @@ export class WorkbenchKernel {
     context.state = reduceRuntimeSessionEvent(previous, event, context.runtime.getState())
     if (event.type === 'activity-settled') {
       context.state = this.withContextSessionActivity(context, context.state)
+      if (context.state.session.id !== null) this.collaboration.ready(context.state.session.id)
     }
     if (
       (event.type === 'process-exit' || (event.type === 'diagnostic' && event.kind === 'process')) &&
@@ -4029,6 +4025,7 @@ export class WorkbenchKernel {
       const message = event.type === 'process-exit'
         ? formatExitError(event.code, event.signal)
         : event.message
+      if (context.state.session.id !== null) this.collaboration.interrupted(context.state.session.id, message || 'Runtime terminated.')
       this.compaction.fail(context, message || 'Runtime process terminated during compaction.')
       this.naming.cancel(context.runtime)
       context.extensionCommandInvocation = null
@@ -4058,6 +4055,7 @@ export class WorkbenchKernel {
       return
     }
     if (event.type === 'agent_settled' && context.provisionalSession !== null) {
+      this.collaboration.settled(context)
       context.provisionalSettled = true
       this.beginContextProvisionalCommit(context)
       return
@@ -4104,6 +4102,7 @@ export class WorkbenchKernel {
       this.beginContextProvisionalCommit(context)
     }
     if (event.type === 'agent_settled') {
+      this.collaboration.settled(context)
       this.naming.ensureQueued(context)
       this.naming.begin(context)
     }

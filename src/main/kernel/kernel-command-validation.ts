@@ -1,3 +1,4 @@
+import { isAgentCollaborationOperation } from '../../shared/agent-collaboration-contract.ts'
 import { isAbsolute } from 'node:path'
 
 import {
@@ -25,6 +26,7 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
   if (!isRecord(value) || typeof value.type !== 'string') return false
   if (
     value.type === 'kernel.get-state' ||
+    value.type === 'kernel.get-agent-collaboration' ||
     value.type === 'kernel.get-runtime-memory-diagnostics' ||
     value.type === 'kernel.get-last-assistant-final-answer' ||
     value.type === 'kernel.list-system-fonts' ||
@@ -41,6 +43,18 @@ export function isKernelCommand(value: unknown): value is KernelCommand {
     value.type === 'kernel.update-pi-packages'
   ) {
     return Object.keys(value).length === 1
+  }
+  if (value.type === 'kernel.agent-collaboration') {
+    return isAgentCollaborationOperation(value.operation) && isSessionPreviewSessionKey(value.expectedSessionKey) && Object.keys(value).length === 3
+  }
+  if (value.type === 'kernel.get-subagent-transcript' || value.type === 'kernel.control-subagent') {
+    if (typeof value.taskId !== 'string' || value.taskId.length === 0 || value.taskId.length > 256 || value.taskId.includes('\0') ||
+      !isSessionPreviewSessionKey(value.expectedSessionKey)) return false
+    if (value.type === 'kernel.get-subagent-transcript') return Object.keys(value).length === 3
+    return (value.action === 'stop' || value.action === 'continue') &&
+      (value.message === undefined || typeof value.message === 'string' && value.message.trim().length > 0 && value.message.length <= 30_000 && !value.message.includes('\0')) &&
+      (value.action !== 'stop' || value.message === undefined) &&
+      Object.keys(value).length === (value.message === undefined ? 4 : 5)
   }
   if (value.type === 'kernel.add-project') {
     if (Object.keys(value).length === 1) return true

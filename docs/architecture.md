@@ -11,7 +11,7 @@ Workbench Kernel (Electron Main)
           -> Node IPC（纯数据命令、结果与事件）
 Pi Runtime 子进程（所有 Session 共用一个；out/main/pi-runtime-host.js）
     -> SharedPiHost / SharedPiRuntime
-    -> SharedPiAgentSession / Pi 0.83.0 SDK（每 Session 独立 driver）
+    -> SharedPiAgentSession / Pi 0.99.0 SDK（每 Session 独立 driver）
     -> pi-gui-task-notify / bounded local request
 DesktopNotificationBroker（Electron Main）
     -> notify-send / default action
@@ -147,10 +147,10 @@ Shared Runtime 没有独立 RPC PID，内存诊断不能把 Main 总进程内存
 | Conversation 内容 | Pi session 文件 | 由 Pi 管理 |
 | Pi credential/provider auth | Pi | GUI 不回读凭据；认证与刷新由 Pi 管理 |
 | 自定义 Provider/Model 配置与模型单价 | Pi `models.json` | GUI 只编辑官方配置；密钥只写不回读；显式拉价后保存 USD/百万 token 单价 |
-| Subagent Package 与 Extension 启停 | Pi `settings.json` `packages` | GUI 只安装固定 Package，并通过官方资源过滤控制其 Extension 是否加载 |
-| Subagent 运行参数 | Workbench Kernel | XDG config；只在新建或显式重载 Runtime 时通过 `PI_SUBAGENT_MAX_DEPTH` 环境变量生效 |
-| Subagent Agent 定义 | `pi-subagents` Markdown frontmatter | Main 只管理用户级 `~/.agents/` 与当前项目 `.pi/agents/`；内置定义只读 |
-| Subagent Agent 启停 | `pi-subagents` `settings.subagents.agentOverrides` | 用户级写入 Pi `settings.json`，项目级写入 `.pi/settings.json`；项目级优先 |
+| 内建 Subagent 执行 | app-owned `pi-gui-native-agents` / Pi SDK | 每父 Session 独立执行 owner；无需安装 pi-subagents |
+| Subagent 运行参数 | Workbench Kernel | XDG config；最大嵌套深度在新建或显式重载 Runtime 时传入 native owner |
+| Subagent Agent 定义 | 内建 worker/scout/reviewer 与 Agent Markdown frontmatter | Main 管理用户级 `~/.agents/` 与当前项目 `.pi/agents/`；内建定义只读，可同名覆盖 |
+| Subagent Agent 启停 | Pi `settings.subagents.agentOverrides` | 用户级写入 Pi `settings.json`，项目级写入 `.pi/settings.json`；项目级优先 |
 | Magic Context 安装与 Extension 启停 | Pi `settings.json` `packages` | GUI 只展示真实 Package/资源过滤状态；配置与健康继续由上游 setup/doctor 负责；当前 `/ctx-status` 依赖 TUI custom UI，不进入 GUI 命令目录 |
 | 历史 Advisor advisory | Pi session 中既有的固定 custom message | Kernel 继续严格归一化为只读 Conversation entry；当前产品不再提供安装、启停或 roster 控制面 |
 | Project、启动/会话等工作区设置 | Workbench Kernel | XDG config |
@@ -159,7 +159,7 @@ Shared Runtime 没有独立 RPC PID，内存诊断不能把 Main 总进程内存
 | Runtime 瞬时状态 | Workbench Kernel | 仅内存 |
 | 历史 Prompt 分支与活动 leaf | Pi Session Tree / `get_tree` | 由 Pi session 文件管理；GUI 只执行受控 `navigate_tree` 并刷新真实分支 |
 | Git repository 状态 | 当前注册 Project 对应的 Git repository | Main 内 `simple-git` 即时读取；Renderer 不提交 cwd、命令或 raw Git 参数，不另建 Git 数据库 |
-| Package/Extension/Skill/Prompt 静态 inventory | 已验证 Pi 0.83.0 package root 与 Pi settings | 离线 child 只读投影；不安装 Package、不执行 Extension factory、不表示当前 Runtime effective state |
+| Package/Extension/Skill/Prompt 静态 inventory | 已验证 Pi 0.99.0 package root 与 Pi settings | 离线 child 只读投影；不安装 Package、不执行 Extension factory、不表示当前 Runtime effective state |
 
 GUI 不建立 Conversation 数据库，也不把 renderer 投影当作对话事实来源。
 
@@ -171,24 +171,31 @@ typed IPC 返回每个命中模型的匹配键、四项单价及未命中模型�
 Renderer 不直接联网，也不建立价格数据库或后台自动刷新。保存后的单价由下一次新建或显式重载的
 Runtime 使用，供 Pi 计算后续请求费用；不改写既有 Session 中已经记录的历史 cost。
 
-Subagent 适配固定使用 `pi-subagents`。拓展页以独立的“已适配拓展”区域承载该
-Package 的显式安装和启停；Subagent 页不重复安装或启停入口，而是管理 Agent 定义和
-运行参数。“关闭”保留 Package 安装，只把对应 Extension resource 在 Pi 官方
-PackageSource 中禁用。
+Subagent 由 app-owned `pi-gui-native-agents` 执行，使用同一 Pi 0.99 SDK、模型注册与
+SessionManager。`Task` 固定后台运行，`TaskWait` / `TaskList` 读取真实状态，`TaskStop` 停止
+精确任务；继续任务沿用 child Session 的原历史。旧 `async: false` 定义明确报错，设置页提供
+保存为后台执行的动作。已有 pi-subagents Package 保留，但它的执行资源在此 Runtime 的
+SettingsManager 临时 override 中过滤，不改写用户 Package 配置。
 
-Agent 管理通过窄 typed IPC 读写 `pi-subagents` 实际发现的 Markdown 定义。Renderer 只接收
-规范化字段，不取得文件路径或任意文件 API；Main 只允许用户级 `~/.agents/*.md` 与当前
-canonical Project 的 `.pi/agents/*.md`。内置 Package 文件保持只读，但界面允许直接修改：
-首次保存时在用户级或项目级创建同名覆盖，“恢复默认”删除同名覆盖。GUI 只编辑已经接通的
-基础与高级字段，保存时保留未由 GUI 管理的 frontmatter。单 Agent 启停复用上游正式的
-`agentOverrides.<name>.disabled`，关闭后从 Runtime 发现与可执行列表中移除；不删除定义文件。
-Agent 列表按 6 项分页，并支持作用域与启动状态筛选。多选模式一次只批量修改一个公共字段，
-不把全部配置同时铺在页面上。
+Agent 管理通过窄 typed IPC 读写用户级 `~/.agents/*.md` 与当前 canonical Project 的
+`.pi/agents/*.md`。内建 worker、scout、reviewer 只读，首次保存创建用户或项目级同名覆盖；
+其他已有 Package 定义仍可发现。Renderer 只接收规范化字段，不取得任意文件 API。
+保存保留未由 GUI 管理的 frontmatter，启停沿用 `agentOverrides.<name>.disabled` 的项目优先
+规则。最大嵌套深度由新建或显式 reload 的 Runtime 使用；Agent 定义在下一次任务启动时读取，
+工具描述中的角色清单由新建或重载刷新，不静默重启已有 Session。
 
-GUI 运行设置只持久化最大嵌套深度；`pi-subagents` 通过该深度上限限制嵌套委派。只有在 Package
-已安装且 Extension 已开启时，Workbench Kernel 才把最大深度作为
-`PI_SUBAGENT_MAX_DEPTH` 环境变量加入新 Runtime。安装、启停或参数变化都不静默重启
-已有 Session；Agent 定义修改同样由用户新建或显式 reload 后进入 Runtime。
+子任务元数据追加到父 Pi Session 的 custom entry，child transcript 由 Pi SessionManager
+管理，文件位于父会话旁的 `subagents/<parentSessionId>/`。Kernel 以 taskId 与
+expectedSessionKey 校验历史读取和停止/继续命令，再归一化成现有 Conversation DTO。
+父 Runtime 重载后，原运行任务恢复为暂停，历史可读，只有显式继续才重新执行。
+子任务等待嵌套任务及其报告触发的后续回答收齐后回传，再释放 child SDK driver；
+继续时从原 JSONL 重开，避免留下已完成的执行实例。
+
+独立对话协作由 `SessionTask` 的 list / spawn / send / status / result / cancel 进入 Kernel
+coordinator。发送者绑定所属 RuntimeContext，后台 spawn 不改变前台选择；忙碌目标按投递排队，
+结果只取该投递所属 run 的回答。完成通知最多回传一次，不递归产生完成通知。投递队列仅在
+内存中，停止或崩溃明确中断，不自动重发（D-099）。Task Workspace 仍保持 singleSession
+约束，拒绝在该工作区创建第二个独立对话。
 
 Magic Context 作为固定但可选的上下文引擎适配。安装和启停复用 Pi PackageSource；
 “已开启”只证明 Extension resource 会在新 Runtime 中加载，不证明 historian、embedding、
@@ -216,12 +223,13 @@ Workbench Kernel 将 Pi message content 按原始顺序投影成 `message`、`th
 
 Kernel 在活动开始时记录当前 run 的 entry 起点，并只以 `agent_settled` 结束该边界。Renderer 对活动 run 线性展示 thinking 与工具状态；run settled 后，把 thinking 和工具项折叠到该轮最终回答上方，展开时仍使用原始顺序。文件操作摘要只从有明确结构化路径的工具参数提取，不猜测 `bash` 的文件副作用。
 
-固定的 `pi-subagents` 显示适配仍走同一 Conversation projector。Main 只在 `subagent`
-工具的结构化 `details` 中提取模式、run/async identity，以及每个参与 Agent 的任务、状态、
+原生 Task 与既有 `pi-subagents` 历史共用 Conversation projector。Main 从
+结构化 `details` 与 app-owned 隐藏进度中提取模式、run/async identity，以及每个参与 Agent 的任务、状态、
 实际模型、input/output/cache read/cache write token、USD 费用、当前工具/路径、轮次、工具数、
-耗时、错误、最终输出与显式 file-only output reference；原始 details、child messages、child
-transcript 和普通 artifact 清单不进入 Renderer，输出引用也只包含 Agent、绝对路径、展示大小
-与行数 metadata，不读取文件正文。前台运行保留为同一 `toolCallId` 的专用过程项；后台完成和
+耗时、错误、最终输出与显式 file-only output reference；原始 details、child messages 与普通 artifact 清单不进入 Renderer；原生 child
+transcript 只通过显式读取命令投影为 Conversation DTO，当前只读文字内容，不复用父对话的图片接口。
+旧记录的输出引用只包含 Agent、绝对路径、展示大小与行数 metadata，不读取文件正文。
+运行任务保留为同一 `toolCallId` 的专用过程项；后台完成和
 需要关注等只接受固定 `customType` 且 `display: true` 的 Pi custom message，投影成严格归一化
 通知。普通 completion 通知在 Timeline 只渲染轻量可点击的完成任务胶囊；实际模型已报告时，
 胶囊在主标签后显示模型 ID 的最后一段，完整 provider/model 保留在 tooltip 与运行摘要，未报告时
@@ -236,9 +244,10 @@ run participant 的具体 request 替代泛化 attention，成功 supervisor rep
 `subagent list/status`、`subagent_wait` 与 supervisor/intercom 的 pending/status/list 属于内部发现或
 轮询，不进入 Timeline。supervisor reply 与 steer/resume/interrupt/stop 等有意义动作保留简洁状态，
 原始参数留在展开技术详情。Main 只按固定 completion 首行协议建立独立详情目标，GUI 不用通知
-Markdown 强行关联原 run，也不直接绕过主 Agent 回复子代理。
+Markdown 强行关联原 run。原生任务以 nativeTaskId 提供任务详情中的历史阅读、停止与继续；
+不具备该身份的既有记录继续只读显示。
 
-Composer 附件沿 Pi 0.83.0 的交互式 TUI 与 RPC 边界处理：普通文件只把 `@路径` 放入消息，由 Agent 使用 Pi 原生 `read` 工具按需读取；不在首条 prompt 中内联文件正文。`read` 的文本结果遵循 Pi 的 2,000 行或 50 KiB 截断边界，并可用 offset/limit 继续。图片转换为 RPC `images` 中的 `{ type: "image", mimeType, data }`，直接使用原生多模态输入。本地/WSL 系统文件选择由 Main 取得路径，显式拖放由 Renderer 通过 Electron `webUtils.getPathForFile` 取得路径；普通文件只读取小段签名头用于区分图片，图片在进入 IPC/RPC 前满足 2000×2000 与 4.5 MiB base64 边界。
+Composer 附件沿 Pi 0.99.0 的交互式 TUI 与 RPC 边界处理：普通文件只把 `@路径` 放入消息，由 Agent 使用 Pi 原生 `read` 工具按需读取；不在首条 prompt 中内联文件正文。`read` 的文本结果遵循 Pi 的 2,000 行或 50 KiB 截断边界，并可用 offset/limit 继续。图片转换为 RPC `images` 中的 `{ type: "image", mimeType, data }`，直接使用原生多模态输入。本地/WSL 系统文件选择由 Main 取得路径，显式拖放由 Renderer 通过 Electron `webUtils.getPathForFile` 取得路径；普通文件只读取小段签名头用于区分图片，图片在进入 IPC/RPC 前满足 2000×2000 与 4.5 MiB base64 边界。
 
 Pi session 仍保存完整用户消息和 image content block。Kernel 对 Renderer 只投影文件名、路径和类型摘要，不把附件正文或图片 base64 放入 `KernelState`；恢复历史和实时事件使用同一投影。用户消息中的图片附件直接占据 Timeline 内联缩略图位置；缩略图接近可视区域后，Renderer 才通过窄 typed command 按需读取对应 session 消息中的 `ImageContent`，并只保存在该图片组件的短生命周期 state 中。点击缩略图复用同一 payload 打开灯箱；Session/message/attachment identity 变化会使旧异步结果失效并关闭 viewer。附件变化不能走纯文本 append patch，必须回退全量状态以避免静默丢失附件。
 
@@ -258,7 +267,7 @@ Timeline 初始只接收并挂载最近 60 个 settled turn 与完整 active run
 
 历史 Prompt 原位编辑沿用 Pi TUI Tree 的事实与顺序，不建立第二套分支协议：Renderer 只对当前可见活动分支中的纯文本 user turn显示编辑入口；Main 将该 turn fail-fast 解析为 Pi active path 上的 entry ID，调用 `navigate_tree` 后返回 revision acknowledgement；Renderer 再复用现有 `prompt`。导航成功而发送失败时保留草稿并只重试 prompt；Session identity 变化、Runtime busy、图片消息或无法唯一解析时明确拒绝。旧分支继续由 Pi Session Tree 保存，GUI 不改写 JSONL。
 
-P3 的 Git 与 Capability Inventory 当前只提供 Main 侧基础。Git typed bridge 只接受已注册的 Project identity，ancestor repository 需要绑定当前 root 与 status revision 的内存 trust challenge；diff/mutation 继续使用 service snapshot fence。Capability Inventory 每次 spawn 前复用现有 Pi executable、精确 0.83.0 与 package-root export 验证，并在无网络、无 Extension factory 的 child 中生成有界静态投影。两者尚未形成 Git 工作台或 Settings Capability Center，不能视为 P3 已启动或完成。
+P3 的 Git 与 Capability Inventory 当前只提供 Main 侧基础。Git typed bridge 只接受已注册的 Project identity，ancestor repository 需要绑定当前 root 与 status revision 的内存 trust challenge；diff/mutation 继续使用 service snapshot fence。Capability Inventory 每次 spawn 前复用现有 Pi executable、精确 0.99.0 与 package-root export 验证，并在无网络、无 Extension factory 的 child 中生成有界静态投影。两者尚未形成 Git 工作台或 Settings Capability Center，不能视为 P3 已启动或完成。
 
 ## Runtime 状态机
 
@@ -275,9 +284,9 @@ stopped -> starting -> ready -> running -> ready -> stopping -> stopped
 
 持久 Session、managed RuntimeContext 与 Renderer 工作集是三个不同生命周期。休眠停止一个非前台 Pi Runtime，同时保留 Session pointer、导航 identity 与 transcript；再次选择只读取同一 Session 的静态历史，首个明确依赖 Runtime 的操作才按该 identity 重新启动。Renderer 的 Chromium native allocation 不属于 Runtime 休眠直接回收的内存。
 
-每个 managed Session Runtime 都显式加载 app-owned `pi-gui-runtime-quiescence` Extension。Main 通过隐藏命令和 nonce-correlated `setStatus` 取得 provider 协调结果，通过 `RuntimeHost.getLoadedExtensions` 取得完整、脱敏、版本化的 loaded-Extension inventory；Shared driver 与外部 RPC 探针分别适配当前 Pi 0.83.0 的 inventory 边界。protocol、complete/loading 一致性、capability、数量、路径边界或 owner discovery 任一异常都 fail-closed，不允许回退扫描 Timeline 或猜测 Extension 状态。
+每个 managed Session Runtime 都显式加载 app-owned `pi-gui-runtime-quiescence` Extension。Main 通过隐藏命令和 nonce-correlated `setStatus` 取得 provider 协调结果，通过 `RuntimeHost.getLoadedExtensions` 取得完整、脱敏、版本化的 loaded-Extension inventory；Shared driver 与外部 RPC 探针分别适配当前 Pi 0.99.0 的 inventory 边界。protocol、complete/loading 一致性、capability、数量、路径边界或 owner discovery 任一异常都 fail-closed，不允许回退扫描 Timeline 或猜测 Extension 状态。
 
-安全休眠由 coordinator 和每个后台 owner 共同执行 generation-fenced `prepare -> commit -> stop -> release`。coordinator 为同一 Session lifecycle 与 attempt 生成 exact token；Magic Context、pi-subagents、MCP adapter、CPA Responses WebSocket、Multi Advisor、ask 与 task-notify 等 owner 必须先同步关闭新 mutation admission，再确认已经进入的工作全部 drain。busy owner 快速拒绝且不取消原任务；stop 或 rollback 失败只允许用同一 generation、attempt 与 token 重试，不能用新 lease 覆盖仍冻结的 provider。
+安全休眠由 coordinator 和每个后台 owner 共同执行 generation-fenced `prepare -> commit -> stop -> release`。coordinator 为同一 Session lifecycle 与 attempt 生成 exact token；Magic Context、内建 native agents、仍加载的 pi-subagents、MCP adapter、CPA Responses WebSocket、Multi Advisor、ask 与 task-notify 等 owner 必须先同步关闭新 mutation admission，再确认已经进入的工作全部 drain。busy owner 快速拒绝且不取消原任务；stop 或 rollback 失败只允许用同一 generation、attempt 与 token 重试，不能用新 lease 覆盖仍冻结的 provider。
 
 自动回收每分钟运行一次。后台 Runtime 连续 5 分钟未被激活或观察到活动后才进入候选，并始终保留前台 Runtime 与最近使用的一个 quiescent 后台 warm Runtime。Kernel 在 prepare 前、commit 前和 launch/stop 串行 gate 内重检 persisted identity、foreground、Runtime generation、ready/settled、provisional、compaction、queued messages、naming、usage refresh 与 stop 状态；任何竞态、超时、未知 owner 或 provider 拒绝都只跳过本轮。
 

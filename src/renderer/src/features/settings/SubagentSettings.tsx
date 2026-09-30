@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
-  SUBAGENT_PACKAGE_NAME,
-  type KernelInstalledPackage,
-  type KernelPiPackageInstallJob,
   type KernelState,
   type KernelSubagentDefinition,
   type KernelSubagentEditableScope,
@@ -22,11 +19,6 @@ import { unknownErrorMessage as errorMessage } from '../../unknown-error-message
 import { SettingsField } from './SettingsField'
 import { useSettingsConfirm } from './SettingsConfirmDialog'
 import { SettingsPageHeading } from './SettingsPageHeading'
-import { PLUGIN_RELOAD_PENDING_STATUS } from './plugin-reload-status'
-import {
-  AdaptedExtensionPackageControl,
-  type AdaptedPackageState
-} from './AdaptedExtensionPackageControl'
 
 const SUBAGENT_PAGE_SIZE = 6
 
@@ -39,7 +31,6 @@ type SubagentBatchField =
   | 'thinking'
   | 'inheritProjectContext'
   | 'inheritSkills'
-  | 'defaultAsync'
   | 'maxSubagentDepth'
 
 type SubagentSettingsProps = {
@@ -47,15 +38,6 @@ type SubagentSettingsProps = {
   activeProjectKey: string | null
   availableModels: KernelState['availableModels']
   busy: boolean
-  /** Package install/enable actions also wait for background package jobs. */
-  packageBusy: boolean
-  /** pi-subagents changed on this settings visit; open Runtimes still use what they loaded. */
-  reloadPending: boolean
-  packageInstallJobs: KernelPiPackageInstallJob[]
-  onListPiPackages: () => Promise<KernelInstalledPackage[]>
-  onInstallPiDevPackage: (name: string) => Promise<void>
-  onSetSubagentEnabled: (enabled: boolean) => Promise<void>
-  onOpenExternal: (url: string) => Promise<void>
   onListSubagentDefinitions: () => Promise<KernelSubagentDefinition[]>
   onSaveSubagentDefinition: (
     definition: KernelSubagentDefinitionInput
@@ -82,13 +64,6 @@ export function SubagentSettings({
   activeProjectKey,
   availableModels,
   busy,
-  packageBusy,
-  reloadPending,
-  packageInstallJobs,
-  onListPiPackages,
-  onInstallPiDevPackage,
-  onSetSubagentEnabled,
-  onOpenExternal,
   onListSubagentDefinitions,
   onSaveSubagentDefinition,
   onSetSubagentDefinitionEnabled,
@@ -97,7 +72,6 @@ export function SubagentSettings({
   onDirtyChange
 }: SubagentSettingsProps): React.JSX.Element {
   const { confirm, confirmDialog } = useSettingsConfirm()
-  const [packageState, setPackageState] = useState<AdaptedPackageState>('loading')
   const [definitions, setDefinitions] = useState<KernelSubagentDefinition[]>([])
   const [definitionsLoading, setDefinitionsLoading] = useState(true)
   const [definitionsError, setDefinitionsError] = useState<string | null>(null)
@@ -122,10 +96,8 @@ export function SubagentSettings({
   const editorBackRef = useRef<HTMLButtonElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const listSubagentDefinitionsRef = useRef(onListSubagentDefinitions)
-  const settingsDisabled = busy || packageState !== 'enabled'
-  const managerDisabled = packageState === 'loading' ||
-    packageState === 'not-installed' ||
-    packageState === 'error'
+  const settingsDisabled = busy
+  const managerDisabled = definitionsLoading
   const effectiveDefinitions = useMemo(
     () => effectiveSubagentDefinitions(definitions),
     [definitions]
@@ -315,13 +287,13 @@ export function SubagentSettings({
     setActionError(null)
   }
 
-  async function saveDefinition(): Promise<void> {
-    if (draft === null) return
-    if (!/^[a-z0-9][a-z0-9-]{0,63}$/u.test(draft.name)) {
+  async function saveDefinition(input: KernelSubagentDefinitionInput | null = draft): Promise<void> {
+    if (input === null) return
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/u.test(input.name)) {
       setActionError('名称只能包含小写字母、数字和连字符，并且必须以字母或数字开头。')
       return
     }
-    if (draft.description.trim().length === 0) {
+    if (input.description.trim().length === 0) {
       setActionError('请填写智能体用途。')
       return
     }
@@ -329,14 +301,14 @@ export function SubagentSettings({
     setActionError(null)
     try {
       const nextDefinitions = await onSaveSubagentDefinition({
-        ...draft,
-        description: draft.description.trim()
+        ...input,
+        description: input.description.trim()
       })
       setDefinitions(nextDefinitions)
       const saved = nextDefinitions.find((definition) =>
         definition.editable &&
-        definition.scope === draft.scope &&
-        definition.name === draft.name
+        definition.scope === input.scope &&
+        definition.name === input.name
       ) ?? null
       selectDefinitionImmediately(saved)
     } catch (saveError) {
@@ -575,7 +547,6 @@ export function SubagentSettings({
     { value: 'thinking', label: '思考强度' },
     { value: 'inheritProjectContext', label: '继承项目指令' },
     { value: 'inheritSkills', label: '继承 Skills' },
-    { value: 'defaultAsync', label: '默认执行方式' },
     { value: 'maxSubagentDepth', label: '单智能体嵌套上限' }
   ]
   const batchValueOptions = batchField === 'scope'
@@ -603,13 +574,7 @@ export function SubagentSettings({
                 { value: 'enabled', label: '开启' },
                 { value: 'disabled', label: '关闭' }
               ]
-            : batchField === 'defaultAsync'
-              ? [
-                  { value: 'unset', label: '调用时决定' },
-                  { value: 'foreground', label: '前台执行' },
-                  { value: 'background', label: '后台执行' }
-                ]
-              : [
+            : [
                   { value: 'unset', label: '使用全局上限' },
                   { value: '0', label: '禁止继续委派' },
                   { value: '1', label: '最多 1 层' },
@@ -619,39 +584,9 @@ export function SubagentSettings({
 
   return (
     <>
-      <SettingsPageHeading
-        title="子智能体"
-        className="settings-subagent-heading"
-        status={reloadPending ? PLUGIN_RELOAD_PENDING_STATUS : null}
-      >
-        <span className="settings-subagent-status" data-state={packageState}>
-          {packageState === 'enabled'
-            ? '已安装并开启'
-            : packageState === 'disabled'
-              ? '已安装，未开启'
-              : packageState === 'not-installed'
-                ? '尚未安装'
-                : packageState === 'loading'
-                  ? '读取中'
-                  : '状态异常'}
-        </span>
+      <SettingsPageHeading title="子智能体" className="settings-subagent-heading">
+        <span className="settings-subagent-status" data-state="enabled">内建</span>
       </SettingsPageHeading>
-
-      <AdaptedExtensionPackageControl
-        heading="扩展"
-        idPrefix="settings-subagent-package"
-        packageName={SUBAGENT_PACKAGE_NAME}
-        detailUrl="https://pi.dev/packages/pi-subagents"
-        description="为 Pi 提供可委派的子智能体"
-        notice="安装与启停在新建或重新载入对话后生效"
-        busy={packageBusy}
-        packageInstallJobs={packageInstallJobs}
-        onListPiPackages={onListPiPackages}
-        onInstallPiDevPackage={onInstallPiDevPackage}
-        onSetEnabled={onSetSubagentEnabled}
-        onOpenExternal={onOpenExternal}
-        onStateChange={setPackageState}
-      />
 
       <section className="settings-group" aria-labelledby="settings-subagent-agents-heading">
         <div className="settings-group-heading-row">
@@ -939,6 +874,12 @@ export function SubagentSettings({
                 </div>
 
                 <div className="settings-subagent-editor-body">
+                  {draft.defaultAsync === false ? (
+                    <div>
+                      <p className="settings-feedback settings-feedback-error" role="alert">这个定义使用旧版前台执行设置，内建子任务无法运行此定义。改为后台执行会保存当前定义。</p>
+                      <button type="button" className="settings-link-button" disabled={formDisabled} onClick={() => void saveDefinition({ ...draft, defaultAsync: true })}>使用后台执行</button>
+                    </div>
+                  ) : null}
                   {editorMode === 'basic' ? (
                     <>
                       <div className={
@@ -1141,25 +1082,10 @@ export function SubagentSettings({
                         </SettingsField>
                       </div>
                       <div className="settings-subagent-field-grid">
-                        <SettingsField label="默认执行方式" htmlFor="settings-subagent-async">
-                          <Select
-                            id="settings-subagent-async"
-                            value={draft.defaultAsync === null
-                              ? 'unset'
-                              : draft.defaultAsync ? 'background' : 'foreground'}
-                            disabled={formDisabled}
-                            groups={[{
-                              options: [
-                                { value: 'unset', label: '调用时决定' },
-                                { value: 'foreground', label: '前台执行' },
-                                { value: 'background', label: '后台执行' }
-                              ]
-                            }]}
-                            onValueChange={(value) => updateDraft({
-                              defaultAsync: value === 'unset' ? null : value === 'background'
-                            })}
-                          />
-                        </SettingsField>
+                        <div className="settings-row-copy">
+                          <h4>执行方式</h4>
+                          <p>内建子任务始终在后台执行</p>
+                        </div>
                         <SettingsField label="单智能体嵌套上限" htmlFor="settings-subagent-agent-depth">
                           <Select
                             id="settings-subagent-agent-depth"
@@ -1311,18 +1237,7 @@ export function SubagentSettings({
             </div>
           </div>
         </div>
-        {packageState === 'enabled' || packageState === 'loading' ? null : (
-          <p
-            className="settings-feedback"
-            role={packageState === 'error' ? 'alert' : undefined}
-          >
-            {packageState === 'not-installed'
-              ? '请先在本页上方安装 pi-subagents。'
-              : packageState === 'disabled'
-                ? 'pi-subagents 已关闭，请先在本页上方开启。'
-                : '无法读取 pi-subagents 状态，请在本页上方重试。'}
-          </p>
-        )}
+
       </section>
       {confirmDialog}
     </>
@@ -1415,7 +1330,6 @@ function isSubagentBatchField(value: string): value is SubagentBatchField {
     'thinking',
     'inheritProjectContext',
     'inheritSkills',
-    'defaultAsync',
     'maxSubagentDepth'
   ].includes(value)
 }
@@ -1424,7 +1338,7 @@ function defaultSubagentBatchValue(field: SubagentBatchField): string {
   if (field === 'scope') return 'user'
   if (field === 'enabled') return 'enabled'
   if (field === 'inheritProjectContext' || field === 'inheritSkills') return 'enabled'
-  if (field === 'defaultAsync' || field === 'maxSubagentDepth') return 'unset'
+  if (field === 'maxSubagentDepth') return 'unset'
   return 'inherit'
 }
 
@@ -1449,11 +1363,6 @@ function subagentBatchPatch(
   if (field === 'inheritSkills') {
     if (value !== 'enabled' && value !== 'disabled') return null
     return { inheritSkills: value === 'enabled' }
-  }
-  if (field === 'defaultAsync') {
-    if (value === 'unset') return { defaultAsync: null }
-    if (value !== 'foreground' && value !== 'background') return null
-    return { defaultAsync: value === 'background' }
   }
   if (value === 'unset') return { maxSubagentDepth: null }
   const maxSubagentDepth = Number(value)

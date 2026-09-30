@@ -21,9 +21,10 @@ test('lists builtin, user, and project definitions and preserves unmanaged front
   ])
   await Promise.all([
     writeFile(join(builtinDir, 'scout.md'), agentFile('scout', 'Find code', 'Scout.'), 'utf8'),
+    writeFile(join(builtinDir, 'legacy-worker.md'), agentFile('legacy-worker', 'Legacy task', 'Legacy instructions.'), 'utf8'),
     writeFile(
       join(userHome, '.agents', 'review.md'),
-      `---\nname: review\ndescription: Review code\npermission:\n  bash: deny\n---\n\nReview carefully.\n`,
+      `---\nname: review\ndescription: Review code\nturnBudget: {"maxTurns":12,"maxTokens":4096}\npermission:\n  bash: deny\n---\n\nReview carefully.\n`,
       'utf8'
     ),
     writeFile(
@@ -38,20 +39,32 @@ test('lists builtin, user, and project definitions and preserves unmanaged front
   assert.deepEqual(
     definitions.map(({ scope, name, editable }) => ({ scope, name, editable })),
     [
+      { scope: 'builtin', name: 'legacy-worker', editable: false },
+      { scope: 'builtin', name: 'worker', editable: false },
       { scope: 'builtin', name: 'scout', editable: false },
+      { scope: 'builtin', name: 'reviewer', editable: false },
       { scope: 'user', name: 'review', editable: true },
       { scope: 'project', name: 'worker', editable: true }
     ]
   )
 
+  const scout = definitions.find(({ scope, name }) => scope === 'builtin' && name === 'scout')
+  assert.ok(scout)
+  assert.equal(scout.id, 'builtin:native:scout')
+  assert.deepEqual(scout.tools, ['read', 'grep', 'find', 'ls'])
+  assert.equal(scout.systemPromptMode, 'append')
+  assert.match(scout.systemPrompt, /Do not modify files\./u)
+  assert.equal(definitions.find(({ name }) => name === 'legacy-worker')?.systemPrompt, 'Legacy instructions.')
   const review = definitions.find(({ name }) => name === 'review')
   assert.ok(review)
   await store.save(projectPath, {
     ...definitionInput(review),
-    description: 'Review correctness and security'
+    description: 'Review correctness and security',
+    maxTurns: null
   })
   const saved = await readFile(join(userHome, '.agents', 'review.md'), 'utf8')
   assert.match(saved, /description: Review correctness and security/u)
+  assert.match(saved, /turnBudget: \{"maxTokens":4096\}/u)
   assert.match(saved, /permission:\n  bash: deny/u)
 })
 
@@ -70,7 +83,7 @@ test('creates, renames, and deletes editable definitions without modifying built
     'utf8'
   )
   const store = new SubagentDefinitionStore({ agentDir, userHome })
-  const builtin = (await store.list(projectPath))[0]
+  const builtin = (await store.list(projectPath)).find(({ scope, name }) => scope === 'builtin' && name === 'reviewer')
   assert.ok(builtin)
 
   const created = await store.save(projectPath, {
@@ -226,6 +239,9 @@ test('excludes legacy Skill markdown from Agent discovery', async (t) => {
   assert.deepEqual(
     definitions.map(({ scope, name }) => ({ scope, name })),
     [
+      { scope: 'builtin', name: 'worker' },
+      { scope: 'builtin', name: 'scout' },
+      { scope: 'builtin', name: 'reviewer' },
       { scope: 'user', name: 'explorer' },
       { scope: 'project', name: 'worker' }
     ]

@@ -126,10 +126,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: ['技能列表', '搜索技能', 'skill', 'slash', '命令']
   },
   {
-    section: 'subagent', target: 'settings-subagent-package-heading', label: 'pi-subagents 扩展', group: '扩展',
-    keywords: ['子智能体', '安装', '启用', '停用', 'subagent', 'extension']
-  },
-  {
     section: 'subagent', target: 'settings-subagent-agents-heading', label: '智能体管理', group: '智能体管理',
     keywords: ['智能体', '新建智能体', '角色', '定义', 'agent', 'subagent']
   },
