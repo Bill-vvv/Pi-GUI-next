@@ -86,7 +86,7 @@ class FakeRuntimeHost implements RuntimeHost {
   private rpcPid: number | null = null
   private state: RuntimeHostState = {
     executable: '/usr/bin/pi',
-    version: '0.83.0',
+    version: '0.99.0',
     stderrChars: 0,
     stderrSummary: null,
     lastError: null,

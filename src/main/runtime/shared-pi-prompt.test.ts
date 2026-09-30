@@ -156,8 +156,15 @@ test('real SDK prompts honor Host proxy settings and preserve concurrent tools, 
       if (head.length > 0) upstream.write(head)
       socket.pipe(upstream).pipe(socket)
     })
-    upstream.on('error', (error) => { serverErrors.push(error); socket.destroy() })
-    socket.on('error', (error) => { serverErrors.push(error); upstream.destroy() })
+    // Disposing ModelRuntime closes idle CONNECT sockets with a reset in Undici 8.
+    // Request failures are still checked by the model fixture and transcript assertions.
+    const disconnect = (error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ECONNRESET') serverErrors.push(error)
+      socket.destroy()
+      upstream.destroy()
+    }
+    upstream.on('error', disconnect)
+    socket.on('error', disconnect)
     socket.on('close', () => upstream.destroy())
   })
   t.after(async () => {
@@ -227,9 +234,10 @@ test('real SDK prompts honor Host proxy settings and preserve concurrent tools, 
     assert.equal(toolEnd.length, 1)
     assert.equal(toolEnd[0]!.isError, false)
     assert.deepEqual((toolEnd[0]!.result as { content: unknown }).content, [{ type: 'text', text: contents[index] }])
-    assert.ok(events.some((event) => event.type === 'message_update'))
+    assert.ok(events.some((event) => event.type === 'message_update' &&
+      (event.message as { role?: string } | undefined)?.role === 'assistant'))
     const transcript = await messages(runtimes[index]!)
-    assert.deepEqual(transcript.map((message) => (message as { role: string }).role), ['user', 'assistant', 'toolResult', 'assistant'])
+    assert.deepEqual(transcript.map((message) => (message as { role: string }).role), ['system', 'user', 'assistant', 'toolResult', 'assistant'])
     assert.deepEqual((transcript.at(-1) as { content: unknown }).content, [{ type: 'text', text: `verified:${contents[index]}` }])
   }
   const [first, second] = runtimes as [RuntimeHost, RuntimeHost]
@@ -249,7 +257,7 @@ test('real SDK prompts honor Host proxy settings and preserve concurrent tools, 
   const forked = await sessionState(first)
   assert.notEqual(forked.sessionId, original!.sessionId)
   assert.notEqual(forked.sessionFile, original!.sessionFile)
-  assert.deepEqual(await messages(first), [])
+  assert.deepEqual((await messages(first)).map((message) => (message as { role: string }).role), ['system'])
   // The SDK intentionally leaves a first-message fork provisional until an answer.
   await assert.rejects(readFile(forked.sessionFile!, 'utf8'), { code: 'ENOENT' })
   await promptAndDrain(first, 'fork-0')

@@ -132,7 +132,7 @@ export const REQUIRED_PROVIDER_EXTENSION_MARKERS = Object.freeze([
 ])
 
 /** Supported Pi coding-agent version for the private ExtensionRunner inventory bridge. */
-export const SUPPORTED_PI_CODING_AGENT_VERSION = '0.83.0'
+export const SUPPORTED_PI_CODING_AGENT_VERSION = '0.99.0'
 
 /** Non-enumerable context accessors installed by the private runner bridge. */
 export const EXTENSION_INVENTORY_ACCESSOR = Symbol.for(

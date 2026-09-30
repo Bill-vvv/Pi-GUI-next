@@ -269,3 +269,4 @@ export function normalizeQuiescenceTimeoutMs(
   timeoutMs: unknown
 ): { ok: true; timeoutMs: number } | { ok: false; reason: string }
 export function boundReason(reason: string): string
+export const SUPPORTED_PI_CODING_AGENT_VERSION: '0.99.0'

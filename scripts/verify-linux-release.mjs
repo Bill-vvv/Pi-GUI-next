@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { spawn } from 'node:child_process'
 import { countReplaceToolMetadataPayloadChars } from './memory-event-metrics.mjs'
+import { SUPPORTED_PI_CODING_AGENT_VERSION } from '../extensions/pi-gui-runtime-quiescence/src/protocol.mjs'
 
 const execFileAsync = promisify(execFile)
 const SCRIPT_PATH = fileURLToPath(import.meta.url)
@@ -51,7 +52,7 @@ const MEMORY_BUDGET_LIMITS = Object.freeze({
   maxSwapBytes: 0
 })
 const NON_RUN_GUARD_CODES = new Set(['E_VERIFY_ALREADY_RUNNING', 'E_DEV_GUI_RUNNING'])
-const PI_VERSION = '0.83.0'
+const PI_VERSION = SUPPORTED_PI_CODING_AGENT_VERSION
 const APP_OWNED_PI_PACKAGE_NAMES = new Set([
   'pi-gui-ask',
   'pi-gui-openai-fast-mode',

@@ -27,7 +27,7 @@ test('resolves the Pi package behind a pnpm executable shim', async (t) => {
     await symlink(packageRoot, join(scope, 'pi-coding-agent'), 'junction')
   }
   await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
-    version: '0.83.0',
+    version: '0.99.0',
     exports: { '.': { import: './dist/index.js' } }
   }))
   await writeFile(executable, '#!/usr/bin/env node\n', { mode: 0o755 })

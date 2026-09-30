@@ -1,5 +1,5 @@
 /**
- * Narrow, version-guarded private bridge into Pi 0.83.0 ExtensionRunner.
+ * Narrow, version-guarded private bridge into Pi 0.99.0 ExtensionRunner.
  *
  * ExtensionContext does not expose ResourceLoader. Before any runner instance is
  * used, patch ExtensionRunner.prototype so createContext/createCommandContext

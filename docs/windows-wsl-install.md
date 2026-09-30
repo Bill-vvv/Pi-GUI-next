@@ -1,6 +1,6 @@
 # Windows GUI + WSL 安装版
 
-此版本是本地体验版：Windows x64 运行 GUI，Ubuntu-24.04 / WSL2 x86_64 运行 Pi 0.83.0、项目和会话。安装包未签名，不代表已完成正式发布 gate。
+此版本是本地体验版：Windows x64 运行 GUI，Ubuntu-24.04 / WSL2 x86_64 运行 Pi 0.99.0、项目和会话。安装包未签名，不代表已完成正式发布 gate。
 
 ## 安装
 
