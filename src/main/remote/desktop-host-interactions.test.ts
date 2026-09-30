@@ -28,7 +28,7 @@ test('Desktop interactions traverse HTTP/SSE, the shared dispatcher and real Ker
   const sessionKey = join(root, 'session.jsonl')
   const runtime = {
     start: async () => {}, stop: async () => { finishInvocation?.() }, getRpcPid: () => null,
-    getState: () => ({ executable: '/usr/bin/pi', version: '0.83.0', stderrChars: 0, stderrSummary: null, lastError: null, exitCode: null, exitSignal: null }),
+    getState: () => ({ executable: '/usr/bin/pi', version: '0.99.0', stderrChars: 0, stderrSummary: null, lastError: null, exitCode: null, exitSignal: null }),
     subscribe: (listener: (event: RuntimeHostEvent) => void) => { listeners.add(listener); return () => { listeners.delete(listener) } },
     send: async (command: RuntimeCommand): Promise<RuntimeCommandResult> => {
       sent.push(command)
