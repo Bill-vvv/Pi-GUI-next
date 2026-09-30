@@ -208,12 +208,32 @@ export function SettingsPanel({
   const contentRef = useRef<HTMLDivElement>(null)
   useSettingsJump(contentRef, jumpTarget)
 
+  // Package and extension changes made on this visit are saved to Pi's user
+  // settings but never reload open Runtimes; the affected pages say so.
+  const [reloadPending, setReloadPending] = useState(false)
+  const activePackageInstallJobs = useRef(new Set<string>())
+  const initialExtensions = useRef(state.extensions)
+  const markReloadPending = <Args extends unknown[]>(
+    action: (...args: Args) => Promise<void>
+  ) => async (...args: Args): Promise<void> => {
+    await action(...args)
+    setReloadPending(true)
+  }
+  useEffect(() => {
+    if (state.extensions !== initialExtensions.current) setReloadPending(true)
+  }, [state.extensions])
+
   useEffect(() => {
     for (const job of packageInstallJobs) {
-      if (job.status !== 'succeeded' && job.status !== 'failed') continue
+      if (job.status === 'queued' || job.status === 'running') {
+        activePackageInstallJobs.current.add(job.id)
+        continue
+      }
       if (handledPackageInstallJobs.current.has(job.id)) continue
       handledPackageInstallJobs.current.add(job.id)
       setPackageRevision((revision) => revision + 1)
+      // Only installs seen queued or running on this visit count as changes made here.
+      if (job.status === 'succeeded' && activePackageInstallJobs.current.has(job.id)) setReloadPending(true)
     }
   }, [packageInstallJobs])
 
@@ -316,13 +336,14 @@ export function SettingsPanel({
             availableModels={state.availableModels}
             busy={busy}
             packageBusy={busy || packageInstallActive}
+            reloadPending={reloadPending}
             packageInstallJobs={packageInstallJobs}
             onListPiPackages={onListPiPackages}
             onInstallPiDevPackage={async (name) => {
               await onInstallPiDevPackage(name)
               bumpPackageRevision()
             }}
-            onSetSubagentEnabled={onSetSubagentEnabled}
+            onSetSubagentEnabled={markReloadPending(onSetSubagentEnabled)}
             onOpenExternal={onOpenExternal}
             onListSubagentDefinitions={onListSubagentDefinitions}
             onSaveSubagentDefinition={onSaveSubagentDefinition}
@@ -339,13 +360,14 @@ export function SettingsPanel({
             pendingAction={pendingAction}
             packageInstallJobs={packageInstallJobs}
             packageRevision={packageRevision}
+            reloadPending={reloadPending}
             onPackagesChanged={bumpPackageRevision}
             onListPiPackages={onListPiPackages}
             onSearchPiDevPackages={onSearchPiDevPackages}
             onInstallPiDevPackage={onInstallPiDevPackage}
-            onRemovePiPackage={onRemovePiPackage}
-            onUpdatePiPackage={onUpdatePiPackage}
-            onUpdatePiPackages={onUpdatePiPackages}
+            onRemovePiPackage={markReloadPending(onRemovePiPackage)}
+            onUpdatePiPackage={markReloadPending(onUpdatePiPackage)}
+            onUpdatePiPackages={markReloadPending(onUpdatePiPackages)}
             onOpenExternal={onOpenExternal}
           />
         ) : null}
@@ -358,14 +380,15 @@ export function SettingsPanel({
             extensionActionError={extensionActionError}
             packageInstallJobs={packageInstallJobs}
             packageRevision={packageRevision}
+            reloadPending={reloadPending}
             onPackagesChanged={bumpPackageRevision}
             onInstallExtension={onInstallExtension}
             onRemoveExtension={onRemoveExtension}
             onListPiPackages={onListPiPackages}
             onSearchPiDevExtensions={onSearchPiDevExtensions}
             onInstallPiDevPackage={onInstallPiDevPackage}
-            onRemovePiPackage={onRemovePiPackage}
-            onSetMagicContextEnabled={onSetMagicContextEnabled}
+            onRemovePiPackage={markReloadPending(onRemovePiPackage)}
+            onSetMagicContextEnabled={markReloadPending(onSetMagicContextEnabled)}
             onOpenExternal={onOpenExternal}
           />
         ) : null}
