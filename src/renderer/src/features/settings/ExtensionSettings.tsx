@@ -12,6 +12,7 @@ import { isWorkbenchAction, type WorkbenchOperation } from '../../workbench-acti
 import { AdaptedExtensionPackageControl } from './AdaptedExtensionPackageControl'
 import { PiDevCatalog } from './PiDevCatalog'
 import { SettingsPageHeading } from './SettingsPageHeading'
+import { PLUGIN_RELOAD_PENDING_STATUS } from './plugin-reload-status'
 import { useSettingsConfirm } from './SettingsConfirmDialog'
 
 export function ExtensionSettings({
@@ -21,6 +22,7 @@ export function ExtensionSettings({
   extensionActionError,
   packageInstallJobs,
   packageRevision,
+  reloadPending,
   onPackagesChanged,
   onInstallExtension,
   onRemoveExtension,
@@ -37,6 +39,8 @@ export function ExtensionSettings({
   extensionActionError: string | null
   packageInstallJobs: KernelPiPackageInstallJob[]
   packageRevision: number
+  /** Extensions changed on this settings visit; open Runtimes still use what they loaded. */
+  reloadPending: boolean
   onPackagesChanged: () => void
   onInstallExtension: (kind: KernelExtensionSelectionKind) => Promise<void>
   onRemoveExtension: (path: string) => Promise<void>
@@ -59,6 +63,7 @@ export function ExtensionSettings({
       <SettingsPageHeading
         title="扩展"
         description="安装或卸载后，将在下一次新建或重新打开对话时生效"
+        status={reloadPending ? PLUGIN_RELOAD_PENDING_STATUS : null}
       />
       <AdaptedExtensionPackageControl
         heading="Magic Context"

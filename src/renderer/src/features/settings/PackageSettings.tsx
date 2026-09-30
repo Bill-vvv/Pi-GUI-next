@@ -7,12 +7,14 @@ import type { WorkbenchOperation } from '../../workbench-actions'
 import { InstalledPackages } from './InstalledPackages'
 import { PiDevCatalog } from './PiDevCatalog'
 import { SettingsPageHeading } from './SettingsPageHeading'
+import { PLUGIN_RELOAD_PENDING_STATUS } from './plugin-reload-status'
 
 export function PackageSettings({
   busy,
   pendingAction,
   packageInstallJobs,
   packageRevision,
+  reloadPending,
   onPackagesChanged,
   onListPiPackages,
   onSearchPiDevPackages,
@@ -26,6 +28,8 @@ export function PackageSettings({
   pendingAction: WorkbenchOperation | null
   packageInstallJobs: KernelPiPackageInstallJob[]
   packageRevision: number
+  /** Packages changed on this settings visit; open Runtimes still use what they loaded. */
+  reloadPending: boolean
   onPackagesChanged: () => void
   onListPiPackages: () => Promise<KernelInstalledPackage[]>
   onSearchPiDevPackages: (query: string) => Promise<KernelPiDevCatalog>
@@ -40,6 +44,7 @@ export function PackageSettings({
       <SettingsPageHeading
         title="插件"
         description="即 Pi Package，可包含扩展、技能与提示模板。安装或卸载后，将在下一次新建或重新打开对话时生效"
+        status={reloadPending ? PLUGIN_RELOAD_PENDING_STATUS : null}
       />
       <InstalledPackages
         busy={busy}
