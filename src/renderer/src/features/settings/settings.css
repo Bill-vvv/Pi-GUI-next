@@ -289,6 +289,11 @@
   line-height: var(--line-body-sm);
 }
 
+/* A change made on this visit that open Runtimes have not picked up yet. */
+.settings-section-heading-copy p.settings-section-heading-status {
+  color: var(--color-status-warning);
+}
+
 .settings-section-heading h2 {
   font-family: var(--font-display);
   font-size: var(--text-page-title);

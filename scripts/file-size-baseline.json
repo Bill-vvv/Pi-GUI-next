@@ -21,7 +21,7 @@
   "src/renderer/src/features/composer/Composer.tsx": 1330,
   "src/renderer/src/features/project/ProjectNavigator.tsx": 1147,
   "src/renderer/src/features/settings/ProviderSettings.tsx": 883,
-  "src/renderer/src/features/settings/SubagentSettings.tsx": 1476,
+  "src/renderer/src/features/settings/SubagentSettings.tsx": 1484,
   "src/renderer/src/preview/create-preview-kernel-api.ts": 1290,
   "src/shared/kernel-contract.ts": 1324
 }

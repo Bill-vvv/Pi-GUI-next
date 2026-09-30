@@ -468,7 +468,7 @@ P2 先用一个短 Slice 固定结构，再实现基础功能，随后在真实�
 | S18 | OMP 多 Advisor Extension 与 GUI 适配 | `Paused` | S18-1 至 S18-4 已完成；S18-5 可观测性与发布作为非阻塞 backlog 保留，后续只有在恢复 Advisor 产品范围时继续，不阻塞 P2 完成或 P3-1 |
 | S19 | Subagent 任务详情侧栏 | `Complete` | Canonical clean commit `b9562b4` 的正式 `pnpm verify:linux` 已通过完整 P1/P2 回归与 S19：3 路并行 worker 同时 running、运行中选择、Escape 优先级、live→completed、宽屏第三列、窄屏替换、关闭/返回/Escape 焦点恢复和 reduced-motion。AppImage SHA-256 为 `4bbe45a505f601966c75ba8c3b4074f793ee88a7aff88e83bf00af03f039c29d`，证据位于 `release/evidence/2026-07-27T16-45-59-798Z-b9562b4ca6c3/` |
 | S20 | 动效与交互基础 | `Paused` | S20-1 与 S20-2 已完成；S20-3 作为非阻塞交互 backlog 保留，仅在真实一致性缺陷出现或对应产品面继续实施时恢复 |
-| S21 | Settings Workspace 2.0 | `Planned` | 设置导航按“个人 / 集成 / 编码”分组（D-102），增加收起、真实设置搜索和应用内 deep link；统一作用域、事实来源、生效时间及 saved/loaded 差异，不建立通用设置 registry，不静默 reload Runtime |
+| S21 | Settings Workspace 2.0 | `Complete` | 设置导航按“个人 / 集成 / 编码”分组（D-102），增加收起、真实设置搜索和应用内 deep link；统一作用域、事实来源、生效时间及 saved/loaded 差异，不建立通用设置 registry，不静默 reload Runtime |
 | S22 | Personalization v1 | `Planned` | 第一批只增加用户级的对话阅读宽度、Navigator 密度和动效偏好；使用有限语义枚举与统一 token，窄窗口、触控命中和 OS reduced-motion 继续拥有更高约束，不提供任意 CSS、像素或颜色编辑 |
 | S23 | Subagent Effective State 与任务一致性 | `Planned` | Main 投影 effective Agent definition、覆盖来源、最终启停/depth、Package/Extension/当前 Runtime 加载及 reload 状态；任务详情补同 run participant 切换、汇总和实时→历史恢复一致性，不读取 child transcript/artifact，不提前加入 GUI 运行控制 |
 | S24 | Magic Context 状态可见性 | `Planned` | 安装/启停继续留在拓展页，独立 Context 页只读展示 Package、Extension、当前 Session loaded、真实 `/ctx-status`、状态时间与过期语义，并提供复制 setup/doctor 命令和上游文档入口；不解析 SQLite 或把“已开启”冒充健康 |
@@ -582,7 +582,7 @@ S20 明确不以“更多动画”为目标，不让位移或 pulse 成为 runni
 | --- | --- | --- | --- |
 | S21-1 Information Architecture | `Complete` | 当前导航按 D-102 对齐 Codex：“个人：常规/外观/键盘快捷键/模型”“集成：插件/扩展/技能/子智能体”“编码：连接”；Context 只有在 S24 有真实内容时加入。分组、删除偏好、导航收起与窄窗口覆盖式导航均已落地（2026-09-30） | 既有功能和 dirty draft 保护无回退；窄窗口使用可访问的单页/覆盖式导航；Context 只有在 S24 有真实内容时出现；不恢复 Advisor 分类 |
 | S21-2 Search & Deep Link | `Complete` | 扩展窄 typed section/group metadata，索引真实设置名称、组和人工同义词；搜索结果跳到稳定应用内目标 | 不索引 credential、endpoint、Agent prompt 或日志；Enter/Escape、焦点恢复和无结果状态通过；不注册 OS URL protocol，不建立插件 registry |
-| S21-3 Scope, Source & Activation | `Pending` | 为重要设置表达 application/user/project/session 作用域、GUI/Pi/Extension 事实来源与 immediate/next-session/reload 生效时机；区分 saved config 与当前 Runtime loaded config | Package installed、Extension enabled、当前 Session loaded、健康 verified 四层状态不混淆；设置保存不静默重启，reload 失败不伪装已应用 |
+| S21-3 Scope, Source & Activation | `Complete` | 为重要设置表达 application/user/project/session 作用域、GUI/Pi/Extension 事实来源与 immediate/next-session/reload 生效时机；区分 saved config 与当前 Runtime loaded config | Package installed、Extension enabled、当前 Session loaded、健康 verified 四层状态不混淆；设置保存不静默重启，reload 失败不伪装已应用 |
 
 设置行不机械堆叠三个 badge；默认立即生效项保持简洁，只在特殊作用域、外部事实源或需 reload 时提高可见性。`settings-redesign-preview.html` 只作为交互参考，模拟状态和未接通选项不是生产事实。
 
@@ -1186,6 +1186,7 @@ Windows 和 Linux/Web 必须从同一仓库/tag 发布。Web Remote 随 Linux Ho
 | 2026-09-30 | S21-1 窄窗口覆盖式设置导航，S21-1 完成 | 用户确认窄窗口改为覆盖式导航。≤500px 时 icon rail 底部同一按钮打开完整导航浮层（列宽保持 rail，内容区不移动），选择页面、Escape、外点、焦点移出或窗口变宽时关闭；Escape 先关浮层并把焦点还给按钮，不再关闭设置页 | typecheck、设置与 composition 定向测试 74/74（含 Chromium fixture）、build、diff check 通过；预览 420px 逐项核对打开、选页、Escape、外点、Tab 移出与放宽到 900px。S21-1 标记 Complete；S21-2/S21-3 仍 Pending |
 | 2026-09-30 | Tooltip 跟随目标改名 | 切换按钮（设置导航收起、左右侧栏）点击后会改 `aria-label`/`data-tooltip`，但已显示的 tooltip 仍保留点击前文字。`TooltipProvider` 显示期间额外观察当前目标的 `data-tooltip`、`data-tooltip-placement`、`data-tooltip-variant`，变化时原地更新并重新定位，清空时关闭 | typecheck、tooltip Chromium fixture 19/19、components 与设置定向测试 25/25、build、diff check 通过；预览中悬停“收起设置导航”后连续点击，提示依次变为“展开设置导航”“收起设置导航” |
 | 2026-09-30 | S21-2 设置搜索与应用内跳转，S21-2 完成 | 设置导航顶部新增搜索（combobox + 内联 listbox，方向键/Enter/Escape、无结果状态）；`settings-search.ts` 静态索引固定设置名、分组与人工同义词（快捷键动作由同一标签表生成），每条指向页面实际渲染的 id，SSH 客户端只索引其可见项；选中后经 settings workspace 切页并由 `useSettingsJump` 滚动、聚焦、标记目标，异步页面等待目标出现且用户接管即停止。快捷键标签移到 `shortcut-labels.ts`，为工作过程密度、技能新建与技能搜索补 id。不注册 OS URL protocol、不建立 registry、不索引凭证/地址/提示词/日志 | typecheck、设置/composition/renderer 定向测试 177/177（新增 22 项 Chromium 搜索 fixture、目标 id 存在性与敏感词排除单测）、build、diff check 通过；预览 1280px 核对跨页跳转、连接页异步目标、Escape 先清空后关闭设置。S21-2 标记 Complete，S21-3 仍 Pending |
+| 2026-09-30 | S21-3 插件与扩展改动的作用域和生效时机，S21-3 完成 | 用户确认按窄范围处理：只为确实容易误解的插件/扩展改动提高可见性。插件安装/卸载/更新、本地扩展增删、Magic Context 与 pi-subagents 启停都写入 Pi 用户配置（`pi install/remove/update` 不带 `-l`，本地扩展写 `~/.pi/agent/settings.json`），不重载已打开的 Runtime。`SettingsPanel` 在本次设置访问中这类操作成功后（后台安装须本次见到 queued/running 且成功），在插件、扩展、子智能体页标题下显示“已写入 Pi 用户配置，对所有项目生效。已打开的对话不会自动重载……新建或重新载入对话后生效”；不声称当前对话已加载或健康已验证，其余即时生效设置保持简洁不加 badge。未改后端：不新增 Runtime loaded 探测，也不把会话标为需要重载 | typecheck、设置定向测试 32/32（新增 SSR 与接线测试）、build、diff check 通过；预览中开启 Magic Context 后扩展页与子智能体页均显示提示，截图核对。S21 三个阶段均已 Complete |
 
 ## 17. 计划变更记录
 

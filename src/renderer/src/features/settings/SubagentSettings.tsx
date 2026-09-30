@@ -22,6 +22,7 @@ import { unknownErrorMessage as errorMessage } from '../../unknown-error-message
 import { SettingsField } from './SettingsField'
 import { useSettingsConfirm } from './SettingsConfirmDialog'
 import { SettingsPageHeading } from './SettingsPageHeading'
+import { PLUGIN_RELOAD_PENDING_STATUS } from './plugin-reload-status'
 import {
   AdaptedExtensionPackageControl,
   type AdaptedPackageState
@@ -48,6 +49,8 @@ type SubagentSettingsProps = {
   busy: boolean
   /** Package install/enable actions also wait for background package jobs. */
   packageBusy: boolean
+  /** pi-subagents changed on this settings visit; open Runtimes still use what they loaded. */
+  reloadPending: boolean
   packageInstallJobs: KernelPiPackageInstallJob[]
   onListPiPackages: () => Promise<KernelInstalledPackage[]>
   onInstallPiDevPackage: (name: string) => Promise<void>
@@ -80,6 +83,7 @@ export function SubagentSettings({
   availableModels,
   busy,
   packageBusy,
+  reloadPending,
   packageInstallJobs,
   onListPiPackages,
   onInstallPiDevPackage,
@@ -615,7 +619,11 @@ export function SubagentSettings({
 
   return (
     <>
-      <SettingsPageHeading title="子智能体" className="settings-subagent-heading">
+      <SettingsPageHeading
+        title="子智能体"
+        className="settings-subagent-heading"
+        status={reloadPending ? PLUGIN_RELOAD_PENDING_STATUS : null}
+      >
         <span className="settings-subagent-status" data-state={packageState}>
           {packageState === 'enabled'
             ? '已安装并开启'
