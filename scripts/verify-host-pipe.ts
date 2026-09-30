@@ -1,6 +1,9 @@
 // Drive a built Node Host (D-095) over its private WSL stdio pipe the way the Windows client does,
 // in an isolated HOME and without a display. Usage (from a checks workspace):
 //   node scripts/verify-host-pipe.ts <build-root>
+//   node scripts/verify-host-pipe.ts <installed-release> --launcher <start-host.sh> --data-home <XDG_DATA_HOME>
+// The second form starts an installed WSL backend exactly as the Windows client does (the
+// launcher alone, its isolated Node from <data-home>/pi-gui-next-wsl).
 // Prints one JSON line per stage; exits non-zero on the first failure.
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -12,8 +15,17 @@ import { KERNEL_COMMAND_CHANNEL } from '../src/shared/kernel-contract.ts'
 import { REMOTE_ADMIN_COMMAND_CHANNEL } from '../src/shared/remote-admin-contract.ts'
 import { WslPipe } from '../src/main/remote/wsl-pipe.ts'
 
-const [buildRoot] = process.argv.slice(2)
-assert.ok(buildRoot !== undefined, 'usage: verify-host-pipe.ts <build-root>')
+const [buildRoot, ...options] = process.argv.slice(2)
+const option = (name: string): string | undefined => {
+  const index = options.indexOf(name)
+  return index >= 0 ? options[index + 1] : undefined
+}
+const launcher = option('--launcher')
+const dataHome = option('--data-home')
+assert.ok(
+  buildRoot !== undefined && (launcher === undefined) === (dataHome === undefined) && options.length === (launcher === undefined ? 0 : 4),
+  'usage: verify-host-pipe.ts <build-root> [--launcher <start-host.sh> --data-home <XDG_DATA_HOME>]'
+)
 const log = (value: Record<string, unknown>): void => console.log(JSON.stringify(value))
 
 const identity = JSON.parse(await readFile(join(buildRoot, 'out/main/build-identity.json'), 'utf8')) as { artifactDigest: string }
@@ -23,7 +35,7 @@ const env: NodeJS.ProcessEnv = {
   HOME: home,
   XDG_CONFIG_HOME: join(home, 'config'),
   XDG_STATE_HOME: join(home, 'state'),
-  XDG_DATA_HOME: join(home, 'data'),
+  XDG_DATA_HOME: dataHome ?? join(home, 'data'),
   XDG_CACHE_HOME: join(home, 'cache'),
   XDG_RUNTIME_DIR: join(home, 'runtime'),
   PI_CODING_AGENT_DIR: join(home, 'agent'),
@@ -33,7 +45,9 @@ const env: NodeJS.ProcessEnv = {
 await mkdir(env.XDG_RUNTIME_DIR!, { mode: 0o700 })
 
 const started = Date.now()
-const child = spawn(process.execPath, ['--use-env-proxy', 'out/main/pi-host.js', 'wsl'], { cwd: buildRoot, env, stdio: ['pipe', 'pipe', 'pipe'] })
+const child = launcher === undefined
+  ? spawn(process.execPath, ['--use-env-proxy', 'out/main/pi-host.js', 'wsl'], { cwd: buildRoot, env, stdio: ['pipe', 'pipe', 'pipe'] })
+  : spawn(launcher, [], { cwd: home, env: { ...env, PATH: '/usr/bin:/bin' }, stdio: ['pipe', 'pipe', 'pipe'] })
 let diagnostics = ''
 child.stderr.on('data', (chunk: Buffer) => { diagnostics += chunk.toString('utf8') })
 const exited = new Promise<{ code: number | null, signal: NodeJS.Signals | null }>((resolve) => {
