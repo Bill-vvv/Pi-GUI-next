@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createSsrTestServer } from '../../test-support/create-ssr-test-server.ts'
+import { runBrowserChecks } from '../../test-support/run-browser-checks.ts'
 
 import type {
   KernelSubagentNoticeEntry,
@@ -35,6 +36,17 @@ const workbenchStyles = await readFile(
   'utf8'
 )
 const chatStyles = await readFile(new URL('./chat.css', import.meta.url), 'utf8')
+
+test('native Subagent reads, stops, continues and fences stale task history', {
+  skip: !process.env.PI_GUI_TEST_BROWSER,
+  timeout: 60_000
+}, async (t) => {
+  await runBrowserChecks(t, {
+    fixture: 'src/renderer/src/features/chat/thinking-disclosure.fixture.tsx',
+    exportName: 'runNativeSubagentChecks',
+    expectedChecks: 5
+  })
+})
 
 test('SubagentTaskCapsule SSR exposes button, selection and stable trigger identity', () => {
   const html = renderToStaticMarkup(createElement(SubagentTaskCapsule, {
@@ -145,7 +157,15 @@ test('internal Subagent polling stays hidden while the task capsule remains visi
       args: JSON.stringify({ action: 'status', id: 'run-1' }),
       subagent: null,
       durationMs: 8
-    }
+    },
+    ...['TaskList', 'TaskWait', 'functions.SessionTask'].map((name, index) => ({
+      ...toolEntry(current),
+      id: `tool:native-poll:${index}`,
+      toolCallId: `native-poll:${index}`,
+      name,
+      status: 'success' as const,
+      args: JSON.stringify({ action: 'status' })
+    }))
   ]
   const html = renderToStaticMarkup(createElement(
     SubagentTaskInteractionContext.Provider,
@@ -161,9 +181,27 @@ test('internal Subagent polling stays hidden while the task capsule remains visi
   ))
 
   assert.match(html, /data-subagent-tool-call-id="subagent-call"/)
+  assert.equal(html.match(/data-subagent-tool-call-id=/g)?.length ?? 0, 1)
   assert.equal(html.match(/process-step tool standard/g)?.length ?? 0, 0)
   assert.doesNotMatch(html, /Subagent 等待已结束/)
   assert.doesNotMatch(html, /已检查 Subagent 状态/)
+})
+
+test('native TaskStop with task details renders its stop action without another task capsule', () => {
+  const html = renderToStaticMarkup(createElement(
+    SubagentTaskInteractionContext.Provider,
+    { value: { selection: null, onOpen: () => undefined } },
+    createElement(LiveTurn, {
+      turn: {
+        id: 'native-stop-turn',
+        entries: [{ ...toolEntry(participant({ status: 'paused' })), name: 'functions.TaskStop', status: 'success' }]
+      },
+      toolDisplayDensity: 'standard',
+      thinkingElapsedByEntryId: new Map()
+    })
+  ))
+  assert.match(html, /已停止子任务/)
+  assert.doesNotMatch(html, /data-subagent-tool-call-id=|委派给/)
 })
 
 test('pending and running Subagents stay visible outside the live process disclosure', () => {

@@ -1,3 +1,5 @@
+import type { AgentCollaborationRequest, AgentCollaborationResponse } from '../../shared/agent-collaboration-contract.ts'
+import type { KernelSubagentStatus } from '../../shared/kernel-contract.ts'
 import type { KernelPromptImage, ThinkingLevel } from '../../shared/kernel-contract.ts'
 import type {
   PiRpcEvent,
@@ -30,6 +32,10 @@ export type RuntimeCommand =
   | { type: 'steer'; message: string; images?: KernelPromptImage[] }
   | { type: 'follow_up'; message: string; images?: KernelPromptImage[] }
   | { type: 'abort' }
+  | { type: 'agent_collaboration_response'; response: AgentCollaborationResponse }
+  | { type: 'collaboration_prompt'; message: string; sourceSessionId: string; messageId: string; kind: 'task' | 'message' | 'completion' }
+  | { type: 'get_subagent_transcript'; taskId: string }
+  | { type: 'control_subagent'; taskId: string; action: 'stop' | 'continue'; message?: string }
   | { type: 'set_model'; provider: string; modelId: string }
   | { type: 'set_thinking_level'; level: ThinkingLevel }
   | { type: 'get_commands' }
@@ -50,6 +56,7 @@ export type RuntimeCommandResult =
   | ({ type: 'tree-navigation' } & PiRpcNavigateTreeResult)
   | ({ type: 'forked' } & PiRpcForkResult)
   | { type: 'accepted' }
+  | { type: 'subagent-transcript'; taskId: string; messages: unknown[]; status: KernelSubagentStatus }
   | { type: 'model'; model: PiRpcModel }
   | { type: 'commands'; commands: PiRpcSlashCommand[] }
   | { type: 'available-models'; models: PiRpcAvailableModel[] }
@@ -66,6 +73,7 @@ export type RuntimeHostState = {
 }
 
 export type RuntimeHostEvent =
+  | ({ type: 'agent-collaboration-request' } & AgentCollaborationRequest)
   | { type: 'activity-started' }
   | { type: 'activity-settled' }
   | { type: 'pi-event'; event: PiRpcEvent }

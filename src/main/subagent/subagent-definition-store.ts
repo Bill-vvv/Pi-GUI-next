@@ -19,6 +19,7 @@ import type {
   ThinkingLevel
 } from '../../shared/kernel-contract.ts'
 import { resolvePiAgentDir } from '../extension/pi-extension-store.ts'
+import { builtinSubagentDefinitionSources } from './native-subagent-definitions.ts'
 
 const SUPPORTED_THINKING_LEVELS = new Set<ThinkingLevel>([
   'off',
@@ -276,7 +277,7 @@ export class SubagentDefinitionStore {
         ? Promise.resolve(emptySubagentSettings())
         : readSubagentSettings(projectSettingsPath)
     ])
-    return [...builtin, ...user, ...project].map((loaded) => ({
+    return [...builtinSubagentDefinitionSources(builtin), ...user, ...project].map((loaded) => ({
       ...loaded,
       definition: applySubagentSettings(loaded, userSettings, projectSettings)
     }))
@@ -868,12 +869,11 @@ function setOptionalListFrontmatter(
 }
 
 function setTurnBudget(frontmatter: Map<string, string>, maxTurns: number | null): void {
-  if (maxTurns === null) {
-    frontmatter.delete('turnBudget')
-    return
-  }
   const existing = jsonRecord(frontmatter.get('turnBudget')) ?? {}
-  frontmatter.set('turnBudget', JSON.stringify({ ...existing, maxTurns }))
+  if (maxTurns === null) delete existing.maxTurns
+  else existing.maxTurns = maxTurns
+  if (Object.keys(existing).length === 0) frontmatter.delete('turnBudget')
+  else frontmatter.set('turnBudget', JSON.stringify(existing))
 }
 
 async function writeFileAtomically(filePath: string, content: string): Promise<void> {

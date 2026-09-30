@@ -163,6 +163,14 @@ export async function dispatchTerminalKernelCommand(
     case 'kernel.abort':
       await kernel.abort()
       return kernel.acknowledge()
+    case 'kernel.get-subagent-transcript':
+      return kernel.getSubagentTranscript(command.taskId, command.expectedSessionKey)
+    case 'kernel.control-subagent':
+      return kernel.controlSubagent(command.taskId, command.expectedSessionKey, command.action, command.message)
+    case 'kernel.agent-collaboration':
+      return kernel.agentCollaboration(command.operation, command.expectedSessionKey)
+    case 'kernel.get-agent-collaboration':
+      return kernel.getAgentCollaboration()
     case 'kernel.set-model':
       await kernel.setModel(command.provider, command.modelId)
       return kernel.acknowledge()

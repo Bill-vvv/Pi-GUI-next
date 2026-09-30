@@ -216,6 +216,9 @@ export type ExtensionDialogInteraction = {
 }
 
 export type RuntimeContext = {
+  /** Delivery-local transcript boundary; neither startup nor persistence completes a run. */
+  collaborationRunStartIndex?: number
+  collaborationRunError?: string
   /**
    * Opaque process-lifetime id for diagnostics correlation.
    * Assigned once at context creation; encodes no Session/Project identity.

@@ -79,6 +79,7 @@ export function reduceRuntimeSessionEvent(
     }
   }
 
+  if (event.type !== 'pi-event') return state
   const pi = event.event
   let next = state
   if (pi.type === 'agent_start') {
@@ -173,7 +174,8 @@ export function settleConversationRun(conversation: KernelConversationState): Ke
   const entries = conversation.entries.map((entry, index) => {
     if (
       index < activeRunStartIndex || entry.kind !== 'tool' ||
-      (entry.status !== 'pending' && entry.status !== 'running')
+      (entry.status !== 'pending' && entry.status !== 'running') ||
+      entry.subagent?.participants.some((participant) => participant.nativeTaskId !== undefined && ['pending', 'running'].includes(participant.status))
     ) return entry
     return { ...entry, status: 'error' as const }
   })

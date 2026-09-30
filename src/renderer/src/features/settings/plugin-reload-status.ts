@@ -1,5 +1,5 @@
 /**
- * Shown on the 插件, 扩展 and 子智能体 pages after this settings visit changed
+ * Shown on the 插件 and 扩展 pages after this settings visit changed
  * installed packages, local extensions or an adapted extension's enablement.
  * These changes are written to Pi's user settings (every project); Pi Runtimes
  * that are already open keep what they loaded and are never reloaded silently.

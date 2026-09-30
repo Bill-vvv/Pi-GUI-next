@@ -5,12 +5,15 @@ import type {
   KernelSubagentNoticeEntry,
   KernelSubagentOutputReference,
   KernelSubagentParticipant,
+  KernelSubagentTranscript,
   KernelToolEntry
 } from '../../../../shared/kernel-contract'
 import { Icon } from '../../components/Icon'
 import { formatUsd } from '../../format-usd'
+import { getRendererHost } from '../../host'
 import { formatTokenCount } from '../../usage-formatters'
 import { MarkdownMessage } from './MarkdownMessage'
+import { NativeSubagentTranscript } from './NativeSubagentTranscript'
 import {
   formatSubagentDuration,
   subagentParticipantLabel,
@@ -88,13 +91,25 @@ export function SubagentTaskDetail({
   entry,
   participant,
   tokenCountFormat = 'full',
-  panelRef
+  panelRef,
+  expectedSessionKey = null,
+  onGetTranscript,
+  onControl,
+  controlsAvailable = true
 }: {
   entry: KernelToolEntry | KernelSubagentNoticeEntry
   participant: KernelSubagentParticipant
   tokenCountFormat?: AppearanceSettings['tokenCountFormat']
   panelRef?: Ref<HTMLElement>
+  expectedSessionKey?: string | null
+  controlsAvailable?: boolean
+  onGetTranscript?: (taskId: string, sessionKey: string) => Promise<KernelSubagentTranscript>
+  onControl?: (taskId: string, sessionKey: string, action: 'stop' | 'continue', message?: string) => Promise<void>
 }): React.JSX.Element {
+  const host = getRendererHost()
+  const getTranscript = onGetTranscript ?? host.getSubagentTranscript
+  const control = controlsAvailable ? onControl ?? host.controlSubagent : undefined
+  const nativeTranscriptAvailable = participant.nativeTaskId !== undefined && expectedSessionKey !== null && getTranscript !== undefined
   const task = participant.task.trim() || '未提供子任务说明'
   const status = subagentParticipantStatusLabel(participant.status)
   const agentLabel = entry.kind === 'subagent-notice'
@@ -139,13 +154,23 @@ export function SubagentTaskDetail({
           <h2 id="subagent-task-detail-title">{task}</h2>
           <p>
             <strong>{agentLabel}</strong>
-            <span className={`subagent-task-detail-status ${participant.status}`}>{status}</span>
+            {nativeTranscriptAvailable ? null : <span className={`subagent-task-detail-status ${participant.status}`}>{status}</span>}
           </p>
         </div>
       </header>
 
       <div className="subagent-task-detail-body stealth-scroll">
-        {isActive ? (
+        {nativeTranscriptAvailable ? (
+          <NativeSubagentTranscript
+            key={JSON.stringify([participant.nativeTaskId, expectedSessionKey])}
+            taskId={participant.nativeTaskId!}
+            expectedSessionKey={expectedSessionKey!}
+            initialStatus={participant.status}
+            onGetTranscript={getTranscript!}
+            onControl={control}
+          />
+        ) : null}
+        {isActive && !nativeTranscriptAvailable ? (
           <section className="subagent-task-detail-section" aria-labelledby="subagent-task-activity-title">
             <h3 id="subagent-task-activity-title">当前活动</h3>
             {hasActivity ? (
@@ -173,7 +198,7 @@ export function SubagentTaskDetail({
           </section>
         ) : null}
 
-        {shouldShowResult ? (
+        {shouldShowResult && !nativeTranscriptAvailable ? (
           <section className="subagent-task-detail-section subagent-task-result" aria-labelledby="subagent-task-output-title">
             <h3 id="subagent-task-output-title">{outputTitle}</h3>
             {hasFinalOutput ? (
@@ -201,7 +226,7 @@ export function SubagentTaskDetail({
           </section>
         ) : null}
 
-        {!isActive && hasActivity ? (
+        {!isActive && hasActivity && !nativeTranscriptAvailable ? (
           <section className="subagent-task-detail-section" aria-labelledby="subagent-task-last-activity-title">
             <h3 id="subagent-task-last-activity-title">最后活动</h3>
             <SubagentActivity participant={participant} />
@@ -320,7 +345,7 @@ function outputReferenceName(path: string): string {
 }
 
 function openOutputReference(path: string): void {
-  void window.piGui.openExternal(path).catch((error: unknown) => {
+  void getRendererHost().openExternal(path).catch((error: unknown) => {
     console.error('Failed to open Subagent output reference.', error)
   })
 }

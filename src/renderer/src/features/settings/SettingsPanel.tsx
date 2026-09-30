@@ -107,7 +107,6 @@ type SettingsPanelProps = {
   onSetModel: (provider: string, modelId: string) => Promise<void>
   onSetSessionNaming: (settings: SessionNamingSettings) => Promise<void>
   onSetGeneral: (settings: GeneralSettingsValue) => Promise<void>
-  onSetSubagentEnabled: (enabled: boolean) => Promise<void>
   onSetMagicContextEnabled: (enabled: boolean) => Promise<void>
   onListSubagentDefinitions: () => Promise<KernelSubagentDefinition[]>
   onSaveSubagentDefinition: (
@@ -182,7 +181,6 @@ export function SettingsPanel({
   onSetModel,
   onSetSessionNaming,
   onSetGeneral,
-  onSetSubagentEnabled,
   onSetMagicContextEnabled,
   onListSubagentDefinitions,
   onSaveSubagentDefinition,
@@ -335,16 +333,6 @@ export function SettingsPanel({
             activeProjectKey={state.activeProjectKey}
             availableModels={state.availableModels}
             busy={busy}
-            packageBusy={busy || packageInstallActive}
-            reloadPending={reloadPending}
-            packageInstallJobs={packageInstallJobs}
-            onListPiPackages={onListPiPackages}
-            onInstallPiDevPackage={async (name) => {
-              await onInstallPiDevPackage(name)
-              bumpPackageRevision()
-            }}
-            onSetSubagentEnabled={markReloadPending(onSetSubagentEnabled)}
-            onOpenExternal={onOpenExternal}
             onListSubagentDefinitions={onListSubagentDefinitions}
             onSaveSubagentDefinition={onSaveSubagentDefinition}
             onSetSubagentDefinitionEnabled={onSetSubagentDefinitionEnabled}

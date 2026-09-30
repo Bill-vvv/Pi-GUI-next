@@ -1,8 +1,9 @@
 import { createElement, type ComponentProps } from 'react'
 import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
-import type { KernelConversationEntry, KernelThinkingEntry } from '../../../../shared/kernel-contract'
+import type { KernelConversationEntry, KernelSubagentStatus, KernelSubagentTranscript, KernelThinkingEntry } from '../../../../shared/kernel-contract'
 import { Timeline } from './Timeline'
+import { NativeSubagentTranscript } from './NativeSubagentTranscript'
 
 const thinking = (id: string, streaming: boolean): KernelThinkingEntry => ({
   id, kind: 'thinking', text: 'First reasoning paragraph.\n\nSecond reasoning paragraph.',
@@ -166,6 +167,102 @@ export async function runThinkingDisclosureChecks(): Promise<string[]> {
         checks.push(`${mode}: merged and filtered groups preserve explicit ${expectedOpen ? 'open' : 'closed'} choice`)
       }
     }
+  } finally {
+    flushSync(() => root.unmount())
+    container.remove()
+  }
+  return checks
+}
+
+/** Exercise the actual transcript reader and typed controls in the existing Timeline fixture. */
+export async function runNativeSubagentChecks(): Promise<string[]> {
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+  const checks: string[] = []
+  const calls: Array<{ taskId: string; sessionKey: string; action: string; message?: string }> = []
+  let status: KernelSubagentStatus = 'completed'
+  let continued = false
+  let resolveLate: ((value: KernelSubagentTranscript) => void) | undefined
+  const transcript = (taskId: string): KernelSubagentTranscript => ({
+    taskId, status,
+    entries: [
+      { id: 'user', kind: 'message', role: 'user', phase: null, text: `Prompt for ${taskId}`, timestamp: 1, streaming: false, stopReason: null, error: null },
+      { id: 'answer', kind: 'message', role: 'assistant', phase: null, text: `Answer for ${taskId}`, timestamp: 2, streaming: false, stopReason: null, error: null },
+      ...(continued ? [{ id: 'followup', kind: 'message' as const, role: 'user' as const, phase: null, text: 'Continue precisely', timestamp: 3, streaming: false, stopReason: null, error: null }] : [])
+    ]
+  })
+  const reader = async (taskId: string, sessionKey: string): Promise<KernelSubagentTranscript> => {
+    if (sessionKey !== `session:${taskId}`) throw new Error('Wrong parent session')
+    if (taskId === 'late') return new Promise((resolve) => { resolveLate = resolve })
+    if (taskId === 'missing') throw new Error('Native task execution instance no longer exists')
+    return transcript(taskId)
+  }
+  const control = async (taskId: string, sessionKey: string, action: 'stop' | 'continue', message?: string): Promise<void> => {
+    calls.push({ taskId, sessionKey, action, message })
+    status = action === 'stop' ? 'paused' : 'running'
+    if (action === 'continue') continued = true
+  }
+  const render = (taskId: string, initialStatus: KernelSubagentStatus): void => {
+    flushSync(() => root.render(createElement(NativeSubagentTranscript, {
+      key: taskId, taskId, expectedSessionKey: `session:${taskId}`, initialStatus,
+      onGetTranscript: reader, onControl: control
+    })))
+  }
+  const until = async (condition: () => boolean, message: string): Promise<void> => {
+    for (let frame = 0; frame < 120; frame += 1) {
+      if (condition()) return
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    }
+    throw new Error(message)
+  }
+  const button = (label: string): HTMLButtonElement => {
+    const found = [...container.querySelectorAll('button')].find((element) => element.textContent === label)
+    if (found === undefined) throw new Error(`Missing button ${label}`)
+    return found
+  }
+  const typeMessage = (text: string): void => {
+    const input = container.querySelector('textarea')!
+    flushSync(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, text)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  }
+  try {
+    render('task', 'completed')
+    await until(() => container.textContent!.includes('Answer for task'), 'native transcript was not readable')
+    checks.push('Native transcript renders prompt and answer with the existing Timeline')
+
+    typeMessage('Keep this draft')
+    status = 'running'
+    render('task', 'running')
+    await until(() => container.querySelector('textarea') === null && !button('停止').disabled, 'external Task continuation did not refresh the panel')
+    flushSync(() => button('停止').click())
+    await until(() => container.querySelector('textarea') !== null, 'stop did not refresh to paused')
+    if (calls[0]?.action !== 'stop' || calls[0]?.sessionKey !== 'session:task') throw new Error('stop used the wrong task owner')
+    if (container.querySelector('textarea')!.value !== 'Keep this draft') throw new Error('same-task status refresh discarded the continuation draft')
+    checks.push('External continuation refreshes status; stopping uses the exact owner and preserves the draft')
+
+    typeMessage('Continue precisely')
+    flushSync(() => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    await until(() => container.textContent!.includes('Continue precisely') && container.querySelector('textarea') === null, 'continuation did not retain and extend task history')
+    if (calls[1]?.action !== 'continue' || calls[1]?.message !== 'Continue precisely') throw new Error('continuation used the wrong command')
+    checks.push('Continuing sends the typed command and retains earlier task history')
+
+    render('late', 'completed')
+    await until(() => resolveLate !== undefined, 'late read did not start')
+    if (container.textContent!.includes('Answer for task')) throw new Error('task switch retained the old output')
+    render('next', 'completed')
+    await until(() => container.textContent!.includes('Answer for next'), 'new task did not load')
+    resolveLate!(transcript('late'))
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    if (container.textContent!.includes('Answer for late')) throw new Error('late old-task response replaced the new task')
+    checks.push('Identity switch clears old output and ignores a late transcript response')
+
+    render('missing', 'failed')
+    await until(() => container.textContent!.includes('当前无法读取或控制此子任务'), 'missing historical task did not show an unavailable state')
+    if (container.querySelector('form') !== null) throw new Error('unavailable history exposed continuation')
+    checks.push('Unavailable native task history exposes a concrete error and refresh without a fake control')
   } finally {
     flushSync(() => root.unmount())
     container.remove()
