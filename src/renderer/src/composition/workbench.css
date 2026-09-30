@@ -355,9 +355,14 @@
   padding: 0.68rem var(--conversation-padding-right) 0.42rem var(--conversation-padding-left);
 }
 
+/*
+ * Holds the 32px sidebar toggles; the minimum keeps the header height the same
+ * whether or not a toggle is shown (task pages have no right-sidebar toggle).
+ */
 .workbench-session-primary {
   display: flex;
   min-width: 0;
+  min-height: 32px;
   align-items: center;
   gap: 0.5rem;
 }
