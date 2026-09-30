@@ -116,6 +116,7 @@ export class SharedPiHost {
     if (this.status !== 'running') throw new Error('Shared Pi Host is not accepting Session starts.')
     const driver = await this.createSession(this.environment, options, {
       onEvent: (event) => runtime.handlePiEvent(event),
+      onCollaborationRequest: (request) => runtime.handleCollaborationRequest(request),
       onExtensionEvent: (event) => runtime.handleExtensionEvent(event),
       onIdentityChange: async (previousSessionFile, nextSessionFile) => {
         await runtime.handleIdentityChange(previousSessionFile, nextSessionFile)
@@ -440,6 +441,10 @@ export class SharedPiRuntime implements RuntimeHost {
     this.publishOrBuffer({ kind: 'runtime', event: { type: 'pi-event', event } })
   }
 
+  handleCollaborationRequest(request: import('../../shared/agent-collaboration-contract.ts').AgentCollaborationRequest): void {
+    this.publishOrBuffer({ kind: 'runtime', event: { type: 'agent-collaboration-request', ...request } })
+  }
+
   handleExtensionEvent(event: PiRpcExtensionEvent): void {
     this.publishOrBuffer({ kind: 'extension', event })
   }
@@ -475,6 +480,10 @@ export class SharedPiRuntime implements RuntimeHost {
     const driver = this.driver
     if (driver === null || this.phase !== 'running') {
       return { ok: false, reason: 'runtime-not-running', message: 'Shared Pi Runtime is not running.' }
+    }
+    if (driver.hasBackgroundActivity === true) {
+      return { ok: true, result: { version: 1, kind: 'pi-gui.runtime-quiescence/query-result', nonce: randomUUID(),
+        core: { idle: !this.streaming, pendingMessages: false }, providers: [{ id: 'pi-gui-native-agents', state: 'busy', reason: 'native-agent-operation-active' }], quiescent: false } }
     }
     if (this.options.quiescenceExtensionPath === undefined) {
       return { ok: false, reason: 'extension-missing', message: 'Runtime quiescence extension path is not configured.' }
@@ -520,6 +529,7 @@ export class SharedPiRuntime implements RuntimeHost {
     if (this.hibernateLease !== null) {
       return { ok: false, reason: 'fenced', message: 'A hibernate lease is already active on this runtime.', action: 'prepare' }
     }
+    if (this.driver?.hasBackgroundActivity === true) return { ok: false, reason: 'lease-rejected', message: 'Native child tasks are running.', action: 'prepare' }
     this.hibernateLease = { phase: 'preparing', ...input }
     const result = await this.runLeaseCommand({ action: 'prepare', ...input })
     if (!result.ok) {

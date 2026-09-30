@@ -351,6 +351,8 @@ export function interpretHibernateLeaseStatusText(
 /** Mutating RuntimeHost.send commands blocked once prepare begins. */
 export function isMutatingRuntimeCommandType(type: string): boolean {
   switch (type) {
+    case 'collaboration_prompt':
+    case 'control_subagent':
     case 'prompt':
     case 'steer':
     case 'follow_up':

@@ -47,6 +47,7 @@ import {
   isInternalSubagentCoordinationTool,
   subagentCoordinationNoticePresentation,
   subagentCoordinationToolPresentation,
+  subagentNoticeTitle,
   type SubagentCoordinationToolPresentation
 } from './subagent-coordination-presentation'
 import {
@@ -762,15 +763,6 @@ function ToolStep({
       </li>
     )
   }
-  if (entry.subagent !== null) {
-    return (
-      <SubagentToolStep
-        detailed={detailed}
-        entry={entry}
-        run={entry.subagent}
-      />
-    )
-  }
   const coordination = subagentCoordinationToolPresentation(entry)
   if (coordination !== null) {
     return (
@@ -778,6 +770,15 @@ function ToolStep({
         detailed={detailed}
         entry={entry}
         presentation={coordination}
+      />
+    )
+  }
+  if (entry.subagent !== null) {
+    return (
+      <SubagentToolStep
+        detailed={detailed}
+        entry={entry}
+        run={entry.subagent}
       />
     )
   }
@@ -1765,16 +1766,6 @@ function SubagentCompletionNotice({
   )
 }
 
-function subagentNoticeTitle(noticeType: KernelSubagentNoticeEntry['noticeType']): string {
-  if (noticeType === 'completion') return 'Subagent 完成通知'
-  if (noticeType === 'control') return 'Subagent 需要关注'
-  if (noticeType === 'steering') return 'Subagent 调整通知'
-  if (noticeType === 'request') return 'Subagent 请求'
-  if (noticeType === 'admin') return 'Subagent 管理'
-  if (noticeType === 'command') return 'Subagent 命令'
-  if (noticeType === 'watchdog-blocker') return 'Subagent Watchdog · 阻断'
-  return 'Subagent Watchdog · 关注'
-}
 
 function activityStatus(entry: KernelToolEntry): 'running' | 'completed' | 'failed' {
   if (entry.status === 'error') return 'failed'

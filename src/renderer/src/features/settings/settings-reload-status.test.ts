@@ -74,7 +74,7 @@ test('SettingsPanel marks only real package and extension changes made on this v
   assert.match(panel, /async \(\.\.\.args: Args\): Promise<void> => \{\s*await action\(\.\.\.args\)\s*setReloadPending\(true\)/u)
   for (const action of [
     'onRemovePiPackage', 'onUpdatePiPackage', 'onUpdatePiPackages',
-    'onSetMagicContextEnabled', 'onSetSubagentEnabled'
+    'onSetMagicContextEnabled'
   ]) {
     assert.match(panel, new RegExp(`${action}=\\{markReloadPending\\(${action}\\)\\}`, 'u'), action)
   }
@@ -83,8 +83,8 @@ test('SettingsPanel marks only real package and extension changes made on this v
   assert.doesNotMatch(panel, /onInstallPiDevPackage=\{markReloadPending/u)
   // Local extensions are Kernel state; any change after opening settings counts.
   assert.match(panel, /if \(state\.extensions !== initialExtensions\.current\) setReloadPending\(true\)/u)
-  assert.equal([...panel.matchAll(/reloadPending=\{reloadPending\}/gu)].length, 3)
-  assert.match(subagent, /status=\{reloadPending \? PLUGIN_RELOAD_PENDING_STATUS : null\}/u)
+  assert.equal([...panel.matchAll(/reloadPending=\{reloadPending\}/gu)].length, 2)
+  assert.doesNotMatch(subagent, /reloadPending|PLUGIN_RELOAD_PENDING_STATUS|onSetSubagentEnabled/u)
   assert.match(heading, /<p className="settings-section-heading-status" role="status">\{status\}<\/p>/u)
   assert.match(styles, /p\.settings-section-heading-status \{\s*color: var\(--color-status-warning\);/u)
 })

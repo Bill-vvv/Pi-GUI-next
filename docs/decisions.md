@@ -836,3 +836,13 @@
 - 决策：设置导航按 Codex 的分组命名为「个人：常规 / 外观 / 键盘快捷键 / 模型」「集成：插件 / 扩展 / 技能 / 子智能体」「编码：连接」，返回按钮为“返回应用”。凭证不再是独立页，作为模型页的一个分组，与对话模型、模型菜单、自定义 Provider 同页（参考 Cursor 在 Models 页管理 API Key）。界面用词采用 Codex 简体中文译法：Pi Package 显示为“插件”并在页内注明即 Pi Package，Extension 为“扩展”，Agent / Subagent 为“智能体 / 子智能体”，Session 为“对话”，远程访问为“连接”；行说明使用短句且不加句号，实验性与调试开关集中在常规页“实验性功能”分组。SSH 客户端按条目过滤，只显示常规、外观与键盘快捷键。
 - 原因：用户要求设置页的分类方式与具体表述对齐成熟产品。结构与文案取自本机安装的 Codex 26.924（`settings.nav.*` 分组与简体中文文案）和 Cursor 3.19.7（设置分区顺序），而不是凭印象；两者都把模型与凭证、技能与子智能体放在一起，也都不为单个条目单独成组。
 - 影响：Pi 的命令行与文档仍使用 package / extension / subagent 等英文术语，设置页通过页内说明保留对应关系。视觉样式（卡片或分隔线）与设置搜索、导航收起不在本决定范围内，仍分别等待 Codex 设置页截图与 S21。
+
+
+## D-103 — Pi 0.99 内建子智能体与对话协作
+
+- 日期：2026-09-30
+- 状态：Accepted；用户选择迁移 Pi Desktop 内建 Subagent 前后端，并要求按计划多 Agent 推进。执行方案见 [迁移计划](native-agent-collaboration-plan.md)。本决定替代 D-031 / D-100 的外部执行依赖和安装入口，以及 D-038 / D-050 对原生子任务历史与控制的限制；旧 pi-subagents 历史投影保留。
+- 决策：使用当前 Pi 0.99 SDK 和 SessionManager 实现 app-owned Task / TaskWait / TaskList / TaskStop；后台任务有完整连续历史、明确停止与同任务继续。内建 worker/scout/reviewer，沿用用户和项目 Agent Markdown、disabled override 与最大嵌套深度。旧 async:false 定义明确拒绝并提供显式修改，已有外部 Package 的执行资源只在 Runtime 临时配置中过滤。
+- 决策：SessionTask 的独立对话通信通过 Kernel 路由，发送者绑定 RuntimeContext，后台创建不改变前台选择。目标忙碌时排队，结果绑定具体投递，完成回传一次且不递归；沿用 D-099 的内存队列、不自动重发。Task Workspace 继续只允许一个独立 Session。
+- 原因：内建执行 owner 能向 GUI 提供真实生命周期与历史，直接复用现有 Kernel、Pi Runtime 子进程和右栏详情；复制旧 Pi Desktop 的 Rust Host、数据库或低层 Agent 引擎会重复当前事实源。
+- 影响：子任务 metadata 写入父 Pi custom entry，历史由 child Pi Session 保存；重载把未完成任务恢复为暂停，显式继续才执行。native owner 加入 Runtime quiescence provider，在子任务或协作工具运行时阻止休眠；父 Runtime 释放时终止其子任务。新命令通过同一 typed command 接入桌面、Desktop Host 和 Web Remote。

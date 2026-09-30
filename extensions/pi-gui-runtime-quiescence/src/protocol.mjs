@@ -118,13 +118,12 @@ export const SUBAGENT_SCHEDULE_IDLE_TEXT = 'No scheduled subagent runs for this 
 
 /**
  * Exact source markers that require a registered prepare/commit/release provider.
- * These packages have background work that is NOT fully awaited by Pi core idle:
- * task-notify (async notify after settle), ask (active execute), MCP (health/
- * reconnect/OAuth), CPA responses WS (sockets/timers). Classification never
- * serializes filesystem paths. Until a provider registers and prepares, inventory
- * fail-closes automatic hibernation.
+ * Native child Sessions and these packages own work beyond Pi core idle.
+ * Classification never serializes filesystem paths; missing or unprepared providers
+ * block automatic hibernation.
  */
 export const REQUIRED_PROVIDER_EXTENSION_MARKERS = Object.freeze([
+  { marker: 'pi-gui-native-agents', providerId: 'pi-gui-native-agents' },
   { marker: 'pi-gui-task-notify', providerId: 'pi-gui-task-notify' },
   { marker: 'pi-gui-ask', providerId: 'pi-gui-ask' },
   { marker: 'pi-mcp-adapter', providerId: 'pi-mcp-adapter' },

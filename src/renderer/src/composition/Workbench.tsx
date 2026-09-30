@@ -5,48 +5,16 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type MouseEvent as ReactMouseEvent,
-  type ReactNode
+  type ReactNode,
+  type MouseEvent as ReactMouseEvent
 } from 'react'
 import { RemoteProjectPicker } from '../features/project/RemoteProjectPicker'
 import { HostConnectionActions } from '../features/desktop-client/HostConnectionActions'
 
 import type {
-  AppearanceSettings,
-  GeneralSettings,
-  KernelAskAnswer,
-  KernelExtensionDialogRequest,
-  KernelExtensionSelectionKind,
-  KernelForkCandidate,
-  KernelInstalledPackage,
-  KernelModelPricingFetchResult,
   KernelNavigatorKind,
-  KernelPiPackageInstallJob,
-  KernelPiDevCatalog,
-  KernelProjectTrustChoice,
-  KernelProjectPathSearchResult,
-  KernelProviderAuthEvent,
-  KernelProviderAuthType,
-  KernelProviderConfig,
-  KernelProviderCredential,
-  KernelProviderInput,
-  KernelProviderTestResult,
-  KernelSessionPreview,
   KernelState,
-  KernelSubagentDefinition,
-  KernelSubagentEditableScope,
-  KernelSubagentDefinitionInput,
-  SessionNamingSettings,
-  SubagentSettings,
-  ShortcutSettings,
-  ThinkingLevel
 } from '../../../shared/kernel-contract'
-import type {
-  DesktopHostAccessStatus,
-  RemoteAccessStatus,
-  RemotePairingCode,
-  TailscaleRemoteStatus
-} from '../../../shared/remote-admin-contract'
 import {
   DEFAULT_SHORTCUT_SETTINGS,
   SHORTCUT_ACTION_IDS,
@@ -57,8 +25,7 @@ import { Icon } from '../components/Icon'
 import { IconButton } from '../components/IconButton'
 import {
   Composer,
-  type ComposerControlRequest,
-  type ComposerDraftRequest
+  type ComposerControlRequest
 } from '../features/composer/Composer'
 import { NavigatorListQueryControls } from '../features/project/NavigatorListQueryControls'
 import { PinnedSessionNavigator } from '../features/project/PinnedSessionNavigator'
@@ -95,8 +62,8 @@ import {
 } from '../features/chat/subagent-task-detail-model'
 import { ExtensionDialog } from '../features/extensions/ExtensionDialog'
 import { GitChangesPanel } from '../features/git/GitChangesPanel'
-import type { WorkbenchClientSurface } from '../features/desktop-client/workbench-client-surface'
 import { ProjectTrustDialog } from '../features/trust/ProjectTrustDialog'
+import type { WorkbenchProps } from './workbench-props'
 import { RIGHT_SIDEBAR_ID, RightSidebar } from './RightSidebar'
 import { reconcileRightSidebarActiveTab } from './right-sidebar-model'
 import { timelineConversation } from './conversation-presentation'
@@ -115,10 +82,6 @@ import { currentTurnTodos } from '../todo-state'
 import {
   isWorkbenchAction,
   runtimeContextActionStatus,
-  type WorkbenchActionFailure,
-  type WorkbenchActionOrigin,
-  type WorkbenchCompletedAction,
-  type WorkbenchOperation
 } from '../workbench-actions'
 
 const TOOL_DISPLAY_DENSITY_STORAGE_KEY = 'pi-workbench.tool-display-density'
@@ -130,152 +93,6 @@ const EDITABLE_TARGET_SHORTCUTS = new Set(
   Object.values(DEFAULT_SHORTCUT_SETTINGS).filter((binding): binding is string => binding !== null)
 )
 
-type WorkbenchProps = {
-  state: KernelState
-  clientSurface: WorkbenchClientSurface
-  sessionPreview: KernelSessionPreview | null
-  archivedSessionPreview: KernelSessionPreview | null
-  composerDraftRequest: ComposerDraftRequest | null
-  viewedSessionKey: string | null
-  viewingNewSession: boolean
-  newSessionPrepared: boolean
-  sessionPreviewPending: boolean
-  pendingAction: WorkbenchOperation | null
-  completedAction: WorkbenchCompletedAction | null
-  actionFailure: WorkbenchActionFailure | null
-  operationNotifications: ReactNode
-  systemFonts: string[] | null
-  systemFontsError: string | null
-  packageInstallJobs: KernelPiPackageInstallJob[]
-  forkDialogOpen: boolean
-  forkCandidates: KernelForkCandidate[]
-  forkCandidatesLoading: boolean
-  forkError: string | null
-  forkSubmitting: boolean
-  forkPreferredUserText: string | null
-  onDisconnectHost?: () => Promise<void>
-  onRevokeHostPairing?: () => Promise<void>
-  connectedHostAlias?: string
-  onAddProject: (projectPath?: string) => Promise<void>
-  onActivateProject: (projectKey: string) => Promise<void>
-  onCreateTask: () => Promise<void>
-  onActivateTask: (taskKey: string, sessionKey: string) => Promise<void>
-  onStartSession: () => Promise<void>
-  onReloadSession: () => Promise<void>
-  onWaitForSessionStart: () => Promise<void>
-  onResolveProjectTrust: (
-    requestId: string,
-    choice: KernelProjectTrustChoice
-  ) => Promise<void>
-  onActivateSession: (sessionKey: string) => Promise<void>
-  onEnsureSessionRuntime: (
-    sessionKey: string,
-    mode?: 'immediate' | 'settled'
-  ) => Promise<void>
-  onSelectSession: (sessionKey: string) => Promise<void>
-  onClearSessionPreview: () => void
-  onClearArchivedSessionPreview: () => void
-  onOpenForkDialog: (preferredUserText?: string) => Promise<void>
-  onCloseForkDialog: () => void
-  onRetryForkCandidates: () => void
-  onForkSession: (entryId: string) => Promise<void>
-  onExportSession: () => Promise<void>
-  onLoadEarlierConversation: () => Promise<void>
-  onCopyAnswer: (text: string) => Promise<void>
-  onCopyLastAnswer: () => Promise<void>
-  onArchiveSession: (sessionKey: string) => Promise<void>
-  onReorderProjects: (projectKeys: string[]) => Promise<void>
-  onInstallExtension: (kind: KernelExtensionSelectionKind) => Promise<void>
-  onRemoveExtension: (path: string) => Promise<void>
-  onSearchPiDevExtensions: (query: string) => Promise<KernelPiDevCatalog>
-  onSearchPiDevPackages: (query: string) => Promise<KernelPiDevCatalog>
-  onListPiPackages: () => Promise<KernelInstalledPackage[]>
-  onInstallPiDevPackage: (name: string) => Promise<void>
-  onRemovePiPackage: (source: string) => Promise<void>
-  onUpdatePiPackage: (source: string) => Promise<void>
-  onUpdatePiPackages: () => Promise<void>
-  onOpenExternal: (url: string) => Promise<void>
-  onListProviders: () => Promise<KernelProviderConfig[]>
-  onSaveProvider: (provider: KernelProviderInput) => Promise<KernelProviderConfig[]>
-  onRemoveProvider: (providerId: string) => Promise<KernelProviderConfig[]>
-  onTestProvider: (providerId: string, modelId: string) => Promise<KernelProviderTestResult>
-  onFetchModelPricing: (
-    providerId: string,
-    modelIds: string[]
-  ) => Promise<KernelModelPricingFetchResult>
-  onListProviderCredentials: () => Promise<KernelProviderCredential[]>
-  onLoginProvider: (
-    providerId: string,
-    authType: KernelProviderAuthType
-  ) => Promise<KernelProviderCredential[]>
-  onSubmitProviderAuthPrompt: (
-    operationId: string,
-    promptId: string,
-    value: string
-  ) => Promise<void>
-  onCancelProviderLogin: (operationId: string) => Promise<void>
-  onLogoutProvider: (providerId: string) => Promise<KernelProviderCredential[]>
-  onSubscribeProviderAuth: (
-    listener: (event: KernelProviderAuthEvent) => void
-  ) => () => void
-  onGetRemoteAccessStatus: () => Promise<RemoteAccessStatus>
-  onCreateRemotePairingCode: () => Promise<RemotePairingCode>
-  onRevokeRemoteDevice: () => Promise<RemoteAccessStatus>
-  onGetTailscaleStatus: () => Promise<TailscaleRemoteStatus>
-  onEnableTailscaleFunnel: () => Promise<TailscaleRemoteStatus>
-  onEnableTailscaleServe: () => Promise<TailscaleRemoteStatus>
-  onDisableTailscale: () => Promise<TailscaleRemoteStatus>
-  onGetDesktopHostStatus: () => Promise<DesktopHostAccessStatus>
-  onCreateDesktopHostPairingCode: () => Promise<RemotePairingCode>
-  onRevokeDesktopHostDevice: (deviceId: string) => Promise<DesktopHostAccessStatus>
-  onSelectPromptAttachments: () => Promise<PromptDraftAttachment[]>
-  onSearchProjectPaths: (query: string) => Promise<KernelProjectPathSearchResult>
-  onSubmitAsk: (
-    sessionKey: string,
-    toolCallId: string,
-    answers: KernelAskAnswer[]
-  ) => Promise<void>
-  onCancelAsk: (sessionKey: string, toolCallId: string) => Promise<void>
-  onRespondExtensionDialog: (
-    request: KernelExtensionDialogRequest,
-    value: string
-  ) => Promise<void>
-  onCancelExtensionDialog: (request: KernelExtensionDialogRequest) => Promise<void>
-  onPrompt: (
-    message: string,
-    attachments?: PromptDraftAttachment[],
-    expectedSessionKey?: string
-  ) => Promise<void>
-  onNavigateHistoryPrompt: (sessionKey: string, messageId: string) => Promise<void>
-  onSteer: (message: string, attachments?: PromptDraftAttachment[]) => Promise<void>
-  onFollowUp: (message: string, attachments?: PromptDraftAttachment[]) => Promise<void>
-  onInvokeCommand: (commandId: string, argument: string) => Promise<void>
-  onAbort: () => Promise<void>
-  onSetModel: (
-    provider: string,
-    modelId: string,
-    origin: WorkbenchActionOrigin
-  ) => Promise<void>
-  onSetThinkingLevel: (level: ThinkingLevel) => Promise<void>
-  onSetOpenAiFastMode: (enabled: boolean) => Promise<void>
-  onSetSessionNaming: (settings: SessionNamingSettings) => Promise<void>
-  onSetGeneral: (settings: GeneralSettings) => Promise<void>
-  onSetSubagentEnabled: (enabled: boolean) => Promise<void>
-  onSetMagicContextEnabled: (enabled: boolean) => Promise<void>
-  onListSubagentDefinitions: () => Promise<KernelSubagentDefinition[]>
-  onSaveSubagentDefinition: (
-    definition: KernelSubagentDefinitionInput
-  ) => Promise<KernelSubagentDefinition[]>
-  onSetSubagentDefinitionEnabled: (
-    id: string,
-    scope: KernelSubagentEditableScope,
-    enabled: boolean
-  ) => Promise<KernelSubagentDefinition[]>
-  onRemoveSubagentDefinition: (id: string) => Promise<KernelSubagentDefinition[]>
-  onSetSubagent: (settings: SubagentSettings) => Promise<void>
-  onSetAppearance: (settings: AppearanceSettings) => Promise<void>
-  onSetShortcuts: (settings: ShortcutSettings) => Promise<void>
-}
 
 export function Workbench({
   state,
@@ -374,8 +191,9 @@ export function Workbench({
   onSetOpenAiFastMode,
   onSetSessionNaming,
   onSetGeneral,
-  onSetSubagentEnabled,
   onSetMagicContextEnabled,
+  onGetSubagentTranscript,
+  onControlSubagent,
   onListSubagentDefinitions,
   onSaveSubagentDefinition,
   onSetSubagentDefinitionEnabled,
@@ -1365,7 +1183,6 @@ export function Workbench({
             onSetModel={(provider, modelId) => onSetModel(provider, modelId, 'settings')}
             onSetSessionNaming={onSetSessionNaming}
             onSetGeneral={onSetGeneral}
-            onSetSubagentEnabled={onSetSubagentEnabled}
             onSetMagicContextEnabled={onSetMagicContextEnabled}
             onListSubagentDefinitions={onListSubagentDefinitions}
             onSaveSubagentDefinition={onSaveSubagentDefinition}
@@ -1592,6 +1409,11 @@ export function Workbench({
               label: '子任务',
               content: (
                 <SubagentTaskDetail
+                  key={JSON.stringify([displayedConversationIdentity, selectedSubagentTask.participant.nativeTaskId ?? selectedSubagentTaskKey])}
+                  expectedSessionKey={displayedSessionKey}
+                  onGetTranscript={onGetSubagentTranscript}
+                  onControl={onControlSubagent}
+                  controlsAvailable={archivedSessionPreview === null}
                   entry={selectedSubagentTask.entry}
                   participant={selectedSubagentTask.participant}
                   tokenCountFormat={state.appearance.tokenCountFormat}

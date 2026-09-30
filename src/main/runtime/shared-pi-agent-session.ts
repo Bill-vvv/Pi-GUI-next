@@ -9,7 +9,7 @@ import {
   createEventBus,
   getAgentDir,
   initTheme,
-  SessionManager,
+  type SessionManager,
   SettingsManager,
   type AgentSession,
   type AgentSessionRuntime,
@@ -17,6 +17,7 @@ import {
   type ExtensionUIContext
 } from '@earendil-works/pi-coding-agent'
 
+import { NativeAgentExtension, isNativeAgentCommand, type NativeAgentSessionOptions, type NativeAgentSessionCallbacks } from './native-agent-extension.ts'
 import type { KernelPromptImage, ThinkingLevel } from '../../shared/kernel-contract.ts'
 import {
   normalizePiRpcSessionEntry,
@@ -63,11 +64,10 @@ type ExtensionCommandInvocation = {
   name: string
 }
 
-export type SharedPiAgentSessionOptions = {
+export type SharedPiAgentSessionOptions = NativeAgentSessionOptions & {
   cwd: string
   sessionFile?: string
   projectTrust?: boolean
-  subagentMaxDepth?: number
   fastExtensionLoading?: boolean
   piExecutable?: string
   extensionPaths: string[]
@@ -78,7 +78,7 @@ export type SharedPiAgentSessionOptions = {
   openAiFastMode?: boolean
 }
 
-export type SharedPiAgentSessionCallbacks = {
+export type SharedPiAgentSessionCallbacks = NativeAgentSessionCallbacks & {
   onEvent: (event: PiRpcEvent) => void
   onExtensionEvent: (event: PiRpcExtensionEvent) => void
   onIdentityChange: (previousSessionFile: string | null, nextSessionFile: string) => Promise<void>
@@ -88,6 +88,7 @@ export type SharedPiAgentSessionCallbacks = {
 export interface SharedPiSessionDriver {
   readonly sessionFile: string
   readonly isStreaming: boolean
+  readonly hasBackgroundActivity?: boolean
   send(command: RuntimeCommand): Promise<RuntimeCommandResult>
   getLoadedExtensions(): PiRpcExtensionInventory
   dispose(): Promise<void>
@@ -140,28 +141,6 @@ function validateExtensionEventChannels(channels: readonly string[]): string[] {
     result.push(channel)
   }
   return result
-}
-
-function environmentOverrides(options: SharedPiAgentSessionOptions): SharedPiEnvironmentOverrides {
-  const fastExtensionLoading = options.fastExtensionLoading === true
-  return {
-    PI_PARALLEL_EXTENSION_IMPORTS: fastExtensionLoading ? '1' : '0',
-    PI_NATIVE_COMPILED_EXTENSION_IMPORTS: fastExtensionLoading ? '1' : '0',
-    JITI_TRY_NATIVE: fastExtensionLoading ? '0' : '1',
-    MAGIC_CONTEXT_PI_BINARY: options.piExecutable,
-    PI_SUBAGENT_MAX_DEPTH: options.subagentMaxDepth === undefined
-      ? undefined
-      : String(options.subagentMaxDepth),
-    PI_GUI_NOTIFICATION_SOCKET: options.desktopNotification?.socketPath,
-    PI_GUI_NOTIFICATION_TOKEN: options.desktopNotification?.token,
-    OPENAI_FAST_MODE: options.openAiFastMode === true ? '1' : undefined
-  }
-}
-
-function createSessionManager(options: SharedPiAgentSessionOptions): SessionManager {
-  return options.sessionFile === undefined
-    ? SessionManager.create(options.cwd)
-    : SessionManager.open(options.sessionFile)
 }
 
 function projectModel(model: AgentSession['model']): PiRpcModel | null {
@@ -238,6 +217,7 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
   private readonly extensionCommandScope = new AsyncLocalStorage<ExtensionCommandInvocation>()
   private activeExtensionCommand: ExtensionCommandInvocation | null = null
   private disposed = false
+  private readonly native: NativeAgentExtension
 
   private constructor(
     environment: SharedPiProcessEnvironment,
@@ -247,7 +227,9 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
     this.environment = environment
     this.options = options
     this.callbacks = callbacks
-    this.overrides = environmentOverrides(options)
+    this.native = new NativeAgentExtension(options, callbacks, () => this.requireSession(),
+      async (childOptions, childCallbacks) => SharedPiAgentSession.create(environment, childOptions, childCallbacks))
+    this.overrides = this.native.environmentOverrides()
   }
 
   static async create(
@@ -280,6 +262,22 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
     return this.runtime?.session.isStreaming === true
   }
 
+  get nativeSession(): AgentSession { return this.requireSession() }
+
+  get hasBackgroundActivity(): boolean { return this.native.hasBackgroundActivity }
+
+  async runTask(message: string): Promise<void> {
+    await this.runScoped(() => this.native.runTask(message))
+  }
+
+  async switchTaskModel(key: string): Promise<void> {
+    await this.runScoped(() => this.native.switchTaskModel(key))
+  }
+
+  async abortTask(): Promise<void> {
+    await this.runScoped(() => this.native.abortTask())
+  }
+
   private runScoped<T>(operation: () => T): T {
     if (this.disposed) throw new Error('Shared Pi Session is disposed.')
     return this.environment.run(this.overrides, operation)
@@ -308,6 +306,7 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
         const settingsManager = SettingsManager.create(input.cwd, input.agentDir, {
           projectTrusted: this.options.projectTrust ?? true
         })
+        this.native.prepareSettings(settingsManager)
         // RPC-mode extensions such as pi-mcp-adapter color status text with ui.theme.
         // The CLI initializes this global theme before bindExtensions; the in-process SDK host must too.
         initTheme(settingsManager.getTheme())
@@ -317,8 +316,7 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
           settingsManager,
           resourceLoaderOptions: {
             eventBus: bridgedEventBus,
-            appendSystemPrompt: [PROGRESS_SYSTEM_PROMPT],
-            additionalExtensionPaths: this.options.extensionPaths
+            ...this.native.resourceOptions(PROGRESS_SYSTEM_PROMPT)
           }
         })
         const extensionErrors = services.resourceLoader.getExtensions().errors
@@ -334,10 +332,8 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
           eventBus.clear()
           throw new Error(`Pi SDK runtime initialization failed with ${errorCount} error diagnostic(s).`)
         }
-        const created = await createAgentSessionFromServices({
-          services,
-          sessionManager: input.sessionManager,
-          sessionStartEvent: input.sessionStartEvent
+        const created = await this.native.createSession({
+          services, sessionManager: input.sessionManager, sessionStartEvent: input.sessionStartEvent
         })
         return { ...created, services, diagnostics: services.diagnostics }
       }
@@ -345,7 +341,7 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
       this.runtime = await createAgentSessionRuntime(createRuntime, {
         cwd: this.options.cwd,
         agentDir,
-        sessionManager: createSessionManager(this.options),
+        sessionManager: this.native.sessionManager(),
         sessionStartEvent: { type: 'session_start', reason: 'startup' }
       })
       this.runtime.setRebindSession(async () => {
@@ -360,8 +356,10 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
     const session = runtime.session
     const nextSessionFile = requireSessionFile(session)
     const previousSessionFile = this.currentSessionFile
+    await this.native.prepareIdentityChange(previousSessionFile, nextSessionFile)
     await this.callbacks.onIdentityChange(previousSessionFile, nextSessionFile)
     this.currentSessionFile = nextSessionFile
+    this.native.restore()
 
     const baseUi = session.extensionRunner.getUIContext()
     await session.bindExtensions({
@@ -404,6 +402,7 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
       method: 'select' | 'confirm' | 'input' | 'editor',
       payload: Record<string, unknown>
     ): Promise<{ value?: string, cancelled?: boolean }> => {
+      if (this.options.nativeChild !== undefined) throw new Error(`Background child agents cannot request interactive ${method} UI.`)
       const id = randomUUID()
       const invocation = this.extensionCommandScope.getStore()
       this.callbacks.onEvent({
@@ -537,6 +536,7 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
       const session = this.requireSession()
       const runtime = this.requireRuntime()
 
+      if (isNativeAgentCommand(command)) return await this.native.send(command)
       if (command.type === 'get_state') {
         const state: PiRpcSessionState = {
           model: projectModel(session.model),
@@ -577,6 +577,9 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
           leafId: session.sessionManager.getLeafId()
         })
         return { type: 'tree', ...result }
+      }
+      if ((command.type === 'navigate_tree' || command.type === 'fork') && this.hasBackgroundActivity) {
+        throw new Error('Stop running child tasks before changing this Session history.')
       }
       if (command.type === 'navigate_tree') {
         const before = session.sessionManager.getEntries().map(normalizePiRpcSessionEntry)
@@ -635,7 +638,7 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
         return { type: 'accepted' }
       }
       if (command.type === 'abort') {
-        await session.abort()
+        await this.native.abortTask()
         return { type: 'accepted' }
       }
       if (command.type === 'set_model') {
@@ -774,8 +777,10 @@ export class SharedPiAgentSession implements SharedPiSessionDriver {
     if (this.disposed) return
     await this.runScoped(async () => {
       const runtime = this.runtime
+      this.native.rejectPendingRequests()
       if (runtime !== null) {
         await runtime.session.abort()
+        await this.native.dispose()
         await runtime.session.waitForIdle()
         await runtime.dispose()
       }

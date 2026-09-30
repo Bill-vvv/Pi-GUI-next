@@ -14883,3 +14883,99 @@ test('Context retains only Session state and reactivation uses current workspace
   assert.deepEqual(kernel.getState().session.pendingSteeringMessages, ['queued'])
   assert.equal(kernel.getState().runtime.lastError, 'background warning')
 })
+
+test('SessionTask keeps background identity, delivery-bound results and one-time callbacks across provisional commit', async (t) => {
+  const sourceKey = '/tmp/collaboration-source.jsonl'
+  const targetKey = '/tmp/collaboration-target.jsonl'
+  const source = new FakeRuntimeHost({ sessionId: 'collaboration-source', sessionFile: sourceKey })
+  const target = new FakeRuntimeHost(
+    { sessionId: 'collaboration-target', sessionFile: targetKey },
+    [{ role: 'assistant', content: [{ type: 'text', text: 'Old answer must not be reused' }], timestamp: 1 }]
+  )
+  const runtimes = [source, target]
+  const persisted: SessionPointer[] = []
+  let targetValidationCalls = 0
+  let releaseCommit!: () => void
+  const commitGate = new Promise<void>((resolve) => { releaseCommit = resolve })
+  const kernel = new WorkbenchKernel(
+    () => { const runtime = runtimes.shift(); assert.ok(runtime); return runtime },
+    { projects: [{ path: '/tmp/project' }], activeProjectKey: '/tmp/project' },
+    {
+      ...kernelOptions(null, persisted),
+      validateSession: async (pointer) => {
+        if (pointer.sessionId !== 'collaboration-target') return pointer
+        targetValidationCalls += 1
+        if (targetValidationCalls === 1) throw fileError('ENOENT', 'custom-only Session is not flushed')
+        await commitGate
+        return pointer
+      }
+    }
+  )
+  t.after(() => kernel.stop())
+  await kernel.start()
+  source.emit({ type: 'pi-event', event: { type: 'agent_start' } })
+  source.emit({
+    type: 'agent-collaboration-request', requestId: 'spawn-request',
+    operation: { action: 'spawn', task: 'First delegated task' }
+  })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  const spawnResponse = source.commands.find((command) => command.type === 'agent_collaboration_response' && command.response.requestId === 'spawn-request')
+  assert.ok(spawnResponse?.type === 'agent_collaboration_response' && spawnResponse.response.ok)
+  assert.equal(spawnResponse.response.result.kind, 'delivery')
+  if (spawnResponse.response.result.kind !== 'delivery') throw new Error('Expected a delivery')
+  const firstId = spawnResponse.response.result.delivery.messageId
+  assert.equal(kernel.getState().activeSessionKey, sourceKey, 'spawn must not activate the target')
+  const prompts = (): Extract<RuntimeCommand, { type: 'collaboration_prompt' }>[] => target.commands.filter((command) => command.type === 'collaboration_prompt')
+  assert.equal(prompts().length, 1)
+  assert.equal(prompts()[0]!.sourceSessionId, 'collaboration-source', 'source comes from its RuntimeContext')
+
+  const second = await kernel.agentCollaboration({ action: 'send', sessionId: 'collaboration-target', content: 'Second delegated task' }, sourceKey)
+  assert.equal(second.kind, 'delivery')
+  if (second.kind !== 'delivery') throw new Error('Expected a delivery')
+  assert.equal(second.delivery.status, 'queued')
+  assert.equal(prompts().length, 1, 'a busy target must not receive the second prompt')
+  const readResult = async (messageId: string) => {
+    const result = await kernel.agentCollaboration({ action: 'result', sessionId: 'collaboration-target', messageId }, sourceKey)
+    assert.equal(result.kind, 'result')
+    if (result.kind !== 'result' || result.delivery === null) throw new Error('Expected the exact delivery')
+    return result.delivery
+  }
+  target.emit({ type: 'pi-event', event: { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'First new answer' }], timestamp: 2 } } })
+  assert.equal(targetValidationCalls, 2)
+  releaseCommit()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(persisted.filter((pointer) => pointer.sessionId === 'collaboration-target').length, 1)
+  assert.equal((await readResult(firstId)).status, 'running', 'provisional commit is not a completed run')
+  assert.equal((await readResult(firstId)).result, null)
+  assert.equal(prompts().length, 1)
+  target.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+  target.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal((await readResult(firstId)).result, 'First new answer')
+  assert.equal(prompts().length, 2)
+  assert.equal((await readResult(second.delivery.messageId)).status, 'running')
+  assert.equal((await readResult(second.delivery.messageId)).result, null, 'the second delivery cannot borrow the first answer')
+  target.emit({ type: 'pi-event', event: { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Second new answer' }], timestamp: 3 } } })
+  target.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal((await readResult(second.delivery.messageId)).result, 'Second new answer')
+  const completions = () => source.commands.filter((command) => command.type === 'collaboration_prompt' && command.kind === 'completion')
+  assert.equal(completions().length, 0, 'source callbacks wait until its current turn settles')
+  source.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(completions().length, 1)
+  source.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(completions().length, 2)
+  source.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+  target.emit({ type: 'pi-event', event: { type: 'agent_settled' } })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(completions().length, 2, 'callbacks do not produce recursive or duplicate completion messages')
+  assert.equal(prompts().length, 2)
+  assert.equal(kernel.getState().activeSessionKey, sourceKey)
+  await kernel.activateSession(targetKey)
+  await assert.rejects(kernel.getSubagentTranscript('child', sourceKey), /changed/u)
+  await assert.rejects(kernel.controlSubagent('child', sourceKey, 'stop'), /changed/u)
+  await assert.rejects(kernel.agentCollaboration({ action: 'list' }, sourceKey), /changed/u)
+  assert.equal(source.commands.some((command) => command.type === 'get_subagent_transcript' || command.type === 'control_subagent'), false)
+})

@@ -17,6 +17,7 @@ export type RuntimeHibernationHost = {
   /** Serializes with activate/reload/start (the Kernel launch gate). */
   withLaunchGate(operation: () => Promise<void>): Promise<void>
   stopContext(context: RuntimeContext): Promise<void>
+  hasPendingCollaboration(context: RuntimeContext): boolean
 }
 
 export type HibernationSweepSummary = {
@@ -87,6 +88,9 @@ export class RuntimeHibernation {
       context.state.activeSessionKey === null
     ) {
       return 'Cannot hibernate a provisional session.'
+    }
+    if (this.host.hasPendingCollaboration(context)) {
+      return 'Cannot hibernate a Session with pending agent deliveries.'
     }
     const runtimeStatus = context.state.runtime.status
     if (

@@ -601,12 +601,6 @@ export function createPreviewKernelApi(): KernelApi {
       extensionEnabled: false
     },
     {
-      source: `npm:${SUBAGENT_PACKAGE_NAME}@1.0.0`,
-      packageName: SUBAGENT_PACKAGE_NAME,
-      filtered: false,
-      extensionEnabled: true
-    },
-    {
       source: `npm:${MAGIC_CONTEXT_PACKAGE_NAME}@1.0.0`,
       packageName: MAGIC_CONTEXT_PACKAGE_NAME,
       filtered: true,
@@ -1110,6 +1104,10 @@ export function createPreviewKernelApi(): KernelApi {
       installedPackages = installedPackages.filter((pkg) => pkg.source !== source)
       return currentAck()
     },
+    getSubagentTranscript: async () => { throw new Error('Native subagent transcripts require a connected Host.') },
+    controlSubagent: async () => { throw new Error('Native subagent controls require a connected Host.') },
+    agentCollaboration: async () => { throw new Error('Session collaboration requires a connected Host.') },
+    getAgentCollaboration: async () => ({ kind: 'sessions', sessions: [] }),
     setSubagentEnabled: async (enabled) => {
       const base = `npm:${SUBAGENT_PACKAGE_NAME}`
       if (!installedPackages.some((pkg) => pkg.source === base || pkg.source.startsWith(`${base}@`))) {

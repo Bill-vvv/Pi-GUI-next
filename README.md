@@ -4,6 +4,8 @@ Windows GUI + WSL2 体验版安装及打包说明见 [Windows + WSL 安装版](d
 
 Pi GUI 是面向本地 Pi Coding Agent 的 Linux 桌面工作台。当前按 [重启与并行实施计划](docs/restart-plan-2026-09-28.md) 推进：Pi Runtime 已迁入独立子进程（D-094），R12 多设备配对已在本地接通，并完成 Linux Host 安装包升级验证与 Windows 平台自动化测试（D-101）；WSL 后端与 SSH Desktop Host 改为无需 Electron 和图形会话的 Node Host（D-095）；Windows 桌面人工验收与真实 SSH 验收仍开放。各阶段状态以 [`docs/development-plan.md`](docs/development-plan.md) 为准。
 
+内建子智能体与对话协作基于 Pi 0.99，支持 Task 后台执行、任务历史与停止/继续，以及 SessionTask 对话间委派和消息。迁移范围和验收见 [内建协作计划](docs/native-agent-collaboration-plan.md)。
+
 ## 工具链
 
 - Node.js 26.4.0
