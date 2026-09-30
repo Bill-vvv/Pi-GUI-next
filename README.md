@@ -8,7 +8,7 @@ Pi GUI 是面向本地 Pi Coding Agent 的 Linux 桌面工作台。当前按 [�
 
 - Node.js 26.4.0
 - pnpm 11.9.0
-- Pi Coding Agent 0.83.0
+- Pi Coding Agent 0.99.0
 
 安装依赖：
 
@@ -45,7 +45,7 @@ node scripts/workspace.mjs wsl
 
 `PI_GUI_PROBE_ONLY=1`（`pnpm smoke:pi`）启动一次 Pi Runtime 子进程，在临时目录中离线创建 Session 并读取命令后退出，不进入 GUI，也不写入用户的 Pi 数据。
 
-通过 pnpm 启动会使用项目锁定的 Pi 0.83.0。Linux 上的会话运行在 Main 按需启动的 Pi Runtime 子进程中。会话命名等辅助功能默认从当前 `PATH` 解析 `pi`；需要显式指定时使用：
+通过 pnpm 启动会使用项目锁定的 Pi 0.99.0。Linux 上的会话运行在 Main 按需启动的 Pi Runtime 子进程中。会话命名等辅助功能默认从当前 `PATH` 解析 `pi`；需要显式指定时使用：
 
 ```bash
 PI_GUI_PI_EXECUTABLE=/absolute/path/to/pi pnpm dev

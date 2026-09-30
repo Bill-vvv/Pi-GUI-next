@@ -4,8 +4,9 @@ import { basename, dirname, extname, delimiter, join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 
 import { errorMessage } from '../utils/errors.ts'
+import { SUPPORTED_PI_CODING_AGENT_VERSION } from '../../../extensions/pi-gui-runtime-quiescence/src/protocol.mjs'
 
-export const SUPPORTED_PI_VERSION = '0.83.0'
+export const SUPPORTED_PI_VERSION = SUPPORTED_PI_CODING_AGENT_VERSION
 
 // Windows may need longer to load the Pi SDK on a cold filesystem cache.
 const DEFAULT_VERSION_TIMEOUT_MS = process.platform === 'win32' ? 30_000 : 5_000

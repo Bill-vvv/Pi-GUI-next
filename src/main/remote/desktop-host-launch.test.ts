@@ -32,8 +32,8 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   for (const file of ['pnpm-lock.yaml', 'pnpm-workspace.yaml', 'electron.vite.config.ts', 'vite.remote.config.ts', 'out/preload/index.cjs', 'out/renderer/index.html']) await write(join(build, file), 'fixture\n')
   await write(join(build, 'package.json'), JSON.stringify({ name: 'pi-gui-next', version: '0.0.1', type: 'module', main: './out/main/index.js',
     engines: { node: process.versions.node }, build: { extraResources: [] },
-    dependencies: { '@earendil-works/pi-coding-agent': '0.83.0' }, devDependencies: { electron: '43.1.1' } }))
-  await write(join(build, 'node_modules/@earendil-works/pi-coding-agent/package.json'), JSON.stringify({ version: '0.83.0' }))
+    dependencies: { '@earendil-works/pi-coding-agent': '0.99.0' }, devDependencies: { electron: '43.1.1' } }))
+  await write(join(build, 'node_modules/@earendil-works/pi-coding-agent/package.json'), JSON.stringify({ version: '0.99.0' }))
   await write(join(build, 'node_modules/@earendil-works/pi-coding-agent/dist/cli.js'), '// fixture\n')
   await write(join(build, 'out/main/index.js'), 'fixture\n')
   // A real Node child process and HTTP server, substituting for the Node Host entry.
@@ -225,7 +225,7 @@ test('inspection validates actual artifacts, pinned dependencies and Linux runti
   const piPackage = join(f.build, 'node_modules/@earendil-works/pi-coding-agent/package.json')
   await writeFile(piPackage, JSON.stringify({ version: 'wrong' }))
   await assert.rejects(inspectDesktopHost(f.directory, f.build), /Installed @earendil-works\/pi-coding-agent does not match/)
-  await writeFile(piPackage, JSON.stringify({ version: '0.83.0' }))
+  await writeFile(piPackage, JSON.stringify({ version: '0.99.0' }))
   // No Electron runtime is needed for the Host (D-095).
   assert.equal(result.hostEntry, join(f.build, 'out/main/pi-host.js'))
   await writeFile(join(f.build, 'out/main/index.js'), 'corrupted')
