@@ -123,3 +123,42 @@ test('only presents meaningful Subagent coordination tools', () => {
   )
   assert.equal(subagentCoordinationToolPresentation(tool('read', 'success')), null)
 })
+
+test('hides native Task polling and SessionTask reads across tool namespaces', () => {
+  for (const name of ['TaskList', 'TaskWait', 'functions.TaskList', 'agent/TaskWait']) {
+    const entry = tool(name, 'success')
+    assert.equal(isInternalSubagentCoordinationTool(entry), true, name)
+    assert.equal(subagentCoordinationToolPresentation(entry), null, name)
+  }
+  for (const action of ['list', 'status', 'result']) {
+    assert.equal(isInternalSubagentCoordinationTool(tool('functions.SessionTask', 'success', { action })), true, action)
+  }
+  for (const action of ['send', 'spawn', 'cancel']) {
+    assert.equal(isInternalSubagentCoordinationTool(tool('SessionTask', 'success', { action })), false, action)
+    assert.notEqual(subagentCoordinationToolPresentation(tool('SessionTask', 'success', { action })), null, action)
+  }
+})
+
+test('presents TaskStop as control instead of a new delegation', () => {
+  for (const [status, text] of [
+    ['running', '正在停止子任务'],
+    ['success', '已停止子任务'],
+    ['error', '停止子任务失败']
+  ] as const) {
+    assert.deepEqual(subagentCoordinationToolPresentation(tool('functions.TaskStop', status, { taskId: 'task-1' })), {
+      text, groupLabel: '停止子任务'
+    })
+  }
+})
+
+test('presents SessionTask send, spawn and cancel as their actual actions', () => {
+  assert.deepEqual(subagentCoordinationToolPresentation(tool('SessionTask', 'running', { action: 'send' })), {
+    text: '正在向其他对话发送消息', groupLabel: '发送对话消息'
+  })
+  assert.deepEqual(subagentCoordinationToolPresentation(tool('SessionTask', 'success', { action: 'spawn' })), {
+    text: '已创建后台对话任务', groupLabel: '创建后台对话任务'
+  })
+  assert.deepEqual(subagentCoordinationToolPresentation(tool('SessionTask', 'error', { action: 'cancel' })), {
+    text: '取消对话投递失败', groupLabel: '取消对话投递'
+  })
+})

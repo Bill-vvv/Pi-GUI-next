@@ -12,8 +12,11 @@ test('labels Agent availability as enabled rather than running', () => {
   assert.match(source, /启用状态/u)
   assert.match(source, /已启用/u)
   assert.match(source, /已停用/u)
-  assert.match(source, /已安装并开启/u)
-  assert.match(source, /已安装，未开启/u)
+  assert.match(source, />内建</u)
+  assert.doesNotMatch(source, /AdaptedExtensionPackageControl|packageState|pi-subagents/u)
+  assert.doesNotMatch(source, /value: 'foreground'|value: 'defaultAsync'/u)
+  assert.match(source, /内建子任务始终在后台执行/u)
+  assert.match(source, /saveDefinition\(\{ \.\.\.draft, defaultAsync: true \}\)/u)
   assert.doesNotMatch(source, /拓展已开启|拓展已关闭/u)
 })
 

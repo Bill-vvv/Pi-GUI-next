@@ -1058,6 +1058,10 @@ export function App(): React.JSX.Element {
       onSearchPiDevExtensions={(query) => window.piGui.searchPiDevExtensions(query)}
       onSearchPiDevPackages={(query) => window.piGui.searchPiDevPackages(query)}
       onListPiPackages={() => window.piGui.listPiPackages()}
+      onGetSubagentTranscript={(taskId, sessionKey) => window.piGui.getSubagentTranscript(taskId, sessionKey)}
+      onControlSubagent={async (taskId, sessionKey, action, message) => {
+        await awaitMutationAck(() => window.piGui.controlSubagent(taskId, sessionKey, action, message))
+      }}
       onListSubagentDefinitions={() => window.piGui.listSubagentDefinitions()}
       onSaveSubagentDefinition={(definition) => window.piGui.saveSubagentDefinition(definition)}
       onSetSubagentDefinitionEnabled={(id, scope, enabled) =>
@@ -1183,12 +1187,6 @@ export function App(): React.JSX.Element {
       }
       onSetGeneral={(settings: GeneralSettings) =>
         saveGeneralSettings(settings)
-      }
-      onSetSubagentEnabled={(enabled) =>
-        runPlainAction(
-          workbenchOp('set-subagent-enabled'),
-          () => window.piGui.setSubagentEnabled(enabled)
-        )
       }
       onSetMagicContextEnabled={(enabled) =>
         runPlainAction(

@@ -1,5 +1,5 @@
 import { normalizeOpenTarget } from '../../shared/external-url'
-import type { KernelMessageImage } from '../../shared/kernel-contract'
+import type { KernelMessageImage, KernelSubagentTranscript } from '../../shared/kernel-contract'
 
 export type RendererHost = {
   normalizeOpenTarget(url: string): string | null
@@ -14,6 +14,8 @@ export type RendererHost = {
     toolCallId: string,
     contentIndex: number
   ): Promise<KernelMessageImage>
+  getSubagentTranscript?: (taskId: string, expectedSessionKey: string) => Promise<KernelSubagentTranscript>
+  controlSubagent?: (taskId: string, expectedSessionKey: string, action: 'stop' | 'continue', message?: string) => Promise<void>
 }
 
 let configuredHost: RendererHost | null = null
@@ -25,7 +27,11 @@ function createDesktopHost(): RendererHost {
     getMessageImage: (sessionKey, messageId, attachmentIndex) =>
       window.piGui.getMessageImage(sessionKey, messageId, attachmentIndex),
     getToolImage: (sessionKey, toolCallId, contentIndex) =>
-      window.piGui.getToolImage(sessionKey, toolCallId, contentIndex)
+      window.piGui.getToolImage(sessionKey, toolCallId, contentIndex),
+    getSubagentTranscript: (taskId, expectedSessionKey) => window.piGui.getSubagentTranscript(taskId, expectedSessionKey),
+    controlSubagent: async (taskId, expectedSessionKey, action, message) => {
+      await window.piGui.controlSubagent(taskId, expectedSessionKey, action, message)
+    }
   }
 }
 

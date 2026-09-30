@@ -169,13 +169,13 @@ test('immediate on/off settings use the switch control', async () => {
   }
 })
 
-test('pi-subagents install and enablement live on the Subagent page (D-100)', async () => {
+test('Subagent settings use the built-in execution path without an installation gate', async () => {
   const [subagent, extensions] = await Promise.all([
     readFile(new URL('./SubagentSettings.tsx', import.meta.url), 'utf8'),
     readFile(new URL('./ExtensionSettings.tsx', import.meta.url), 'utf8')
   ])
-  assert.match(subagent, /<AdaptedExtensionPackageControl[\s\S]*?packageName=\{SUBAGENT_PACKAGE_NAME\}/u)
-  assert.match(subagent, /onStateChange=\{setPackageState\}/u)
+  assert.match(subagent, />内建</u)
+  assert.doesNotMatch(subagent, /AdaptedExtensionPackageControl|packageState|SUBAGENT_PACKAGE_NAME/u)
   assert.doesNotMatch(subagent, /findUniqueInstalledPackage/u)
   assert.doesNotMatch(subagent, /“拓展”/u)
   assert.doesNotMatch(extensions, /SUBAGENT_PACKAGE_NAME|onSetSubagentEnabled/u)

@@ -1,3 +1,17 @@
+import type {
+  KernelSubagentDefinitionScope,
+  KernelSubagentEditableScope,
+  KernelSubagentDefinition,
+  KernelSubagentDefinitionInput,
+  KernelSubagentStatus,
+  KernelSubagentUsage,
+  KernelSubagentOutputReference,
+  KernelSubagentParticipant,
+  KernelSubagentTranscript,
+  KernelSubagentRun
+} from './subagent-contract.ts'
+export type * from './subagent-contract.ts'
+import type { AgentCollaborationOperation, AgentCollaborationResult } from './agent-collaboration-contract.ts'
 export const KERNEL_COMMAND_CHANNEL = 'pi-gui:kernel-command'
 export const KERNEL_EVENT_CHANNEL = 'pi-gui:kernel-event'
 export const PROVIDER_AUTH_EVENT_CHANNEL = 'pi-gui:provider-auth-event'
@@ -463,40 +477,6 @@ export const DEFAULT_SUBAGENT_SETTINGS: SubagentSettings = {
   maxDepth: 3
 }
 
-export type KernelSubagentDefinitionScope = 'builtin' | 'user' | 'project'
-export type KernelSubagentEditableScope = Exclude<KernelSubagentDefinitionScope, 'builtin'>
-
-export type KernelSubagentDefinition = {
-  id: string
-  scope: KernelSubagentDefinitionScope
-  editable: boolean
-  enabled: boolean
-  name: string
-  description: string
-  systemPrompt: string
-  model: string | null
-  fallbackModels: string[] | null
-  thinking: ThinkingLevel | null
-  systemPromptMode: 'replace' | 'append'
-  inheritProjectContext: boolean
-  inheritSkills: boolean
-  defaultContext: 'fresh' | 'fork' | null
-  tools: string[] | null
-  skills: string[] | null
-  defaultAsync: boolean | null
-  timeoutMs: number | null
-  maxTurns: number | null
-  maxSubagentDepth: number | null
-}
-
-export type KernelSubagentDefinitionInput = Omit<
-  KernelSubagentDefinition,
-  'id' | 'editable' | 'enabled' | 'scope'
-> & {
-  originalId: string | null
-  scope: KernelSubagentEditableScope
-}
-
 export type KernelSessionState = {
   id: string | null
   name: string | null
@@ -580,54 +560,6 @@ export type KernelAdvisorEntry = {
   content: string
   delivery: 'aside' | 'steer'
   timestamp: number
-}
-
-export type KernelSubagentStatus =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'paused'
-  | 'detached'
-
-export type KernelSubagentUsage = {
-  inputTokens: number
-  outputTokens: number
-  cacheReadTokens: number
-  cacheWriteTokens: number
-  costUsd: number
-}
-
-export type KernelSubagentOutputReference = {
-  agent: string | null
-  path: string
-  sizeLabel: string | null
-  lines: number | null
-}
-
-export type KernelSubagentParticipant = {
-  index: number
-  agent: string
-  status: KernelSubagentStatus
-  task: string
-  model: string | null
-  usage: KernelSubagentUsage | null
-  currentTool: string | null
-  currentPath: string | null
-  toolCount: number
-  turnCount: number
-  tokens: number
-  durationMs: number
-  error: string | null
-  finalOutput: string | null
-  outputReferences: KernelSubagentOutputReference[]
-}
-
-export type KernelSubagentRun = {
-  mode: 'single' | 'parallel' | 'chain'
-  runId: string | null
-  asyncId: string | null
-  participants: KernelSubagentParticipant[]
 }
 
 export type KernelTodoStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
@@ -738,6 +670,7 @@ export type KernelSubagentNoticeEntry = {
   kind: 'subagent-notice'
   noticeType:
     | 'completion'
+    | 'agent-message'
     | 'control'
     | 'steering'
     | 'request'
@@ -1073,6 +1006,10 @@ export type KernelCommand =
   | { type: 'kernel.remove-pi-package'; source: string }
   | { type: 'kernel.set-subagent-enabled'; enabled: boolean }
   | { type: 'kernel.set-magic-context-enabled'; enabled: boolean }
+  | { type: 'kernel.get-subagent-transcript'; taskId: string; expectedSessionKey: string }
+  | { type: 'kernel.control-subagent'; taskId: string; expectedSessionKey: string; action: 'stop' | 'continue'; message?: string }
+  | { type: 'kernel.agent-collaboration'; operation: AgentCollaborationOperation; expectedSessionKey: string }
+  | { type: 'kernel.get-agent-collaboration' }
   | { type: 'kernel.list-subagent-definitions' }
   | { type: 'kernel.save-subagent-definition'; definition: KernelSubagentDefinitionInput }
   | {
@@ -1240,6 +1177,10 @@ export type KernelApi = {
   removePiPackage: (source: string) => Promise<KernelMutationAck>
   setSubagentEnabled: (enabled: boolean) => Promise<KernelInstalledPackage[]>
   setMagicContextEnabled: (enabled: boolean) => Promise<KernelInstalledPackage[]>
+  getSubagentTranscript: (taskId: string, expectedSessionKey: string) => Promise<KernelSubagentTranscript>
+  controlSubagent: (taskId: string, expectedSessionKey: string, action: 'stop' | 'continue', message?: string) => Promise<KernelMutationAck>
+  agentCollaboration: (operation: AgentCollaborationOperation, expectedSessionKey: string) => Promise<AgentCollaborationResult>
+  getAgentCollaboration: () => Promise<AgentCollaborationResult>
   listSubagentDefinitions: () => Promise<KernelSubagentDefinition[]>
   saveSubagentDefinition: (
     definition: KernelSubagentDefinitionInput

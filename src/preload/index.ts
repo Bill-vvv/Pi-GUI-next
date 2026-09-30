@@ -44,8 +44,10 @@ import {
   type KernelSessionExportResult,
   type KernelSessionPreview,
   type KernelSessionPreviewPageRequest,
-  type KernelSubagentDefinition
+  type KernelSubagentDefinition,
+  type KernelSubagentTranscript
 } from '../shared/kernel-contract'
+import type { AgentCollaborationResult } from '../shared/agent-collaboration-contract'
 import {
   GIT_COMMAND_CHANNEL,
   type GitApi,
@@ -409,6 +411,25 @@ const kernelApi: KernelApi = {
     const command: KernelCommand = { type: 'kernel.search-project-paths', query }
 
     return kernelBridge.invoke(command) as Promise<KernelProjectPathSearchResult>
+  },
+  getSubagentTranscript: (taskId, expectedSessionKey) => {
+    const command: KernelCommand = { type: 'kernel.get-subagent-transcript', taskId, expectedSessionKey }
+    return kernelBridge.invoke(command) as Promise<KernelSubagentTranscript>
+  },
+  controlSubagent: (taskId, expectedSessionKey, action, message) => {
+    const command: KernelCommand = {
+      type: 'kernel.control-subagent', taskId, expectedSessionKey, action,
+      ...(message === undefined ? {} : { message })
+    }
+    return kernelBridge.invoke(command) as Promise<KernelMutationAck>
+  },
+  agentCollaboration: (operation, expectedSessionKey) => {
+    const command: KernelCommand = { type: 'kernel.agent-collaboration', operation, expectedSessionKey }
+    return kernelBridge.invoke(command) as Promise<AgentCollaborationResult>
+  },
+  getAgentCollaboration: () => {
+    const command: KernelCommand = { type: 'kernel.get-agent-collaboration' }
+    return kernelBridge.invoke(command) as Promise<AgentCollaborationResult>
   },
   reorderProjects: (projectKeys) => {
     const command: KernelCommand = { type: 'kernel.reorder-projects', projectKeys }

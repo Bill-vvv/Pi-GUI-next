@@ -430,7 +430,7 @@ export async function startHostApplication(environment: HostEnvironment): Promis
         piExecutable,
         quiescenceExtensionPath,
         extensionPaths: runtimeExtensionPaths,
-        ...(subagentPackageEnabled ? { subagent: launchOptions.subagent } : {}),
+        subagent: launchOptions.subagent,
         ...(desktopNotificationBroker === null
           ? {}
           : {

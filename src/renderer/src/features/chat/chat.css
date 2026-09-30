@@ -1905,6 +1905,64 @@ button.subagent-run-chip:focus-visible {
   padding-bottom: 1rem;
 }
 
+.subagent-task-transcript {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.subagent-task-transcript-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  color: var(--color-text-muted);
+  font-size: var(--text-meta);
+}
+
+.subagent-task-transcript-heading h3 {
+  flex: 1;
+  margin: 0;
+  font-size: var(--text-control);
+  font-weight: var(--weight-medium);
+}
+
+.subagent-task-transcript-heading button,
+.subagent-task-continue button {
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--color-border-divider);
+  border-radius: var(--radius-control);
+  font-size: var(--text-control);
+}
+
+.subagent-task-continue {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border-divider);
+}
+
+.subagent-task-continue label {
+  color: var(--color-text-soft);
+  font-size: var(--text-control);
+}
+
+.subagent-task-continue textarea {
+  width: 100%;
+  min-width: 0;
+  resize: vertical;
+  padding: 0.6rem;
+  border: 1px solid var(--color-border-divider);
+  border-radius: var(--radius-control);
+  font-family: var(--font-ui);
+  font-size: var(--text-body-sm);
+}
+
+.subagent-task-continue button {
+  justify-self: end;
+}
+
 .subagent-task-detail-section h3 {
   margin: 0;
   color: var(--color-text-muted);
