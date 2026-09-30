@@ -191,6 +191,9 @@ test('Workbench gives the shell a generic mirrored toggle and keeps domain modul
   )
   assert.doesNotMatch(workbenchSource, /left-sidebar-bottom-triggers|left-sidebar-trigger/)
   assert.doesNotMatch(workbenchStyles, /left-sidebar-bottom-triggers|composer-clearance[^;]*\+ 0\.35rem/)
+  // The header row keeps the toggle height, so showing or hiding a toggle never moves the conversation.
+  assert.match(workbenchStyles, /\.workbench-session-primary \{[^}]*min-height: 32px;/)
+  assert.match(workbenchStyles, /\.workbench-header-left-sidebar-toggle,\s*\.workbench-header-right-sidebar-toggle \{\s*width: 32px;\s*height: 32px;/)
   assert.doesNotMatch(workbenchSource, /label: '(?:History|Branches|Sync|MCP|Browser|Terminal)'/)
 })
 
