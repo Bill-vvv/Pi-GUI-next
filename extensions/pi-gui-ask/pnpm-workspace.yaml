@@ -1,13 +1,3 @@
-nodeVersion: 26.4.0
-engineStrict: true
-saveExact: true
-strictPeerDependencies: true
-allowBuilds:
-  '@google/genai': false
-  electron: true
-  electron-winstaller: false
-  esbuild: true
-  protobufjs: false
 minimumReleaseAgeExclude:
   - '@earendil-works/chord@0.99.0'
   - '@earendil-works/pi-agent-core@0.99.0'
