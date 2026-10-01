@@ -197,5 +197,7 @@ D-095 完成后，第三轮中“Host 需具备图形会话”和“真实 Elect
 
 本轮五步均已在本地完成。仍待真实环境验证：WSL 后端（Node Host）与 Windows 客户端的真机连接、真实 SSH 主机上的无图形会话 Desktop Host、安装包体积与内存的实测。
 
+2026-10-01 用户在本机安装 `pi-gui-next-0.0.1-wsl.20260930.1`（`da226d4`）：WSL 后端切换为新版本（旧版保留为 `previous`），后端进程为 `node --use-env-proxy out/main/pi-host.js wsl`，无 Electron；Pi 0.99.0 在子进程中运行；15 个项目与 44 个会话目录保留；`host.sock` 与 `logs/host.jsonl`、`pi-runtime.jsonl` 正常写入；本对话即经新后端完成。启动后约 2 分钟的常驻内存：Host 进程 516 MiB、Pi 子进程 395 MiB，尚未与旧拓扑对比。附件、设置页与 Git 面板的界面操作待用户确认。
+
 
 **本轮可先交付的结果：** 可恢复且可追溯的开发基线、完成接线的 R12 本地候选、可用的 Host 包与客户端，以及准确的真实 SSH 待验清单。正式跨平台交付以第三轮实际通过为准。
