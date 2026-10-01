@@ -23,7 +23,7 @@ export async function readSessionStatistics(pointer: SessionPointer): Promise<Ke
   return sessionStatistics(await readSessionTranscript(pointer))
 }
 
-function sessionStatistics(entries: SessionTranscriptEntry[]): KernelSessionStatistics {
+export function sessionStatistics(entries: SessionTranscriptEntry[]): KernelSessionStatistics {
   const statistics: KernelSessionStatistics = {
     userMessages: 0,
     assistantMessages: 0,

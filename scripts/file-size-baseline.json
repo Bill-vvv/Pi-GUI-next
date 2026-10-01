@@ -7,7 +7,7 @@
   "src/main/git/git-capability-controller.ts": 893,
   "src/main/git/git-service.ts": 1081,
   "src/main/index.ts": 843,
-  "src/main/kernel/workbench-kernel.ts": 4250,
+  "src/main/kernel/workbench-kernel.ts": 4248,
   "src/main/project/project-store.ts": 2012,
   "src/main/remote/desktop-host-client.ts": 889,
   "src/main/remote/desktop-host-gateway.ts": 871,

@@ -43,9 +43,9 @@ import { startRemoteAccess, type RemoteAccess } from './remote-access.ts'
 import { PiProviderStore } from '../provider/pi-provider-store.ts'
 import { PiProviderAuth } from '../provider/pi-provider-auth.ts'
 import { ProjectStore } from '../project/project-store.ts'
-import { readSessionMetadata, readSessionStatistics } from '../project/session-statistics.ts'
+import { SessionMetadataCache } from '../project/session-metadata-cache.ts'
 import { readSessionMessagesTailFirst, readSessionTranscriptGeneration } from '../project/session-transcript-tail.ts'
-import { readSessionActivityAt, readSessionMessages } from '../project/session-transcript.ts'
+import { readSessionMessages } from '../project/session-transcript.ts'
 import { resolvePiExecutable } from '../runtime/pi-executable.ts'
 import { PiRuntimeProcessHost } from '../runtime/pi-runtime-process-host.ts'
 import { createJsonlLogger } from '../utils/jsonl-log.ts'
@@ -120,6 +120,7 @@ export async function startHostApplication(environment: HostEnvironment): Promis
   let wslHostPipe: WslPipe | null = null
   let kernel: WorkbenchKernel | null = null
   let projectStoreForShutdown: ProjectStore | null = null
+  let sessionMetadataCacheForShutdown: SessionMetadataCache | null = null
   let providerAuth: PiProviderAuth | null = null
   let desktopNotificationBroker: DesktopNotificationBroker | null = null
   let sharedPiHost: PiRuntimeProcessHost | null = null
@@ -244,6 +245,9 @@ export async function startHostApplication(environment: HostEnvironment): Promis
     kernel = null
     sharedPiHost = null
     projectStoreForShutdown = null
+    const metadataCache = sessionMetadataCacheForShutdown
+    sessionMetadataCacheForShutdown = null
+    await metadataCache?.flush()
     await control.close()
     logger.write('info', 'host', 'stopped')
   }
@@ -287,6 +291,10 @@ export async function startHostApplication(environment: HostEnvironment): Promis
   })
   const projectStore = new ProjectStore()
   projectStoreForShutdown = projectStore
+  const sessionMetadataCache = await SessionMetadataCache.open(
+    join(environment.userDataDirectory, 'session-metadata-cache.json')
+  )
+  sessionMetadataCacheForShutdown = sessionMetadataCache
   const general = await projectStore.loadGeneral()
   const restartContinuations = general.autoContinueInterruptedTasks
     ? await projectStore.loadRestartContinuations()
@@ -466,9 +474,9 @@ export async function startHostApplication(environment: HostEnvironment): Promis
       restoreArchivedSession: (projectPath, sessionKey) =>
         projectStore.restoreArchivedSession(projectPath, sessionKey),
       validateSession: (pointer) => projectStore.validateSession(pointer),
-      readSessionActivityAt,
-      readSessionStatistics,
-      readSessionMetadata,
+      readSessionActivityAt: (pointer) => sessionMetadataCache.readSessionActivityAt(pointer),
+      readSessionStatistics: (pointer) => sessionMetadataCache.readSessionStatistics(pointer),
+      readSessionMetadata: (pointer) => sessionMetadataCache.readSessionMetadata(pointer),
       readSessionMessages,
       readSessionMessagesTailFirst,
       readSessionTranscriptGeneration,

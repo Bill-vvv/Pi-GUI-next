@@ -231,3 +231,9 @@ Sessions now run in one Pi Runtime process shared by all Sessions (`out/main/pi-
 - `getRuntimeMemoryDiagnostics()` keeps per-Runtime `rootPid` null: the shared process is never attributed to, or divided among, individual Sessions. Its real PID and RSS/PSS are reported once as `sharedHost`, with the same unavailable reasons.
 - `verify:linux --memory-diagnostics` classifies the process as role `pi-runtime-host` and includes it in the Pi PSS maximum.
 - The measurements above predate this topology and are not a baseline for it. Startup latency, event throughput and memory for the shared process still need a real measurement before any comparison is claimed.
+
+## 10. Session navigation metadata at Host startup (2026-10-01)
+
+Measured on the installed Node Host: 516 MiB resident two minutes after start, with a 3.0 GB high-water mark. The peak came from `refreshSessionActivities()`, which read and fully parsed every registered Session transcript at once (927 files, 1.1 GB, largest 107 MB) to compute navigation activity times and statistics; the old Electron Main ran the same code. Most of the later resident size was allocator memory kept after that peak.
+
+The Kernel now reads one Session file at a time, and `SessionMetadataCache` (`<userData>/session-metadata-cache.json`, 0600) keeps each Session's activity time and statistics keyed by device, inode, size, modification time and Session id, so unchanged Sessions are not read again. Results and errors equal the uncached readers. Same data, measured in a fresh process: first start without a cache peaks at 851 MiB (about 11 s, dominated by the largest transcript); later starts take 0.28 s and 78 MiB for this work, previously 3.0 GB every start.

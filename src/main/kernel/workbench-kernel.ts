@@ -924,17 +924,19 @@ export class WorkbenchKernel {
       pointers: pointers.map((pointer) => ({ ...pointer }))
     }))
     const activeProjectAtStart = this.state.activeProjectKey
-    const metadataByProject = await Promise.all(snapshots.map(async ({ projectPath, pointers }) => {
-      if (projectPath === activeProjectAtStart) {
-        return { projectPath, pointers, ...await this.loadSessionMetadata(pointers) }
-      }
-      return {
-        projectPath,
-        pointers,
-        activityAtByKey: await this.loadSessionActivities(pointers),
-        statisticsByKey: undefined
-      }
-    }))
+    // One Session file at a time: reading every transcript at once held all of them in memory
+    // together (about 3 GB for 1.1 GB of Sessions).
+    const metadataByProject: Array<{
+      projectPath: string
+      pointers: SessionPointer[]
+      activityAtByKey: Map<string, number | null>
+      statisticsByKey: Map<string, KernelSessionStatistics | null> | undefined
+    }> = []
+    for (const { projectPath, pointers } of snapshots) {
+      metadataByProject.push(projectPath === activeProjectAtStart
+        ? { projectPath, pointers, ...await this.loadSessionMetadata(pointers) }
+        : { projectPath, pointers, activityAtByKey: await this.loadSessionActivities(pointers), statisticsByKey: undefined })
+    }
     let changed = false
     for (const metadata of metadataByProject) {
       const currentPointers = this.sessionPointersByProject.get(metadata.projectPath)
@@ -3655,11 +3657,9 @@ export class WorkbenchKernel {
   private async loadSessionActivities(
     pointers: SessionPointer[]
   ): Promise<Map<string, number | null>> {
-    const entries = await Promise.all(pointers.map(async (pointer) => [
-      pointer.sessionFile,
-      await this.readSessionActivityAt(pointer)
-    ] as const))
-    return new Map(entries)
+    const entries = new Map<string, number | null>()
+    for (const pointer of pointers) entries.set(pointer.sessionFile, await this.readSessionActivityAt(pointer))
+    return entries
   }
 
   private async loadSessionMetadata(
@@ -3668,10 +3668,8 @@ export class WorkbenchKernel {
     activityAtByKey: Map<string, number | null>
     statisticsByKey: Map<string, KernelSessionStatistics | null>
   }> {
-    const entries = await Promise.all(pointers.map(async (pointer) => [
-      pointer.sessionFile,
-      await this.readSessionMetadataForPointer(pointer)
-    ] as const))
+    const entries: Array<readonly [string, SessionMetadata]> = []
+    for (const pointer of pointers) entries.push([pointer.sessionFile, await this.readSessionMetadataForPointer(pointer)])
     return {
       activityAtByKey: new Map(entries.map(([sessionFile, metadata]) => [
         sessionFile,
