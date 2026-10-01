@@ -66,6 +66,6 @@ pnpm verify:linux
 
 P1 只生成 `release/pi-gui-next-0.0.1-x86_64.AppImage`。`verify:linux` 必须在干净工作区运行，并从该 AppImage 执行真实核心链路；脱敏报告和截图写入被 Git 忽略的 `release/evidence/`。
 
-2026-10-01 的 `main` 以自动化校验为准合入：typecheck、完整 `test:core`（含行数检查）、浏览器测试、build、`package:linux` 与 AppImage 的 `PI_GUI_PROBE_ONLY` 探测均通过。`verify:linux` 的真实界面检查尚未在 Pi 0.99 上重新通过：它需要 Niri Wayland 工作站并调用真实模型，其 S19 子任务步骤仍按旧 `pi-subagents` 的 `subagent` 工具编写，需先改为内建 Task。该项与 Windows 桌面、真实 SSH 验收一样保持待验。
+2026-10-01 的 `main` 以自动化校验为准合入：typecheck、完整 `test:core`（含行数检查）、浏览器测试、build、`package:linux` 与 AppImage 的 `PI_GUI_PROBE_ONLY` 探测均通过。`verify:linux` 的真实界面检查尚未在 Pi 0.99 上重新通过：它需要 Niri Wayland 工作站并调用真实模型，S19 子任务步骤已改为内建 Task，但尚未在工作站上实际运行。该项与 Windows 桌面、真实 SSH 验收一样保持待验。
 
 产品范围、架构、发布门槛和决策分别见 `docs/product-boundary.md`、`docs/architecture.md`、`docs/release-gate.md` 和 `docs/decisions.md`；P2 Workbench 结构见 `docs/p2-workbench-structure.md`；已交付能力、历史修复与工程经验见 `docs/engineering-history.md`。可选的私有 Web Remote（默认关闭，SSE + JSON POST；设置页默认一键使用 Tailscale Funnel/Serve，Lucky 作为高级手动反代）见 `docs/remote-access.md`；Linux loopback Desktop Host 与 Windows remote-only 客户端见 `docs/desktop-host.md`。P4-2 source 已接通系统 OpenSSH、Credential Manager 与连接界面；P4-3 真实 Windows 发布 gate 前不得宣称 Windows 已受支持。

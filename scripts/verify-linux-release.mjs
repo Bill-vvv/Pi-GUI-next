@@ -73,13 +73,15 @@ const S19_MARKERS = [
   ['s19-beta.txt', 'beta'],
   ['s19-gamma.txt', 'gamma']
 ]
+// S19 (D-103): three built-in Task children, one tool call and capsule each, kept in one turn by TaskWait.
 const S19_PROMPT = [
-  'Use the subagent tool exactly once with one parallel invocation containing exactly three independent tasks.',
-  'Every task must use agent "worker"; do not use Oracle, Advisor, planner, scout, reviewer, or explorer. The workers must not edit any file.',
+  'Start exactly three background child tasks by calling the Task tool exactly three times in the same response, before any other tool call.',
+  'Every Task call must set agent to "worker"; do not use scout, reviewer, Oracle, Advisor or any other agent. The workers must not edit any file.',
   'Task 1: call bash exactly once with `sleep 20; cat s19-alpha.txt`, then return only its one-word output.',
   'Task 2: call bash exactly once with `sleep 20; cat s19-beta.txt`, then return only its one-word output.',
   'Task 3: call bash exactly once with `sleep 20; cat s19-gamma.txt`, then return only its one-word output.',
-  'Set concurrency to 3 and wait for all three tasks before replying. Do not perform the tasks yourself.'
+  'Then call TaskWait without taskIds and with timeoutMs 60000, again until all three tasks have completed, and only then reply with the three words.',
+  'Do not perform the tasks yourself and do not use any other tool.'
 ].join('\n')
 const STARTED_AT = new Date().toISOString()
 const RUN_STAMP = STARTED_AT.replaceAll(':', '-').replaceAll('.', '-')
@@ -241,8 +243,9 @@ async function prepareIsolatedPiAgentDirectory(targetAgentDirectory) {
   if (extensions !== undefined) settings.extensions = extensions
 
   // S19 validates the GUI's Subagent lifecycle, not ambient user model routing.
-  // Inherit the already-proven parent model inside the isolated run so a stale
-  // user worker override cannot turn a UI gate into an unrelated auth probe.
+  // The built-in worker definition has no model, so its Task children inherit the
+  // already-proven parent model; a stale user worker override or default model
+  // must not turn a UI gate into an unrelated auth probe.
   const subagents = isRecord(settings.subagents) ? { ...settings.subagents } : {}
   const agentOverrides = isRecord(subagents.agentOverrides)
     ? { ...subagents.agentOverrides }
@@ -1070,17 +1073,16 @@ async function exerciseUi() {
     await setAppWindowSize(activeApp, activeCdp, 1600, 1000)
     await submitPrompt(activeCdp, S19_PROMPT)
 
-    let liveRun = null
+    let liveTasks = null
     await waitForCondition(async () => {
-      liveRun = await latestParallelSubagentRun(activeCdp)
-      return liveRun?.runtime === 'running' && liveRun.toolStatus === 'running' &&
-        liveRun.participants.length === 3 &&
-        liveRun.participants.every((participant) =>
-          participant.agent === 'worker' && participant.status === 'running'
+      liveTasks = await latestNativeTaskRuns(activeCdp)
+      return liveTasks?.runtime === 'running' && liveTasks.runs.length === 3 &&
+        liveTasks.runs.every(({ participant }) =>
+          participant.agent === 'worker' && participant.status === 'running' && participant.nativeTaskId
         )
     }, TIMEOUT.turn, 'E_S19_PARALLEL_LIVE')
-    s19Summary.parallelParticipants = liveRun.participants.length
-    s19Summary.agents = [...new Set(liveRun.participants.map((participant) => participant.agent))]
+    s19Summary.parallelParticipants = liveTasks.runs.length
+    s19Summary.agents = [...new Set(liveTasks.runs.map(({ participant }) => participant.agent))]
     s19Summary.observedLive = true
     await captureMemorySample('three-subagents-running')
 
@@ -1123,18 +1125,11 @@ async function exerciseUi() {
       'E_S19_CAPSULES'
     )
 
-    const first = {
-      toolCallId: liveRun.toolCallId,
-      participantIndex: liveRun.participants[0].index
-    }
-    const second = {
-      toolCallId: liveRun.toolCallId,
-      participantIndex: liveRun.participants[1].index
-    }
-    const third = {
-      toolCallId: liveRun.toolCallId,
-      participantIndex: liveRun.participants[2].index
-    }
+    const [first, second, third] = liveTasks.runs.map(({ toolCallId, participant }) => ({
+      toolCallId,
+      participantIndex: participant.index
+    }))
+    const liveToolCallIds = liveTasks.runs.map(({ toolCallId }) => toolCallId).join('\n')
 
     await openSubagentParticipant(activeCdp, first)
     const wideLayout = await evaluateValue(
@@ -1196,33 +1191,34 @@ async function exerciseUi() {
     s19Summary.escapePriority = true
 
     await openSubagentParticipant(activeCdp, first)
-    let completedRun = null
+    let completedTasks = null
+    const sameTasks = (observed) =>
+      observed?.runs.map(({ toolCallId }) => toolCallId).join('\n') === liveToolCallIds
     try {
       await waitForCondition(async () => {
-        completedRun = await latestParallelSubagentRun(activeCdp)
-        return completedRun?.toolCallId === first.toolCallId && completedRun.runtime === 'ready' &&
-          completedRun.participants.length === 3 &&
-          completedRun.participants.every((participant) =>
+        completedTasks = await latestNativeTaskRuns(activeCdp)
+        return sameTasks(completedTasks) && completedTasks.runtime === 'ready' &&
+          completedTasks.runs.every(({ participant }) =>
             participant.status === 'completed' && participant.hasFinalOutput
           )
       }, TIMEOUT.subagent, 'E_S19_COMPLETION')
     } catch {
-      completedRun = await latestParallelSubagentRun(activeCdp)
-      s19Summary.completionObservation = completedRun === null
+      completedTasks = await latestNativeTaskRuns(activeCdp)
+      s19Summary.completionObservation = completedTasks === null
         ? null
         : {
-            runtime: completedRun.runtime,
-            toolStatus: completedRun.toolStatus,
-            participants: completedRun.participants.map((participant) => ({
+            runtime: completedTasks.runtime,
+            toolStatuses: completedTasks.runs.map(({ toolStatus }) => toolStatus),
+            participants: completedTasks.runs.map(({ participant }) => ({
               status: participant.status,
               hasFinalOutput: participant.hasFinalOutput
             }))
           }
-      if (completedRun?.toolCallId === first.toolCallId && completedRun.runtime === 'ready') {
-        if (completedRun.participants.some((participant) => participant.status !== 'completed')) {
+      if (sameTasks(completedTasks) && completedTasks.runtime === 'ready') {
+        if (completedTasks.runs.some(({ participant }) => participant.status !== 'completed')) {
           fail('E_S19_PARTICIPANT_TERMINAL')
         }
-        if (completedRun.participants.some((participant) => !participant.hasFinalOutput)) {
+        if (completedTasks.runs.some(({ participant }) => !participant.hasFinalOutput)) {
           fail('E_S19_FINAL_OUTPUT')
         }
       }
@@ -1743,24 +1739,25 @@ async function selectedTitledButton(cdp, selector) {
   return typeof title === 'string' && title.length > 0 ? title : null
 }
 
-async function latestParallelSubagentRun(cdp) {
+/** Built-in Task child tasks started since the latest user message, one tool call each. */
+async function latestNativeTaskRuns(cdp) {
   return evaluateValue(
     cdp,
     `window.piGui.getState().then((snapshot) => snapshot.state).then((state) => {
-      const runs = state.conversation.entries
-        .filter((entry) => entry.kind === 'tool' && entry.name === 'subagent' && entry.subagent?.mode === 'parallel')
-        .map((entry) => ({
-          toolCallId: entry.toolCallId,
-          toolStatus: entry.status,
-          runtime: state.runtime.status,
-          participants: entry.subagent.participants.map((participant) => ({
-            index: participant.index,
-            agent: participant.agent,
+      const entries = state.conversation.entries
+      const start = entries.findLastIndex((entry) => entry.kind === 'message' && entry.role === 'user') + 1
+      const runs = entries.slice(start)
+        .filter((entry) => entry.kind === 'tool' && entry.name === 'Task' &&
+          entry.subagent?.mode === 'single' && entry.subagent.participants.length === 1)
+        .map((entry) => {
+          const participant = entry.subagent.participants[0]
+          return { toolCallId: entry.toolCallId, toolStatus: entry.status, participant: {
+            index: participant.index, nativeTaskId: participant.nativeTaskId ?? null, agent: participant.agent,
             status: participant.status,
             hasFinalOutput: typeof participant.finalOutput === 'string' && participant.finalOutput.length > 0
-          }))
-        }))
-      return runs.at(-1) ?? null
+          } }
+        })
+      return { runtime: state.runtime.status, runs }
     })`
   )
 }

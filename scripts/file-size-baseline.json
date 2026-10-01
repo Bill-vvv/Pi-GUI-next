@@ -2,7 +2,7 @@
   "extensions/pi-gui-multi-advisor/src/index.ts": 872,
   "extensions/pi-gui-runtime-quiescence/src/index.ts": 1253,
   "extensions/pi-gui-runtime-quiescence/src/protocol.mjs": 1808,
-  "scripts/verify-linux-release.mjs": 2987,
+  "scripts/verify-linux-release.mjs": 2984,
   "src/main/extension/pi-capability-inventory-core.ts": 1566,
   "src/main/git/git-capability-controller.ts": 893,
   "src/main/git/git-service.ts": 1081,

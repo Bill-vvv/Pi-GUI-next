@@ -51,7 +51,7 @@ Windows x64 安装包由 Windows 机器执行 `pnpm package:win`，产物为 `re
 必须从打包产物而非开发服务器执行并记录：
 
 1. launch 与干净退出；
-2. Pi 0.83.0 probe；
+2. Pi 0.99.0 probe；
 3. project 路径选择与明确 cwd 启动；
 4. prompt、streaming、thinking 和真实 tool execution；
 5. abort 后 runtime/UI 状态一致；
@@ -70,7 +70,7 @@ P2 在完整保留上述 P1 链路的基础上，还必须从同一 AppImage 验
 4. 空对话、Project/Session 切换反馈和切换后的 Composer 焦点恢复可观察；
 5. P2 新增步骤与 P1 回归使用同一隔离 XDG、清理和脱敏边界。
 
-`pnpm verify:linux` 只在干净工作区执行；它从 AppImage 的真实 renderer UI 完成 P1 回归、当前 P2 链路与 S19 Subagent 任务详情 gate，并将 schema v2 的脱敏 `report.json` 与九张关键截图写入 `release/evidence/<UTC>-<commit>/`。P2/S19 摘要只记录计数、角色集合和布尔结果，不记录完整 Project 路径、Session 标题、prompt、tool output 或 credential；S19 截图还必须遮罩 participant 任务标签、详情活动与最终输出。验证器不得向生产代码加入测试后门。
+`pnpm verify:linux` 只在干净工作区执行；它从 AppImage 的真实 renderer UI 完成 P1 回归、当前 P2 链路与 S19 Subagent 任务详情 gate（D-103 起由内建 Task 发起三个后台 worker 子任务、各自一个任务胶囊，并以 TaskWait 保持在同一轮内），并将 schema v2 的脱敏 `report.json` 与九张关键截图写入 `release/evidence/<UTC>-<commit>/`。P2/S19 摘要只记录计数、角色集合和布尔结果，不记录完整 Project 路径、Session 标题、prompt、tool output 或 credential；S19 截图还必须遮罩 participant 任务标签、详情活动与最终输出。验证器不得向生产代码加入测试后门。
 
 真实 UI gate 独占工作站窗口：同一用户同时只能运行一个 `pnpm verify:linux`。canonical `pnpm dev` 仍在运行时，验证器必须在启动 AppImage 前以 `E_DEV_GUI_RUNNING` Fail Fast，防止后台 Agent 反复打开或聚焦测试 GUI；正式验收应先关闭开发实例。只有人工监督且明确接受窗口抢占时，才可显式设置 `PI_GUI_VERIFY_ALLOW_ACTIVE_DEV=1` 覆盖该保护，跨进程互斥仍然生效。异常退出遗留的 verifier lock 只能在 owner 进程已不存在后回收。
 
